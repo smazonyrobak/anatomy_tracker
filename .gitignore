@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.exe
+*.lnk
+*.spec
+_internal/
+build/
+data/
+tools/
+settings.json

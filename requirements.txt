@@ -1,0 +1,9 @@
+numpy
+pandas
+opencv-python
+pynrrd
+PyOpenGL
+PySide6
+pyqtgraph
+scipy
+tifffile
