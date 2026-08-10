@@ -336,6 +336,85 @@ def gray_rgba(image_u8: np.ndarray) -> np.ndarray:
     return rgba
 
 
+def polygon_mask(shape: tuple[int, int], points: list[tuple[float, float]]) -> np.ndarray:
+    mask = np.zeros(shape, dtype=np.uint8)
+    polygon = np.rint(np.asarray(points, dtype=np.float32)).astype(np.int32)
+    cv2.fillPoly(mask, [polygon], 1)
+    return mask
+
+
+def canonical_section_features(
+    image: np.ndarray,
+    mask: np.ndarray,
+    size: int = 128,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    mask = (mask > 0).astype(np.uint8)
+    moments = cv2.moments(mask, binaryImage=True)
+    if moments["m00"] < 100:
+        return None
+    angle = np.degrees(
+        0.5 * np.arctan2(2.0 * moments["mu11"], moments["mu20"] - moments["mu02"])
+    )
+    if angle > 45.0:
+        angle -= 90.0
+    elif angle < -45.0:
+        angle += 90.0
+    height, width = mask.shape
+    rotation = cv2.getRotationMatrix2D((width / 2.0, height / 2.0), angle, 1.0)
+    rotated_mask = cv2.warpAffine(mask, rotation, (width, height), flags=cv2.INTER_NEAREST)
+    rotated_image = cv2.warpAffine(normalize_u8(image), rotation, (width, height))
+    x, y, box_width, box_height = cv2.boundingRect(rotated_mask)
+    scale = (size - 8.0) / max(box_width, box_height)
+    resized_width = max(1, round(box_width * scale))
+    resized_height = max(1, round(box_height * scale))
+    offset_x = (size - resized_width) // 2
+    offset_y = (size - resized_height) // 2
+    canonical_image = np.zeros((size, size), dtype=np.uint8)
+    canonical_mask = np.zeros((size, size), dtype=np.uint8)
+    canonical_image[offset_y : offset_y + resized_height, offset_x : offset_x + resized_width] = cv2.resize(
+        rotated_image[y : y + box_height, x : x + box_width],
+        (resized_width, resized_height),
+    )
+    canonical_mask[offset_y : offset_y + resized_height, offset_x : offset_x + resized_width] = cv2.resize(
+        rotated_mask[y : y + box_height, x : x + box_width],
+        (resized_width, resized_height),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    canonical_image = cv2.createCLAHE(2.0, (8, 8)).apply(canonical_image)
+    gradient_x = cv2.Sobel(canonical_image, cv2.CV_32F, 1, 0)
+    gradient_y = cv2.Sobel(canonical_image, cv2.CV_32F, 0, 1)
+    gradient = cv2.GaussianBlur(cv2.magnitude(gradient_x, gradient_y), (0, 0), 1.0)
+    gradient /= float(gradient.max()) + 1e-6
+    canonical_transform = np.array(
+        [
+            [scale, 0.0, offset_x - scale * x],
+            [0.0, scale, offset_y - scale * y],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    ) @ np.vstack([rotation, [0.0, 0.0, 1.0]])
+    return canonical_mask, gradient, canonical_transform
+
+
+def canonical_alignment_score(
+    reference_mask: np.ndarray,
+    reference_gradient: np.ndarray,
+    candidate_mask: np.ndarray,
+    candidate_gradient: np.ndarray,
+) -> float:
+    reference = reference_mask > 0
+    candidate = candidate_mask > 0
+    overlap = reference & candidate
+    union = reference | candidate
+    iou = np.count_nonzero(overlap) / max(np.count_nonzero(union), 1)
+    correlation = 0.0
+    if np.count_nonzero(overlap) >= 50:
+        correlation = float(np.corrcoef(reference_gradient[overlap], candidate_gradient[overlap])[0, 1])
+        if not np.isfinite(correlation):
+            correlation = 0.0
+    return float((1.0 - iou) + 0.45 * (1.0 - np.clip(correlation, -1.0, 1.0)))
+
+
 def atlas_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:
     if plane == "coronal":
         return volume[index, :, :]
@@ -441,6 +520,15 @@ def volume_to_gl(points: np.ndarray) -> np.ndarray:
     return np.column_stack([points[:, 2], points[:, 0], points[:, 1]])
 
 
+@dataclass
+class AffineCoordinate:
+    matrix: np.ndarray
+    row: int
+
+    def __call__(self, x: np.ndarray | float, y: np.ndarray | float) -> np.ndarray | float:
+        return self.matrix[self.row, 0] * x + self.matrix[self.row, 1] * y + self.matrix[self.row, 2]
+
+
 def clamp_volume(coord: np.ndarray, shape: tuple[int, int, int]) -> tuple[int, int, int]:
     ap = int(np.clip(round(float(coord[0])), 0, shape[0] - 1))
     dv = int(np.clip(round(float(coord[1])), 0, shape[1] - 1))
@@ -468,16 +556,19 @@ class SliceSession:
     atlas_tilt_dv_deg: float = 0.0
     atlas_landmarks: list[tuple[float, float]] = field(default_factory=list)
     slice_landmarks: list[tuple[float, float]] = field(default_factory=list)
+    brain_outline_points: list[tuple[float, float]] = field(default_factory=list)
     probe_atlas_points: list[tuple[float, float]] = field(default_factory=list)
     probe_slice_points: list[tuple[float, float]] = field(default_factory=list)
     probe_volume_points: list[list[float]] = field(default_factory=list)
     probe_signal_values: list[float] = field(default_factory=list)
     point_history: list[str] = field(default_factory=list)
+    auto_alignment_score: float | None = None
+    auto_alignment_affine: list[list[float]] | None = None
     transformed_overlay: np.ndarray | None = None
-    slice_to_atlas_x: Rbf | None = None
-    slice_to_atlas_y: Rbf | None = None
-    atlas_to_slice_x: Rbf | None = None
-    atlas_to_slice_y: Rbf | None = None
+    slice_to_atlas_x: Rbf | AffineCoordinate | None = None
+    slice_to_atlas_y: Rbf | AffineCoordinate | None = None
+    atlas_to_slice_x: Rbf | AffineCoordinate | None = None
+    atlas_to_slice_y: Rbf | AffineCoordinate | None = None
 
 
 class ImagePanel(QtWidgets.QWidget):
@@ -502,12 +593,21 @@ class ImagePanel(QtWidgets.QWidget):
         self.overlay_item.hide()
         self.landmark_item = pg.ScatterPlotItem(size=10, brush=pg.mkBrush("#ffe66d"), pen=pg.mkPen("#111820", width=1))
         self.probe_item = pg.ScatterPlotItem(size=9, brush=pg.mkBrush("#ff4d8d"), pen=pg.mkPen("#ffffff", width=1))
+        self.outline_item = pg.PlotDataItem(
+            pen=pg.mkPen("#5de4ff", width=2),
+            symbol="o",
+            symbolSize=7,
+            symbolBrush=pg.mkBrush("#5de4ff"),
+            symbolPen=pg.mkPen("#052c36"),
+        )
         self.landmark_item.setZValue(20)
         self.probe_item.setZValue(25)
+        self.outline_item.setZValue(18)
         self.view.addItem(self.base_item)
         self.view.addItem(self.overlay_item)
         self.view.addItem(self.landmark_item)
         self.view.addItem(self.probe_item)
+        self.view.addItem(self.outline_item)
         self.labels: list[pg.TextItem] = []
         self.image_shape: tuple[int, int] | None = None
         self.widget.scene().sigMouseClicked.connect(self._mouse_clicked)
@@ -556,6 +656,13 @@ class ImagePanel(QtWidgets.QWidget):
             label.setPos(x, y)
             self.view.addItem(label)
             self.labels.append(label)
+
+    def set_outline(self, points: list[tuple[float, float]]) -> None:
+        display_points = points + [points[0]] if len(points) >= 3 else points
+        self.outline_item.setData(
+            [point[0] for point in display_points],
+            [point[1] for point in display_points],
+        )
 
     def _mouse_clicked(self, event: QtGui.QMouseEvent) -> None:
         if event.button() != QtCore.Qt.MouseButton.LeftButton or self.image_shape is None:
@@ -839,23 +946,33 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         toolbar_layout.addWidget(self.flip_horizontal, 2, 4)
         toolbar_layout.addWidget(self.flip_vertical, 2, 5)
 
-        mode_box = QtWidgets.QGroupBox("Point target")
+        mode_box = QtWidgets.QGroupBox("Mode")
         mode_layout = QtWidgets.QHBoxLayout(mode_box)
         mode_layout.setContentsMargins(6, 4, 6, 4)
         self.landmark_mode = QtWidgets.QPushButton("Transform landmarks")
         self.probe_mode = QtWidgets.QPushButton("Probe trajectory")
+        self.auto_outline_mode = QtWidgets.QPushButton("Draw brain outline")
         self.landmark_mode.setCheckable(True)
         self.probe_mode.setCheckable(True)
+        self.auto_outline_mode.setCheckable(True)
         mode_button_style = "QPushButton:checked { background:#2b6f95; border:2px solid #80d4ff; color:#ffffff; }"
         self.landmark_mode.setStyleSheet(mode_button_style)
         self.probe_mode.setStyleSheet(mode_button_style)
+        self.auto_outline_mode.setStyleSheet(mode_button_style)
+        self.auto_outline_mode.setToolTip("Click around the outer brain surface on the histology image")
         self.landmark_mode.setChecked(True)
         self.mode_group = QtWidgets.QButtonGroup(self)
         self.mode_group.setExclusive(True)
         self.mode_group.addButton(self.landmark_mode)
         self.mode_group.addButton(self.probe_mode)
+        self.mode_group.addButton(self.auto_outline_mode)
         mode_layout.addWidget(self.landmark_mode)
         mode_layout.addWidget(self.probe_mode)
+        mode_layout.addWidget(self.auto_outline_mode)
+        self.auto_align_btn = QtWidgets.QPushButton("Auto-align")
+        self.auto_align_btn.setToolTip("Find the best coronal AP position and L-R/D-V cutting angles")
+        self.auto_align_btn.setEnabled(False)
+        mode_layout.addWidget(self.auto_align_btn)
         self.transform_btn = QtWidgets.QPushButton("Transform slice to atlas coordinates")
         self.undo_point_btn = QtWidgets.QPushButton("Undo point")
         self.clear_points_btn = QtWidgets.QPushButton("Clear active points")
@@ -1008,6 +1125,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.flip_vertical.toggled.connect(self._slice_geometry_changed)
         self.curve_editor.points_changed.connect(self._curve_changed)
         self.transform_btn.clicked.connect(self.transform_current_slice)
+        self.auto_align_btn.clicked.connect(self._auto_align_clicked)
         self.undo_point_btn.clicked.connect(self.undo_last_point)
         self.clear_points_btn.clicked.connect(self.clear_current_points)
         self.atlas_opacity.valueChanged.connect(self._atlas_opacity_changed)
@@ -1443,12 +1561,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.flip_horizontal = bool(flip_horizontal)
         session.flip_vertical = bool(flip_vertical)
         self._update_slice_image(clear_transform=True)
-        if had_transform and self._rebuild_slice_transform(session):
+        n_pairs = min(len(session.atlas_landmarks), len(session.slice_landmarks))
+        if had_transform and n_pairs >= 3 and self._rebuild_slice_transform(session):
             self._recompute_probe_points_from_slice_points(session)
             self._refresh_atlas()
             self._refresh_points()
             self._refresh_3d()
             self.status.setText("Slice geometry changed; transform and probe coordinates were rebuilt.")
+        elif had_transform:
+            self.status.setText("Slice geometry changed; run auto-align again.")
         else:
             self.status.setText("Slice geometry changed; transform landmarks were moved with the slice.")
 
@@ -1475,6 +1596,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.slice_to_atlas_y = None
             session.atlas_to_slice_x = None
             session.atlas_to_slice_y = None
+            session.auto_alignment_score = None
+            session.auto_alignment_affine = None
             self._clear_derived_probe_coordinates(session)
         if session.probe_slice_points:
             session.probe_signal_values = [self._probe_point_signal(session, point) for point in session.probe_slice_points]
@@ -1518,7 +1641,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session = self.current_session()
         if session is None:
             return
-        if self.landmark_mode.isChecked():
+        if self.auto_outline_mode.isChecked():
+            self.status.setText("Draw the brain outline on the histology panel, then click Auto-align.")
+        elif self.landmark_mode.isChecked():
             self._invalidate_transform_after_landmark_edit(session)
             session.atlas_landmarks.append((x, y))
             session.point_history.append("atlas_landmark")
@@ -1532,7 +1657,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if session is None:
             return
         raw_point = self._slice_display_to_raw_point(session, (x, y))
-        if self.landmark_mode.isChecked():
+        if self.auto_outline_mode.isChecked():
+            session.brain_outline_points.append(raw_point)
+            session.point_history.append("brain_outline")
+            self.status.setText(f"Brain outline: {len(session.brain_outline_points)} points")
+        elif self.landmark_mode.isChecked():
             self._invalidate_transform_after_landmark_edit(session)
             session.slice_landmarks.append(raw_point)
             session.point_history.append("slice_landmark")
@@ -1549,6 +1678,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.slice_to_atlas_y = None
         session.atlas_to_slice_x = None
         session.atlas_to_slice_y = None
+        session.auto_alignment_score = None
+        session.auto_alignment_affine = None
         self._clear_derived_probe_coordinates(session)
         self.atlas_panel.set_overlay(None)
         self._refresh_atlas()
@@ -1615,6 +1746,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if session is None:
             self.atlas_panel.set_points([], [])
             self.slice_panel.set_points([], [])
+            self.atlas_panel.set_outline([])
+            self.slice_panel.set_outline([])
             self._refresh_point_counts()
             return
         self.atlas_panel.set_points(session.atlas_landmarks, session.probe_atlas_points)
@@ -1622,22 +1755,34 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self._slice_raw_to_display_points(session, session.slice_landmarks),
             self._slice_raw_to_display_points(session, session.probe_slice_points),
         )
+        self.atlas_panel.set_outline([])
+        self.slice_panel.set_outline(self._slice_raw_to_display_points(session, session.brain_outline_points))
         self._refresh_point_counts()
 
     def _refresh_point_counts(self) -> None:
         session = self.current_session()
         if session is None:
-            self.point_counts.setText("Transform atlas 0 / slice 0 | Probe 0")
+            self.point_counts.setText("Outline 0 | Transform atlas 0 / slice 0 | Probe 0")
+            self.auto_align_btn.setEnabled(False)
             return
         n_pairs = min(len(session.atlas_landmarks), len(session.slice_landmarks))
         self.point_counts.setText(
+            f"Outline {len(session.brain_outline_points)} | "
             f"Transform atlas {len(session.atlas_landmarks)} / slice {len(session.slice_landmarks)} ({n_pairs} pairs) | "
             f"Probe {len(session.probe_slice_points)}"
+        )
+        self.auto_align_btn.setEnabled(
+            len(session.brain_outline_points) >= 8
+            and session.rotated is not None
+            and self.atlas_volume is not None
+            and self.annotation_volume is not None
         )
 
     def _point_target_changed(self, *_: object) -> None:
         self._refresh_atlas()
-        if self.landmark_mode.isChecked():
+        if self.auto_outline_mode.isChecked():
+            self.status.setText("Click around the outer brain surface on the histology panel, then click Auto-align.")
+        elif self.landmark_mode.isChecked():
             self.status.setText("Point target: transform landmarks")
         else:
             self.status.setText("Point target: probe trajectory")
@@ -1652,6 +1797,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             return
         while session.point_history:
             action = session.point_history.pop()
+            if action == "brain_outline" and session.brain_outline_points:
+                session.brain_outline_points.pop()
+                self.status.setText("Undid brain outline point")
+                break
             if action == "atlas_landmark" and session.atlas_landmarks:
                 session.atlas_landmarks.pop()
                 self._invalidate_transform_after_landmark_edit(session)
@@ -1683,7 +1832,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session = self.current_session()
         if session is None:
             return
-        if self.landmark_mode.isChecked():
+        if self.auto_outline_mode.isChecked():
+            session.brain_outline_points.clear()
+            session.point_history = [action for action in session.point_history if action != "brain_outline"]
+            self.status.setText("Cleared brain outline on current slice")
+        elif self.landmark_mode.isChecked():
             session.atlas_landmarks.clear()
             session.slice_landmarks.clear()
             session.point_history = [action for action in session.point_history if action not in {"atlas_landmark", "slice_landmark"}]
@@ -1713,6 +1866,152 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_3d()
         self.status.setText(f"Transformed {session.name} using {n} point pairs")
 
+    def _auto_align_clicked(self) -> None:
+        try:
+            self.auto_align_current_slice()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Auto-alignment failed", str(exc))
+            self.status.setText(f"Auto-alignment failed: {exc}")
+
+    def auto_align_current_slice(self) -> None:
+        session = self.current_session()
+        if session is None or session.rotated is None or self.atlas_volume is None or self.annotation_volume is None:
+            return
+        if len(session.brain_outline_points) < 8:
+            QtWidgets.QMessageBox.warning(self, "Outline incomplete", "Add at least 8 points around the outer brain surface.")
+            return
+
+        outline = self._slice_raw_to_display_points(session, session.brain_outline_points)
+        reference = canonical_section_features(
+            session.rotated,
+            polygon_mask(session.rotated.shape[:2], outline),
+        )
+        if reference is None:
+            QtWidgets.QMessageBox.warning(self, "Outline incomplete", "The brain outline is too small.")
+            return
+        reference_mask, reference_gradient, reference_transform = reference
+        best: tuple[float, int, float, float, np.ndarray] | None = None
+
+        def evaluate(index: int, tilt_ml: float, tilt_dv: float) -> tuple[float, int, float, float, np.ndarray] | None:
+            if tilt_ml == 0.0 and tilt_dv == 0.0:
+                atlas_image = self.atlas_volume[index]
+                atlas_mask = self.annotation_volume[index] > 0
+            else:
+                atlas_image = coronal_oblique_slice(self.atlas_volume, index, tilt_ml, tilt_dv, order=1)
+                atlas_mask = coronal_oblique_slice(self.annotation_volume, index, tilt_ml, tilt_dv, order=0) > 0
+            candidate = canonical_section_features(atlas_image, atlas_mask)
+            if candidate is None:
+                return None
+            candidate_mask, candidate_gradient, candidate_transform = candidate
+            score = canonical_alignment_score(
+                reference_mask,
+                reference_gradient,
+                candidate_mask,
+                candidate_gradient,
+            )
+            return score, index, tilt_ml, tilt_dv, candidate_transform
+
+        self.setCursor(QtCore.Qt.CursorShape.WaitCursor)
+        self.auto_align_btn.setEnabled(False)
+        try:
+            self.status.setText("Auto-aligning: scanning AP position...")
+            QtWidgets.QApplication.processEvents()
+            coarse: list[tuple[float, int, float, float, np.ndarray]] = []
+            for index in range(10, self.atlas_volume.shape[0] - 10, 2):
+                result = evaluate(index, 0.0, 0.0)
+                if result is not None:
+                    coarse.append(result)
+                if index % 40 == 0:
+                    QtWidgets.QApplication.processEvents()
+            coarse.sort(key=lambda item: item[0])
+            seeds: list[int] = []
+            for result in coarse:
+                if all(abs(result[1] - seed) >= 8 for seed in seeds):
+                    seeds.append(result[1])
+                if len(seeds) == 5:
+                    break
+            if not seeds:
+                raise RuntimeError("No valid atlas sections were found")
+
+            self.status.setText("Auto-aligning: estimating L-R and D-V tilt...")
+            QtWidgets.QApplication.processEvents()
+            for seed in seeds:
+                for tilt_ml in range(-12, 13, 4):
+                    for tilt_dv in range(-12, 13, 4):
+                        result = evaluate(seed, float(tilt_ml), float(tilt_dv))
+                        if result is not None and (best is None or result[0] < best[0]):
+                            best = result
+                QtWidgets.QApplication.processEvents()
+            if best is None:
+                raise RuntimeError("No valid tilted atlas sections were found")
+
+            _, best_index, best_ml, best_dv, _ = best
+            self.status.setText("Auto-aligning: refining the best plane...")
+            QtWidgets.QApplication.processEvents()
+            for index in range(max(0, best_index - 6), min(self.atlas_volume.shape[0], best_index + 7), 2):
+                for tilt_ml in np.arange(max(-15.0, best_ml - 4.0), min(15.0, best_ml + 4.0) + 0.1, 2.0):
+                    for tilt_dv in np.arange(max(-15.0, best_dv - 4.0), min(15.0, best_dv + 4.0) + 0.1, 2.0):
+                        result = evaluate(index, float(tilt_ml), float(tilt_dv))
+                        if result is not None and result[0] < best[0]:
+                            best = result
+                QtWidgets.QApplication.processEvents()
+        finally:
+            self.unsetCursor()
+            self._refresh_point_counts()
+
+        score, index, tilt_ml, tilt_dv, atlas_transform = best
+        session.atlas_plane = "coronal"
+        session.atlas_index = index
+        session.atlas_tilt_ml_deg = tilt_ml
+        session.atlas_tilt_dv_deg = tilt_dv
+        self.plane_box.blockSignals(True)
+        self.plane_box.setCurrentText("coronal")
+        self.plane_box.blockSignals(False)
+        self._set_plane_limits()
+        self.section_slider.blockSignals(True)
+        self.section_scroll.blockSignals(True)
+        self.section_slider.setValue(index)
+        self.section_scroll.setValue(index)
+        self.section_slider.blockSignals(False)
+        self.section_scroll.blockSignals(False)
+        self.atlas_tilt_ml.blockSignals(True)
+        self.atlas_tilt_dv.blockSignals(True)
+        self.atlas_tilt_ml.setValue(round(tilt_ml * 10))
+        self.atlas_tilt_dv.setValue(round(tilt_dv * 10))
+        self.atlas_tilt_ml.blockSignals(False)
+        self.atlas_tilt_dv.blockSignals(False)
+        self.atlas_tilt_ml_value.setText(f"{tilt_ml:+.1f}°")
+        self.atlas_tilt_dv_value.setText(f"{tilt_dv:+.1f}°")
+        self._update_axis_control(index)
+        self._refresh_atlas()
+
+        matrix = np.linalg.inv(atlas_transform) @ reference_transform
+        inverse = np.linalg.inv(matrix)
+        session.slice_to_atlas_x = AffineCoordinate(matrix, 0)
+        session.slice_to_atlas_y = AffineCoordinate(matrix, 1)
+        session.atlas_to_slice_x = AffineCoordinate(inverse, 0)
+        session.atlas_to_slice_y = AffineCoordinate(inverse, 1)
+        session.auto_alignment_score = score
+        session.auto_alignment_affine = matrix.tolist()
+        height, width = self.current_atlas_image.shape
+        session.transformed_overlay = cv2.warpAffine(
+            session.rotated,
+            matrix[:2],
+            (width, height),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        self._recompute_probe_points_from_slice_points(session)
+        self.probe_mode.setChecked(True)
+        self._refresh_atlas()
+        self._refresh_points()
+        self._refresh_3d()
+        self.status.setText(
+            f"Auto-aligned AP {self._index_to_um(index):+d} um, L-R {tilt_ml:+.1f}°, D-V {tilt_dv:+.1f}°. "
+            "Review the overlay and adjust manually if needed."
+        )
+
     def _rebuild_slice_transform(self, session: SliceSession) -> int | None:
         if session.rotated is None or self.current_atlas_image is None:
             return None
@@ -1726,6 +2025,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.slice_to_atlas_y = Rbf(slice_points[:, 0], slice_points[:, 1], atlas_points[:, 1], function="thin_plate", smooth=0.0)
         session.atlas_to_slice_x = Rbf(atlas_points[:, 0], atlas_points[:, 1], slice_points[:, 0], function="thin_plate", smooth=0.0)
         session.atlas_to_slice_y = Rbf(atlas_points[:, 0], atlas_points[:, 1], slice_points[:, 1], function="thin_plate", smooth=0.0)
+        session.auto_alignment_score = None
+        session.auto_alignment_affine = None
         h, w = self.current_atlas_image.shape
         yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
         map_x = session.atlas_to_slice_x(xx, yy).astype(np.float32)
@@ -2119,6 +2420,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     "atlas_landmarks": session.atlas_landmarks,
                     "slice_landmarks": self._slice_raw_to_display_points(session, session.slice_landmarks),
                     "slice_landmarks_raw": session.slice_landmarks,
+                    "brain_outline_points": self._slice_raw_to_display_points(session, session.brain_outline_points),
+                    "brain_outline_points_raw": session.brain_outline_points,
+                    "auto_alignment_method": (
+                        "outline_and_anatomical_gradient_coarse_to_fine"
+                        if session.auto_alignment_score is not None
+                        else None
+                    ),
+                    "auto_alignment_score": session.auto_alignment_score,
+                    "auto_alignment_affine": session.auto_alignment_affine,
                     "probe_atlas_points": session.probe_atlas_points,
                     "probe_slice_points": self._slice_raw_to_display_points(session, session.probe_slice_points),
                     "probe_slice_points_raw": session.probe_slice_points,
