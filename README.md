@@ -28,7 +28,13 @@ Atlas positions and exported coordinates use a bregma-centred stereotaxic conven
 
 Use **Add slices** to select many TIFF, PNG, JPEG, or BMP images at once. Browse them with the slice selector, the previous/next buttons, or `Ctrl+Left` and `Ctrl+Right`; points and adjustments are retained separately for each slice.
 
-For automatic coronal registration, select **Draw brain outline**, click clockwise or anticlockwise around the complete outer brain surface, then click **Auto-align**. The tracker returns one best AP position, L-R tilt, D-V tilt, and in-plane alignment using the outline plus anatomical edges inside it. Review the overlay and use the existing atlas and landmark controls for any manual correction.
+The **Manual alignment** tab is the direct landmark workflow: choose AP and cutting tilts, add corresponding atlas/slice landmarks, then transform the slice. The **Automatic alignment** tab is independent: enable **Smart surface brush** and paint over the intended brain object. The app uses the stroke as foreground evidence, selects the contrast-defined object, and converts its outer boundary into the exact number of evenly spaced points selected in **Auto-selection** (50 by default); changing that value resamples an existing automatically selected outline. Hold Shift while painting to subtract. Manual trustworthy surface arcs remain available across folds, tears, or missing boundary. Surface geometry establishes scale; brightness-invariant internal anatomy drives the atlas match.
+
+To constrain automatic registration, enable **Limit AP search** and enter a stereotaxic interval such as `From +1200 um` and `To +1800 um`; bregma is 0, anterior is positive, and posterior is negative. A cancellable progress window shows the AP scan, shared-tilt estimation, and 25 µm/1° refinement. The custom brightness curve changes only display contrast and cannot change automatic detection or alignment.
+
+After transforming or auto-aligning a slice, use the **Slice — Atlas** blend slider directly below the atlas comparison image to inspect either image alone or any intermediate opacity.
+
+For a joint run, check the slices to include, drag them into explicit most-anterior-to-most-posterior order, and use **Auto-align selected A→P sequence**. The solver enforces that order while optimizing one shared L-R/D-V cutting tilt and a separate AP position/2D transform for every selected slice. Saved overlays and per-slice costs update while browsing.
 
 The desktop launcher source is `source/proprietary_tracker_launcher.pyw`. Generated executables, bundled runtimes, and atlas data are intentionally excluded from Git because they exceed normal GitHub repository limits.
 
