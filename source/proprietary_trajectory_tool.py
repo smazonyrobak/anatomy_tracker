@@ -26,7 +26,8 @@ from scipy.ndimage import map_coordinates
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 DEFAULT_ATLAS_FOLDER = APP_DIR / "data" / "Allen Brain Atlas 25um"
 VOXEL_UM = 25.0
-# IBL Allen CCF bregma is ML, AP, DV in um; this NRRD is indexed AP, DV, ML.
+ALLEN_CCF_25_SHAPE_AP_DV_ML = (528, 320, 456)
+# IBL bregma estimate in Allen CCF space: ML, AP, DV in um; this NRRD is indexed AP, DV, ML.
 DEFAULT_BREGMA_UM_ML_AP_DV = np.array([5739.0, 5400.0, 332.0], dtype=np.float64)
 DEFAULT_BREGMA_VOXEL_AP_DV_ML = (
     np.array(
@@ -796,13 +797,33 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.axis_position_um.setRange(-999999, 999999)
         self.axis_position_um.setSingleStep(int(VOXEL_UM))
         self.axis_position_um.setSuffix(" um")
+        self.axis_position_um.setToolTip(
+            "Stereotaxic coordinate relative to bregma. For AP, 0 is bregma; anterior is positive and posterior is negative."
+        )
         toolbar_layout.addWidget(QtWidgets.QLabel("Plane"), 1, 0)
         toolbar_layout.addWidget(self.plane_box, 1, 1)
         toolbar_layout.addWidget(self.axis_label, 1, 2)
         toolbar_layout.addWidget(self.axis_position_um, 1, 3)
 
-        self.add_slice_btn = QtWidgets.QPushButton("Add/load slice")
+        self.add_slice_btn = QtWidgets.QPushButton("Add slices")
+        self.previous_slice_btn = QtWidgets.QPushButton("‹")
+        self.previous_slice_btn.setToolTip("Previous slice (Ctrl+Left)")
+        self.previous_slice_btn.setFixedWidth(32)
         self.slice_list = QtWidgets.QComboBox()
+        self.slice_list.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.slice_list.setMinimumContentsLength(20)
+        self.next_slice_btn = QtWidgets.QPushButton("›")
+        self.next_slice_btn.setToolTip("Next slice (Ctrl+Right)")
+        self.next_slice_btn.setFixedWidth(32)
+        self.slice_position = QtWidgets.QLabel("0 / 0")
+        slice_picker = QtWidgets.QWidget()
+        slice_picker_layout = QtWidgets.QHBoxLayout(slice_picker)
+        slice_picker_layout.setContentsMargins(0, 0, 0, 0)
+        slice_picker_layout.setSpacing(4)
+        slice_picker_layout.addWidget(self.previous_slice_btn)
+        slice_picker_layout.addWidget(self.slice_list, 1)
+        slice_picker_layout.addWidget(self.next_slice_btn)
+        slice_picker_layout.addWidget(self.slice_position)
         self.rotation = QtWidgets.QDoubleSpinBox()
         self.rotation.setKeyboardTracking(False)
         self.rotation.setRange(-3600.0, 3600.0)
@@ -812,7 +833,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.flip_horizontal = QtWidgets.QCheckBox("Flip H")
         self.flip_vertical = QtWidgets.QCheckBox("Flip V")
         toolbar_layout.addWidget(self.add_slice_btn, 2, 0)
-        toolbar_layout.addWidget(self.slice_list, 2, 1)
+        toolbar_layout.addWidget(slice_picker, 2, 1)
         toolbar_layout.addWidget(QtWidgets.QLabel("Slice rotation"), 2, 2)
         toolbar_layout.addWidget(self.rotation, 2, 3)
         toolbar_layout.addWidget(self.flip_horizontal, 2, 4)
@@ -980,6 +1001,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.axis_position_um.valueChanged.connect(self._axis_um_changed)
         self.add_slice_btn.clicked.connect(self._load_slice_dialog)
         self.slice_list.currentIndexChanged.connect(self._switch_slice)
+        self.previous_slice_btn.clicked.connect(lambda: self._step_slice(-1))
+        self.next_slice_btn.clicked.connect(lambda: self._step_slice(1))
         self.rotation.valueChanged.connect(self._rotation_changed)
         self.flip_horizontal.toggled.connect(self._slice_geometry_changed)
         self.flip_vertical.toggled.connect(self._slice_geometry_changed)
@@ -1003,6 +1026,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.mode_group.buttonClicked.connect(self._point_target_changed)
         self.undo_shortcut = QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Undo, self)
         self.undo_shortcut.activated.connect(self.undo_last_point)
+        self.previous_slice_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Left"), self)
+        self.previous_slice_shortcut.activated.connect(lambda: self._step_slice(-1))
+        self.next_slice_shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Right"), self)
+        self.next_slice_shortcut.activated.connect(lambda: self._step_slice(1))
+        self._update_slice_navigation()
         self._refresh_probe_names()
 
     def _map_channels_units_clicked(self) -> None:
@@ -1044,9 +1072,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.status.setText(f"Loaded atlas: {folder}")
 
     def _default_bregma_for_shape(self, shape: tuple[int, int, int]) -> np.ndarray:
-        if tuple(shape) == (528, 320, 456):
-            return DEFAULT_BREGMA_VOXEL_AP_DV_ML.copy()
-        return np.array([shape[0] / 2, 0, shape[2] / 2], dtype=np.float64)
+        if tuple(shape) != ALLEN_CCF_25_SHAPE_AP_DV_ML:
+            raise ValueError(
+                f"Expected Allen CCFv3 25 um atlas shape {ALLEN_CCF_25_SHAPE_AP_DV_ML}, got {tuple(shape)}"
+            )
+        return DEFAULT_BREGMA_VOXEL_AP_DV_ML.copy()
 
     def _load_region_names(self, query_path: Path) -> dict[int, tuple[str, str]]:
         if not query_path.exists():
@@ -1185,7 +1215,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         max_um = self._index_to_um(self.atlas_volume.shape[axis] - 1)
         if min_um > max_um:
             min_um, max_um = max_um, min_um
-        self.axis_label.setText(f"{plane_axis_name(plane)} position")
+        if plane == "coronal":
+            self.axis_label.setText("AP from bregma (+ anterior)")
+        else:
+            self.axis_label.setText(f"{plane_axis_name(plane)} from bregma")
         self.axis_position_um.blockSignals(True)
         self.axis_position_um.setRange(min_um, max_um)
         self.axis_position_um.setValue(self._index_to_um(index))
@@ -1258,41 +1291,68 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _load_slice_dialog(self) -> None:
         start = str(self.default_slices_folder) if self.default_slices_folder else ""
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+        paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self,
-            "Select brain slice",
+            "Select brain slices",
             start,
             "Images (*.tif *.tiff *.png *.jpg *.jpeg *.bmp)",
         )
-        if path:
-            self.load_slice(Path(path))
+        if not paths:
+            return
+        first_index = len(self.sessions)
+        self.slice_list.blockSignals(True)
+        for path in paths:
+            self.load_slice(Path(path), select=False)
+        self.slice_list.setCurrentIndex(first_index)
+        self.slice_list.blockSignals(False)
+        self.default_slices_folder = Path(paths[0]).parent
+        self._switch_slice(first_index)
+        self.status.setText(f"Loaded {len(paths)} slices")
 
-    def load_slice(self, path: Path) -> None:
-        raw = tifffile.imread(str(path)) if path.suffix.lower() in {".tif", ".tiff"} else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-        raw = as_gray(raw)
-        display_raw, scale = downsample_for_display(raw)
-        display_u8 = normalize_u8(display_raw)
+    def load_slice(self, path: Path, *, select: bool = True) -> None:
         session = SliceSession(
             name=path.name,
             path=str(path),
-            display_scale=scale,
-            raw_display=display_u8,
             atlas_plane=self.plane_box.currentText(),
             atlas_index=self.section_slider.value(),
             atlas_tilt_ml_deg=self._current_atlas_tilts()[0],
             atlas_tilt_dv_deg=self._current_atlas_tilts()[1],
         )
         self.sessions.append(session)
-        self.slice_list.addItem(session.name)
-        self.slice_list.setCurrentIndex(len(self.sessions) - 1)
-        self._update_slice_image()
-        self.status.setText(f"Loaded slice: {path.name}")
+        index = len(self.sessions) - 1
+        self.slice_list.blockSignals(True)
+        self.slice_list.addItem(session.name, session.path)
+        self.slice_list.setItemData(index, session.path, QtCore.Qt.ItemDataRole.ToolTipRole)
+        self.slice_list.blockSignals(False)
+        if select:
+            self.slice_list.setCurrentIndex(index)
+            self._switch_slice(index)
+            self.status.setText(f"Loaded slice: {path.name}")
+        else:
+            self._update_slice_navigation()
+
+    def _load_session_image(self, session: SliceSession) -> None:
+        path = Path(session.path)
+        raw = tifffile.imread(str(path)) if path.suffix.lower() in {".tif", ".tiff"} else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        raw = as_gray(raw)
+        display_raw, scale = downsample_for_display(raw)
+        session.display_scale = scale
+        session.raw_display = normalize_u8(display_raw)
 
     def _switch_slice(self, index: int) -> None:
         if index < 0 or index >= len(self.sessions):
             return
+        previous_index = self.current_session_index
+        if 0 <= previous_index < len(self.sessions) and previous_index != index:
+            previous = self.sessions[previous_index]
+            previous.raw_display = None
+            previous.adjusted = None
+            previous.rotated = None
+            previous.weight_image = None
         self.current_session_index = index
         session = self.sessions[index]
+        if session.raw_display is None:
+            self._load_session_image(session)
         self.rotation.blockSignals(True)
         self.rotation.setValue(session.rotation_deg)
         self.rotation.blockSignals(False)
@@ -1326,6 +1386,19 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._update_axis_control(session.atlas_index)
         self._refresh_atlas()
         self._update_slice_image()
+        self._update_slice_navigation()
+
+    def _step_slice(self, offset: int) -> None:
+        index = self.current_session_index + offset
+        if 0 <= index < len(self.sessions):
+            self.slice_list.setCurrentIndex(index)
+
+    def _update_slice_navigation(self) -> None:
+        count = len(self.sessions)
+        index = self.current_session_index
+        self.slice_position.setText(f"{index + 1 if index >= 0 else 0} / {count}")
+        self.previous_slice_btn.setEnabled(index > 0)
+        self.next_slice_btn.setEnabled(0 <= index < count - 1)
 
     def current_session(self) -> SliceSession | None:
         if 0 <= self.current_session_index < len(self.sessions):
@@ -2013,6 +2086,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "voxel_um": VOXEL_UM,
             "bregma_um_mlapdv": DEFAULT_BREGMA_UM_ML_AP_DV.tolist(),
             "bregma_voxel_ap_dv_ml": self.bregma_voxel.tolist(),
+            "stereotaxic_origin": "bregma",
+            "stereotaxic_ap_convention": "0 at bregma; anterior positive; posterior negative",
             "stereotaxic_axis_sign_ap_dv_ml": STEREOTAXIC_AXIS_SIGN_AP_DV_ML.tolist(),
             "probe_type": self.probe_type.currentText(),
             "channel_identity": ["probe_name", "probe_channel_number"],
