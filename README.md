@@ -29,3 +29,11 @@ Atlas positions and exported coordinates use a bregma-centred stereotaxic conven
 Use **Add slices** to select many TIFF, PNG, JPEG, or BMP images at once. Browse them with the slice selector, the previous/next buttons, or `Ctrl+Left` and `Ctrl+Right`; points and adjustments are retained separately for each slice.
 
 The desktop launcher source is `source/proprietary_tracker_launcher.pyw`. Generated executables, bundled runtimes, and atlas data are intentionally excluded from Git because they exceed normal GitHub repository limits.
+
+## Build the bundled tracker
+
+```powershell
+python -m PyInstaller --noconfirm --clean TrajectoryTracker.spec
+```
+
+Deploy the complete generated `dist/TrajectoryTracker` folder. Do not combine a newly built executable with an older `_internal` runtime; the executable and runtime must come from the same build.

@@ -3,6 +3,7 @@ __pycache__/
 *.exe
 *.lnk
 *.spec
+!TrajectoryTracker.spec
 _internal/
 build/
 data/
