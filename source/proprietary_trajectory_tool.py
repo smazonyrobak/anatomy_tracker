@@ -670,6 +670,18 @@ def ordered_alignment_path(costs: np.ndarray) -> list[int]:
     return path[::-1]
 
 
+def partially_ordered_alignment_path(costs: np.ndarray, constrained_rows: list[int]) -> list[int]:
+    costs = np.asarray(costs, dtype=np.float64)
+    path = np.argmin(costs, axis=1).tolist()
+    if any(not np.isfinite(costs[row, column]) for row, column in enumerate(path)):
+        raise RuntimeError("No valid AP position exists for one or more slices")
+    if len(constrained_rows) >= 2:
+        constrained_path = ordered_alignment_path(costs[np.asarray(constrained_rows)])
+        for row, column in zip(constrained_rows, constrained_path):
+            path[row] = column
+    return path
+
+
 def refine_affine_from_internal_structure(
     slice_image: np.ndarray,
     atlas_image: np.ndarray,
@@ -1130,7 +1142,7 @@ class CurveCanvas(QtWidgets.QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setMinimumHeight(165)
+        self.setMinimumHeight(100)
         self.setMouseTracking(True)
         self.points: list[tuple[float, float]] = [(0.0, 0.0), (255.0, 255.0)]
         self.hist: np.ndarray | None = None
@@ -1140,8 +1152,10 @@ class CurveCanvas(QtWidgets.QWidget):
         if image_u8 is None:
             self.hist = None
         else:
-            hist, _ = np.histogram(image_u8.ravel(), bins=256, range=(0, 255))
+            hist, _ = np.histogram(image_u8.ravel(), bins=128, range=(0, 256))
             hist = hist.astype(np.float32)
+            hist = cv2.GaussianBlur(hist[None, :], (0, 0), 1.5).ravel()
+            hist = np.sqrt(hist)
             self.hist = hist / hist.max() if hist.max() > 0 else hist
         self.update()
 
@@ -1156,12 +1170,23 @@ class CurveCanvas(QtWidgets.QWidget):
         graph = self._graph_rect()
         painter.setPen(QtGui.QPen(QtGui.QColor("#2d3a4c"), 1))
         painter.drawRect(graph)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#263342"), 1, QtCore.Qt.PenStyle.DotLine))
+        for fraction in (0.25, 0.5, 0.75):
+            x = graph.left() + fraction * graph.width()
+            y = graph.top() + fraction * graph.height()
+            painter.drawLine(QtCore.QPointF(x, graph.top()), QtCore.QPointF(x, graph.bottom()))
+            painter.drawLine(QtCore.QPointF(graph.left(), y), QtCore.QPointF(graph.right(), y))
         if self.hist is not None:
-            painter.setPen(QtGui.QPen(QtGui.QColor("#697789"), 1))
+            histogram = QtGui.QPainterPath(QtCore.QPointF(graph.left(), graph.bottom()))
             for i, value in enumerate(self.hist):
-                x = graph.left() + i / 255.0 * graph.width()
+                x = graph.left() + i / max(1, len(self.hist) - 1) * graph.width()
                 y = graph.bottom() - float(value) * graph.height()
-                painter.drawLine(QtCore.QPointF(x, graph.bottom()), QtCore.QPointF(x, y))
+                histogram.lineTo(x, y)
+            histogram.lineTo(graph.right(), graph.bottom())
+            histogram.closeSubpath()
+            painter.setPen(QtGui.QPen(QtGui.QColor("#6f8da6"), 1.5))
+            painter.setBrush(QtGui.QColor(76, 111, 137, 95))
+            painter.drawPath(histogram)
         sorted_points = sorted(self.points)
         polyline = QtGui.QPolygonF([self._data_to_pos(x, y) for x, y in sorted_points])
         painter.setPen(QtGui.QPen(QtGui.QColor("#49b9ff"), 2))
@@ -1173,12 +1198,30 @@ class CurveCanvas(QtWidgets.QWidget):
             painter.drawEllipse(pos, 5, 5)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() != QtCore.Qt.MouseButton.LeftButton:
-            return
         pos = event.position()
         distances = [QtCore.QLineF(pos, self._data_to_pos(x, y)).length() for x, y in self.points]
+        if event.button() == QtCore.Qt.MouseButton.RightButton and distances and min(distances) <= 12:
+            index = int(np.argmin(distances))
+            if len(self.points) > 2 and index not in (0, len(self.points) - 1):
+                self.points.pop(index)
+                self.points = sorted(self.points)
+                self.update()
+                self.points_changed.emit(self.points)
+            return
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
         if distances and min(distances) <= 12:
             self.drag_index = int(np.argmin(distances))
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() != QtCore.Qt.MouseButton.LeftButton or len(self.points) >= 12:
+            return
+        if any(QtCore.QLineF(event.position(), self._data_to_pos(x, y)).length() <= 12 for x, y in self.points):
+            return
+        self.points.append(self._pos_to_data(event.position()))
+        self.points = sorted(self.points)
+        self.update()
+        self.points_changed.emit(self.points)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         if self.drag_index is None:
@@ -1189,6 +1232,8 @@ class CurveCanvas(QtWidgets.QWidget):
         self.points_changed.emit(sorted(self.points))
 
     def mouseReleaseEvent(self, _: QtGui.QMouseEvent) -> None:
+        if self.drag_index is None:
+            return
         self.drag_index = None
         self.points = sorted(self.points)
         self.points_changed.emit(self.points)
@@ -1226,24 +1271,36 @@ class CurveEditor(QtWidgets.QWidget):
         self.point_count.setKeyboardTracking(False)
         self.point_count.setRange(2, 12)
         self.point_count.setValue(2)
-        row.addWidget(QtWidgets.QLabel("Curve points"))
+        row.addWidget(QtWidgets.QLabel("Points"))
         row.addWidget(self.point_count)
+        row.addWidget(QtWidgets.QLabel("Drag points • double-click to add • right-click to remove"))
         row.addStretch(1)
+        self.reset_btn = QtWidgets.QPushButton("Reset linear")
+        row.addWidget(self.reset_btn)
         layout.addLayout(row)
 
         self.canvas = CurveCanvas()
-        layout.addWidget(self.canvas)
 
         self.table = QtWidgets.QTableWidget(2, 2)
         self.table.setHorizontalHeaderLabels(["Input", "Output"])
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
-        self.table.setMaximumHeight(135)
-        layout.addWidget(self.table)
+        self.table.setMinimumWidth(150)
+
+        self.editor_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self.editor_splitter.setChildrenCollapsible(False)
+        self.editor_splitter.setHandleWidth(6)
+        self.editor_splitter.addWidget(self.canvas)
+        self.editor_splitter.addWidget(self.table)
+        self.editor_splitter.setStretchFactor(0, 3)
+        self.editor_splitter.setStretchFactor(1, 1)
+        self.editor_splitter.setSizes([420, 180])
+        layout.addWidget(self.editor_splitter, 1)
 
         self.point_count.valueChanged.connect(self._set_count)
         self.table.cellChanged.connect(self._table_changed)
         self.canvas.points_changed.connect(self._canvas_changed)
+        self.reset_btn.clicked.connect(self._reset_linear)
         self.set_points(self.points)
 
     def set_histogram(self, image_u8: np.ndarray | None) -> None:
@@ -1293,6 +1350,10 @@ class CurveEditor(QtWidgets.QWidget):
         self.set_points(points)
         self.points_changed.emit(self.points)
 
+    def _reset_linear(self) -> None:
+        self.set_points([(0.0, 0.0), (255.0, 255.0)])
+        self.points_changed.emit(self.points)
+
     def _refresh_plot(self) -> None:
         self.canvas.set_points(self.points)
 
@@ -1331,12 +1392,32 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         layout = QtWidgets.QVBoxLayout(root)
         layout.setContentsMargins(6, 6, 6, 6)
 
+        self.workspace_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.workspace_splitter.setChildrenCollapsible(False)
+        self.workspace_splitter.setHandleWidth(8)
+        layout.addWidget(self.workspace_splitter, 1)
+
         controls = QtWidgets.QWidget()
         controls_layout = QtWidgets.QGridLayout(controls)
         controls_layout.setContentsMargins(0, 0, 0, 0)
         controls_layout.setHorizontalSpacing(6)
         controls_layout.setVerticalSpacing(6)
-        layout.addWidget(controls)
+
+        def resizable_panel(widget: QtWidgets.QWidget, minimum_width: int) -> QtWidgets.QScrollArea:
+            panel = QtWidgets.QScrollArea()
+            panel.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+            panel.setWidgetResizable(True)
+            panel.setMinimumWidth(minimum_width)
+            panel.setWidget(widget)
+            return panel
+
+        self.controls_scroll = QtWidgets.QScrollArea()
+        self.controls_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.controls_scroll.setWidgetResizable(True)
+        self.controls_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.controls_scroll.setMinimumHeight(130)
+        self.controls_scroll.setWidget(controls)
+        self.workspace_splitter.addWidget(self.controls_scroll)
 
         self.atlas_path = QtWidgets.QLineEdit(str(self.atlas_folder))
         self.load_atlas_btn = QtWidgets.QPushButton("Load atlas")
@@ -1367,7 +1448,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         atlas_setup_layout.setColumnStretch(0, 1)
         atlas_setup_layout.setColumnStretch(1, 2)
         atlas_setup_layout.setColumnStretch(2, 2)
-        controls_layout.addWidget(atlas_setup, 0, 0)
 
         self.add_slice_btn = QtWidgets.QPushButton("Add slices")
         self.previous_slice_btn = QtWidgets.QPushButton("‹")
@@ -1408,7 +1488,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         slice_setup_layout.addWidget(self.flip_horizontal, 1, 3)
         slice_setup_layout.addWidget(self.flip_vertical, 1, 4)
         slice_setup_layout.setColumnStretch(1, 1)
-        controls_layout.addWidget(slice_setup, 0, 1)
+        self.setup_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self.setup_splitter.setChildrenCollapsible(False)
+        self.setup_splitter.setHandleWidth(8)
+        self.atlas_setup_panel = resizable_panel(atlas_setup, 260)
+        self.slice_setup_panel = resizable_panel(slice_setup, 260)
+        self.setup_splitter.addWidget(self.atlas_setup_panel)
+        self.setup_splitter.addWidget(self.slice_setup_panel)
+        self.setup_splitter.setSizes([900, 900])
+        controls_layout.addWidget(self.setup_splitter, 0, 0, 1, 2)
 
         alignment_group = QtWidgets.QGroupBox("Alignment")
         alignment_group_layout = QtWidgets.QVBoxLayout(alignment_group)
@@ -1458,6 +1546,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         manual_layout.setColumnStretch(1, 1)
         manual_layout.setColumnStretch(2, 1)
         manual_layout.setColumnStretch(3, 1)
+        manual_layout.setRowStretch(2, 1)
         self.alignment_tabs.addTab(manual_tab, "Manual alignment")
 
         automatic_tab = QtWidgets.QWidget()
@@ -1501,9 +1590,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.auto_align_btn = QtWidgets.QPushButton("Auto-align current")
         self.auto_align_btn.setToolTip("Find the best coronal AP position and L-R/D-V cutting angles")
         self.auto_align_btn.setEnabled(False)
-        self.auto_align_all_btn = QtWidgets.QPushButton("Auto-align selected A→P sequence")
+        self.auto_align_all_btn = QtWidgets.QPushButton("Auto-align all outlined slices")
         self.auto_align_all_btn.setToolTip(
-            "Jointly align the checked slices in the displayed anterior-to-posterior order with one shared tilt"
+            "Jointly align every outlined slice with one shared tilt; checked slices optionally constrain AP order"
         )
         self.auto_align_all_btn.setEnabled(False)
         automatic_layout.addWidget(self.auto_align_btn, 2, 0, 1, 3)
@@ -1525,7 +1614,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         automatic_layout.addWidget(self.limit_auto_align_ap, 3, 0)
         automatic_layout.addWidget(self.auto_align_ap_min, 3, 1)
         automatic_layout.addWidget(self.auto_align_ap_max, 3, 2)
-        order_label = QtWidgets.QLabel("Selected slice order: most anterior (top) → most posterior (bottom)")
+        order_label = QtWidgets.QLabel(
+            "Optional AP-order constraint: drag slices into known anterior → posterior order and check only those "
+            "whose relative order is known. Leave all unchecked to apply no order constraint."
+        )
+        order_label.setWordWrap(True)
         order_label.setStyleSheet("color:#9fb4c8;")
         automatic_layout.addWidget(order_label, 4, 0, 1, 6)
         self.auto_slice_order = QtWidgets.QListWidget()
@@ -1549,8 +1642,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         automatic_layout.addWidget(self.alignment_summary, 6, 0, 1, 6)
         for column in range(6):
             automatic_layout.setColumnStretch(column, 1)
+        automatic_layout.setRowStretch(7, 1)
         self.alignment_tabs.addTab(automatic_tab, "Automatic alignment")
-        controls_layout.addWidget(alignment_group, 1, 0)
 
         self.probe_type = QtWidgets.QComboBox()
         self.probe_type.addItems(["Neuropixels 1.0", "Neuropixels 2.0 single-shank", "Neuropixels 2.0 four-shank"])
@@ -1605,7 +1698,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         probe_layout.addWidget(self.probe_clear_points_btn, 3, 4, 1, 2)
         probe_layout.setColumnStretch(1, 2)
         probe_layout.setColumnStretch(3, 1)
-        controls_layout.addWidget(probe_group, 1, 1)
+        probe_layout.setRowStretch(4, 1)
+        self.workflow_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self.workflow_splitter.setChildrenCollapsible(False)
+        self.workflow_splitter.setHandleWidth(8)
+        self.alignment_panel = resizable_panel(alignment_group, 420)
+        self.probe_mapping_panel = resizable_panel(probe_group, 340)
+        self.workflow_splitter.addWidget(self.alignment_panel)
+        self.workflow_splitter.addWidget(self.probe_mapping_panel)
+        self.workflow_splitter.setSizes([980, 800])
+        controls_layout.addWidget(self.workflow_splitter, 1, 0, 1, 2)
 
         self.status = QtWidgets.QLabel("Idle")
         self.status.setStyleSheet("color:#9fb4c8;")
@@ -1619,7 +1721,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
-        layout.addWidget(splitter, 1)
+        splitter.setHandleWidth(8)
+        self.workspace_splitter.addWidget(splitter)
 
         atlas_group = QtWidgets.QGroupBox("Atlas")
         atlas_layout = QtWidgets.QVBoxLayout(atlas_group)
@@ -1667,9 +1770,19 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         slice_group = QtWidgets.QGroupBox("Slice")
         slice_layout = QtWidgets.QVBoxLayout(slice_group)
         self.slice_panel = ImagePanel("Brain slice")
-        slice_layout.addWidget(self.slice_panel, 1)
         self.curve_editor = CurveEditor()
-        slice_layout.addWidget(self.curve_editor)
+        self.curve_group = QtWidgets.QGroupBox("Contrast curve — display only")
+        curve_group_layout = QtWidgets.QVBoxLayout(self.curve_group)
+        curve_group_layout.addWidget(self.curve_editor)
+        self.slice_workspace_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.slice_workspace_splitter.setChildrenCollapsible(True)
+        self.slice_workspace_splitter.setHandleWidth(8)
+        self.slice_workspace_splitter.addWidget(self.slice_panel)
+        self.slice_workspace_splitter.addWidget(self.curve_group)
+        self.slice_workspace_splitter.setStretchFactor(0, 4)
+        self.slice_workspace_splitter.setStretchFactor(1, 1)
+        self.slice_workspace_splitter.setSizes([520, 170])
+        slice_layout.addWidget(self.slice_workspace_splitter, 1)
         splitter.addWidget(slice_group)
 
         view3d_group = QtWidgets.QGroupBox("3D trajectory")
@@ -1692,6 +1805,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         view3d_layout.addLayout(brain_opacity_row)
         splitter.addWidget(view3d_group)
         splitter.setSizes([620, 620, 540])
+        self.workspace_splitter.setStretchFactor(0, 0)
+        self.workspace_splitter.setStretchFactor(1, 1)
+        self.workspace_splitter.setSizes([300, 680])
 
         self.atlas_panel.clicked.connect(self._atlas_clicked)
         self.slice_panel.clicked.connect(self._slice_clicked)
@@ -2098,7 +2214,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             | QtCore.Qt.ItemFlag.ItemIsUserCheckable
             | QtCore.Qt.ItemFlag.ItemIsDragEnabled
         )
-        order_item.setCheckState(QtCore.Qt.CheckState.Checked)
+        order_item.setCheckState(QtCore.Qt.CheckState.Unchecked)
         self.auto_slice_order.addItem(order_item)
         self._update_auto_order_labels()
         if select:
@@ -2575,8 +2691,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             item.setToolTip(session.path)
         self.auto_slice_order.blockSignals(False)
 
-    def _selected_auto_sessions(self) -> list[tuple[int, SliceSession]]:
-        selected: list[tuple[int, SliceSession]] = []
+    def _outlined_auto_sessions(self) -> list[tuple[int, SliceSession]]:
+        outlined: list[tuple[int, SliceSession]] = []
+        for row in range(self.auto_slice_order.count()):
+            item = self.auto_slice_order.item(row)
+            session_index = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if (
+                session_index is not None
+                and 0 <= int(session_index) < len(self.sessions)
+                and len(self.sessions[int(session_index)].brain_outline_points) >= 8
+            ):
+                outlined.append((int(session_index), self.sessions[int(session_index)]))
+        return outlined
+
+    def _auto_order_constraint_session_indices(self) -> list[int]:
+        constrained: list[int] = []
         for row in range(self.auto_slice_order.count()):
             item = self.auto_slice_order.item(row)
             session_index = item.data(QtCore.Qt.ItemDataRole.UserRole)
@@ -2586,8 +2715,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 and 0 <= int(session_index) < len(self.sessions)
                 and len(self.sessions[int(session_index)].brain_outline_points) >= 8
             ):
-                selected.append((int(session_index), self.sessions[int(session_index)]))
-        return selected
+                constrained.append(int(session_index))
+        return constrained
 
     def _move_auto_order_item(self, offset: int) -> None:
         row = self.auto_slice_order.currentRow()
@@ -2603,7 +2732,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_point_counts()
 
     def _alignment_tab_changed(self, index: int) -> None:
-        self.curve_editor.setVisible(index == 0)
+        self.curve_group.setVisible(index == 0)
         if index == 0:
             self.landmark_mode.setChecked(True)
         else:
@@ -2682,7 +2811,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             and self.annotation_volume is not None
         )
         self._update_auto_order_labels()
-        outlined = len(self._selected_auto_sessions())
+        outlined = len(self._outlined_auto_sessions())
         self.auto_align_all_btn.setEnabled(
             outlined >= 2 and self.atlas_volume is not None and self.annotation_volume is not None
         )
@@ -3036,14 +3165,25 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
 
     def auto_align_all_slices(self) -> None:
-        outlined = self._selected_auto_sessions()
+        outlined = self._outlined_auto_sessions()
         if len(outlined) < 2 or self.atlas_volume is None or self.annotation_volume is None:
             QtWidgets.QMessageBox.warning(
                 self,
                 "More surfaces needed",
-                "Check at least 2 slices that each have 8 or more trusted/detected surface points.",
+                "Create at least 8 trusted/detected surface points on at least 2 slices.",
             )
             return
+        outlined_row_by_session = {session_index: row for row, (session_index, _) in enumerate(outlined)}
+        constrained_rows = [
+            outlined_row_by_session[session_index]
+            for session_index in self._auto_order_constraint_session_indices()
+            if session_index in outlined_row_by_session
+        ]
+        constraint_description = (
+            f"a {len(constrained_rows)}-slice anterior-to-posterior constraint"
+            if len(constrained_rows) >= 2
+            else "no AP-order constraint"
+        )
 
         progress = QtWidgets.QProgressDialog("Preparing outlined slices...", "Cancel", 0, len(outlined) + 1, self)
         progress.setWindowTitle("Global auto-align")
@@ -3126,7 +3266,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
             coarse_indices = self._auto_align_indices(step=4)
             search_min, search_max = self._auto_align_index_bounds()
-            progress.setLabelText(f"Scanning {self._auto_align_ap_description()} under the selected A-to-P order...")
+            progress.setLabelText(f"Scanning {self._auto_align_ap_description()} with {constraint_description}...")
             progress.setMaximum(completed + len(coarse_indices))
             coarse_results: list[list[tuple[float, int, np.ndarray, str]]] = [[] for _ in references]
             for index in coarse_indices:
@@ -3138,7 +3278,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 [[result[0] for result in results] for results in coarse_results],
                 dtype=np.float64,
             )
-            initial_path = ordered_alignment_path(initial_costs)
+            initial_path = partially_ordered_alignment_path(initial_costs, constrained_rows)
             initial_results = [coarse_results[row][column] for row, column in enumerate(initial_path)]
             initial_centers = [result[1] for result in initial_results]
             coarse_candidates = sorted(
@@ -3150,7 +3290,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             )
             coarse_candidate_array = np.asarray(coarse_candidates)
             tilt_values = list(range(-12, 13, 4))
-            progress.setLabelText("Optimizing one shared L-R/D-V tilt and one ordered AP path...")
+            progress.setLabelText(f"Optimizing one shared L-R/D-V tilt with {constraint_description}...")
             progress.setMaximum(completed + len(tilt_values) ** 2 * len(coarse_candidates))
             best_joint: tuple[
                 float,
@@ -3172,7 +3312,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     for row, center in enumerate(initial_centers):
                         costs[row, np.abs(coarse_candidate_array - center) > 10] = np.inf
                     try:
-                        path = ordered_alignment_path(costs)
+                        path = partially_ordered_alignment_path(costs, constrained_rows)
                     except RuntimeError:
                         continue
                     results = [grid[row][column] for row, column in enumerate(path)]
@@ -3194,7 +3334,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             refine_candidate_array = np.asarray(refine_candidates)
             refine_ml_values = np.arange(max(-15.0, coarse_ml - 3.0), min(15.0, coarse_ml + 3.0) + 0.1, 1.0)
             refine_dv_values = np.arange(max(-15.0, coarse_dv - 3.0), min(15.0, coarse_dv + 3.0) + 0.1, 1.0)
-            progress.setLabelText("Refining ordered AP positions at 25 um and shared tilt at 1 degree...")
+            progress.setLabelText("Refining AP positions at 25 um and shared tilt at 1 degree...")
             progress.setMaximum(completed + len(refine_ml_values) * len(refine_dv_values) * len(refine_candidates))
             refined_joint: tuple[
                 float,
@@ -3216,7 +3356,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     for row, center in enumerate(refine_centers):
                         costs[row, np.abs(refine_candidate_array - center) > 5] = np.inf
                     try:
-                        path = ordered_alignment_path(costs)
+                        path = partially_ordered_alignment_path(costs, constrained_rows)
                     except RuntimeError:
                         continue
                     results = [grid[row][column] for row, column in enumerate(path)]
@@ -3224,7 +3364,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     if refined_joint is None or joint_cost < refined_joint[0]:
                         refined_joint = joint_cost, float(tilt_ml), float(tilt_dv), results
             if refined_joint is None:
-                raise RuntimeError("The ordered fine search could not fit the selected slices")
+                raise RuntimeError("The fine search could not fit the outlined slices")
 
             _, tilt_ml, tilt_dv, results = refined_joint
             for (_, session), reference, result in zip(outlined, references, results):
@@ -3259,7 +3399,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 session.auto_alignment_global = True
                 session.auto_alignment_extent = extent
                 session.auto_alignment_method = (
-                    "ordered_multi_slice_shared_tilt_trusted_surface_and_brightness_invariant_internal_structure"
+                    "partially_ordered_multi_slice_shared_tilt_trusted_surface_and_brightness_invariant_internal_structure"
+                    if len(constrained_rows) >= 2
+                    else "unconstrained_multi_slice_shared_tilt_trusted_surface_and_brightness_invariant_internal_structure"
                 )
                 session.transformed_overlay = None
                 self._recompute_probe_points_from_slice_points(session)
@@ -3267,7 +3409,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self._switch_slice(self.current_session_index)
             self._refresh_3d()
             self.status.setText(
-                f"Jointly aligned {len(outlined)} selected slices in strict A-to-P order with shared "
+                f"Jointly aligned {len(outlined)} outlined slices with {constraint_description} and shared "
                 f"L-R {tilt_ml:+.1f}°, D-V {tilt_dv:+.1f}°."
             )
         except InterruptedError:
@@ -3718,8 +3860,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             ),
             "brightness_weighted_trajectory": self.brightness_weighting.isChecked(),
             "automatic_outline_point_count": self.outline_point_count.value(),
-            "automatic_alignment_selected_sequence_anterior_to_posterior": [
-                session.name for _, session in self._selected_auto_sessions()
+            "automatic_alignment_outlined_slices": [
+                session.name for _, session in self._outlined_auto_sessions()
+            ],
+            "automatic_alignment_order_constraint_anterior_to_posterior": [
+                self.sessions[index].name for index in self._auto_order_constraint_session_indices()
             ],
             "marked_endpoint_voxel_ap_dv_ml": marked_endpoint.tolist(),
             "marked_endpoint_stereotaxic_um_ap_dv_ml": volume_to_stereotaxic_um(marked_endpoint, self.bregma_voxel).tolist(),
@@ -3785,6 +3930,7 @@ def main() -> None:
         QPushButton { background:#24415a; border:1px solid #41627f; border-radius:6px; padding:7px 12px; }
         QPushButton:hover { background:#2d526f; }
         QSplitter::handle { background:#2d3a4c; }
+        QSplitter::handle:hover { background:#49b9ff; }
         """
     )
     window = TrajectoryTrackerWindow(

@@ -34,7 +34,9 @@ To constrain automatic registration, enable **Limit AP search** and enter a ster
 
 After transforming or auto-aligning a slice, use the **Slice — Atlas** blend slider directly below the atlas comparison image to inspect either image alone or any intermediate opacity.
 
-For a joint run, check the slices to include, drag them into explicit most-anterior-to-most-posterior order, and use **Auto-align selected A→P sequence**. The solver enforces that order while optimizing one shared L-R/D-V cutting tilt and a separate AP position/2D transform for every selected slice. Saved overlays and per-slice costs update while browsing.
+The Atlas/Slices setup row, Alignment/Probe mapping row, controls/image workspace, Atlas/Slice/3D views, and slice/contrast editor are separated by draggable splitter handles. Pull the controls/image handle upward to give the brain-slice view more room. The manual-alignment contrast editor shows a continuous smoothed intensity distribution; drag curve points, double-click to add one, right-click an interior point to remove it, or use **Reset linear**.
+
+For a joint run, use **Auto-align all outlined slices**. Every slice with at least 8 surface points participates automatically, and the solver estimates one shared L-R/D-V cutting tilt plus a separate AP position/2D transform for each. AP order is optional: leave every slice unchecked for a fully unconstrained search, or drag a subset into known most-anterior-to-most-posterior order and check only that subset. The solver enforces the checked partial-order chain without imposing an order on unchecked slices. Saved overlays and per-slice costs update while browsing.
 
 The desktop launcher source is `source/proprietary_tracker_launcher.pyw`. Generated executables, bundled runtimes, and atlas data are intentionally excluded from Git because they exceed normal GitHub repository limits.
 
