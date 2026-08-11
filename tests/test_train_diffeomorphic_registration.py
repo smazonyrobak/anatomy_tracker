@@ -13,6 +13,7 @@ from training.train_diffeomorphic_registration import (
     SELECTION_SEED_BASE,
     SELECTION_STRATA,
     EMA,
+    checkpoint_selection_key,
     export_gate_failures,
     export_candidate_model,
     hierarchical_label_dice_loss,
@@ -22,6 +23,7 @@ from training.train_diffeomorphic_registration import (
     onnx_parity_report,
     surface_affine_calibrate,
 )
+from training.real_histology_registration import native_registration_batch
 
 
 def toy_plane(batch: int = 2, height: int = 32, width: int = 48):
@@ -132,7 +134,8 @@ def test_combined_training_objective_has_model_gradients_and_ema_updates():
 
     assert torch.isfinite(loss)
     assert set(terms) == {
-        "mind", "flow", "dice", "inverse", "smooth", "topology", "affine", "rejection", "wrong_identity"
+        "mind", "flow", "dice", "inverse", "smooth", "topology", "affine", "support",
+        "rejection", "wrong_identity",
     }
     assert model.registration.velocity_head.weight.grad is not None
     assert model.rejector[-1].weight.grad is not None
@@ -140,6 +143,59 @@ def test_combined_training_objective_has_model_gradients_and_ema_updates():
         model.rejector[-1].weight.add_(1.0)
     ema.update(model)
     assert not torch.equal(before, ema.model.rejector[-1].weight)
+
+
+def test_native_positive_has_finite_unsupervised_objective_without_fake_targets():
+    template, _, mask = toy_plane(batch=1)
+    section = {
+        "fixed": template[0, 0].numpy(),
+        "moving": (template[0, 0].square() * mask[0, 0]).numpy(),
+        "fixed_mask": mask[0, 0].numpy().astype(bool),
+        "moving_mask": mask[0, 0].numpy().astype(bool),
+    }
+    batch = native_registration_batch([section], torch.device("cpu"))
+    model = RegistrationWithRejector(base_channels=4)
+
+    loss, terms = registration_objective(model, batch)
+    loss.backward()
+
+    assert batch["similarity_supervision"].all()
+    assert not batch["dense_supervision"].any() and not batch["label_supervision"].any()
+    assert "target_atlas_to_affine" not in batch and "fixed_labels" not in batch
+    assert torch.isfinite(loss) and torch.isfinite(terms["mind"])
+    assert terms["flow"] == 0.0 and terms["dice"] == 0.0
+    assert model.registration.velocity_head.weight.grad is not None
+    assert torch.isfinite(model.registration.velocity_head.weight.grad).all()
+
+
+def test_native_wrong_plane_only_supervises_rejection_and_identity():
+    template, _, mask = toy_plane(batch=1)
+    target = {
+        "fixed": template[0, 0].numpy(),
+        "moving": template[0, 0].numpy(),
+        "fixed_mask": mask[0, 0].numpy().astype(bool),
+        "moving_mask": mask[0, 0].numpy().astype(bool),
+    }
+    wrong_mask = torch.zeros_like(mask)
+    wrong_mask[:, :, 7:27, 14:36] = 1.0
+    wrong = {
+        "fixed": torch.flip(template[0, 0], (-1,)).numpy(),
+        "fixed_mask": wrong_mask[0, 0].numpy().astype(bool),
+    }
+    batch = native_registration_batch(
+        [target], torch.device("cpu"), wrong_sections=[wrong], wrong_kind="wrong_tilt"
+    )
+    model = RegistrationWithRejector(base_channels=4)
+    loss, terms = registration_objective(model, batch)
+    loss.backward()
+
+    assert batch["wrong_pair"].all()
+    assert not batch["similarity_supervision"].any()
+    assert not batch["dense_supervision"].any()
+    assert not batch["geometry_supervision"].any()
+    assert terms["mind"] == terms["flow"] == terms["dice"] == terms["support"] == 0.0
+    assert torch.isfinite(loss)
+    assert model.rejector[-1].weight.grad is not None
 
 
 def passing_gate_metrics():
@@ -175,6 +231,19 @@ def passing_gate_metrics():
         "runtime_ms": 35.0,
         "runtime_limit_ms": 250.0,
     }}
+
+
+def test_checkpoint_selection_prefers_gate_feasibility_then_normalized_violation():
+    feasible = passing_gate_metrics()
+    slightly_invalid = {"gates": dict(feasible["gates"], landmark_tre_px=1.1)}
+    severely_invalid = {"gates": dict(feasible["gates"], landmark_tre_px=2.0)}
+
+    assert checkpoint_selection_key(feasible, None, 100.0) < checkpoint_selection_key(
+        slightly_invalid, None, 0.0
+    )
+    assert checkpoint_selection_key(slightly_invalid, None, 100.0) < checkpoint_selection_key(
+        severely_invalid, None, 0.0
+    )
 
 
 def test_export_gates_cover_geometry_accuracy_rejection_and_runtime():

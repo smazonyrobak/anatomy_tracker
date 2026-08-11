@@ -35,6 +35,10 @@ MAXIMUM_OUTSIDE_TISSUE_DISPLACEMENT_PX = 1e-3
 MAXIMUM_DISPLACEMENT_P95_PX = 8.0
 MAXIMUM_DISPLACEMENT_PX = 12.0
 REJECTION_PROBABILITY_THRESHOLD = 0.5
+MINIMUM_RUNTIME_MIND_IMPROVEMENT = 0.0
+MAXIMUM_RUNTIME_SURFACE_DICE_LOSS = 0.01
+MINIMUM_RUNTIME_RETAINED_COVERAGE = 0.95
+MINIMUM_EFFECTIVE_DISPLACEMENT_PX = 0.05
 RUNTIME_GATE_CONTRACT = {
     "minimum_jacobian": MINIMUM_JACOBIAN,
     "maximum_abs_log_jacobian_p99": MAXIMUM_ABS_LOG_JACOBIAN_P99,
@@ -46,6 +50,10 @@ RUNTIME_GATE_CONTRACT = {
     "maximum_displacement_p95_px": MAXIMUM_DISPLACEMENT_P95_PX,
     "maximum_displacement_px": MAXIMUM_DISPLACEMENT_PX,
     "rejection_probability_threshold": REJECTION_PROBABILITY_THRESHOLD,
+    "minimum_mind_improvement": MINIMUM_RUNTIME_MIND_IMPROVEMENT,
+    "maximum_surface_dice_loss": MAXIMUM_RUNTIME_SURFACE_DICE_LOSS,
+    "minimum_retained_coverage": MINIMUM_RUNTIME_RETAINED_COVERAGE,
+    "minimum_effective_displacement_px": MINIMUM_EFFECTIVE_DISPLACEMENT_PX,
 }
 
 
@@ -245,9 +253,6 @@ class NonlinearWarp2D:
         d_dx = self.atlas_to_affine_xy[:-1, 1:] - self.atlas_to_affine_xy[:-1, :-1]
         d_dy = self.atlas_to_affine_xy[1:, :-1] - self.atlas_to_affine_xy[:-1, :-1]
         return d_dx[..., 0] * d_dy[..., 1] - d_dx[..., 1] * d_dy[..., 0]
-
-    def inverse_consistency_error(self) -> np.ndarray:
-        return _cycle_error(self.atlas_to_affine_xy, self.affine_to_atlas_xy)
 
     def diagnostics(
         self,

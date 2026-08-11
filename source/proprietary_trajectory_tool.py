@@ -833,6 +833,16 @@ def verify_staged_mapping_outputs(
             raise RuntimeError("Staged nonlinear transform sidecar checksum failed")
         restored = SliceAtlasTransform2D.load_npz(sidecar_path)
         restored.check_invariants()
+        attestation = restored.nonlinear_attestation
+        if restored.nonlinear is None or attestation is None:
+            raise RuntimeError("Staged nonlinear transform sidecar contains no accepted warp")
+        if (
+            sidecar.get("coordinate_convention") != restored.coordinate_convention
+            or sidecar.get("model_sha256") != attestation.model_sha256
+            or sidecar.get("manifest_sha256") != attestation.manifest_sha256
+            or sidecar.get("pixel_spacing_um") != attestation.pixel_spacing_um
+        ):
+            raise RuntimeError("Staged nonlinear transform metadata disagrees with its sidecar")
 
     files = sorted(path for path in staging_root.rglob("*") if path.is_file())
     return {path.relative_to(staging_root): file_sha256(path) for path in files}
@@ -858,9 +868,23 @@ def promote_staged_mapping_outputs(
         else:
             originals[relative_path] = None
 
+    def is_manifest(relative_path: Path) -> bool:
+        return (
+            relative_path.parent == Path("anatomy")
+            and relative_path.name.startswith("proprietary_trajectory_manifest_")
+            and relative_path.suffix == ".json"
+        )
+
+    # The manifest is the transaction's commit marker: every file it references
+    # is installed and checksum-verified before the manifest becomes visible.
+    promotion_order = sorted(
+        staged_hashes,
+        key=lambda path: (is_manifest(path), path.as_posix()),
+    )
     promoted: list[Path] = []
     try:
-        for relative_path, expected_sha256 in staged_hashes.items():
+        for relative_path in promotion_order:
+            expected_sha256 = staged_hashes[relative_path]
             source = staging_root / relative_path
             destination = data_folder / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -868,17 +892,26 @@ def promote_staged_mapping_outputs(
             replace_file(source, destination)
             if file_sha256(destination) != expected_sha256:
                 raise RuntimeError(f"Promoted mapping checksum failed for {relative_path}")
-    except Exception:
+    except Exception as promotion_error:
+        rollback_errors = []
         for relative_path in reversed(promoted):
-            destination = data_folder / relative_path
-            backup = originals[relative_path]
-            if backup is None:
-                if destination.exists():
-                    destination.unlink()
-            else:
-                shutil.copy2(backup, destination)
-                if file_sha256(destination) != file_sha256(backup):
-                    raise RuntimeError(f"Rollback checksum failed for {relative_path}")
+            try:
+                destination = data_folder / relative_path
+                backup = originals[relative_path]
+                if backup is None:
+                    if destination.exists():
+                        destination.unlink()
+                else:
+                    shutil.copy2(backup, destination)
+                    if file_sha256(destination) != file_sha256(backup):
+                        raise RuntimeError(f"rollback checksum failed for {relative_path}")
+            except Exception as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        if rollback_errors:
+            details = "; ".join(rollback_errors)
+            raise RuntimeError(
+                f"Mapping promotion failed and rollback was incomplete: {details}"
+            ) from promotion_error
         raise
 
 
@@ -5437,7 +5470,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         for trace in session.probe_traces.values():
             display_points = self._slice_raw_to_display_points(session, trace.slice_points)
             trace.atlas_points = [
-                tuple(point)
+                tuple(map(float, point))
                 for point in map_session_display_to_atlas(session, np.asarray(display_points))
             ] if display_points else []
         self._recompute_session_volume_points(session)

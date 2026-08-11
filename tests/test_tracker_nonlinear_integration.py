@@ -208,6 +208,139 @@ def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_p
         restored = TRACKER.SliceAtlasTransform2D.load_npz(sidecar_path)
         assert restored.nonlinear is not None
         assert restored.nonlinear_attestation.model_sha256 == "a" * 64
+
+        row = {"probe_name": "imec0", "probe_channel_number": 0}
+        row.update({name: 1 for name in TRACKER.ANATOMY_MAPPING_COLUMNS})
+        channels = TRACKER.pd.DataFrame([row])
+        units = TRACKER.pd.DataFrame([{"unit_key": "imec0:0", **row}])
+        channels.to_csv(tmp_path / "channels.csv", index=False)
+        units.to_csv(tmp_path / "units.csv", index=False)
+        TRACKER.write_anatomy_sidecars(tmp_path, channels, units)
+        TRACKER.verify_staged_mapping_outputs(tmp_path, 1, 1, "imec0")
+
+        for field, invalid in (
+            ("coordinate_convention", "wrong convention"),
+            ("model_sha256", "c" * 64),
+            ("manifest_sha256", "d" * 64),
+            ("pixel_spacing_um", 50.0),
+        ):
+            changed = json.loads(json.dumps(manifest))
+            changed["slices"][0]["slice_atlas_transform"]["sidecar"][field] = invalid
+            manifest_path.write_text(json.dumps(changed), encoding="utf-8")
+            with pytest.raises(RuntimeError, match="metadata disagrees"):
+                TRACKER.verify_staged_mapping_outputs(tmp_path, 1, 1, "imec0")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_nonidentity_warp_has_one_overlay_probe_volume_and_export_convention(tmp_path):
+    from nonlinear_registration import NonlinearWarp2D
+
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    try:
+        shape = (65, 64)
+        yy, xx = np.mgrid[: shape[0], : shape[1]].astype(np.float32)
+        mask = np.zeros(shape, dtype=bool)
+        mask[2:-2, 2:-2] = True
+        shift = (
+            0.8
+            * np.sin(np.pi * xx / (shape[1] - 1.0)) ** 2
+            * (
+                np.sin(2.0 * np.pi * yy / (shape[0] - 1.0))
+                - 2.0 * np.sin(4.0 * np.pi * yy / (shape[0] - 1.0))
+            )
+            * mask
+        )
+        basis = np.stack(
+            (
+                np.ones_like(xx),
+                xx * (2.0 / (shape[1] - 1.0)) - 1.0,
+                yy * (2.0 / (shape[0] - 1.0)) - 1.0,
+            ),
+            axis=-1,
+        )
+        affine = np.linalg.lstsq(basis[mask], shift[mask], rcond=None)[0]
+        shift = (shift - basis @ affine) * mask
+        inverse_x = xx.copy()
+        for _ in range(50):
+            sampled_shift = TRACKER.cv2.remap(
+                shift.astype(np.float32),
+                inverse_x.astype(np.float32),
+                yy,
+                TRACKER.cv2.INTER_LINEAR,
+                borderMode=TRACKER.cv2.BORDER_REPLICATE,
+            )
+            inverse_x = xx - sampled_shift
+        warp = NonlinearWarp2D(
+            np.stack((xx + shift, yy), axis=-1),
+            np.stack((inverse_x, yy), axis=-1),
+        )
+        transform = TRACKER.SliceAtlasTransform2D(
+            np.eye(3),
+            shape,
+            shape,
+            warp,
+            TRACKER.NonlinearWarpAttestation(mask, mask, "a" * 64, "b" * 64),
+        )
+        expected_atlas = np.array([32.0, 16.0])
+        display_point = tuple(transform.map_atlas_to_display(expected_atlas[None])[0])
+        image = np.broadcast_to(np.arange(shape[1], dtype=np.float32), shape).copy()
+        session = TRACKER.SliceSession(
+            "slice",
+            path="slice.tif",
+            raw_display=image,
+            adjusted=image,
+            rotated=image,
+            weight_image=image,
+            atlas_index=20,
+            slice_atlas_transform=transform,
+            auto_alignment_run_id="nonidentity-run",
+            auto_alignment_diagnostics={"nonlinear_refinement": {"status": "accepted"}},
+            probe_traces={"imec0": TRACKER.ProbeTrace(slice_points=[display_point])},
+        )
+        window.sessions = [session]
+        window.atlas_volume = np.zeros((40, *shape), dtype=np.uint8)
+
+        overlay = TRACKER.render_session_slice_in_atlas(session, image, shape)
+        window._recompute_probe_points_from_slice_points(session)
+        trace = session.probe_traces["imec0"]
+        expected_volume = TRACKER.point_to_volume(
+            expected_atlas, "coronal", 20, window.atlas_volume.shape
+        )
+
+        assert abs(display_point[0] - expected_atlas[0]) > 0.5
+        assert overlay[16, 32] == pytest.approx(display_point[0], abs=0.05)
+        assert np.allclose(trace.atlas_points[0], expected_atlas, atol=0.03)
+        assert np.allclose(trace.volume_points[0], expected_volume, atol=0.03)
+        assert np.allclose(window.all_probe_volume_points("imec0")[0], expected_volume, atol=0.03)
+
+        window._write_manifest(
+            tmp_path,
+            "imec0",
+            "y0_contact",
+            expected_volume,
+            expected_volume,
+            np.array([0.0, -1.0, 0.0]),
+        )
+        manifest_path = tmp_path / "anatomy" / "proprietary_trajectory_manifest_imec0.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        slice_record = manifest["slices"][0]
+        sidecar = manifest_path.parent / slice_record["slice_atlas_transform"]["sidecar"]["relative_path"]
+        restored = TRACKER.SliceAtlasTransform2D.load_npz(sidecar)
+
+        assert np.allclose(slice_record["probe_atlas_points"][0], expected_atlas, atol=0.03)
+        assert np.allclose(slice_record["probe_volume_points"][0], expected_volume, atol=0.03)
+        assert np.allclose(
+            restored.map_display_to_atlas(np.asarray([display_point]))[0],
+            expected_atlas,
+            atol=0.03,
+        )
+        assert restored.render_display_image_in_atlas(image)[16, 32] == pytest.approx(
+            display_point[0], abs=0.05
+        )
     finally:
         window.close()
         app.processEvents()
@@ -389,3 +522,38 @@ def test_mapping_promotion_failure_rolls_back_every_output(tmp_path, monkeypatch
     finally:
         window.close()
         app.processEvents()
+
+
+def test_mapping_manifest_is_promoted_last(tmp_path):
+    staging = tmp_path / "stage"
+    destination = tmp_path / "output"
+    backup = tmp_path / "backup"
+    relative_paths = [
+        Path("anatomy/proprietary_trajectory_manifest_imec0.json"),
+        Path("channels.csv"),
+        Path("anatomy/slice_atlas_transforms/transform.npz"),
+        Path("units.csv"),
+    ]
+    for index, relative_path in enumerate(relative_paths):
+        path = staging / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"staged-{index}".encode())
+    staged_hashes = {
+        relative_path: TRACKER.file_sha256(staging / relative_path)
+        for relative_path in relative_paths
+    }
+    promoted = []
+
+    def record_replace(source, target):
+        promoted.append(Path(target).relative_to(destination))
+        os.replace(source, target)
+
+    TRACKER.promote_staged_mapping_outputs(
+        staging,
+        destination,
+        backup,
+        staged_hashes,
+        replace_file=record_replace,
+    )
+
+    assert promoted[-1] == Path("anatomy/proprietary_trajectory_manifest_imec0.json")

@@ -13,11 +13,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from source.nonlinear_registration import (
-    MAXIMUM_ABS_LOG_JACOBIAN_P99,
-    MINIMUM_JACOBIAN,
-)
-
 MAX_DEFORMATION_PX = 6.0
 INTENSITY_QUANTILES = (0.005, 0.995)
 

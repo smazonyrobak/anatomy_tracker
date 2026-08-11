@@ -44,7 +44,7 @@ from training.diffeomorphic_registration_model import (
 )
 
 
-REAL_HISTOLOGY_CONTRACT_VERSION = 2
+REAL_HISTOLOGY_CONTRACT_VERSION = 3
 ALLEN_IMAGE_DOWNSAMPLE = 5
 REAL_HISTOLOGY_TRAIN_BANK_SEED = 2_000_039
 REAL_HISTOLOGY_TRAIN_BANK_ANIMALS = 256
@@ -59,21 +59,32 @@ MAX_DENSE_EPE_MEDIAN_PX = 1.0
 MAX_DENSE_EPE_P95_PX = 2.0
 MAX_TRE_MEDIAN_PX = 1.0
 MAX_TRE_P95_PX = 2.0
+MAX_TRE_MEDIAN_CCF_UM = 30.0
+MAX_TRE_P95_CCF_UM = 60.0
 MAX_JACOBIAN_ERROR_P95 = 0.20
 MIN_DENSE_IMPROVEMENT_PX = 0.50
 MIN_DENSE_RELATIVE_IMPROVEMENT = 0.25
 MIN_INTERIOR_IMPROVEMENT_PX = 0.15
 MIN_VALID_ACCEPT_RATE = 0.95
 MIN_NATIVE_ACCEPT_RATE = 0.90
-MAX_NATIVE_MIND_INCREASE = 0.01
+MIN_NATIVE_WRONG_REJECT_RATE = 0.95
+MAX_NATIVE_WRONG_DISPLACEMENT_P95_PX = 1.0
+MAX_NATIVE_MIND_UPPER95 = 0.0
 MAX_NATIVE_SURFACE_DICE_LOSS = 0.01
 MIN_NATIVE_RETAINED_COVERAGE = 0.95
+MIN_DENSE_SECTION_PASS_RATE = 0.95
+MIN_NATIVE_MIND_IMPROVEMENT_RATE = 0.80
+MAX_HARD_WRONG_AP_DELTA_UM = 1000.0
+MAX_HARD_WRONG_TILT_AP_DELTA_UM = 500.0
+MAX_HARD_WRONG_AP_TILT_DELTA_DEG = 2.0
+MAX_HARD_WRONG_TILT_DELTA_DEG = 5.0
 ALLOWED_SPLITS = {"train", "validation", "test"}
 DENSE_STRATA = (
     "real_histology_interior_label_free",
     "smooth_deformation_label_free",
     "nuisance_damage_label_free",
 )
+NATIVE_WRONG_KINDS = ("wrong_ap", "wrong_tilt", "wrong_plane")
 
 
 def file_sha256(path: str | Path) -> str:
@@ -251,6 +262,8 @@ class RegisteredHistologySource:
                     "section_image_id": section_id,
                     "image_sha256": self.downloads[section_id],
                     "ap_um": float(record["ap_um"]),
+                    "tilt_lr_deg": float(record["tilt_lr_deg"]),
+                    "tilt_dv_deg": float(record["tilt_dv_deg"]),
                     "synthetic_seeds": {
                         stratum: int.from_bytes(
                             _hash_order(seed, stratum, section_id)[:8], "big"
@@ -299,6 +312,9 @@ class RegisteredHistologySource:
                 "experiment_id": int(record["experiment_id"]),
                 "section_image_id": int(record["section_image_id"]),
                 "image_sha256": self.downloads[int(record["section_image_id"])],
+                "ap_um": float(record["ap_um"]),
+                "tilt_lr_deg": float(record["tilt_lr_deg"]),
+                "tilt_dv_deg": float(record["tilt_dv_deg"]),
             })
         payload = {
             "contract_version": REAL_HISTOLOGY_CONTRACT_VERSION,
@@ -336,7 +352,7 @@ class RegisteredHistologySource:
                 raise ValueError("Real-histology entry differs from the immutable Allen manifests")
 
     @lru_cache(maxsize=384)
-    def section(self, section_image_id: int) -> dict[str, np.ndarray | int]:
+    def section(self, section_image_id: int) -> dict[str, np.ndarray | int | float]:
         if int(section_image_id) in self.rejected_records:
             raise ValueError(
                 f"Allen image {section_image_id} was rejected by the registered-image quality contract"
@@ -366,6 +382,10 @@ class RegisteredHistologySource:
             "specimen_id": int(record["specimen_id"]),
             "experiment_id": int(record["experiment_id"]),
             "section_image_id": int(section_image_id),
+            "ap_um": float(record["ap_um"]),
+            "tilt_lr_deg": float(record["tilt_lr_deg"]),
+            "tilt_dv_deg": float(record["tilt_dv_deg"]),
+            "plane_basis_um": model_canvas_plane_basis_um(dataset, record),
         }
 
 
@@ -388,6 +408,174 @@ def downloaded_pixel_to_reference_index(dataset: dict, section: dict) -> np.ndar
     reference = tvr[:9].reshape(3, 3) @ image_to_volume
     reference[:, 2] += tvr[9:12]
     return reference / MODEL_PIXEL_SPACING_UM
+
+
+def model_canvas_plane_basis_um(dataset: dict, section: dict) -> np.ndarray:
+    """Map model-canvas ``(dx,dy)`` endpoints to CCF ``(AP,DV,ML)`` microns."""
+    transform = downloaded_pixel_to_reference_index(dataset, section)
+    source_from_ml_dv = np.linalg.inv(transform[[2, 1], :2])
+    ap_from_ml_dv = transform[0, :2] @ source_from_ml_dv
+    return MODEL_PIXEL_SPACING_UM * np.asarray(
+        ((ap_from_ml_dv[0], ap_from_ml_dv[1]), (0.0, 1.0), (1.0, 0.0)),
+        dtype=np.float32,
+    )
+
+
+def surface_affine_target_to_source(
+    source_mask: torch.Tensor,
+    target_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Return a target-to-source map matching tissue centroid and axis scales."""
+    batch, _, height, width = source_mask.shape
+    identity = pixel_identity_grid(
+        batch, height, width, device=source_mask.device, dtype=source_mask.dtype
+    )
+    maps = []
+    for item in range(batch):
+        source_y, source_x = torch.where(source_mask[item, 0] > 0.5)
+        target_y, target_x = torch.where(target_mask[item, 0] > 0.5)
+        source_center = torch.stack((source_x.float().mean(), source_y.float().mean()))
+        target_center = torch.stack((target_x.float().mean(), target_y.float().mean()))
+        source_scale = torch.stack((source_x.float().std(), source_y.float().std())).clamp_min(1.0)
+        target_scale = torch.stack((target_x.float().std(), target_y.float().std())).clamp_min(1.0)
+        maps.append(
+            source_center[:, None, None]
+            + (identity[item] - target_center[:, None, None])
+            * (source_scale / target_scale)[:, None, None]
+        )
+    return torch.stack(maps)
+
+
+def native_registration_batch(
+    sections: list[dict],
+    device: torch.device,
+    *,
+    wrong_sections: list[dict] | None = None,
+    wrong_kind: str | None = None,
+) -> dict[str, torch.Tensor]:
+    """Build native registered pairs without inventing dense or label supervision."""
+    moving = torch.stack([torch.from_numpy(section["moving"]) for section in sections])[:, None].to(device)
+    moving_mask = torch.stack(
+        [torch.from_numpy(section["moving_mask"]) for section in sections]
+    )[:, None].to(device).float()
+    if wrong_sections is None:
+        fixed = torch.stack([torch.from_numpy(section["fixed"]) for section in sections])[:, None].to(device)
+        fixed_mask = torch.stack(
+            [torch.from_numpy(section["fixed_mask"]) for section in sections]
+        )[:, None].to(device).float()
+        wrong = False
+    else:
+        if wrong_kind not in NATIVE_WRONG_KINDS or len(wrong_sections) != len(sections):
+            raise ValueError("Native wrong pairs require a known wrong-plane kind and one plane per section")
+        raw_fixed = torch.stack(
+            [torch.from_numpy(section["fixed"]) for section in wrong_sections]
+        )[:, None].to(device)
+        raw_mask = torch.stack(
+            [torch.from_numpy(section["fixed_mask"]) for section in wrong_sections]
+        )[:, None].to(device).float()
+        target_to_source = surface_affine_target_to_source(raw_mask, moving_mask)
+        fixed = sample_at_pixel_map(raw_fixed, target_to_source, padding_mode="zeros")
+        fixed_mask = sample_at_pixel_map(raw_mask, target_to_source, padding_mode="zeros")
+        wrong = True
+    overlap = fixed_mask * moving_mask
+    count = len(sections)
+    flags = lambda value: torch.full((count,), value, device=device, dtype=torch.bool)
+    return {
+        "fixed": preprocess_registration_tensor(fixed, fixed_mask),
+        "moving": preprocess_registration_tensor(moving, moving_mask),
+        "fixed_mask": fixed_mask,
+        "moving_mask": moving_mask,
+        "atlas_supervision_mask": overlap,
+        "affine_supervision_mask": overlap,
+        "wrong_pair": flags(wrong),
+        "similarity_supervision": flags(not wrong),
+        "dense_supervision": flags(False),
+        "label_supervision": flags(False),
+        "geometry_supervision": flags(not wrong),
+        "support_supervision": flags(not wrong),
+    }
+
+
+def select_native_wrong_entries(
+    entries: list[dict],
+    targets: list[dict],
+    kind: str,
+    seed: int,
+) -> list[dict]:
+    """Choose deterministic train/split-local wrong planes with the requested pose mismatch."""
+    if kind not in NATIVE_WRONG_KINDS:
+        raise ValueError(f"Unknown native wrong-pair kind: {kind}")
+    selected = []
+    reuse: dict[int, int] = {}
+    for target in targets:
+        candidates = [
+            entry for entry in entries
+            if int(entry["section_image_id"]) != int(target["section_image_id"])
+            and int(entry["specimen_id"]) != int(target["specimen_id"])
+        ]
+        if not candidates:
+            raise ValueError("Native wrong-pair generation requires a second independent specimen")
+        ap_delta = lambda entry: abs(float(entry["ap_um"]) - float(target["ap_um"]))
+        tilt_delta = lambda entry: float(np.hypot(
+            float(entry["tilt_lr_deg"]) - float(target["tilt_lr_deg"]),
+            float(entry["tilt_dv_deg"]) - float(target["tilt_dv_deg"]),
+        ))
+        if kind == "wrong_ap":
+            eligible = [
+                entry for entry in candidates
+                if 500.0 <= ap_delta(entry) <= MAX_HARD_WRONG_AP_DELTA_UM
+                and tilt_delta(entry) <= MAX_HARD_WRONG_AP_TILT_DELTA_DEG
+            ]
+            if not eligible:
+                raise ValueError(
+                    "Native wrong-AP generation requires a plane 500-1000 um away "
+                    "with no more than 2 degrees of tilt mismatch"
+                )
+            nearest = min(ap_delta(entry) for entry in eligible)
+            eligible = [entry for entry in eligible if ap_delta(entry) <= nearest + 500.0]
+            key = lambda entry: (
+                reuse.get(int(entry["section_image_id"]), 0),
+                ap_delta(entry), tilt_delta(entry),
+                _hash_order(
+                    seed, f"{kind}:{int(target['section_image_id'])}",
+                    int(entry["section_image_id"]),
+                ),
+            )
+        elif kind == "wrong_tilt":
+            eligible = [
+                entry for entry in candidates
+                if 1.0 <= tilt_delta(entry) <= MAX_HARD_WRONG_TILT_DELTA_DEG
+                and ap_delta(entry) <= MAX_HARD_WRONG_TILT_AP_DELTA_UM
+            ]
+            if not eligible:
+                raise ValueError(
+                    "Native wrong-tilt generation requires 1-5 degrees of tilt mismatch "
+                    "within 500 um AP"
+                )
+            nearest = min(ap_delta(entry) for entry in eligible)
+            eligible = [entry for entry in eligible if ap_delta(entry) <= nearest + 250.0]
+            key = lambda entry: (
+                reuse.get(int(entry["section_image_id"]), 0),
+                ap_delta(entry), tilt_delta(entry),
+                _hash_order(
+                    seed, f"{kind}:{int(target['section_image_id'])}",
+                    int(entry["section_image_id"]),
+                ),
+            )
+        else:
+            eligible = candidates
+            key = lambda entry: (
+                reuse.get(int(entry["section_image_id"]), 0),
+                _hash_order(
+                    seed, f"{kind}:{int(target['section_image_id'])}",
+                    int(entry["section_image_id"]),
+                ),
+            )
+        chosen = min(eligible, key=key)
+        selected.append(chosen)
+        section_id = int(chosen["section_image_id"])
+        reuse[section_id] = reuse.get(section_id, 0) + 1
+    return selected
 
 
 def canonical_registered_pair(
@@ -495,9 +683,21 @@ def _dense_row(outputs: tuple[torch.Tensor, ...], pair: dict, item: int, identif
     if tre_mask.sum() < 16:
         tre_mask = masks[0]
     tre = torch.linalg.vector_norm(predicted_maps[0] - target_maps[0], dim=0)[tre_mask]
-    target_tre = torch.linalg.vector_norm(
-        pixel_identity_grid(1, *target_maps[0].shape[-2:], device=target_maps[0].device)[0]
-        - target_maps[0], dim=0,
+    identity = pixel_identity_grid(
+        1, *target_maps[0].shape[-2:], device=target_maps[0].device,
+        dtype=target_maps[0].dtype,
+    )[0]
+    target_tre = torch.linalg.vector_norm(identity - target_maps[0], dim=0)[tre_mask]
+    plane_basis_um = pair["plane_basis_um"][item].to(
+        device=target_maps[0].device, dtype=target_maps[0].dtype
+    )
+    physical_tre = torch.linalg.vector_norm(
+        torch.einsum("ij,jhw->ihw", plane_basis_um, predicted_maps[0] - target_maps[0]),
+        dim=0,
+    )[tre_mask]
+    physical_target_tre = torch.linalg.vector_norm(
+        torch.einsum("ij,jhw->ihw", plane_basis_um, identity - target_maps[0]),
+        dim=0,
     )[tre_mask]
     jacobian_errors = []
     for predicted, target, mask in zip(predicted_maps, target_maps, masks):
@@ -518,6 +718,10 @@ def _dense_row(outputs: tuple[torch.Tensor, ...], pair: dict, item: int, identif
     tre_p95 = _percentile(tre, 0.95)
     baseline_tre_median = _percentile(target_tre, 0.5)
     baseline_tre_p95 = _percentile(target_tre, 0.95)
+    physical_tre_median = _percentile(physical_tre, 0.5)
+    physical_tre_p95 = _percentile(physical_tre, 0.95)
+    physical_baseline_tre_median = _percentile(physical_target_tre, 0.5)
+    physical_baseline_tre_p95 = _percentile(physical_target_tre, 0.95)
     return {
         **identifiers,
         "epe_median_px": epe_median,
@@ -534,6 +738,20 @@ def _dense_row(outputs: tuple[torch.Tensor, ...], pair: dict, item: int, identif
         "baseline_tre_p95_px": baseline_tre_p95,
         "tre_improvement_px": baseline_tre_median - tre_median,
         "tre_p95_improvement_px": baseline_tre_p95 - tre_p95,
+        "tre_median_ccf_um": physical_tre_median,
+        "tre_p95_ccf_um": physical_tre_p95,
+        "baseline_tre_median_ccf_um": physical_baseline_tre_median,
+        "baseline_tre_p95_ccf_um": physical_baseline_tre_p95,
+        "tre_improvement_ccf_um": physical_baseline_tre_median - physical_tre_median,
+        "tre_p95_improvement_ccf_um": physical_baseline_tre_p95 - physical_tre_p95,
+        "accuracy_passed": float(
+            epe_median <= MAX_DENSE_EPE_MEDIAN_PX
+            and epe_p95 <= MAX_DENSE_EPE_P95_PX
+            and tre_median <= MAX_TRE_MEDIAN_PX
+            and tre_p95 <= MAX_TRE_P95_PX
+            and physical_tre_median <= MAX_TRE_MEDIAN_CCF_UM
+            and physical_tre_p95 <= MAX_TRE_P95_CCF_UM
+        ),
         "jacobian_error_p95": _percentile(jacobian_error, 0.95),
         "target_maps_sha256": _map_pair_sha256(target_maps[0], target_maps[1]),
         "accepted": float(torch.sigmoid(rejection_logit[item]) < 0.5),
@@ -565,6 +783,7 @@ def _native_row(outputs: tuple[torch.Tensor, ...], batch: dict, item: int, ident
         "mind_before": mind_before,
         "mind_after": mind_after,
         "mind_delta": mind_after - mind_before,
+        "mind_improved": float(mind_after < mind_before),
         "surface_dice_before": surface_before,
         "surface_dice_after": surface_after,
         "surface_dice_delta": surface_after - surface_before,
@@ -576,18 +795,44 @@ def _native_row(outputs: tuple[torch.Tensor, ...], batch: dict, item: int, ident
     }
 
 
+def _native_wrong_row(
+    outputs: tuple[torch.Tensor, ...],
+    batch: dict,
+    item: int,
+    identifiers: dict,
+) -> dict:
+    forward, inverse, _, rejection_logit = outputs
+    fixed_mask = batch["fixed_mask"][item, 0] > 0.5
+    moving_mask = batch["moving_mask"][item, 0] > 0.5
+    identity = pixel_identity_grid(
+        1, *fixed_mask.shape, device=forward.device, dtype=forward.dtype
+    )[0]
+    displacement = torch.cat((
+        torch.linalg.vector_norm(forward[item] - identity, dim=0)[fixed_mask],
+        torch.linalg.vector_norm(inverse[item] - identity, dim=0)[moving_mask],
+    ))
+    diagnostics, failures = _warp_diagnostics(
+        forward[item], inverse[item], fixed_mask, moving_mask
+    )
+    return {
+        **identifiers,
+        "rejected": float(torch.sigmoid(rejection_logit[item]) >= 0.5),
+        "displacement_p95_px": _percentile(displacement, 0.95),
+        "geometry_passed": not failures,
+        "geometry_failures": failures,
+        "geometry": diagnostics,
+    }
+
+
 def _animal_summary(
     rows: list[dict],
     metrics: tuple[str, ...],
-    rate_metrics: tuple[str, ...] = (),
 ) -> dict[int, dict[str, float]]:
     specimen_ids = sorted({int(row["specimen_id"]) for row in rows})
     return {
         specimen_id: {
             metric: float(
-                (np.mean if metric in rate_metrics else np.median)(
-                    [row[metric] for row in rows if int(row["specimen_id"]) == specimen_id]
-                )
+                np.mean([row[metric] for row in rows if int(row["specimen_id"]) == specimen_id])
             )
             for metric in metrics
         }
@@ -622,6 +867,14 @@ def real_histology_gate_failures(gates: dict) -> list[str]:
         (gates["dense_epe_p95_px"] <= MAX_DENSE_EPE_P95_PX, "dense EPE p95 exceeds 2 px"),
         (gates["tre_median_px"] <= MAX_TRE_MEDIAN_PX, "sparse TRE median exceeds 1 px"),
         (gates["tre_p95_px"] <= MAX_TRE_P95_PX, "sparse TRE p95 exceeds 2 px"),
+        (
+            gates["tre_median_ccf_um"] <= MAX_TRE_MEDIAN_CCF_UM,
+            "physical sparse TRE median exceeds 30 CCF um",
+        ),
+        (
+            gates["tre_p95_ccf_um"] <= MAX_TRE_P95_CCF_UM,
+            "physical sparse TRE p95 exceeds 60 CCF um",
+        ),
         (gates["jacobian_error_p95"] <= MAX_JACOBIAN_ERROR_P95, "Jacobian error p95 exceeds 0.20"),
         (gates["epe_improvement_px"] >= MIN_DENSE_IMPROVEMENT_PX, "dense EPE improvement is below 0.5 px"),
         (
@@ -642,8 +895,27 @@ def real_histology_gate_failures(gates: dict) -> list[str]:
             "dense EPE p95 relative improvement is below 25%",
         ),
         (gates["dense_accept_rate"] >= MIN_VALID_ACCEPT_RATE, "valid dense-pair acceptance is below 95%"),
+        (
+            gates["dense_section_pass_rate"] >= MIN_DENSE_SECTION_PASS_RATE,
+            "fewer than 95% of held-out sections pass every dense accuracy gate",
+        ),
         (gates["native_accept_rate"] >= MIN_NATIVE_ACCEPT_RATE, "native-pair acceptance is below 90%"),
-        (gates["native_mind_delta"] <= MAX_NATIVE_MIND_INCREASE, "native MIND worsens by more than 0.01"),
+        (
+            gates["native_mind_improvement_rate"] >= MIN_NATIVE_MIND_IMPROVEMENT_RATE,
+            "native MIND improves on fewer than 80% of held-out sections",
+        ),
+        (
+            gates["native_wrong_reject_rate"] >= MIN_NATIVE_WRONG_REJECT_RATE,
+            "native wrong-plane rejection is below 95%",
+        ),
+        (
+            gates["native_wrong_displacement_p95_px"] <= MAX_NATIVE_WRONG_DISPLACEMENT_P95_PX,
+            "native wrong-plane displacement p95 exceeds 1 px",
+        ),
+        (
+            gates["native_mind_delta"] < MAX_NATIVE_MIND_UPPER95,
+            "native MIND improvement is not statistically supported",
+        ),
         (
             gates["native_surface_dice_delta"] >= -MAX_NATIVE_SURFACE_DICE_LOSS,
             "native surface Dice drops by more than 0.01",
@@ -655,6 +927,44 @@ def real_histology_gate_failures(gates: dict) -> list[str]:
         (gates["geometry_passed"], "at least one real-histology prediction fails geometry gates"),
     )
     return [message for passed, message in checks if not passed]
+
+
+def real_histology_gate_violation(gates: dict) -> float:
+    """Sum dimensionless release-gate violations for checkpoint ordering."""
+    upper = lambda value, limit: max(float(value) / float(limit) - 1.0, 0.0)
+    lower = lambda value, limit: max(1.0 - float(value) / float(limit), 0.0)
+    violations = (
+        lower(gates["animal_count"], REAL_HISTOLOGY_MIN_ANIMALS),
+        lower(gates["section_count"], REAL_HISTOLOGY_MIN_SECTIONS),
+        upper(gates["dense_epe_median_px"], MAX_DENSE_EPE_MEDIAN_PX),
+        upper(gates["dense_epe_p95_px"], MAX_DENSE_EPE_P95_PX),
+        upper(gates["tre_median_px"], MAX_TRE_MEDIAN_PX),
+        upper(gates["tre_p95_px"], MAX_TRE_P95_PX),
+        upper(gates["tre_median_ccf_um"], MAX_TRE_MEDIAN_CCF_UM),
+        upper(gates["tre_p95_ccf_um"], MAX_TRE_P95_CCF_UM),
+        upper(gates["jacobian_error_p95"], MAX_JACOBIAN_ERROR_P95),
+        lower(gates["epe_improvement_px"], MIN_DENSE_IMPROVEMENT_PX),
+        lower(gates["interior_epe_improvement_px"], MIN_INTERIOR_IMPROVEMENT_PX),
+        lower(gates["epe_relative_improvement"], MIN_DENSE_RELATIVE_IMPROVEMENT),
+        lower(gates["epe_p95_improvement_px"], MIN_DENSE_IMPROVEMENT_PX),
+        lower(gates["interior_epe_p95_improvement_px"], MIN_INTERIOR_IMPROVEMENT_PX),
+        lower(gates["epe_p95_relative_improvement"], MIN_DENSE_RELATIVE_IMPROVEMENT),
+        lower(gates["dense_accept_rate"], MIN_VALID_ACCEPT_RATE),
+        lower(gates["dense_section_pass_rate"], MIN_DENSE_SECTION_PASS_RATE),
+        lower(gates["native_accept_rate"], MIN_NATIVE_ACCEPT_RATE),
+        lower(gates["native_mind_improvement_rate"], MIN_NATIVE_MIND_IMPROVEMENT_RATE),
+        lower(gates["native_wrong_reject_rate"], MIN_NATIVE_WRONG_REJECT_RATE),
+        upper(
+            gates["native_wrong_displacement_p95_px"],
+            MAX_NATIVE_WRONG_DISPLACEMENT_P95_PX,
+        ),
+        max(float(gates["native_mind_delta"]), 0.0) / 0.01
+        + (1e-9 if float(gates["native_mind_delta"]) >= 0.0 else 0.0),
+        upper(max(-float(gates["native_surface_dice_delta"]), 0.0), MAX_NATIVE_SURFACE_DICE_LOSS),
+        lower(gates["native_retained_coverage"], MIN_NATIVE_RETAINED_COVERAGE),
+        0.0 if gates["geometry_passed"] else 1.0,
+    )
+    return float(sum(violations))
 
 
 @torch.inference_mode()
@@ -670,32 +980,36 @@ def evaluate_real_histology(
     source.verify_manifest(manifest)
     if len(model_sha256) != 64 or any(character not in "0123456789abcdef" for character in model_sha256):
         raise ValueError("Real-histology evidence requires the evaluated model SHA-256")
-    dense_rows, native_rows = [], []
+    dense_rows, native_rows, native_wrong_rows = [], [], []
     entries = manifest["entries"]
+    native_wrong_entries = {
+        kind: select_native_wrong_entries(
+            entries, entries, kind, int(manifest["seed"]) + 1009 * (index + 1)
+        )
+        for index, kind in enumerate(NATIVE_WRONG_KINDS)
+    }
     for start in range(0, len(entries), batch_size):
         chunk = entries[start : start + batch_size]
         sections = [source.section(int(entry["section_image_id"])) for entry in chunk]
-        fixed = torch.stack([torch.from_numpy(section["fixed"]) for section in sections])[:, None].to(device)
         moving = torch.stack([torch.from_numpy(section["moving"]) for section in sections])[:, None].to(device)
         fixed_mask = torch.stack([torch.from_numpy(section["fixed_mask"]) for section in sections])[:, None].to(device).float()
         moving_mask = torch.stack([torch.from_numpy(section["moving_mask"]) for section in sections])[:, None].to(device).float()
 
-        native_batch = {
-            "fixed": preprocess_registration_tensor(fixed, fixed_mask),
-            "moving": preprocess_registration_tensor(moving, moving_mask),
-            "fixed_mask": fixed_mask,
-            "moving_mask": moving_mask,
-        }
+        native_batch = native_registration_batch(sections, device)
         native_outputs = model.eval()(*(native_batch[name] for name in ("fixed", "moving", "fixed_mask", "moving_mask")))
         dense_pairs = []
         dense_identifiers = []
         for item, entry in enumerate(chunk):
             labels = torch.zeros_like(moving[item : item + 1], dtype=torch.long)
             for stratum in DENSE_STRATA:
-                dense_pairs.append(pair_factory(
+                dense_pair = pair_factory(
                     moving[item : item + 1], labels, moving_mask[item : item + 1],
                     seed=int(entry["synthetic_seeds"][stratum]), stratum=stratum,
-                ))
+                )
+                dense_pair["plane_basis_um"] = torch.from_numpy(
+                    sections[item]["plane_basis_um"]
+                )[None].to(device)
+                dense_pairs.append(dense_pair)
                 dense_identifiers.append({
                     "specimen_id": int(entry["specimen_id"]),
                     "experiment_id": int(entry["experiment_id"]),
@@ -716,22 +1030,63 @@ def evaluate_real_histology(
                 "section_image_id": int(entry["section_image_id"]),
             }
             native_rows.append(_native_row(native_outputs, native_batch, item, identifiers))
+        for kind in NATIVE_WRONG_KINDS:
+            wrong_records = native_wrong_entries[kind][start : start + len(chunk)]
+            wrong_sections = [
+                source.section(int(entry["section_image_id"])) for entry in wrong_records
+            ]
+            wrong_batch = native_registration_batch(
+                sections, device, wrong_sections=wrong_sections, wrong_kind=kind
+            )
+            wrong_outputs = model.eval()(*(
+                wrong_batch[name] for name in ("fixed", "moving", "fixed_mask", "moving_mask")
+            ))
+            for item, (entry, wrong_entry) in enumerate(zip(chunk, wrong_records)):
+                ap_delta_um = abs(float(entry["ap_um"]) - float(wrong_entry["ap_um"]))
+                tilt_delta_deg = float(np.hypot(
+                    float(entry["tilt_lr_deg"]) - float(wrong_entry["tilt_lr_deg"]),
+                    float(entry["tilt_dv_deg"]) - float(wrong_entry["tilt_dv_deg"]),
+                ))
+                native_wrong_rows.append(_native_wrong_row(
+                    wrong_outputs,
+                    wrong_batch,
+                    item,
+                    {
+                        "specimen_id": int(entry["specimen_id"]),
+                        "experiment_id": int(entry["experiment_id"]),
+                        "section_image_id": int(entry["section_image_id"]),
+                        "wrong_section_image_id": int(wrong_entry["section_image_id"]),
+                        "ap_delta_um": ap_delta_um,
+                        "tilt_delta_deg": tilt_delta_deg,
+                        "stratum": kind,
+                    },
+                ))
 
     dense_metrics = (
         "epe_median_px", "epe_p95_px", "epe_improvement_px", "epe_relative_improvement",
         "epe_p95_improvement_px", "epe_p95_relative_improvement",
         "tre_median_px", "tre_p95_px", "jacobian_error_p95", "accepted",
+        "tre_median_ccf_um", "tre_p95_ccf_um", "accuracy_passed",
     )
-    native_metrics = ("mind_delta", "surface_dice_delta", "retained_coverage", "accepted")
+    native_metrics = (
+        "mind_delta", "mind_improved", "surface_dice_delta", "retained_coverage", "accepted",
+    )
     dense_animals = {
         stratum: _animal_summary(
             [row for row in dense_rows if row["stratum"] == stratum],
             dense_metrics,
-            rate_metrics=("accepted",),
         )
         for stratum in DENSE_STRATA
     }
-    native_animals = _animal_summary(native_rows, native_metrics, rate_metrics=("accepted",))
+    native_animals = _animal_summary(native_rows, native_metrics)
+    native_wrong_metrics = ("rejected", "displacement_p95_px")
+    native_wrong_animals = {
+        kind: _animal_summary(
+            [row for row in native_wrong_rows if row["stratum"] == kind],
+            native_wrong_metrics,
+        )
+        for kind in NATIVE_WRONG_KINDS
+    }
     dense_bootstrap = {
         stratum: _animal_bootstrap(
             dense_animals[stratum], dense_metrics,
@@ -742,6 +1097,13 @@ def evaluate_real_histology(
     native_bootstrap = _animal_bootstrap(
         native_animals, native_metrics, int(manifest["bootstrap_seed"]) + 1
     )
+    native_wrong_bootstrap = {
+        kind: _animal_bootstrap(
+            native_wrong_animals[kind], native_wrong_metrics,
+            int(manifest["bootstrap_seed"]) + 100 + index,
+        )
+        for index, kind in enumerate(NATIVE_WRONG_KINDS)
+    }
     interior = dense_bootstrap["real_histology_interior_label_free"]
     full_deformation = [
         dense_bootstrap[stratum]
@@ -763,6 +1125,12 @@ def evaluate_real_histology(
         "tre_p95_px": max(
             report["tre_p95_px"]["upper95"] for report in dense_bootstrap.values()
         ),
+        "tre_median_ccf_um": max(
+            report["tre_median_ccf_um"]["upper95"] for report in dense_bootstrap.values()
+        ),
+        "tre_p95_ccf_um": max(
+            report["tre_p95_ccf_um"]["upper95"] for report in dense_bootstrap.values()
+        ),
         "jacobian_error_p95": max(
             report["jacobian_error_p95"]["upper95"] for report in dense_bootstrap.values()
         ),
@@ -783,11 +1151,24 @@ def evaluate_real_histology(
         "dense_accept_rate": min(
             report["accepted"]["lower95"] for report in dense_bootstrap.values()
         ),
+        "dense_section_pass_rate": min(
+            report["accuracy_passed"]["lower95"] for report in dense_bootstrap.values()
+        ),
         "native_accept_rate": native_bootstrap["accepted"]["lower95"],
+        "native_mind_improvement_rate": native_bootstrap["mind_improved"]["lower95"],
+        "native_wrong_reject_rate": min(
+            report["rejected"]["lower95"] for report in native_wrong_bootstrap.values()
+        ),
+        "native_wrong_displacement_p95_px": max(
+            report["displacement_p95_px"]["upper95"]
+            for report in native_wrong_bootstrap.values()
+        ),
         "native_mind_delta": native_bootstrap["mind_delta"]["upper95"],
         "native_surface_dice_delta": native_bootstrap["surface_dice_delta"]["lower95"],
         "native_retained_coverage": native_bootstrap["retained_coverage"]["lower95"],
-        "geometry_passed": all(row["geometry_passed"] for row in (*dense_rows, *native_rows)),
+        "geometry_passed": all(
+            row["geometry_passed"] for row in (*dense_rows, *native_rows, *native_wrong_rows)
+        ),
     }
     failures = real_histology_gate_failures(gates)
     report = {
@@ -805,15 +1186,31 @@ def evaluate_real_histology(
         },
         "native_pairs": {
             "kind": "official_allen_registered_atlas_histology",
-            "claims": ["acceptance", "geometry", "mind_non_degradation", "surface_non_degradation"],
+            "claims": ["acceptance", "geometry", "mind_improvement", "surface_non_degradation"],
             "dense_ground_truth_available": False,
         },
+        "physical_tre": {
+            "coordinate_order": ["AP", "DV", "ML"],
+            "units": "micrometres",
+            "conversion": "exact per-record oblique model-canvas basis from official Allen transforms",
+            "projected_grid_pixel_gates_retained": True,
+        },
+        "native_wrong_pairs": {
+            "kind": "surface-calibrated held-out wrong fixed planes",
+            "strata": list(NATIVE_WRONG_KINDS),
+            "claims": ["rejection", "identity_displacement", "geometry"],
+        },
         "gates": gates,
-        "animal_bootstrap": {"dense_by_stratum": dense_bootstrap, "native": native_bootstrap},
+        "animal_bootstrap": {
+            "dense_by_stratum": dense_bootstrap,
+            "native": native_bootstrap,
+            "native_wrong_by_stratum": native_wrong_bootstrap,
+        },
         "failures": failures,
         "passed": not failures,
         "dense_rows": dense_rows,
         "native_rows": native_rows,
+        "native_wrong_rows": native_wrong_rows,
         "sealed_data_used": False,
     }
     report["report_sha256"] = canonical_sha256(report)

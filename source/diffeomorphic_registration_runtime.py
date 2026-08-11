@@ -8,6 +8,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from nonlinear_registration import (
@@ -18,6 +19,10 @@ from nonlinear_registration import (
     MODEL_PIXEL_SPACING_UM,
     MODEL_SHAPE,
     MODEL_SPATIAL_CONTRACT,
+    MAXIMUM_RUNTIME_SURFACE_DICE_LOSS,
+    MINIMUM_EFFECTIVE_DISPLACEMENT_PX,
+    MINIMUM_RUNTIME_MIND_IMPROVEMENT,
+    MINIMUM_RUNTIME_RETAINED_COVERAGE,
     NonlinearWarp2D,
     REJECTION_PROBABILITY_THRESHOLD,
     RUNTIME_GATE_CONTRACT,
@@ -80,6 +85,22 @@ def _verified_model_manifest(model_path: Path) -> tuple[str, str, dict]:
     mismatched = [key for key, value in expected.items() if manifest.get(key) != value]
     if mismatched:
         raise RuntimeError("Nonlinear model manifest contract failed: " + ", ".join(mismatched))
+    evidence_path = model_path.with_suffix(".prelocked.json")
+    if (
+        manifest.get("prelocked_evidence_file") != evidence_path.name
+        or not evidence_path.is_file()
+        or manifest.get("prelocked_evidence_sha256") != _file_sha256(evidence_path)
+    ):
+        raise RuntimeError("Nonlinear model prelocked evidence is missing or fails its commitment")
+    commitment = manifest.get("locked_real_histology_commitment")
+    evaluation_sha256 = commitment.get("evaluation_manifest_sha256") if isinstance(commitment, dict) else None
+    if (
+        not isinstance(commitment, dict)
+        or not isinstance(commitment.get("source"), dict)
+        or not isinstance(evaluation_sha256, str)
+        or len(evaluation_sha256) != 64
+    ):
+        raise RuntimeError("Nonlinear model has no valid locked real-histology commitment")
     for key in (
         "real_histology_gate_report_sha256",
         "real_histology_evaluation_manifest_sha256",
@@ -136,6 +157,90 @@ def _gray_unit(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         normalized = np.clip((gray - low) / (high - low), 0.0, 1.0).astype(np.float32)
     normalized[~mask] = 0.0
     return normalized
+
+
+def _mind_descriptor(image: np.ndarray) -> np.ndarray:
+    padded = np.pad(np.asarray(image, dtype=np.float32), 1, mode="edge")
+    neighbours = np.stack((
+        padded[1:-1, :-2], padded[1:-1, 2:],
+        padded[:-2, 1:-1], padded[2:, 1:-1],
+    ))
+    distance = (image[None] - neighbours) ** 2
+    distance = np.stack([
+        cv2.boxFilter(channel, -1, (3, 3), normalize=True, borderType=cv2.BORDER_CONSTANT)
+        for channel in distance
+    ])
+    descriptor = np.exp(-distance / (distance.mean(axis=0, keepdims=True) + 1e-6))
+    return descriptor / np.maximum(descriptor.max(axis=0, keepdims=True), 1e-6)
+
+
+def _dice(first: np.ndarray, second: np.ndarray) -> float:
+    return float(2.0 * np.count_nonzero(first & second) / max(
+        np.count_nonzero(first) + np.count_nonzero(second), 1
+    ))
+
+
+def _correspondence_diagnostics(
+    fixed: np.ndarray,
+    moving: np.ndarray,
+    fixed_mask: np.ndarray,
+    moving_mask: np.ndarray,
+    atlas_to_affine: np.ndarray,
+) -> dict[str, float | int]:
+    original_overlap = fixed_mask & moving_mask
+    map_x, map_y = atlas_to_affine[..., 0], atlas_to_affine[..., 1]
+    warped_mask = cv2.remap(
+        moving_mask.astype(np.uint8), map_x, map_y, cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    ) > 0.5
+    fixed_descriptor = _mind_descriptor(fixed)
+    moving_descriptor = _mind_descriptor(moving)
+    warped_descriptor = np.stack([
+        cv2.remap(channel, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+        for channel in moving_descriptor
+    ])
+    if np.count_nonzero(original_overlap):
+        before = float(np.mean(np.abs(
+            fixed_descriptor[:, original_overlap] - moving_descriptor[:, original_overlap]
+        )))
+        after = float(np.mean(np.abs(
+            fixed_descriptor[:, original_overlap] - warped_descriptor[:, original_overlap]
+        )))
+        retained = float(np.count_nonzero(original_overlap & warped_mask) / np.count_nonzero(original_overlap))
+    else:
+        before = after = float("inf")
+        retained = 0.0
+    surface_before = _dice(fixed_mask, moving_mask)
+    surface_after = _dice(fixed_mask, warped_mask)
+    return {
+        "prewarp_overlap_pixels": int(np.count_nonzero(original_overlap)),
+        "mind_before": before,
+        "mind_after": after,
+        "mind_improvement": before - after,
+        "surface_dice_before": surface_before,
+        "surface_dice_after": surface_after,
+        "surface_dice_delta": surface_after - surface_before,
+        "retained_coverage": retained,
+    }
+
+
+def _correspondence_failures(diagnostics: dict[str, float | int]) -> list[str]:
+    checks = (
+        (diagnostics["prewarp_overlap_pixels"] >= 64, "affine brain overlap is too small"),
+        (
+            diagnostics["mind_improvement"] > MINIMUM_RUNTIME_MIND_IMPROVEMENT,
+            "nonlinear warp does not improve MIND correspondence",
+        ),
+        (
+            diagnostics["surface_dice_delta"] >= -MAXIMUM_RUNTIME_SURFACE_DICE_LOSS,
+            "nonlinear warp reduces surface Dice by more than 0.01",
+        ),
+        (
+            diagnostics["retained_coverage"] >= MINIMUM_RUNTIME_RETAINED_COVERAGE,
+            "nonlinear warp retains less than 95% of affine overlap",
+        ),
+    )
+    return [message for passed, message in checks if not passed]
 
 
 def _center_geometry(native_shape: tuple[int, int]) -> tuple[int, int, int, int, int, int]:
@@ -281,6 +386,9 @@ def run_diffeomorphic_registration(
     affine_to_atlas = _native_map(affine_to_atlas_output, native_shape, geometry)
     warp = NonlinearWarp2D(atlas_to_affine, affine_to_atlas)
     warp_diagnostics = warp.diagnostics(fixed_mask, moving_mask)
+    correspondence = _correspondence_diagnostics(
+        fixed, moving, fixed_mask, moving_mask, atlas_to_affine
+    )
     rejection_probability = float(1.0 / (1.0 + np.exp(-np.clip(rejection_values[0], -80.0, 80.0))))
     trusted_pixels = fixed_mask | moving_mask
     modeled = np.zeros(native_shape, dtype=bool)
@@ -301,6 +409,7 @@ def run_diffeomorphic_registration(
         "modeled_trusted_fraction": modeled_trusted_fraction,
         "rejection_logit": float(rejection_values[0]),
         "rejection_probability": rejection_probability,
+        **correspondence,
         **warp_diagnostics,
     }
     failures = []
@@ -311,6 +420,8 @@ def run_diffeomorphic_registration(
             f"model rejection probability {rejection_probability:.3f} exceeds "
             f"{REJECTION_PROBABILITY_THRESHOLD:.3f}"
         )
+    if warp_diagnostics["displacement_max_px"] > MINIMUM_EFFECTIVE_DISPLACEMENT_PX:
+        failures.extend(_correspondence_failures(correspondence))
     failures.extend(nonlinear_acceptance_failures(warp_diagnostics))
     if failures:
         raise DiffeomorphicRegistrationRejected(failures, diagnostics)

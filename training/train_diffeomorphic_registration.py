@@ -59,9 +59,15 @@ from training.diffeomorphic_registration_model import (
     soft_tissue_support,
 )
 from training.real_histology_registration import (
+    NATIVE_WRONG_KINDS,
+    REAL_HISTOLOGY_LOCKED_SEED,
     REAL_HISTOLOGY_SELECTION_SEED,
     RegisteredHistologySource,
     evaluate_real_histology,
+    native_registration_batch,
+    real_histology_gate_violation,
+    select_native_wrong_entries,
+    surface_affine_target_to_source,
     torch_model_sha256,
 )
 from training.synthetic_atlas import AP_MAX_UM, AP_MIN_UM, BREGMA_AP_INDEX, VOXEL_UM, SyntheticAtlas, make_manifest
@@ -280,21 +286,7 @@ def surface_affine_calibrate(
     target_mask: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Match centroid and axis scales so negative pairs cannot be rejected by outline size."""
-    batch, _, height, width = template.shape
-    identity = pixel_identity_grid(batch, height, width, device=template.device, dtype=template.dtype)
-    maps = []
-    for item in range(batch):
-        source_y, source_x = torch.where(mask[item, 0] > 0.5)
-        target_y, target_x = torch.where(target_mask[item, 0] > 0.5)
-        source_center = torch.stack((source_x.float().mean(), source_y.float().mean()))
-        target_center = torch.stack((target_x.float().mean(), target_y.float().mean()))
-        source_scale = torch.stack((source_x.float().std(), source_y.float().std())).clamp_min(1.0)
-        target_scale = torch.stack((target_x.float().std(), target_y.float().std())).clamp_min(1.0)
-        maps.append(
-            source_center[:, None, None]
-            + (identity[item] - target_center[:, None, None]) * (source_scale / target_scale)[:, None, None]
-        )
-    target_to_source = torch.stack(maps)
+    target_to_source = surface_affine_target_to_source(mask.float(), target_mask.float())
     calibrated_template = sample_at_pixel_map(template, target_to_source, padding_mode="zeros")
     calibrated_mask = sample_at_pixel_map(mask.float(), target_to_source, padding_mode="zeros")
     calibrated_labels = sample_at_pixel_map(one_hot_labels(labels), target_to_source, padding_mode="zeros")
@@ -379,6 +371,18 @@ def make_synthetic_pair(
         "affine_supervision_mask": affine_supervision_mask.float(),
         "retained_overlap": atlas_supervision_mask.flatten(1).sum(1) / mask.flatten(1).sum(1).clamp_min(1.0),
         "wrong_pair": torch.full((batch,), is_wrong, device=device, dtype=torch.bool),
+        "similarity_supervision": torch.full((batch,), not is_wrong, device=device, dtype=torch.bool),
+        "dense_supervision": torch.full((batch,), not is_wrong, device=device, dtype=torch.bool),
+        "label_supervision": torch.full(
+            (batch,), not is_wrong and label_appearance, device=device, dtype=torch.bool
+        ),
+        "geometry_supervision": torch.full((batch,), not is_wrong, device=device, dtype=torch.bool),
+        "support_supervision": torch.zeros(batch, device=device, dtype=torch.bool),
+        "plane_basis_um": torch.tensor(
+            ((0.0, 0.0), (0.0, MODEL_PIXEL_SPACING_UM), (MODEL_PIXEL_SPACING_UM, 0.0)),
+            device=device,
+            dtype=template.dtype,
+        )[None].expand(batch, -1, -1),
     }
 
 
@@ -388,16 +392,34 @@ def real_histology_training_batch(
     seed: int,
     count: int,
     device: torch.device,
+    mode: str = "synthetic",
 ) -> dict[str, torch.Tensor]:
     records = training_bank["entries"]
     rng = np.random.default_rng(seed)
     selected = rng.choice(len(records), count, replace=len(records) < count)
-    sections = [source.section(int(records[int(index)]["section_image_id"])) for index in selected]
-    images = torch.stack([torch.from_numpy(section["moving"]) for section in sections])[:, None].to(device)
-    masks = torch.stack([torch.from_numpy(section["moving_mask"]) for section in sections])[:, None].to(device).float()
-    labels = torch.zeros_like(images, dtype=torch.long)
-    stratum = "nuisance_damage_label_free" if seed % 2 else "smooth_deformation_label_free"
-    return make_synthetic_pair(images, labels, masks, seed=seed, stratum=stratum)
+    target_records = [records[int(index)] for index in selected]
+    sections = [source.section(int(record["section_image_id"])) for record in target_records]
+    if mode == "synthetic":
+        images = torch.stack([torch.from_numpy(section["moving"]) for section in sections])[:, None].to(device)
+        masks = torch.stack(
+            [torch.from_numpy(section["moving_mask"]) for section in sections]
+        )[:, None].to(device).float()
+        labels = torch.zeros_like(images, dtype=torch.long)
+        stratum = "nuisance_damage_label_free" if seed % 2 else "smooth_deformation_label_free"
+        pair = make_synthetic_pair(images, labels, masks, seed=seed, stratum=stratum)
+        pair["plane_basis_um"] = torch.stack(
+            [torch.from_numpy(section["plane_basis_um"]) for section in sections]
+        ).to(device)
+        return pair
+    if mode == "native_positive":
+        return native_registration_batch(sections, device)
+    if mode in NATIVE_WRONG_KINDS:
+        wrong_records = select_native_wrong_entries(records, target_records, mode, seed)
+        wrong_sections = [source.section(int(record["section_image_id"])) for record in wrong_records]
+        return native_registration_batch(
+            sections, device, wrong_sections=wrong_sections, wrong_kind=mode
+        )
+    raise ValueError(f"Unknown real-histology training mode: {mode}")
 
 
 class AllenObliquePairGenerator:
@@ -530,32 +552,66 @@ def registration_objective(
     zero = rejection * 0.0
     terms = {
         "mind": zero, "flow": zero, "dice": zero, "inverse": zero,
-        "smooth": zero, "topology": zero, "affine": zero,
+        "smooth": zero, "topology": zero, "affine": zero, "support": zero,
     }
-    correct = ~wrong
-    if bool(correct.any()):
-        atlas_mask = batch["atlas_supervision_mask"][correct]
-        affine_mask = batch["affine_supervision_mask"][correct]
+    similarity = batch["similarity_supervision"]
+    if bool(similarity.any()):
         terms["mind"] = mind_loss(
-            batch["fixed"][correct], batch["moving"][correct], predicted[correct], atlas_mask
+            batch["fixed"][similarity], batch["moving"][similarity], predicted[similarity],
+            batch["atlas_supervision_mask"][similarity],
         )
+    dense = batch["dense_supervision"]
+    if bool(dense.any()):
         terms["flow"] = 0.5 * (
-            synthetic_flow_loss(predicted[correct], batch["target_atlas_to_affine"][correct], atlas_mask)
-            + synthetic_flow_loss(predicted_inverse[correct], batch["target_affine_to_atlas"][correct], affine_mask)
+            synthetic_flow_loss(
+                predicted[dense], batch["target_atlas_to_affine"][dense],
+                batch["atlas_supervision_mask"][dense],
+            )
+            + synthetic_flow_loss(
+                predicted_inverse[dense], batch["target_affine_to_atlas"][dense],
+                batch["affine_supervision_mask"][dense],
+            )
         )
+    labelled = batch["label_supervision"]
+    if bool(labelled.any()):
         terms["dice"] = hierarchical_label_dice_loss(
-            batch["fixed_labels"][correct], batch["moving_labels"][correct], predicted[correct], atlas_mask
+            batch["fixed_labels"][labelled], batch["moving_labels"][labelled], predicted[labelled],
+            batch["atlas_supervision_mask"][labelled],
         )
+    geometry = batch["geometry_supervision"]
+    if bool(geometry.any()):
+        atlas_mask = batch["atlas_supervision_mask"][geometry]
+        affine_mask = batch["affine_supervision_mask"][geometry]
         terms["inverse"] = inverse_consistency_loss(
-            predicted[correct], predicted_inverse[correct], atlas_mask, affine_mask
+            predicted[geometry], predicted_inverse[geometry], atlas_mask, affine_mask
         )
-        terms["smooth"] = smoothness_loss(velocity[correct])
-        terms["topology"] = topology_loss(predicted[correct], MINIMUM_JACOBIAN) + topology_loss(
-            predicted_inverse[correct], MINIMUM_JACOBIAN
+        terms["smooth"] = smoothness_loss(velocity[geometry])
+        terms["topology"] = topology_loss(predicted[geometry], MINIMUM_JACOBIAN) + topology_loss(
+            predicted_inverse[geometry], MINIMUM_JACOBIAN
         )
-        forward_affine = tissue_affine_component(predicted[correct], batch["fixed_mask"][correct])
-        inverse_affine = tissue_affine_component(predicted_inverse[correct], batch["moving_mask"][correct])
+        forward_affine = tissue_affine_component(predicted[geometry], batch["fixed_mask"][geometry])
+        inverse_affine = tissue_affine_component(
+            predicted_inverse[geometry], batch["moving_mask"][geometry]
+        )
         terms["affine"] = 0.5 * (forward_affine.square().mean() + inverse_affine.square().mean())
+    support = batch["support_supervision"]
+    if bool(support.any()):
+        fixed_mask = batch["fixed_mask"][support]
+        moving_mask = batch["moving_mask"][support]
+        warped_mask = sample_at_pixel_map(
+            moving_mask, predicted[support], padding_mode="zeros"
+        ).clamp(0.0, 1.0)
+        before = 2.0 * (fixed_mask * moving_mask).sum((-2, -1)) / (
+            fixed_mask.sum((-2, -1)) + moving_mask.sum((-2, -1))
+        ).clamp_min(1.0)
+        after = 2.0 * (fixed_mask * warped_mask).sum((-2, -1)) / (
+            fixed_mask.sum((-2, -1)) + warped_mask.sum((-2, -1))
+        ).clamp_min(1.0)
+        original_overlap = fixed_mask * moving_mask
+        retained = (original_overlap * warped_mask).sum((-2, -1)) / original_overlap.sum(
+            (-2, -1)
+        ).clamp_min(1.0)
+        terms["support"] = (F.relu(before - after) + F.relu(0.95 - retained)).mean()
     wrong_identity = zero
     if bool(wrong.any()):
         identity = pixel_identity_grid(
@@ -577,6 +633,7 @@ def registration_objective(
         + 0.05 * terms["smooth"]
         + 5.0 * terms["topology"]
         + 2.0 * terms["affine"]
+        + 2.0 * terms["support"]
         + 0.75 * rejection
         + 0.5 * wrong_identity
     )
@@ -905,6 +962,57 @@ def export_gate_failures(metrics: dict) -> list[str]:
     return failures
 
 
+def synthetic_gate_violation(gates: dict) -> float:
+    """Return dimensionless validation-gate violation, excluding runtime."""
+    upper = lambda value, limit: max(float(value) / float(limit) - 1.0, 0.0)
+    lower = lambda value, limit: max(1.0 - float(value) / float(limit), 0.0)
+    violations = (
+        float(gates["folded_voxels"]),
+        lower(gates["minimum_jacobian"], MINIMUM_JACOBIAN),
+        upper(gates["maximum_abs_log_jacobian_p99"], MAXIMUM_ABS_LOG_JACOBIAN_P99),
+        upper(gates["maximum_abs_log_jacobian"], MAXIMUM_ABS_LOG_JACOBIAN),
+        1.0 - min(float(gates["inverse_finite_fraction"]), 1.0),
+        1.0 - min(float(gates["map_finite_fraction"]), 1.0),
+        upper(gates["roundtrip_p95_px"], MAXIMUM_INVERSE_P95_PX),
+        upper(gates["roundtrip_max_px"], MAXIMUM_INVERSE_PX),
+        upper(gates["residual_affine_max_px"], MAXIMUM_RESIDUAL_AFFINE_PX),
+        upper(
+            gates["outside_tissue_displacement_max_px"],
+            MAXIMUM_OUTSIDE_TISSUE_DISPLACEMENT_PX,
+        ) if MAXIMUM_OUTSIDE_TISSUE_DISPLACEMENT_PX else float(
+            gates["outside_tissue_displacement_max_px"] > 0.0
+        ),
+        upper(gates["displacement_p95_px"], MAXIMUM_DISPLACEMENT_P95_PX),
+        upper(gates["displacement_max_px"], MAXIMUM_DISPLACEMENT_PX),
+        upper(gates["landmark_tre_px"], MAX_LANDMARK_TRE_MEDIAN_PX),
+        upper(gates["landmark_tre_p95_px"], MAX_LANDMARK_TRE_P95_PX),
+        lower(gates["tre_improvement_px"], MIN_TRE_IMPROVEMENT_PX),
+        lower(gates["tre_relative_improvement"], MIN_TRE_RELATIVE_IMPROVEMENT),
+        lower(gates["tre_p95_improvement_px"], MIN_TRE_IMPROVEMENT_PX),
+        lower(gates["tre_p95_relative_improvement"], MIN_TRE_RELATIVE_IMPROVEMENT),
+        lower(gates["label_dice"], MIN_LABEL_DICE),
+        lower(gates["label_dice_improvement"], MIN_LABEL_DICE_IMPROVEMENT),
+        upper(gates["identity_tre_p95_px"], 1.0),
+        lower(gates["wrong_reject_rate"], 0.95),
+        upper(gates["wrong_displacement_p95_px"], 1.0),
+        upper(gates["valid_reject_rate"], 0.05),
+        lower(gates["retained_overlap"], 0.40),
+    )
+    return float(sum(violations))
+
+
+def checkpoint_selection_key(
+    validation: dict,
+    real_validation: dict | None,
+    scientific_score: float,
+) -> tuple[int, float, float]:
+    """Prefer releasable checkpoints, then least gate violation, then scientific score."""
+    violation = synthetic_gate_violation(validation["gates"])
+    if real_validation is not None:
+        violation += real_histology_gate_violation(real_validation["gates"])
+    return (0 if violation == 0.0 else 1, violation, float(scientific_score))
+
+
 def export_candidate_model(model: nn.Module, metrics: dict, destination: Path) -> tuple[bool, list[str]]:
     failures = export_gate_failures(metrics)
     if failures:
@@ -924,8 +1032,27 @@ def export_candidate_model(model: nn.Module, metrics: dict, destination: Path) -
     return True, []
 
 
+def write_prelocked_evidence(model_path: Path, report: dict) -> tuple[Path, str]:
+    model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    payload = {
+        "format_version": 1,
+        "model_sha256": model_sha256,
+        "synthetic_gate": report["synthetic_gate"],
+        "onnx_gate": report["onnx_gate"],
+        "onnx_parity": report.get("onnx_parity"),
+        "locked_pytorch": report.get("locked_pytorch"),
+        "locked_onnx": report.get("locked_onnx"),
+        "locked_real_histology_commitment": report.get("locked_real_histology_commitment"),
+    }
+    evidence_path = model_path.with_suffix(".prelocked.json")
+    evidence_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    evidence_path.write_bytes(evidence_bytes)
+    return evidence_path, hashlib.sha256(evidence_bytes).hexdigest()
+
+
 def write_model_manifest(model_path: Path, report: dict) -> tuple[Path, str]:
     model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    evidence_path, evidence_sha256 = write_prelocked_evidence(model_path, report)
     real_gate = report["real_histology_ground_truth_gate"]
     payload = {
         "format_version": MODEL_CONTRACT_VERSION,
@@ -937,6 +1064,9 @@ def write_model_manifest(model_path: Path, report: dict) -> tuple[Path, str]:
         "input_names": list(MODEL_INPUT_NAMES),
         "output_names": list(MODEL_OUTPUT_NAMES),
         "runtime_gates": RUNTIME_GATE_CONTRACT,
+        "prelocked_evidence_file": evidence_path.name,
+        "prelocked_evidence_sha256": evidence_sha256,
+        "locked_real_histology_commitment": report.get("locked_real_histology_commitment"),
         "synthetic_gate_passed": bool(report["synthetic_gate"]["passed"]),
         "onnx_gate_passed": bool(report["onnx_gate"]["passed"]),
         "real_histology_gate_passed": bool(real_gate["passed"]),
@@ -1026,7 +1156,7 @@ def train() -> dict:
     strata = np.asarray(SELECTION_STRATA)
     probabilities = np.asarray([0.10, 0.25, 0.25, 0.15, 0.15, 0.10])
     history = []
-    best_score = float("inf")
+    best_key = None
     best_state = None
     best_selection = None
     best_real_selection = None
@@ -1038,13 +1168,16 @@ def train() -> dict:
         if rng.random() < 0.35:
             stratum += "_label_free"
         training_seed = (seed + step * 1009 + 17) % 900_000_000
-        batch = (
-            real_histology_training_batch(
-                real_source, real_training_bank, training_seed, batch_size, device
+        if real_source and rng.random() < real_train_fraction:
+            real_mode = str(rng.choice(
+                np.asarray(("synthetic", "native_positive", *NATIVE_WRONG_KINDS)),
+                p=np.asarray((0.50, 0.25, 0.25 / 3.0, 0.25 / 3.0, 0.25 / 3.0)),
+            ))
+            batch = real_histology_training_batch(
+                real_source, real_training_bank, training_seed, batch_size, device, real_mode
             )
-            if real_source and rng.random() < real_train_fraction
-            else generator.batch(training_seed, batch_size, stratum)
-        )
+        else:
+            batch = generator.batch(training_seed, batch_size, stratum)
         model.train()
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device.type, dtype=torch.float16, enabled=device.type == "cuda"):
@@ -1089,20 +1222,23 @@ def train() -> dict:
                 score += (
                     real_gates["dense_epe_median_px"]
                     + 0.5 * real_gates["dense_epe_p95_px"]
-                    + 10.0 * max(real_gates["native_mind_delta"], 0.0)
+                    + 10.0 * real_gates["native_mind_delta"]
                     + 5.0 * (1.0 - real_gates["native_accept_rate"])
+                    + 5.0 * (1.0 - real_gates["native_wrong_reject_rate"])
                 )
             if not np.isfinite(score):
                 raise RuntimeError("Selection metrics became non-finite")
+            selection_key = checkpoint_selection_key(report, real_selection, score)
             history.append({
                 "step": step,
                 "loss": float(loss.detach()),
                 "terms": {name: float(value.detach()) for name, value in terms.items()},
                 "validation": report,
                 "real_histology_validation": real_selection,
+                "selection_key": list(selection_key),
             })
-            if score < best_score:
-                best_score = score
+            if best_key is None or selection_key < best_key:
+                best_key = selection_key
                 best_state = deepcopy(ema.model.state_dict())
                 best_selection = report
                 best_real_selection = real_selection
@@ -1178,10 +1314,18 @@ def train() -> dict:
             "Run training.evaluate_locked_nonlinear_histology once for the frozen ONNX candidate."
         ),
     }
+    locked_real_histology_commitment = None
+    if real_source is not None:
+        locked_manifest = real_source.evaluation_manifest("test", REAL_HISTOLOGY_LOCKED_SEED)
+        locked_real_histology_commitment = {
+            "source": real_source.contract,
+            "evaluation_manifest_sha256": locked_manifest["manifest_sha256"],
+        }
     final = {
         "device": str(device),
         "training_steps": history[-1]["step"],
         "selected_step": best_step,
+        "selected_checkpoint_key": list(best_key),
         "split_seeds": {
             "training_range": [0, 899_999_999],
             "selection_base": SELECTION_SEED_BASE,
@@ -1201,6 +1345,7 @@ def train() -> dict:
         "locked_onnx": onnx_locked,
         "onnx_gate": {"passed": bool(parity and parity["passed"] and not onnx_failures), "failures": onnx_failures},
         "real_histology_ground_truth_gate": real_histology_gate,
+        "locked_real_histology_commitment": locked_real_histology_commitment,
         "real_histology_gate_artifact": None,
         "promotion_ready": False,
         "promoted": False,

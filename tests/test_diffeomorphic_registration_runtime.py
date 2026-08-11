@@ -14,7 +14,10 @@ from diffeomorphic_registration_runtime import (
     DiffeomorphicRegistrationRejected,
     MODEL_PIXEL_SPACING_UM,
     MODEL_SHAPE,
+    _correspondence_diagnostics,
+    _correspondence_failures,
     _gray_unit,
+    _mind_descriptor,
     _verified_model_manifest,
     run_diffeomorphic_registration,
 )
@@ -26,7 +29,7 @@ from nonlinear_registration import (
     MODEL_SPATIAL_CONTRACT,
     RUNTIME_GATE_CONTRACT,
 )
-from training.diffeomorphic_registration_model import preprocess_registration_tensor
+from training.diffeomorphic_registration_model import mind_descriptor, preprocess_registration_tensor
 from training.train_diffeomorphic_registration import write_model_manifest
 
 
@@ -97,6 +100,17 @@ def inputs(shape):
 
 
 def write_manifest(model_path, **changes):
+    commitment = {
+        "source": {"sections_sha256": "3" * 64},
+        "evaluation_manifest_sha256": "2" * 64,
+    }
+    evidence_path = model_path.with_suffix(".prelocked.json")
+    evidence_path.write_text(json.dumps({
+        "model_sha256": hashlib.sha256(model_path.read_bytes()).hexdigest(),
+        "synthetic_gate": {"passed": True},
+        "onnx_gate": {"passed": True},
+        "locked_real_histology_commitment": commitment,
+    }), encoding="utf-8")
     payload = {
         "format_version": MODEL_CONTRACT_VERSION,
         "model_sha256": hashlib.sha256(model_path.read_bytes()).hexdigest(),
@@ -107,6 +121,9 @@ def write_manifest(model_path, **changes):
         "input_names": list(MODEL_INPUT_NAMES),
         "output_names": list(MODEL_OUTPUT_NAMES),
         "runtime_gates": RUNTIME_GATE_CONTRACT,
+        "prelocked_evidence_file": evidence_path.name,
+        "prelocked_evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+        "locked_real_histology_commitment": commitment,
         "onnx_gate_passed": True,
         "real_histology_gate_passed": True,
         "real_histology_gate_report_sha256": "1" * 64,
@@ -232,6 +249,28 @@ def test_numpy_and_torch_preprocessing_are_identical():
     assert np.allclose(numpy_result, torch_result, atol=2e-6)
 
 
+def test_runtime_mind_descriptor_matches_the_training_implementation():
+    rng = np.random.default_rng(19)
+    image = rng.random((37, 53), dtype=np.float32)
+    expected = mind_descriptor(torch.from_numpy(image)[None, None])[0].numpy()
+    assert np.allclose(_mind_descriptor(image), expected, atol=2e-6)
+
+
+def test_safe_but_anatomically_worse_warp_is_rejected():
+    rng = np.random.default_rng(23)
+    shape = (80, 96)
+    fixed = rng.random(shape, dtype=np.float32)
+    moving = fixed.copy()
+    mask = np.ones(shape, dtype=bool)
+    yy, xx = np.mgrid[: shape[0], : shape[1]].astype(np.float32)
+    shift = 0.75 * np.sin(12.0 * np.pi * yy / (shape[0] - 1.0))
+    forward = np.stack((xx + shift, yy), axis=-1)
+    diagnostics = _correspondence_diagnostics(fixed, moving, mask, mask, forward)
+    failures = _correspondence_failures(diagnostics)
+    assert diagnostics["mind_improvement"] < 0.0
+    assert "nonlinear warp does not improve MIND correspondence" in failures
+
+
 def test_onnx_names_and_shapes_are_enforced():
     session = FakeSession()
     session.get_inputs = lambda: [ValueInfo("wrong", ["batch", 1, *MODEL_SHAPE])]
@@ -288,6 +327,10 @@ def test_model_manifest_verifies_sha_contract_evidence_and_source_pin(tmp_path, 
             "evaluation_manifest_sha256": "2" * 64,
             "source": {"sections_sha256": "3" * 64},
             "benchmark_role": "locked_promotion_gate",
+        },
+        "locked_real_histology_commitment": {
+            "source": {"sections_sha256": "3" * 64},
+            "evaluation_manifest_sha256": "2" * 64,
         },
         "promotion_ready": True,
     }

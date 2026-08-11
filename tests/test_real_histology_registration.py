@@ -10,34 +10,48 @@ from PIL import Image
 
 from source.registered_image_quality import build_registered_image_quality_manifest
 
+import training.evaluate_locked_nonlinear_histology as locked_evaluator
 from training.evaluate_locked_nonlinear_histology import run_locked_evaluation
 from training.real_histology_registration import (
     MAX_DENSE_EPE_MEDIAN_PX,
     MAX_DENSE_EPE_P95_PX,
     MAX_JACOBIAN_ERROR_P95,
-    MAX_NATIVE_MIND_INCREASE,
+    MAX_NATIVE_MIND_UPPER95,
+    MAX_NATIVE_WRONG_DISPLACEMENT_P95_PX,
     MAX_NATIVE_SURFACE_DICE_LOSS,
     MAX_TRE_MEDIAN_PX,
+    MAX_TRE_MEDIAN_CCF_UM,
     MAX_TRE_P95_PX,
+    MAX_TRE_P95_CCF_UM,
     MIN_DENSE_IMPROVEMENT_PX,
     MIN_DENSE_RELATIVE_IMPROVEMENT,
+    MIN_DENSE_SECTION_PASS_RATE,
     MIN_INTERIOR_IMPROVEMENT_PX,
     MIN_NATIVE_ACCEPT_RATE,
+    MIN_NATIVE_MIND_IMPROVEMENT_RATE,
     MIN_NATIVE_RETAINED_COVERAGE,
+    MIN_NATIVE_WRONG_REJECT_RATE,
     MIN_VALID_ACCEPT_RATE,
     RegisteredHistologySource,
     _animal_bootstrap,
     _animal_summary,
     _dense_row,
     _native_row,
+    model_canvas_plane_basis_um,
+    native_registration_batch,
     canonical_registered_pair,
     canonical_sha256,
     downloaded_pixel_to_reference_index,
     file_sha256,
     real_histology_gate_failures,
+    real_histology_gate_violation,
+    select_native_wrong_entries,
     torch_model_sha256,
 )
-from training.train_diffeomorphic_registration import make_synthetic_pair
+from training.train_diffeomorphic_registration import (
+    RegistrationWithRejector,
+    make_synthetic_pair,
+)
 from training.diffeomorphic_registration_model import pixel_identity_grid
 
 
@@ -85,6 +99,8 @@ def source_fixture(tmp_path: Path, *, crossing_specimen: bool = False):
             "section_number": 2,
             "alignment2d_tsv": [scale, 0.0, 0.0, scale, offset, offset],
             "ap_um": -1000.0 + section_id,
+            "tilt_lr_deg": 0.0,
+            "tilt_dv_deg": 0.0,
             "relative_path": relative_path,
         })
         downloads.append({"section_image_id": section_id, "sha256": file_sha256(path)})
@@ -114,6 +130,8 @@ def test_registered_source_binds_provenance_split_and_deterministic_selection(tm
     assert manifest["split"] == "validation"
     assert manifest["sealed_data_used"] is False
     assert manifest["entries"][0]["synthetic_seeds"]
+    training = source.training_bank_manifest()
+    assert training["split"] == "train" and training["sealed_data_used"] is False
 
     changed = json.loads(json.dumps(manifest))
     changed["entries"][0]["ap_um"] += 25.0
@@ -176,6 +194,18 @@ def test_native_registered_resampling_preserves_one_to_one_25um_geometry():
     }
     transform = downloaded_pixel_to_reference_index(dataset, section)
     assert np.allclose(transform, [[0, 0, 2], [0, 1, 0], [1, 0, 0]])
+    assert np.allclose(
+        model_canvas_plane_basis_um(dataset, section),
+        [[0, 0], [0, 25], [25, 0]],
+    )
+    oblique_dataset = {
+        **dataset,
+        "alignment3d_tvr": [0.2, 0.1, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    }
+    assert np.allclose(
+        model_canvas_plane_basis_um(oblique_dataset, section),
+        [[5.0, 2.5], [0.0, 25.0], [25.0, 0.0]],
+    )
 
     image = np.arange(48, dtype=np.float32).reshape(6, 8) / 47.0
     average = np.arange(4 * 6 * 8, dtype=np.float32).reshape(4, 6, 8)
@@ -228,6 +258,50 @@ def test_dense_oracle_beats_identity_and_binds_exact_target_maps():
     assert baseline_row["epe_improvement_px"] == 0.0
 
 
+def test_dense_tre_uses_exact_oblique_basis_for_ccf_microns():
+    y, x = torch.meshgrid(torch.arange(48), torch.arange(64), indexing="ij")
+    mask = (((x - 32) / 25).square() + ((y - 24) / 18).square() < 1)[None, None].float()
+    pair = make_synthetic_pair(
+        torch.rand_like(mask) * mask,
+        torch.zeros_like(mask, dtype=torch.long),
+        mask,
+        seed=91,
+        stratum="identity_extreme_label_free",
+    )
+    pair["plane_basis_um"] = torch.tensor([[[15.0, 0.0], [0.0, 25.0], [20.0, 0.0]]])
+    identity = pixel_identity_grid(1, 48, 64)
+    forward, inverse = identity.clone(), identity.clone()
+    forward[:, 0] += 1.0
+    inverse[:, 0] -= 1.0
+    row = _dense_row(
+        (forward, inverse, torch.zeros_like(identity), torch.tensor([-10.0])),
+        pair,
+        0,
+        {"specimen_id": 1, "stratum": "physical"},
+    )
+    assert row["tre_median_px"] == pytest.approx(1.0)
+    assert row["tre_median_ccf_um"] == pytest.approx(25.0)
+    assert row["tre_p95_ccf_um"] == pytest.approx(25.0)
+
+
+def test_native_wrong_selection_encodes_ap_tilt_and_independent_plane_constraints():
+    entries = [
+        {"section_image_id": 1, "specimen_id": 1, "ap_um": 0.0, "tilt_lr_deg": 0.0, "tilt_dv_deg": 0.0},
+        {"section_image_id": 2, "specimen_id": 2, "ap_um": -1200.0, "tilt_lr_deg": 0.2, "tilt_dv_deg": 0.1},
+        {"section_image_id": 3, "specimen_id": 3, "ap_um": 100.0, "tilt_lr_deg": 8.0, "tilt_dv_deg": 5.0},
+        {"section_image_id": 4, "specimen_id": 4, "ap_um": -300.0, "tilt_lr_deg": -2.0, "tilt_dv_deg": 1.0},
+        {"section_image_id": 5, "specimen_id": 5, "ap_um": -700.0, "tilt_lr_deg": 0.1, "tilt_dv_deg": 0.1},
+    ]
+    target = entries[:1]
+    assert select_native_wrong_entries(entries, target, "wrong_ap", 7)[0]["section_image_id"] == 5
+    assert select_native_wrong_entries(entries, target, "wrong_tilt", 7)[0]["section_image_id"] == 4
+    plane = select_native_wrong_entries(entries, target, "wrong_plane", 7)[0]
+    assert plane["section_image_id"] != 1 and plane["specimen_id"] != 1
+
+    repeated = select_native_wrong_entries(entries, target * 3, "wrong_plane", 7)
+    assert len({entry["section_image_id"] for entry in repeated}) == 3
+
+
 def test_native_similarity_cannot_improve_by_discarding_support():
     height, width = 32, 40
     identity = pixel_identity_grid(1, height, width)
@@ -253,6 +327,8 @@ def passing_real_gates():
         "dense_epe_p95_px": MAX_DENSE_EPE_P95_PX,
         "tre_median_px": MAX_TRE_MEDIAN_PX,
         "tre_p95_px": MAX_TRE_P95_PX,
+        "tre_median_ccf_um": MAX_TRE_MEDIAN_CCF_UM,
+        "tre_p95_ccf_um": MAX_TRE_P95_CCF_UM,
         "jacobian_error_p95": MAX_JACOBIAN_ERROR_P95,
         "epe_improvement_px": MIN_DENSE_IMPROVEMENT_PX,
         "interior_epe_improvement_px": MIN_INTERIOR_IMPROVEMENT_PX,
@@ -261,22 +337,31 @@ def passing_real_gates():
         "interior_epe_p95_improvement_px": MIN_INTERIOR_IMPROVEMENT_PX,
         "epe_p95_relative_improvement": MIN_DENSE_RELATIVE_IMPROVEMENT,
         "dense_accept_rate": MIN_VALID_ACCEPT_RATE,
+        "dense_section_pass_rate": MIN_DENSE_SECTION_PASS_RATE,
         "native_accept_rate": MIN_NATIVE_ACCEPT_RATE,
-        "native_mind_delta": MAX_NATIVE_MIND_INCREASE,
+        "native_mind_improvement_rate": MIN_NATIVE_MIND_IMPROVEMENT_RATE,
+        "native_wrong_reject_rate": MIN_NATIVE_WRONG_REJECT_RATE,
+        "native_wrong_displacement_p95_px": MAX_NATIVE_WRONG_DISPLACEMENT_P95_PX,
+        "native_mind_delta": MAX_NATIVE_MIND_UPPER95 - 1e-3,
         "native_surface_dice_delta": -MAX_NATIVE_SURFACE_DICE_LOSS,
         "native_retained_coverage": MIN_NATIVE_RETAINED_COVERAGE,
         "geometry_passed": True,
     }
 
 
-def test_real_gate_requires_independent_animals_dense_accuracy_and_native_noninferiority():
+def test_real_gate_requires_independent_animals_dense_accuracy_and_native_improvement():
     assert real_histology_gate_failures(passing_real_gates()) == []
+    assert real_histology_gate_violation(passing_real_gates()) == 0.0
     gates = passing_real_gates()
     gates.update({"animal_count": 5, "dense_epe_p95_px": 3.0, "native_retained_coverage": 0.80})
     failures = real_histology_gate_failures(gates)
     assert any("independent animals" in failure for failure in failures)
     assert any("EPE p95" in failure for failure in failures)
     assert any("support" in failure for failure in failures)
+    gates = passing_real_gates()
+    gates["native_mind_delta"] = 0.0
+    assert any("statistically supported" in failure for failure in real_histology_gate_failures(gates))
+    assert real_histology_gate_violation(gates) > 0.0
 
 
 def test_acceptance_is_a_rate_and_sections_cannot_outvote_an_animal():
@@ -284,10 +369,21 @@ def test_acceptance_is_a_rate_and_sections_cannot_outvote_an_animal():
         *({"specimen_id": 1, "accepted": 1.0, "score": 0.0} for _ in range(100)),
         {"specimen_id": 2, "accepted": 0.0, "score": 10.0},
     ]
-    animals = _animal_summary(rows, ("accepted", "score"), rate_metrics=("accepted",))
+    animals = _animal_summary(rows, ("accepted", "score"))
     interval = _animal_bootstrap(animals, ("accepted", "score"), seed=3)
     assert animals[1]["accepted"] == 1.0 and animals[2]["accepted"] == 0.0
     assert interval["score"]["estimate"] == 5.0
+
+
+def test_animal_summary_does_not_hide_catastrophic_section_failures():
+    rows = [
+        {"specimen_id": animal, "error": error}
+        for animal in range(20)
+        for error in (0.0, 0.0, 0.0, 100.0)
+    ]
+    animals = _animal_summary(rows, ("error",))
+    interval = _animal_bootstrap(animals, ("error",), seed=3)
+    assert interval["error"]["lower95"] == pytest.approx(25.0)
 
 
 def test_model_hash_is_deterministic_and_parameter_sensitive():
@@ -318,3 +414,70 @@ def test_locked_evaluator_refuses_an_unbound_or_already_claimed_candidate(tmp_pa
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="already claims"):
         run_locked_evaluation(model_path, tmp_path / "unused", tmp_path / "out")
+
+
+def test_locked_evaluator_atomically_consumes_candidate_before_test_and_cannot_retry(
+    tmp_path, monkeypatch
+):
+    model_path = tmp_path / "candidate.onnx"
+    model_path.write_bytes(b"frozen-model")
+    model_sha256 = file_sha256(model_path)
+    commitment = {
+        "source": {"source": "fixed-test-source"},
+        "evaluation_manifest_sha256": "a" * 64,
+    }
+    evidence_path = model_path.with_suffix(".prelocked.json")
+    evidence_path.write_text(json.dumps({
+        "model_sha256": model_sha256,
+        "synthetic_gate": {"passed": True},
+        "onnx_gate": {"passed": True},
+        "locked_real_histology_commitment": commitment,
+    }), encoding="utf-8")
+    manifest_path = model_path.with_suffix(".manifest.json")
+    manifest_path.write_text(json.dumps({
+        "model_sha256": model_sha256,
+        "prelocked_evidence_file": evidence_path.name,
+        "prelocked_evidence_sha256": file_sha256(evidence_path),
+        "locked_real_histology_commitment": commitment,
+        "synthetic_gate_passed": True,
+        "onnx_gate_passed": True,
+        "real_histology_gate_passed": False,
+        "promotion_ready": False,
+    }), encoding="utf-8")
+    registered_root = tmp_path / "registered"
+    ledger = registered_root / ".nonlinear_locked_test_consumption"
+
+    class FakeSource:
+        def __init__(self, *_):
+            assert (ledger / f"{model_sha256}.claim").is_file()
+            assert (ledger / f"{model_sha256}.json").is_file()
+            self.contract = {"source": "fixed-test-source"}
+
+        def evaluation_manifest(self, split, seed):
+            assert split == "test"
+            return {"manifest_sha256": "a" * 64, "split": split, "seed": seed}
+
+    monkeypatch.setattr(locked_evaluator, "RegisteredHistologySource", FakeSource)
+    monkeypatch.setattr(locked_evaluator, "OnnxRegistrationModel", lambda _: object())
+
+    def fake_evaluate(*_args, **_kwargs):
+        assert (ledger / f"{model_sha256}.json").is_file()
+        return {"passed": True, "report_sha256": "b" * 64}
+
+    monkeypatch.setattr(locked_evaluator, "evaluate_real_histology", fake_evaluate)
+    release = run_locked_evaluation(
+        model_path,
+        registered_root,
+        tmp_path / "output-1",
+        tmp_path / "atlas",
+    )
+    assert release["test_split_consumed"] is True
+    assert len(release["consumption_receipt_sha256"]) == 64
+
+    with pytest.raises(RuntimeError, match="already consumed"):
+        run_locked_evaluation(
+            model_path,
+            registered_root,
+            tmp_path / "output-2",
+            tmp_path / "atlas",
+        )

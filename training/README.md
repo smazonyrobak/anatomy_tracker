@@ -43,6 +43,12 @@ Model-family decisions use registered-validation animal-level hierarchical boots
 
 Passing metrics alone does not deploy a model. The runtime accepts AtlasPose only when the ONNX model, metadata, and sealed release evidence exactly match hashes pinned in application source. Promotion emits proposed hashes for human review and never edits those source pins.
 
+## Residual nonlinear registration
+
+Nonlinear registration is a second-stage anatomical refinement, not a pose estimator. `train_diffeomorphic_registration.py` trains a bounded stationary-velocity U-Net only after the AP plane, cutting tilts, and surface affine are fixed. Its forward and inverse maps use one explicit 25-um atlas-pixel convention; global translation, rotation, scale, and shear are projected out so the model cannot hide a pose error inside the residual warp. Wrong-AP and unsafe predictions are rejected and retain the affine result.
+
+Selection uses animal-disjoint registered Allen histology. Dense accuracy is measured with exact held-out synthetic diffeomorphisms applied to real histology texture; native registered pairs must show statistically supported modality-independent MIND improvement while preserving tissue support, acceptance, and valid geometry. Promotion requires at least 20 animals and 80 sections, animal-level bootstrap gates, zero folds, bounded displacement and forward/inverse error, ONNX parity, and a separate one-shot locked test through `evaluate_locked_nonlinear_histology.py`. The GUI keeps refinement disabled until the model, manifest, and locked evidence hashes are pinned in application source.
+
 ## Running v7
 
 Use the CUDA environment and explicit workspace/data roots:
