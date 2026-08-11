@@ -19,7 +19,7 @@ POSE_ORIENTATION_OUTPUT_NAME = "orientation_inverted_logit"
 POSE_INFERENCE_BATCH_SIZE = 16
 QUICKNII_COORDINATE_CONTRACT_VERSION = "quicknii-ras-to-allen-pir-v2"
 ATLAS_POSE_PREPROCESSING_VERSION = "smart-mask-scale-invariant-v2"
-AUTOMATIC_BRAIN_MASK_VERSION = "border-distance-conditional-hull-v4"
+AUTOMATIC_BRAIN_MASK_VERSION = "border-distance-conditional-hull-v5"
 APPROVED_ATLAS_POSE_MODEL_SHA256: str | None = None
 APPROVED_ATLAS_POSE_METADATA_SHA256: str | None = None
 APPROVED_ATLAS_POSE_EVIDENCE_SHA256: str | None = None
@@ -83,6 +83,12 @@ def _brain_mask_from_distance(distance: np.ndarray, threshold: float) -> np.ndar
         (areas >= max(0.001 * height * width, 0.15 * areas.max()))
         & (distance_from_center < 0.55)
     )
+    border_labels = np.unique(
+        np.concatenate((labels[0], labels[-1], labels[:, 0], labels[:, -1]))
+    )
+    interior_labels = selected_labels[~np.isin(selected_labels, border_labels)]
+    if stats[interior_labels, cv2.CC_STAT_AREA].sum() >= 0.03 * height * width:
+        selected_labels = interior_labels
     selected = np.isin(labels, selected_labels).astype(np.uint8)
     radius = max(2, round(min(height, width) / 70))
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
@@ -149,15 +155,26 @@ def automatic_brain_mask(image: np.ndarray) -> np.ndarray:
         distance,
         max(3.0, border_threshold * 2.0 + 2.0, otsu_floor),
     )
-    if result is None:
-        raise ValueError("No brain foreground was detected")
-    if result.mean() < 0.05:
-        retry = _brain_mask_from_distance(
-            distance,
-            max(3.0, border_threshold * 1.25 + 2.0, otsu_floor),
+    if result is None or result.mean() < 0.20:
+        border_retry = max(3.0, float(np.percentile(border_distance, 60.0)) * 1.25 + 2.0)
+        retries = (
+            _brain_mask_from_distance(distance, border_retry),
+            _brain_mask_from_distance(distance, max(border_retry, 0.15 * float(otsu_threshold))),
         )
-        if retry is not None and retry.mean() > result.mean():
-            result = retry
+        retries = [
+            retry
+            for retry in retries
+            if retry is not None
+            and 0.03 <= retry.mean() <= 0.75
+            and np.concatenate((retry[0], retry[-1], retry[:, 0], retry[:, -1])).mean() < 0.20
+        ]
+        if retries:
+            retry = max(retries, key=np.mean)
+            current_area = 0.0 if result is None else float(result.mean())
+            if current_area < 0.05 or retry.mean() > 1.5 * current_area:
+                result = retry
+    if result is None or result.mean() < 0.03:
+        raise ValueError("No brain foreground was detected")
     y, x = np.nonzero(result)
     hull = np.zeros_like(result, dtype=np.uint8)
     cv2.fillConvexPoly(hull, cv2.convexHull(np.column_stack((x, y)).astype(np.int32)), 1)

@@ -728,7 +728,7 @@ def test_export_is_verified_and_promotion_is_explicit(tmp_path):
     model_path = export_folder / "atlas_pose.onnx"
     assert metadata["sha256"] == file_sha256(model_path)
     assert metadata["preprocessing_version"] == "smart-mask-scale-invariant-v2"
-    assert metadata["automatic_brain_mask_version"] == "border-distance-conditional-hull-v4"
+    assert metadata["automatic_brain_mask_version"] == "border-distance-conditional-hull-v5"
     assert metadata["quicknii_coordinate_contract"] == "quicknii-ras-to-allen-pir-v2"
     assert metadata["preprocessing_contract_sha256"] == trainer.atlas_pose_preprocessing_contract_sha256()
     assert metadata["verification_sample_count"] == 2
