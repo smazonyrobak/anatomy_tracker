@@ -60,6 +60,8 @@ DEEPSLICE_ONNX_SHA256 = {
 DEEPSLICE_REVIEW_AP_UM = 400.0
 DEEPSLICE_REVIEW_TILT_DEG = 5.0
 DEEPSLICE_REVIEW_SURFACE_RMS_PX = 8.0
+SURFACE_EDIT_ACTIONS = {"brain_outline_edit", "brain_outline_delete", "brain_outline_erase", "brain_outline_insert"}
+SURFACE_ACTIONS = SURFACE_EDIT_ACTIONS | {"brain_outline", "brain_brush"}
 CHANNEL_KEY_COLUMNS = ["probe_name", "probe_channel_number"]
 ANATOMY_MAPPING_COLUMNS = [
     "structure_id",
@@ -559,18 +561,19 @@ def quicknii_to_tracker_alignment(
         normal = -normal
     if abs(normal[1]) < 1e-9:
         raise ValueError("DeepSlice returned a non-coronal plane")
-    ap_per_ml = normal[0] / normal[1]
+    ap_per_ml = -normal[0] / normal[1]
     ap_per_dv = -normal[2] / normal[1]
     center_ml = (atlas_shape[2] - 1) / 2.0
     center_dv = (atlas_shape[1] - 1) / 2.0
+    origin_ml = atlas_shape[2] - origin[0]
     origin_ap = atlas_shape[0] - origin[1]
     origin_dv = atlas_shape[1] - origin[2]
-    index = origin_ap + ap_per_ml * (center_ml - origin[0]) + ap_per_dv * (center_dv - origin_dv)
+    index = origin_ap + ap_per_ml * (center_ml - origin_ml) + ap_per_dv * (center_dv - origin_dv)
     width = float(prediction["width"])
     height = float(prediction["height"])
     matrix = np.asarray(
         [
-            [horizontal[0] / width, vertical[0] / height, origin[0]],
+            [-horizontal[0] / width, -vertical[0] / height, origin_ml],
             [-horizontal[2] / width, -vertical[2] / height, origin_dv],
             [0.0, 0.0, 1.0],
         ],
@@ -1210,7 +1213,6 @@ def solve_deepslice_alignment(
             "runtime_device": runtime_info.get("device", "unknown"),
             "alignment_run_id": runtime_info.get("alignment_run_id"),
             "alignment_scope": "global" if global_alignment else "single",
-            "alignment_batch_inputs": input_crops,
             "onnxruntime_version": runtime_info.get("onnxruntime_version"),
             "gpu_fallback_reason": runtime_info.get("gpu_fallback_reason"),
             "inference_seconds": runtime_info.get("inference_seconds"),
@@ -1222,6 +1224,8 @@ def solve_deepslice_alignment(
             "input_crop": input_crops.get(Path(str(records_by_session[session_index]["Filenames"])).name),
             **{f"surface_{key}": value for key, value in surface_fit.items()},
         }
+        if not prepared:
+            diagnostics["alignment_batch_inputs"] = input_crops
         prepared.append(
             (
                 session_index,
@@ -1576,10 +1580,12 @@ class ImagePanel(QtWidgets.QWidget):
             self.selection_item.hide()
             self.image_shape = None
             return
+        previous_shape = self.image_shape
         self.image_shape = image.shape[:2]
         self.base_item.setImage(image, autoLevels=False, levels=(0, 255))
         self.base_item.setRect(QtCore.QRectF(0, 0, image.shape[1], image.shape[0]))
-        self.view.autoRange()
+        if previous_shape != self.image_shape:
+            self.view.autoRange()
 
     def set_overlay(self, image: np.ndarray | None, opacity: float = 0.55) -> None:
         if image is None:
@@ -2329,6 +2335,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.browse_run_btn = QtWidgets.QPushButton("Browse")
         self.map_btn = QtWidgets.QPushButton("Map channels/units")
         self.undo_mapping_btn = QtWidgets.QPushButton("Undo file mapping")
+        for button in (
+            self.load_atlas_btn,
+            self.add_slice_btn,
+            self.transform_btn,
+            self.auto_align_btn,
+            self.auto_align_all_btn,
+            self.map_btn,
+        ):
+            button.setProperty("role", "primary")
         probe_group = QtWidgets.QGroupBox("Probe mapping")
         probe_layout = QtWidgets.QGridLayout(probe_group)
         probe_layout.addWidget(QtWidgets.QLabel("Run folder"), 0, 0)
@@ -2388,6 +2403,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
         self.status = QtWidgets.QLabel("Idle")
         self.status.setStyleSheet("color:#9fb4c8;")
+        self.status.setWordWrap(True)
         feedback_layout = QtWidgets.QHBoxLayout()
         feedback_layout.addWidget(self.point_counts)
         feedback_layout.addStretch(1)
@@ -2987,7 +3003,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.atlas_tilt_dv_value.setText(f"{session.atlas_tilt_dv_deg:+.1f}°")
         self._update_tilt_controls()
         self._update_axis_control(session.atlas_index)
-        self._refresh_atlas()
         self._update_slice_image()
         self._update_slice_navigation()
         self._refresh_3d()
@@ -3013,10 +3028,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session = self.current_session()
         if session is None:
             return
-        had_transform = session.atlas_to_slice_x is not None
         session.curve_points = [(float(x), float(y)) for x, y in points]
-        self._update_slice_image()
-        if had_transform:
+        session.adjusted = apply_curve(session.raw_display, session.curve_points)
+        session.rotated, _ = transform_slice_image(
+            session.adjusted,
+            session.rotation_deg,
+            session.flip_horizontal,
+            session.flip_vertical,
+        )
+        self.slice_panel.set_base(session.rotated)
+        if session.atlas_to_slice_x is not None:
             self._refresh_transformed_overlay(session)
             self._refresh_atlas()
         self.status.setText("Brightness curve updated; alignment coordinates unchanged.")
@@ -3099,7 +3120,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if session.probe_slice_points:
             session.probe_signal_values = [self._probe_point_signal(session, point) for point in session.probe_slice_points]
         self.slice_panel.set_base(session.rotated)
-        self.curve_editor.set_histogram(session.raw_display)
         if not clear_transform and session.atlas_to_slice_x is not None:
             self._refresh_transformed_overlay(session)
         self._refresh_atlas()
@@ -3338,13 +3358,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._detach_smart_surface(session)
         session.point_history.append("brain_outline_edit")
         self._invalidate_auto_alignment_after_surface_edit(session)
+        self._refresh_point_counts()
 
     def _surface_point_moved(self, index: int, x: float, y: float) -> None:
         session = self.current_session()
         if session is None or not 0 <= index < len(session.brain_outline_points):
             return
         session.brain_outline_points[index] = self._slice_display_to_raw_point(session, (x, y))
-        self._refresh_points()
+        self.slice_panel.set_outline(
+            self._slice_raw_to_display_points(session, session.brain_outline_points),
+            session.brain_outline_segment_starts,
+            session.brain_outline_closed,
+        )
         self.status.setText(f"Moved surface point {index + 1}; run auto-alignment again")
 
     def _surface_point_deleted(self, index: int) -> None:
@@ -3459,7 +3484,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.brain_outline_closed = False
         session.brain_brush_strokes.clear()
         session.point_history = [
-            action for action in session.point_history if action not in {"brain_outline", "brain_brush", "brain_outline_erase"}
+            action for action in session.point_history if action not in SURFACE_ACTIONS
         ]
         session.point_history.extend("brain_outline" for _ in session.brain_outline_points)
         session.point_history.append("brain_outline_erase")
@@ -3788,12 +3813,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session = self.current_session()
         if session is None:
             return
-        surface_edit_actions = {"brain_outline_edit", "brain_outline_delete", "brain_outline_erase", "brain_outline_insert"}
         if (
             self.alignment_tabs.currentIndex() == 1
             and session.brain_outline_undo_stack
             and session.point_history
-            and session.point_history[-1] in surface_edit_actions
+            and session.point_history[-1] in SURFACE_EDIT_ACTIONS
         ):
             points, starts, closed, strokes, selection_mask, point_history = session.brain_outline_undo_stack.pop()
             session.brain_outline_points = points
@@ -3887,7 +3911,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.brain_brush_selection_mask = None
             session.brain_outline_undo_stack.clear()
             session.point_history = [
-                action for action in session.point_history if action not in {"brain_outline", "brain_brush", "brain_outline_erase"}
+                action for action in session.point_history if action not in SURFACE_ACTIONS
             ]
             self.status.setText("Cleared the surface selection on the current slice")
         elif self.landmark_mode.isChecked():
@@ -4022,7 +4046,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 session.atlas_tilt_dv_deg,
                 tuple(session.atlas_landmarks),
                 tuple(session.slice_landmarks),
-                tuple(session.probe_slice_points),
                 id(session.slice_to_atlas_x),
                 id(session.atlas_to_slice_x),
             )
@@ -4755,7 +4778,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             diagnostics = session.auto_alignment_diagnostics or {}
             if session.auto_alignment_run_id is None:
                 continue
-            alignment_runs.setdefault(
+            run = alignment_runs.setdefault(
                 session.auto_alignment_run_id,
                 {
                     "scope": diagnostics.get("alignment_scope", session.auto_alignment_scope),
@@ -4777,6 +4800,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     "model_sha256": session.deepslice_model_hashes,
                 },
             )
+            if diagnostics.get("alignment_batch_inputs"):
+                run["input_snapshot"] = diagnostics["alignment_batch_inputs"]
         manifest = {
             "created_at": datetime.now().astimezone().isoformat(),
             "probe_name": probe_name,
@@ -4837,7 +4862,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     "auto_alignment_scope": session.auto_alignment_scope,
                     "auto_alignment_run_id": session.auto_alignment_run_id,
                     "manual_refined_from_run_id": session.manual_refined_from_run_id,
-                    "auto_alignment_diagnostics": session.auto_alignment_diagnostics,
+                    "auto_alignment_diagnostics": (
+                        None
+                        if session.auto_alignment_diagnostics is None
+                        else {
+                            key: value
+                            for key, value in session.auto_alignment_diagnostics.items()
+                            if key != "alignment_batch_inputs"
+                        }
+                    ),
                     "deepslice_raw_ensemble_ouv_quicknii_ml_ap_dv": session.deepslice_raw_ensemble_ouv,
                     "deepslice_shared_angle_ouv_quicknii_ml_ap_dv": session.deepslice_shared_angle_ouv,
                     "deepslice_version": session.deepslice_version,
@@ -4881,8 +4914,15 @@ def main() -> None:
         }
         QTabBar::tab:selected { background:#2b6f95; color:#ffffff; }
         QTabBar::tab:hover:!selected { background:#24415a; color:#ffffff; }
-        QPushButton { background:#24415a; border:1px solid #41627f; border-radius:6px; padding:7px 12px; }
-        QPushButton:hover { background:#2d526f; }
+        QPushButton { background:#1b2634; border:1px solid #33475b; border-radius:6px; padding:7px 12px; }
+        QPushButton:hover { background:#25384a; }
+        QPushButton[role="primary"] { background:#245f82; border-color:#4387ad; }
+        QPushButton[role="primary"]:hover { background:#2b7199; }
+        QPushButton:focus { border:2px solid #80d4ff; }
+        QPushButton:disabled { background:#1b232d; border-color:#293544; color:#667789; }
+        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTableWidget:focus {
+            border:1px solid #80d4ff;
+        }
         QSplitter::handle { background:#2d3a4c; }
         QSplitter::handle:hover { background:#49b9ff; }
         """

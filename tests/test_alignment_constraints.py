@@ -233,10 +233,10 @@ def _quicknii_record(filename, shape, atlas_index, tilt_lr, tilt_dv):
     center_dv = (dv_size - 1) / 2.0
     record = {
         "Filenames": filename,
-        "ox": 0.0,
+        "ox": float(ml_size),
         "oy": ap_size - (atlas_index - lr_slope * center_ml - dv_slope * center_dv),
         "oz": float(dv_size),
-        "ux": float(ml_size),
+        "ux": -float(ml_size),
         "uy": -lr_slope * ml_size,
         "uz": 0.0,
         "vx": 0.0,

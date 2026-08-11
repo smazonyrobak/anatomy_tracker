@@ -168,9 +168,10 @@ def test_smart_selection_crop_flip_and_surface_fit_recover_known_oblique_plane()
         global_alignment=False,
     )
 
-    _, atlas_index, tilt_lr, tilt_dv, *_rest, diagnostics = prepared[0]
+    _, atlas_index, tilt_lr, tilt_dv, matrix, _, _, diagnostics = prepared[0]
     assert shared_tilt is None
     assert abs(atlas_index - 280) < 5
-    assert abs(tilt_lr - 6.0) < 10.0
-    assert abs(tilt_dv + 4.0) < 10.0
+    assert abs(tilt_lr - 6.0) < 5.0
+    assert abs(tilt_dv + 4.0) < 5.0
+    assert matrix[0, 0] > 0.0
     assert diagnostics["surface_rms_after_atlas_px"] < 3.0
