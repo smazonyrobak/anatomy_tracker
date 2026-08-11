@@ -4961,10 +4961,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.view3d.removeItem(item)
         self.dynamic_gl_items.clear()
         if self.atlas_volume is not None and self.sessions:
+            aligned_sessions = [
+                (index, session)
+                for index, session in enumerate(self.sessions)
+                if session.brain_outline_points
+                and session.slice_to_atlas_x is not None
+                and session.slice_to_atlas_y is not None
+                and session.atlas_to_slice_x is not None
+                and session.atlas_to_slice_y is not None
+            ]
             if self.show_all_slice_planes.isChecked():
-                visible_sessions = list(enumerate(self.sessions))
+                visible_sessions = aligned_sessions
             else:
-                visible_sessions = [(self.current_session_index, self.current_session())]
+                visible_sessions = [
+                    item for item in aligned_sessions if item[0] == self.current_session_index
+                ]
             palette = [
                 (0.15, 0.85, 1.0),
                 (1.0, 0.55, 0.18),
@@ -4974,8 +4985,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 (0.88, 0.88, 0.22),
             ]
             for session_index, session in visible_sessions:
-                if session is None:
-                    continue
                 is_current = session_index == self.current_session_index
                 rgb = (0.15, 0.85, 1.0) if is_current else palette[session_index % len(palette)]
                 corners = volume_to_gl(

@@ -94,6 +94,40 @@ def test_both_probe_regressions_render_together_with_distinct_colors(window):
     assert by_color[expected_color("imec1")].width == 4
 
 
+def test_3d_slice_planes_require_both_surface_and_completed_alignment(window):
+    identity = np.eye(3)
+
+    def aligned_session(name, *, surface):
+        session = TRACKER.SliceSession(name, brain_outline_points=[(1.0, 1.0)] if surface else [])
+        session.slice_to_atlas_x = TRACKER.AffineCoordinate(identity, 0)
+        session.slice_to_atlas_y = TRACKER.AffineCoordinate(identity, 1)
+        session.atlas_to_slice_x = TRACKER.AffineCoordinate(identity, 0)
+        session.atlas_to_slice_y = TRACKER.AffineCoordinate(identity, 1)
+        return session
+
+    window.atlas_volume = np.zeros((10, 12, 14), dtype=np.uint8)
+    window.sessions = [
+        TRACKER.SliceSession("unused"),
+        TRACKER.SliceSession("surface-only", brain_outline_points=[(1.0, 1.0)]),
+        aligned_session("alignment-only", surface=False),
+        aligned_session("registered", surface=True),
+    ]
+    window.current_session_index = 0
+    window.show_all_slice_planes.setChecked(True)
+    window._refresh_3d()
+
+    meshes = [item for item in window.dynamic_gl_items if isinstance(item, TRACKER.gl.GLMeshItem)]
+    assert len(meshes) == 1
+
+    window.show_all_slice_planes.setChecked(False)
+    window._refresh_3d()
+    assert not any(isinstance(item, TRACKER.gl.GLMeshItem) for item in window.dynamic_gl_items)
+
+    window.current_session_index = 3
+    window._refresh_3d()
+    assert sum(isinstance(item, TRACKER.gl.GLMeshItem) for item in window.dynamic_gl_items) == 1
+
+
 def test_undo_and_clear_touch_only_selected_probe(window):
     session = TRACKER.SliceSession("slice")
     session.probe_traces = {
