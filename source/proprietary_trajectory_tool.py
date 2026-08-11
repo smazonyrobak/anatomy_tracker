@@ -30,7 +30,7 @@ from PIL import Image
 from PySide6 import QtCore, QtGui, QtWidgets
 from scipy.interpolate import Rbf
 from scipy.ndimage import map_coordinates
-from scipy.optimize import isotonic_regression, least_squares
+from scipy.optimize import least_squares
 
 
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
@@ -60,6 +60,10 @@ DEEPSLICE_ONNX_SHA256 = {
 DEEPSLICE_REVIEW_AP_UM = 400.0
 DEEPSLICE_REVIEW_TILT_DEG = 5.0
 DEEPSLICE_REVIEW_SURFACE_RMS_PX = 8.0
+MIND_CANONICAL_SIZE = (171, 120)
+MIND_AP_PRIOR_WEIGHT = 0.001
+MIND_TILT_PRIOR_WEIGHT = 0.0005
+MIND_SURFACE_WEIGHT = 0.05
 SURFACE_EDIT_ACTIONS = {"brain_outline_edit", "brain_outline_delete", "brain_outline_erase", "brain_outline_insert"}
 SURFACE_ACTIONS = SURFACE_EDIT_ACTIONS | {"brain_outline", "brain_brush"}
 CHANNEL_KEY_COLUMNS = ["probe_name", "probe_channel_number"]
@@ -85,8 +89,22 @@ ANATOMY_MAPPING_COLUMNS = [
     "anatomy_assignment_method",
     "anatomy_mapped_at",
 ]
+PROBE_COLORS = (
+    (40, 181, 246),
+    (255, 153, 51),
+    (171, 108, 255),
+    (46, 204, 113),
+    (255, 91, 137),
+    (240, 209, 70),
+)
 
 pg.setConfigOptions(imageAxisOrder="row-major", background="#0f131a", foreground="#d7e7f5")
+
+
+def probe_color(probe_name: str) -> tuple[int, int, int]:
+    digits = "".join(character for character in probe_name if character.isdigit())
+    index = int(digits) if digits else sum(probe_name.encode("utf-8"))
+    return PROBE_COLORS[index % len(PROBE_COLORS)]
 
 
 def file_sha256(path: Path) -> str:
@@ -381,13 +399,13 @@ def run_deepslice_inference(
 ) -> tuple[list[dict], str, dict[str, str], dict[str, dict[str, float]], dict]:
     import onnxruntime as ort
 
-    progress_messages.put((1, "Loading the validated DeepSlice GPU runtime..."))
+    progress_messages.put((5, "Loading the validated DeepSlice GPU runtime..."))
     started = time.perf_counter()
     sessions, model_hashes, provider, fallback_reason = load_deepslice_onnx_sessions()
     inputs, widths, heights = preprocess_deepslice_images(image_paths)
     if cancel_event.is_set():
         raise InterruptedError
-    progress_messages.put((2, f"Running the DeepSlice two-model ensemble on {provider}..."))
+    progress_messages.put((15, f"Running the DeepSlice two-model ensemble on {provider}..."))
     inference_started = time.perf_counter()
     inference_error = None
     try:
@@ -405,7 +423,7 @@ def run_deepslice_inference(
         if provider != "DmlExecutionProvider":
             raise inference_error
         fallback_reason = f"DirectML inference failed: {type(inference_error).__name__}: {inference_error}"
-        progress_messages.put((2, "DirectML failed; retrying the validated models on CPU..."))
+        progress_messages.put((15, "DirectML failed; retrying the validated models on CPU..."))
         sessions, model_hashes, provider, _ = load_deepslice_onnx_sessions(True)
         primary_result = sessions["primary"].run(["Identity:0"], {"images": inputs})
         if cancel_event.is_set():
@@ -448,7 +466,7 @@ def run_deepslice_inference(
         [quicknii_to_tracker_alignment(record, ALLEN_CCF_25_SHAPE_AP_DV_ML)[1:3] for record in records]
     )
     if propagate_angles and len(records) > 1:
-        progress_messages.put((3, "Integrating one shared cutting angle across slices..."))
+        progress_messages.put((22, "Integrating one shared cutting angle across slices..."))
         records = propagate_deepslice_shared_angles(records)
     for record in records:
         record["shared_angle_ouv"] = (
@@ -456,7 +474,7 @@ def run_deepslice_inference(
             if propagate_angles and len(records) > 1
             else None
         )
-    progress_messages.put((4, "Converting DeepSlice coordinates into the tracker atlas..."))
+    progress_messages.put((27, "Converting DeepSlice coordinates into the tracker atlas..."))
     runtime_info = {
         "backend": "ONNX Runtime DirectML" if provider == "DmlExecutionProvider" else "ONNX Runtime CPU",
         "onnxruntime_version": ort.__version__,
@@ -474,13 +492,25 @@ def run_deepslice_inference(
 
 
 def prepare_and_run_deepslice(
-    image_jobs: list[tuple[str, float, bool, bool, list[tuple[float, float]], tuple[int, int, int, int] | None, bool]],
+    image_jobs: list[
+        tuple[
+            str,
+            float,
+            bool,
+            bool,
+            list[tuple[float, float]],
+            tuple[int, int, int, int] | None,
+            bool,
+            np.ndarray | None,
+        ]
+    ],
     propagate_angles: bool,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
-) -> tuple[list[dict], str, dict[str, str], dict[str, dict[str, float]], dict]:
+) -> tuple[list[dict], str, dict[str, str], dict[str, dict[str, float]], dict, dict[str, dict[str, np.ndarray]]]:
     image_paths = []
     input_crops = {}
+    prepared_inputs = {}
     with tempfile.TemporaryDirectory(prefix="trajectory_deepslice_") as temporary_folder:
         for sequence, (
             source_path,
@@ -490,10 +520,11 @@ def prepare_and_run_deepslice(
             surface_points,
             selection_crop,
             outline_closed,
+            selection_mask,
         ) in enumerate(image_jobs):
             if cancel_event.is_set():
                 raise InterruptedError
-            progress_messages.put((0, f"Preparing DeepSlice input {sequence + 1} / {len(image_jobs)}..."))
+            progress_messages.put((2, f"Preparing DeepSlice input {sequence + 1} / {len(image_jobs)}..."))
             path = Path(source_path)
             output_path = Path(temporary_folder) / f"slice_{sequence:04d}.png"
             raw = tifffile.imread(str(path)) if path.suffix.lower() in {".tif", ".tiff"} else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
@@ -506,9 +537,16 @@ def prepare_and_run_deepslice(
                 flip_horizontal,
                 flip_vertical,
             )
+            if selection_mask is not None and selection_mask.shape == image.shape:
+                brain_mask = np.asarray(selection_mask, dtype=np.uint8) > 0
+            else:
+                brain_mask = np.zeros(image.shape, dtype=np.uint8)
+                hull = cv2.convexHull(np.rint(np.asarray(surface_points)).astype(np.int32))
+                cv2.drawContours(brain_mask, [hull], -1, 1, -1)
+                brain_mask = brain_mask.astype(bool)
             if selection_crop is not None:
                 crop = selection_crop
-            elif outline_closed:
+            elif surface_points:
                 crop = surface_crop_bounds(surface_points, image.shape, 0.06)
             else:
                 crop = (0, 0, image.shape[1], image.shape[0])
@@ -516,6 +554,10 @@ def prepare_and_run_deepslice(
             if not cv2.imwrite(str(output_path), image[y0:y1, x0:x1]):
                 raise RuntimeError(f"Could not prepare {path.name} for DeepSlice")
             image_paths.append(str(output_path))
+            prepared_inputs[output_path.name] = {
+                "image": image,
+                "brain_mask": brain_mask,
+            }
             input_crops[output_path.name] = {
                 "source_path": str(path),
                 "source_size_bytes": int(path.stat().st_size),
@@ -546,7 +588,7 @@ def prepare_and_run_deepslice(
             cancel_event,
         )
     runtime_info["input_crops"] = input_crops
-    return records, deepslice_version, model_hashes, disagreement, runtime_info
+    return records, deepslice_version, model_hashes, disagreement, runtime_info, prepared_inputs
 
 
 def quicknii_to_tracker_alignment(
@@ -959,42 +1001,118 @@ def smart_brain_surface_selection(
     return [(float(x), float(y)) for x, y in surface], selection
 
 
-def constrain_deepslice_ap_indices(
-    predicted_indices: dict[int, float],
-    bounds: tuple[int, int] | None,
-    anterior_to_posterior: list[int],
-) -> tuple[dict[int, float], dict[int, float]]:
-    constrained = {index: float(value) for index, value in predicted_indices.items()}
-    if bounds is not None:
-        minimum, maximum = sorted(bounds)
-        constrained = {
-            index: float(np.clip(value, minimum, maximum))
-            for index, value in constrained.items()
-        }
-    ordered = list(dict.fromkeys(index for index in anterior_to_posterior if index in constrained))
-    if len(ordered) >= 2:
-        spacing = 1.0
-        targets = np.asarray(
-            [constrained[index] - position * spacing for position, index in enumerate(ordered)],
-            dtype=np.float64,
+def canonical_mind_input(
+    image: np.ndarray,
+    brain_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    mask = np.asarray(brain_mask, dtype=bool)
+    y, x = np.nonzero(mask)
+    if len(x) < 64:
+        raise ValueError("The selected brain surface does not enclose enough tissue")
+    image_crop = np.asarray(image)[y.min() : y.max() + 1, x.min() : x.max() + 1]
+    mask_crop = mask[y.min() : y.max() + 1, x.min() : x.max() + 1]
+    width, height = MIND_CANONICAL_SIZE
+    canonical = cv2.resize(
+        image_crop.astype(np.float32),
+        (width, height),
+        interpolation=cv2.INTER_AREA,
+    )
+    canonical_mask = cv2.resize(
+        mask_crop.astype(np.uint8),
+        (width, height),
+        interpolation=cv2.INTER_NEAREST,
+    ).astype(bool)
+    values = canonical[canonical_mask]
+    low, high = np.percentile(values, [1.0, 99.0])
+    canonical = np.clip((canonical - low) / max(float(high - low), 1e-4), 0.0, 1.0)
+    canonical[~canonical_mask] = 0.0
+    return canonical.astype(np.float32), canonical_mask
+
+
+def mind_descriptor(image: np.ndarray) -> np.ndarray:
+    differences = []
+    for dy, dx in ((-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (-1, 1), (1, -1), (1, 1)):
+        shifted = cv2.warpAffine(
+            image,
+            np.asarray([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32),
+            (image.shape[1], image.shape[0]),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_REFLECT_101,
         )
-        if bounds is not None:
-            minimum, maximum = sorted(bounds)
-            upper = maximum - (len(ordered) - 1) * spacing
-            if upper < minimum:
-                raise ValueError("The AP range is too narrow for the selected slice order")
-            targets = np.clip(targets, minimum, upper)
-        fitted = isotonic_regression(
-            targets,
-            increasing=True,
-        ).x
-        for position, (index, value) in enumerate(zip(ordered, fitted)):
-            constrained[index] = float(value + position * spacing)
-    shifts = {
-        index: constrained[index] - float(predicted_indices[index])
-        for index in constrained
+        differences.append(cv2.GaussianBlur((image - shifted) ** 2, (0, 0), 1.0))
+    differences = np.stack(differences)
+    local_variance = np.mean(differences, axis=0)
+    return np.exp(-differences / (local_variance + 1e-4)).astype(np.float32)
+
+
+def mind_distance(
+    first_descriptor: np.ndarray,
+    first_mask: np.ndarray,
+    second_descriptor: np.ndarray,
+    second_mask: np.ndarray,
+) -> tuple[float, float]:
+    overlap = cv2.erode(
+        (np.asarray(first_mask) & np.asarray(second_mask)).astype(np.uint8),
+        np.ones((5, 5), dtype=np.uint8),
+    ).astype(bool)
+    if np.count_nonzero(overlap) < 64:
+        return float("inf"), float("inf")
+    union = np.asarray(first_mask) | np.asarray(second_mask)
+    texture = float(np.mean(np.abs(first_descriptor[:, overlap] - second_descriptor[:, overlap])))
+    surface = float(np.count_nonzero(np.asarray(first_mask) ^ np.asarray(second_mask)) / np.count_nonzero(union))
+    return texture, surface
+
+
+def ap_candidate_indices(
+    predicted_index: float,
+    atlas_length: int,
+    bounds: tuple[int, int] | None,
+    step: int,
+) -> list[int]:
+    if bounds is None:
+        minimum = max(0, int(np.floor(predicted_index)) - 8)
+        maximum = min(atlas_length - 1, int(np.ceil(predicted_index)) + 8)
+    else:
+        minimum, maximum = sorted(int(value) for value in bounds)
+        minimum = int(np.clip(minimum, 0, atlas_length - 1))
+        maximum = int(np.clip(maximum, 0, atlas_length - 1))
+    candidates = list(range(minimum, maximum + 1, max(1, int(step))))
+    if candidates[-1] != maximum:
+        candidates.append(maximum)
+    return candidates
+
+
+def solve_ordered_lattice(
+    lattices: dict[int, dict[int, tuple[float, dict]]],
+    anterior_to_posterior: list[int],
+) -> tuple[dict[int, int], float]:
+    assignments = {
+        session_index: min(values, key=lambda ap: values[ap][0])
+        for session_index, values in lattices.items()
     }
-    return constrained, shifts
+    ordered = list(dict.fromkeys(index for index in anterior_to_posterior if index in lattices))
+    if len(ordered) < 2:
+        return assignments, float(sum(lattices[index][ap][0] for index, ap in assignments.items()))
+
+    costs = {ap: lattices[ordered[0]][ap][0] for ap in lattices[ordered[0]]}
+    paths = {ap: [ap] for ap in costs}
+    for session_index in ordered[1:]:
+        next_costs = {}
+        next_paths = {}
+        for ap, (score, _) in lattices[session_index].items():
+            predecessors = [previous for previous in costs if previous < ap]
+            if not predecessors:
+                continue
+            previous = min(predecessors, key=costs.get)
+            next_costs[ap] = costs[previous] + score
+            next_paths[ap] = [*paths[previous], ap]
+        costs, paths = next_costs, next_paths
+    if not costs:
+        raise ValueError("The AP search range is too narrow for the selected slice order")
+    last = min(costs, key=costs.get)
+    assignments.update(dict(zip(ordered, paths[last])))
+    total = sum(lattices[index][ap][0] for index, ap in assignments.items())
+    return assignments, float(total)
 
 
 def surface_crop_bounds(
@@ -1023,8 +1141,16 @@ def deepslice_review_reasons(disagreement: dict, diagnostics: dict) -> list[str]
         reasons.append("model AP disagreement")
     if max(disagreement.get("lr_deg", 0.0), disagreement.get("dv_deg", 0.0)) >= DEEPSLICE_REVIEW_TILT_DEG:
         reasons.append("model tilt disagreement")
-    if abs(diagnostics.get("ap_constraint_shift_um", 0.0)) >= DEEPSLICE_REVIEW_AP_UM:
-        reasons.append("large AP-prior shift")
+    if abs(diagnostics.get("ap_search_shift_um", 0.0)) >= DEEPSLICE_REVIEW_AP_UM:
+        reasons.append("large AP refinement")
+    if diagnostics.get("pose_search_boundary"):
+        reasons.append(
+            "best match is at AP search boundary"
+            if diagnostics.get("pose_search_explicit_bounds")
+            else "best match is at local AP-search edge; set an explicit range"
+        )
+    if diagnostics.get("pose_search_flat"):
+        reasons.append("ambiguous AP score curve")
     if diagnostics.get("surface_rms_after_atlas_px", 0.0) > DEEPSLICE_REVIEW_SURFACE_RMS_PX:
         reasons.append("poor surface fit")
     return reasons
@@ -1133,6 +1259,235 @@ def fit_surface_scale_translation(
     }
 
 
+def refine_deepslice_pose_search(
+    converted: dict[int, tuple[float, float, float, np.ndarray]],
+    records_by_session: dict[int, dict],
+    atlas_volume: np.ndarray,
+    annotation_volume: np.ndarray,
+    prepared_inputs: dict[str, dict[str, np.ndarray]],
+    disagreement: dict[str, dict[str, float]],
+    ap_bounds: tuple[int, int] | None,
+    order_snapshot: list[int],
+    progress_messages: queue.SimpleQueue | None,
+    cancel_event: threading.Event | None,
+    *,
+    global_alignment: bool,
+) -> tuple[dict[int, tuple[int, float, float]], dict[int, dict], tuple[float, float] | None]:
+    sources = {}
+    filenames = {}
+    for session_index, record in records_by_session.items():
+        filename = Path(str(record["Filenames"])).name
+        prepared = prepared_inputs[filename]
+        canonical, mask = canonical_mind_input(prepared["image"], prepared["brain_mask"])
+        sources[session_index] = (mind_descriptor(canonical), mask)
+        filenames[session_index] = filename
+
+    def atlas_reference(ap: int, tilt_lr: float, tilt_dv: float) -> tuple[np.ndarray, np.ndarray] | None:
+        plane = coronal_oblique_slice_resampled(
+            atlas_volume,
+            int(ap),
+            float(tilt_lr),
+            float(tilt_dv),
+            order=1,
+        )
+        mask = coronal_oblique_slice_resampled(
+            annotation_volume,
+            int(ap),
+            float(tilt_lr),
+            float(tilt_dv),
+            order=0,
+        ) > 0
+        if np.count_nonzero(mask) < 64:
+            return None
+        canonical, canonical_mask = canonical_mind_input(plane, mask)
+        return mind_descriptor(canonical), canonical_mask
+
+    evaluated_poses = {session_index: 0 for session_index in converted}
+
+    def lattice(
+        tilt_lr: float,
+        tilt_dv: float,
+        candidates: dict[int, list[int]],
+    ) -> dict[int, dict[int, tuple[float, dict]]]:
+        candidate_sets = {index: set(values) for index, values in candidates.items()}
+        result = {index: {} for index in candidates}
+        for ap in sorted(set().union(*candidate_sets.values())):
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError
+            reference = atlas_reference(ap, tilt_lr, tilt_dv)
+            for session_index, ap_values in candidate_sets.items():
+                if ap not in ap_values:
+                    continue
+                predicted_ap, predicted_lr, predicted_dv, _ = converted[session_index]
+                model_difference = disagreement.get(filenames[session_index], {})
+                ap_sigma = max(8.0, float(model_difference.get("ap_um", 0.0)) / VOXEL_UM)
+                if ap_bounds is not None:
+                    minimum, maximum = sorted(ap_bounds)
+                    if predicted_ap < minimum or predicted_ap > maximum:
+                        distance = min(abs(predicted_ap - minimum), abs(predicted_ap - maximum))
+                        ap_sigma = max(ap_sigma, float(maximum - minimum), 2.0 * distance)
+                lr_sigma = max(3.0, float(model_difference.get("lr_deg", 0.0)))
+                dv_sigma = max(3.0, float(model_difference.get("dv_deg", 0.0)))
+                source_descriptor, source_mask = sources[session_index]
+                if reference is None:
+                    texture_distance = surface_distance = float("inf")
+                else:
+                    texture_distance, surface_distance = mind_distance(
+                        source_descriptor,
+                        source_mask,
+                        *reference,
+                    )
+                structural_distance = texture_distance + MIND_SURFACE_WEIGHT * surface_distance
+                ap_prior = MIND_AP_PRIOR_WEIGHT * ((ap - predicted_ap) / ap_sigma) ** 2
+                tilt_prior = MIND_TILT_PRIOR_WEIGHT * (
+                    ((tilt_lr - predicted_lr) / lr_sigma) ** 2
+                    + ((tilt_dv - predicted_dv) / dv_sigma) ** 2
+                )
+                result[session_index][int(ap)] = (
+                    float(structural_distance + ap_prior + tilt_prior),
+                    {
+                        "mind_texture_distance": float(texture_distance),
+                        "surface_shape_distance": float(surface_distance),
+                        "deepslice_ap_prior": float(ap_prior),
+                        "deepslice_tilt_prior": float(tilt_prior),
+                    },
+                )
+                evaluated_poses[session_index] += 1
+        return result
+
+    def coarse_tilts(center: float) -> list[float]:
+        values = set(float(value) for value in np.arange(-12.0, 12.1, 4.0))
+        values.add(float(np.clip(center, -20.0, 20.0)))
+        if abs(center) > 12.0:
+            values.update(float(np.clip(center + offset, -20.0, 20.0)) for offset in (-4.0, 4.0))
+        return sorted(values)
+
+    def search_group(
+        session_indices: list[int],
+        ordered_indices: list[int],
+        progress_start: int,
+        progress_end: int,
+    ) -> tuple[dict[int, tuple[int, float, float]], dict[int, dict], tuple[float, float]]:
+        predicted_tilt = np.mean(
+            np.asarray([(converted[index][1], converted[index][2]) for index in session_indices]),
+            axis=0,
+        )
+        coarse_candidates = {
+            index: ap_candidate_indices(converted[index][0], atlas_volume.shape[0], ap_bounds, 4)
+            for index in session_indices
+        }
+        initial_lattice = lattice(float(predicted_tilt[0]), float(predicted_tilt[1]), coarse_candidates)
+        initial_assignment, _ = solve_ordered_lattice(initial_lattice, ordered_indices)
+        fixed_candidates = {index: [ap] for index, ap in initial_assignment.items()}
+        tilt_pairs = [
+            (tilt_lr, tilt_dv)
+            for tilt_lr in coarse_tilts(float(predicted_tilt[0]))
+            for tilt_dv in coarse_tilts(float(predicted_tilt[1]))
+        ]
+        coarse_results = []
+        for sequence, (tilt_lr, tilt_dv) in enumerate(tilt_pairs, start=1):
+            if progress_messages is not None:
+                progress_messages.put(
+                    (
+                        progress_start + round((progress_end - progress_start) * 0.40 * sequence / len(tilt_pairs)),
+                        f"Searching atlas tilt {sequence} / {len(tilt_pairs)}...",
+                    )
+                )
+            values = lattice(tilt_lr, tilt_dv, fixed_candidates)
+            assignments, total = solve_ordered_lattice(values, ordered_indices)
+            coarse_results.append((total, tilt_lr, tilt_dv, assignments))
+        _, coarse_lr, coarse_dv, _ = min(coarse_results, key=lambda item: item[0])
+
+        updated_lattice = lattice(coarse_lr, coarse_dv, coarse_candidates)
+        updated_assignment, _ = solve_ordered_lattice(updated_lattice, ordered_indices)
+        fine_candidates = {
+            index: [
+                ap
+                for ap in ap_candidate_indices(converted[index][0], atlas_volume.shape[0], ap_bounds, 1)
+                if abs(ap - updated_assignment[index]) <= 3
+            ]
+            for index in session_indices
+        }
+        fine_tilts = [
+            (float(coarse_lr + lr_offset), float(coarse_dv + dv_offset))
+            for lr_offset in range(-3, 4)
+            for dv_offset in range(-3, 4)
+        ]
+        fine_results = []
+        for sequence, (tilt_lr, tilt_dv) in enumerate(fine_tilts, start=1):
+            if progress_messages is not None:
+                progress_messages.put(
+                    (
+                        progress_start
+                        + round(
+                            (progress_end - progress_start)
+                            * (0.40 + 0.40 * sequence / len(fine_tilts))
+                        ),
+                        f"Refining atlas pose {sequence} / {len(fine_tilts)}...",
+                    )
+                )
+            values = lattice(tilt_lr, tilt_dv, fine_candidates)
+            assignments, total = solve_ordered_lattice(values, ordered_indices)
+            fine_results.append((total, tilt_lr, tilt_dv, assignments))
+        _, best_lr, best_dv, _ = min(fine_results, key=lambda item: item[0])
+
+        final_candidates = {
+            index: ap_candidate_indices(converted[index][0], atlas_volume.shape[0], ap_bounds, 1)
+            for index in session_indices
+        }
+        final_lattice = lattice(best_lr, best_dv, final_candidates)
+        assignments, _ = solve_ordered_lattice(final_lattice, ordered_indices)
+        group_pose = {
+            index: (int(ap), float(best_lr), float(best_dv))
+            for index, ap in assignments.items()
+        }
+        group_diagnostics = {}
+        for index, ap in assignments.items():
+            values = final_lattice[index]
+            alternatives = sorted(
+                score
+                for candidate_ap, (score, _) in values.items()
+                if abs(candidate_ap - ap) >= 2
+            )
+            best_score, components = values[ap]
+            if not np.isfinite(best_score):
+                raise ValueError("The AP search range contains no usable atlas brain sections")
+            margin = float(alternatives[0] - best_score) if alternatives else float("nan")
+            minimum, maximum = min(values), max(values)
+            group_diagnostics[index] = {
+                **components,
+                "pose_search_score": float(best_score),
+                "pose_search_margin": margin,
+                "pose_search_flat": bool(np.isfinite(margin) and margin < 0.0003),
+                "pose_search_final_ap_candidate_count": int(len(values)),
+                "pose_search_evaluated_pose_count": int(evaluated_poses[index]),
+                "pose_search_boundary": bool(ap in (minimum, maximum)),
+                "pose_search_explicit_bounds": ap_bounds is not None,
+                "pose_search_method": "coarse-to-fine MIND + disagreement-weighted DeepSlice prior",
+            }
+        return group_pose, group_diagnostics, (float(best_lr), float(best_dv))
+
+    groups = [list(converted)] if global_alignment else [[index] for index in converted]
+    pose = {}
+    diagnostics = {}
+    shared_tilt = None
+    for group_number, session_indices in enumerate(groups):
+        progress_start = 30 + round(60 * group_number / len(groups))
+        progress_end = 30 + round(60 * (group_number + 1) / len(groups))
+        group_order = [index for index in order_snapshot if index in session_indices]
+        group_pose, group_diagnostics, group_tilt = search_group(
+            session_indices,
+            group_order,
+            progress_start,
+            progress_end,
+        )
+        pose.update(group_pose)
+        diagnostics.update(group_diagnostics)
+        if global_alignment:
+            shared_tilt = group_tilt
+    return pose, diagnostics, shared_tilt
+
+
 def solve_deepslice_alignment(
     records: list[dict],
     filename_to_session: dict[str, int],
@@ -1145,6 +1500,10 @@ def solve_deepslice_alignment(
     cancel_event: threading.Event | None = None,
     *,
     global_alignment: bool,
+    atlas_volume: np.ndarray,
+    prepared_inputs: dict[str, dict[str, np.ndarray]],
+    disagreement: dict[str, dict[str, float]],
+    progress_messages: queue.SimpleQueue | None = None,
 ) -> tuple[list[tuple], tuple[float, float] | None]:
     records_by_session = {
         filename_to_session[Path(str(record["Filenames"])).name]: dict(record)
@@ -1167,27 +1526,25 @@ def solve_deepslice_alignment(
         )
         converted[index] = (atlas_index, tilt_ml, tilt_dv, matrix @ full_to_crop)
 
-    constrained_indices, ap_shifts = constrain_deepslice_ap_indices(
-        {index: values[0] for index, values in converted.items()},
+    pose, search_diagnostics, shared_tilt = refine_deepslice_pose_search(
+        converted,
+        records_by_session,
+        atlas_volume,
+        annotation_volume,
+        prepared_inputs,
+        disagreement,
         ap_bounds,
-        order_snapshot if global_alignment else [],
+        order_snapshot,
+        progress_messages,
+        cancel_event,
+        global_alignment=global_alignment,
     )
-    shared_tilt = None
-    if global_alignment:
-        shared_tilt = tuple(
-            np.mean(
-                np.asarray([(values[1], values[2]) for values in converted.values()]),
-                axis=0,
-            )
-        )
 
     prepared = []
-    for session_index, (preconstraint_atlas_index, tilt_ml, tilt_dv, matrix) in converted.items():
+    for session_index, (raw_atlas_index, tilt_ml, tilt_dv, matrix) in converted.items():
         if cancel_event is not None and cancel_event.is_set():
             raise InterruptedError
-        if shared_tilt is not None:
-            tilt_ml, tilt_dv = shared_tilt
-        atlas_index = int(np.clip(round(constrained_indices[session_index]), 0, atlas_shape[0] - 1))
+        atlas_index, tilt_ml, tilt_dv = pose[session_index]
         atlas_mask = coronal_oblique_slice(
             annotation_volume,
             atlas_index,
@@ -1202,10 +1559,10 @@ def solve_deepslice_alignment(
         )
         inverse = np.linalg.inv(matrix)
         diagnostics = {
-            "preconstraint_ap_index": float(preconstraint_atlas_index),
-            "constrained_ap_index": float(constrained_indices[session_index]),
-            "ap_constraint_shift_index": float(ap_shifts[session_index]),
-            "ap_bounds_index": None if ap_bounds is None else list(ap_bounds),
+            "raw_deepslice_ap_index": float(raw_atlas_index),
+            "refined_ap_index": float(atlas_index),
+            "ap_search_shift_index": float(atlas_index - raw_atlas_index),
+            "ap_search_bounds_index": None if ap_bounds is None else list(ap_bounds),
             "order_constraint_applied": session_index in order_snapshot,
             "alignment_batch_session_indices": sorted(filename_to_session.values()),
             "order_constraint_session_indices": list(order_snapshot),
@@ -1222,6 +1579,7 @@ def solve_deepslice_alignment(
                 [0.0, 0.0],
             ),
             "input_crop": input_crops.get(Path(str(records_by_session[session_index]["Filenames"])).name),
+            **search_diagnostics[session_index],
             **{f"surface_{key}": value for key, value in surface_fit.items()},
         }
         if not prepared:
@@ -1245,6 +1603,7 @@ def prepare_run_and_solve_deepslice(
     image_jobs: list[tuple],
     filename_to_session: dict[str, int],
     atlas_shape: tuple[int, int, int],
+    atlas_volume: np.ndarray,
     annotation_volume: np.ndarray,
     outline_snapshot: dict[int, list[tuple[float, float]]],
     ap_bounds: tuple[int, int] | None,
@@ -1255,7 +1614,7 @@ def prepare_run_and_solve_deepslice(
     cancel_event: threading.Event,
 ) -> tuple[str, dict[str, str], dict[str, dict[str, float]], dict, list[tuple], tuple[float, float] | None]:
     alignment_started = time.perf_counter()
-    records, version, hashes, disagreement, runtime_info = prepare_and_run_deepslice(
+    records, version, hashes, disagreement, runtime_info, prepared_inputs = prepare_and_run_deepslice(
         image_jobs,
         global_alignment,
         progress_messages,
@@ -1264,7 +1623,7 @@ def prepare_run_and_solve_deepslice(
     runtime_info["alignment_run_id"] = alignment_run_id
     if cancel_event.is_set():
         raise InterruptedError
-    progress_messages.put((4, "Applying AP constraints and trusted-surface calibration..."))
+    progress_messages.put((30, "Searching corresponding Allen atlas anatomy..."))
     solver_started = time.perf_counter()
     prepared, shared_tilt = solve_deepslice_alignment(
         records,
@@ -1277,15 +1636,19 @@ def prepare_run_and_solve_deepslice(
         runtime_info,
         cancel_event,
         global_alignment=global_alignment,
+        atlas_volume=atlas_volume,
+        prepared_inputs=prepared_inputs,
+        disagreement=disagreement,
+        progress_messages=progress_messages,
     )
-    runtime_info["surface_solver_seconds"] = float(time.perf_counter() - solver_started)
+    runtime_info["alignment_solver_seconds"] = float(time.perf_counter() - solver_started)
     runtime_info["total_alignment_seconds"] = float(time.perf_counter() - alignment_started)
     for *_, diagnostics in prepared:
-        diagnostics["surface_solver_seconds"] = runtime_info["surface_solver_seconds"]
+        diagnostics["alignment_solver_seconds"] = runtime_info["alignment_solver_seconds"]
         diagnostics["total_alignment_seconds"] = runtime_info["total_alignment_seconds"]
     if cancel_event.is_set():
         raise InterruptedError
-    progress_messages.put((5, "Alignment ready"))
+    progress_messages.put((100, "Alignment ready"))
     return version, hashes, disagreement, runtime_info, prepared, shared_tilt
 
 
@@ -1311,6 +1674,33 @@ def coronal_oblique_slice(
         float(index)
         + np.tan(np.deg2rad(tilt_ml_deg)) * (ml - (ml_size - 1) / 2.0)
         + np.tan(np.deg2rad(tilt_dv_deg)) * (dv - (dv_size - 1) / 2.0)
+    )
+    return map_coordinates(
+        volume,
+        [ap, dv, ml],
+        order=order,
+        mode="constant",
+        cval=0,
+        prefilter=False,
+    )
+
+
+def coronal_oblique_slice_resampled(
+    volume: np.ndarray,
+    index: int,
+    tilt_ml_deg: float,
+    tilt_dv_deg: float,
+    *,
+    order: int,
+) -> np.ndarray:
+    width, height = MIND_CANONICAL_SIZE
+    dv = np.linspace(0.0, volume.shape[1] - 1.0, height)
+    ml = np.linspace(0.0, volume.shape[2] - 1.0, width)
+    dv, ml = np.meshgrid(dv, ml, indexing="ij")
+    ap = (
+        float(index)
+        + np.tan(np.deg2rad(tilt_ml_deg)) * (ml - (volume.shape[2] - 1) / 2.0)
+        + np.tan(np.deg2rad(tilt_dv_deg)) * (dv - (volume.shape[1] - 1) / 2.0)
     )
     return map_coordinates(
         volume,
@@ -1443,6 +1833,14 @@ class AffineCoordinate:
 
 
 @dataclass
+class ProbeTrace:
+    atlas_points: list[tuple[float, float]] = field(default_factory=list)
+    slice_points: list[tuple[float, float]] = field(default_factory=list)
+    volume_points: list[list[float]] = field(default_factory=list)
+    signal_values: list[float] = field(default_factory=list)
+
+
+@dataclass
 class SliceSession:
     name: str
     path: str = ""
@@ -1468,10 +1866,7 @@ class SliceSession:
     brain_brush_strokes: list[tuple[bool, list[tuple[float, float]]]] = field(default_factory=list)
     brain_brush_selection_mask: np.ndarray | None = None
     brain_outline_undo_stack: list[tuple] = field(default_factory=list, repr=False)
-    probe_atlas_points: list[tuple[float, float]] = field(default_factory=list)
-    probe_slice_points: list[tuple[float, float]] = field(default_factory=list)
-    probe_volume_points: list[list[float]] = field(default_factory=list)
-    probe_signal_values: list[float] = field(default_factory=list)
+    probe_traces: dict[str, ProbeTrace] = field(default_factory=dict)
     point_history: list[str] = field(default_factory=list)
     auto_alignment_score: float | None = None
     auto_alignment_affine: list[list[float]] | None = None
@@ -1523,7 +1918,11 @@ class ImagePanel(QtWidgets.QWidget):
         self.selection_item.setZValue(12)
         self.selection_item.hide()
         self.landmark_item = pg.ScatterPlotItem(size=10, brush=pg.mkBrush("#ffe66d"), pen=pg.mkPen("#111820", width=1))
-        self.probe_item = pg.ScatterPlotItem(size=9, brush=pg.mkBrush("#ff4d8d"), pen=pg.mkPen("#ffffff", width=1))
+        self.probe_item = pg.ScatterPlotItem(
+            size=9,
+            brush=pg.mkBrush(*PROBE_COLORS[0]),
+            pen=pg.mkPen("#ffffff", width=1),
+        )
         self.outline_item = pg.PlotDataItem(
             pen=pg.mkPen("#5de4ff", width=2),
             symbol="o",
@@ -1652,9 +2051,23 @@ class ImagePanel(QtWidgets.QWidget):
         self.brush_cursor_item.setRect(point[0] - radius, point[1] - radius, 2 * radius, 2 * radius)
         self.brush_cursor_item.show()
 
-    def set_points(self, landmarks: list[tuple[float, float]], probes: list[tuple[float, float]]) -> None:
+    def set_points(
+        self,
+        landmarks: list[tuple[float, float]],
+        probes: list[tuple[tuple[float, float], tuple[int, int, int], bool]],
+    ) -> None:
         self.landmark_item.setData([{"pos": point} for point in landmarks])
-        self.probe_item.setData([{"pos": point} for point in probes])
+        self.probe_item.setData(
+            [
+                {
+                    "pos": point,
+                    "size": 10 if selected else 7,
+                    "brush": pg.mkBrush(*color, 255 if selected else 150),
+                    "pen": pg.mkPen("#ffffff" if selected else "#1d2733", width=1),
+                }
+                for point, color, selected in probes
+            ]
+        )
         for label in self.labels:
             self.view.removeItem(label)
         self.labels.clear()
@@ -2229,8 +2642,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         automatic_tab = QtWidgets.QWidget()
         automatic_layout = QtWidgets.QGridLayout(automatic_tab)
         automatic_help = QtWidgets.QLabel(
-            "Select at least 8 reliable outer-surface points. DeepSlice matches internal anatomy on the full coronal "
-            "image; the trusted surface then calibrates scale and position without using the display brightness curve."
+            "Select at least 8 reliable outer-surface points. DeepSlice initializes the pose, then a bounded "
+            "modality-independent atlas search matches internal anatomy; the surface fixes scale independently "
+            "of the display brightness curve."
         )
         automatic_help.setWordWrap(True)
         automatic_help.setStyleSheet("color:#9fb4c8;")
@@ -2277,10 +2691,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.auto_align_all_btn.setEnabled(False)
         automatic_layout.addWidget(self.auto_align_btn, 4, 0, 1, 2)
         automatic_layout.addWidget(self.auto_align_all_btn, 4, 2, 1, 2)
-        self.limit_auto_align_ap = QtWidgets.QCheckBox("Constrain AP estimate")
+        self.limit_auto_align_ap = QtWidgets.QCheckBox("Limit AP search")
         self.limit_auto_align_ap.setToolTip(
-            "DeepSlice is a direct regressor: use this interval as a hard output prior. Estimates outside it are "
-            "projected to the nearest bound and flagged for review. Bregma is 0; anterior is positive."
+            "Evaluate atlas candidates only inside this stereotaxic AP interval. This is a genuine bounded "
+            "anatomical search, not clipping after prediction. Bregma is 0; anterior is positive."
         )
         self.auto_align_ap_min = QtWidgets.QSpinBox()
         self.auto_align_ap_max = QtWidgets.QSpinBox()
@@ -2351,7 +2765,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         probe_layout.addWidget(self.browse_run_btn, 0, 3)
         probe_layout.addWidget(QtWidgets.QLabel("Probe type"), 1, 0)
         probe_layout.addWidget(self.probe_type, 1, 1, 1, 3)
-        probe_layout.addWidget(QtWidgets.QLabel("Probe to map"), 2, 0)
+        probe_layout.addWidget(QtWidgets.QLabel("Active probe (edit / map)"), 2, 0)
         probe_layout.addWidget(self.probe_name, 2, 1, 1, 3)
         probe_layout.addWidget(self.map_btn, 3, 0, 1, 2)
         probe_layout.addWidget(self.undo_mapping_btn, 3, 2, 1, 2)
@@ -2552,6 +2966,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.reset_3d_view_btn.clicked.connect(self._reset_3d_camera)
         self.browse_run_btn.clicked.connect(self._browse_run)
         self.run_folder.editingFinished.connect(self._refresh_probe_names)
+        self.probe_name.currentTextChanged.connect(self._probe_selection_changed)
         self.endpoint_reference.currentIndexChanged.connect(
             lambda: self.marked_tip_to_y0_um.setEnabled(
                 self.endpoint_reference.currentData() == "physical_tip"
@@ -2631,7 +3046,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         affected_sessions = [
             session
             for session in self.sessions
-            if session.slice_to_atlas_x is not None or session.probe_volume_points
+            if session.slice_to_atlas_x is not None
+            or any(trace.volume_points for trace in session.probe_traces.values())
         ]
         if atlas_changed and affected_sessions:
             reply = QtWidgets.QMessageBox.question(
@@ -3024,6 +3440,20 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             return self.sessions[self.current_session_index]
         return None
 
+    def _active_probe_name(self) -> str:
+        return self.probe_name.currentText().strip()
+
+    @staticmethod
+    def _probe_trace(
+        session: SliceSession,
+        probe_name: str,
+        *,
+        create: bool = False,
+    ) -> ProbeTrace | None:
+        if create:
+            return session.probe_traces.setdefault(probe_name, ProbeTrace())
+        return session.probe_traces.get(probe_name)
+
     def _curve_changed(self, points: list[tuple[float, float]]) -> None:
         session = self.current_session()
         if session is None:
@@ -3117,8 +3547,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         if clear_transform:
             self._clear_slice_transform(session)
-        if session.probe_slice_points:
-            session.probe_signal_values = [self._probe_point_signal(session, point) for point in session.probe_slice_points]
+        for trace in session.probe_traces.values():
+            trace.signal_values = [
+                self._probe_point_signal(session, point) for point in trace.slice_points
+            ]
         self.slice_panel.set_base(session.rotated)
         if not clear_transform and session.atlas_to_slice_x is not None:
             self._refresh_transformed_overlay(session)
@@ -3126,8 +3558,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_points()
 
     def _clear_derived_probe_coordinates(self, session: SliceSession) -> None:
-        session.probe_atlas_points.clear()
-        session.probe_volume_points.clear()
+        for trace in session.probe_traces.values():
+            trace.atlas_points.clear()
+            trace.volume_points.clear()
 
     def _clear_auto_alignment_metadata(self, session: SliceSession) -> None:
         session.auto_alignment_score = None
@@ -3260,6 +3693,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session = self.current_session()
         if session is None:
             return
+        probe_name = self.probe_name.currentText().strip()
+        if not probe_name:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Probe required",
+                "Select the probe whose trajectory point you are adding.",
+            )
+            return
         if session.slice_to_atlas_x is None or session.atlas_to_slice_x is None:
             QtWidgets.QMessageBox.warning(self, "Transform missing", "Transform the current slice before adding probe points.")
             return
@@ -3274,10 +3715,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             slice_raw_point = self._slice_display_to_raw_point(session, slice_display_point)
         if atlas_point is None or slice_raw_point is None:
             return
-        session.probe_atlas_points.append(atlas_point)
-        session.probe_slice_points.append(slice_raw_point)
+        trace = self._probe_trace(session, probe_name, create=True)
+        assert trace is not None
+        trace.atlas_points.append(atlas_point)
+        trace.slice_points.append(slice_raw_point)
         if self.atlas_volume is not None:
-            session.probe_volume_points.append(
+            trace.volume_points.append(
                 point_to_volume(
                     atlas_point,
                     session.atlas_plane,
@@ -3287,10 +3730,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     session.atlas_tilt_dv_deg,
                 ).tolist()
             )
-        session.probe_signal_values.append(self._probe_point_signal(session, slice_raw_point))
-        session.point_history.append("probe")
+        trace.signal_values.append(self._probe_point_signal(session, slice_raw_point))
+        session.point_history.append(f"probe:{probe_name}")
         self._refresh_3d()
-        self.status.setText(f"Added probe point {len(session.probe_atlas_points)}")
+        self.status.setText(f"Added {probe_name} trajectory point {len(trace.atlas_points)}")
 
     def _probe_point_signal(self, session: SliceSession, slice_raw_point: tuple[float, float]) -> float:
         if session.weight_image is None:
@@ -3698,6 +4141,26 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         button.setChecked(True)
         self.clear_current_points()
 
+    def _probe_spots(
+        self,
+        session: SliceSession,
+        *,
+        atlas: bool,
+    ) -> list[tuple[tuple[float, float], tuple[int, int, int], bool]]:
+        selected_probe = self.probe_name.currentText().strip()
+        spots = []
+        for probe_name, trace in sorted(session.probe_traces.items()):
+            points = (
+                trace.atlas_points
+                if atlas
+                else self._slice_raw_to_display_points(session, trace.slice_points)
+            )
+            spots.extend(
+                (point, probe_color(probe_name), probe_name == selected_probe)
+                for point in points
+            )
+        return spots
+
     def _refresh_points(self) -> None:
         session = self.current_session()
         if session is None:
@@ -3710,10 +4173,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             return
         manual_active = self.alignment_tabs.currentIndex() == 0
         automatic_active = self.alignment_tabs.currentIndex() == 1
-        self.atlas_panel.set_points(session.atlas_landmarks if manual_active else [], session.probe_atlas_points)
+        self.atlas_panel.set_points(
+            session.atlas_landmarks if manual_active else [],
+            self._probe_spots(session, atlas=True),
+        )
         self.slice_panel.set_points(
             self._slice_raw_to_display_points(session, session.slice_landmarks) if manual_active else [],
-            self._slice_raw_to_display_points(session, session.probe_slice_points),
+            self._probe_spots(session, atlas=False),
         )
         self.atlas_panel.set_outline([])
         self.slice_panel.set_outline(
@@ -3735,10 +4201,19 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.alignment_summary.setText("Auto-align: not run")
             return
         n_pairs = min(len(session.atlas_landmarks), len(session.slice_landmarks))
+        selected_probe = self.probe_name.currentText().strip()
+        selected_trace = session.probe_traces.get(selected_probe)
+        selected_count = 0 if selected_trace is None else len(selected_trace.slice_points)
+        total_probe_points = sum(len(trace.slice_points) for trace in session.probe_traces.values())
+        probe_count_text = (
+            f"Probe {selected_probe} {selected_count} / all probes {total_probe_points}"
+            if selected_probe
+            else f"Probe not selected / all probes {total_probe_points}"
+        )
         self.point_counts.setText(
             f"Surface {len(session.brain_outline_points)} | "
             f"Transform atlas {len(session.atlas_landmarks)} / slice {len(session.slice_landmarks)} ({n_pairs} pairs) | "
-            f"Probe {len(session.probe_slice_points)}"
+            f"{probe_count_text}"
         )
         self.auto_align_btn.setEnabled(
             session.rotated is not None
@@ -3768,8 +4243,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     f" | models differ: AP {disagreement['ap_um']:.0f} um, L-R {disagreement['lr_deg']:.1f}°, "
                     f"D-V {disagreement['dv_deg']:.1f}°"
                 )
-            constraint_shift = abs(float(diagnostics.get("ap_constraint_shift_um", 0.0)))
-            constraint_text = f" | AP prior shift {constraint_shift:.0f} um" if constraint_shift >= 0.5 else ""
+            search_shift = abs(float(diagnostics.get("ap_search_shift_um", 0.0)))
+            constraint_text = f" | AP search shift {search_shift:.0f} um" if search_shift >= 0.5 else ""
             scale_text = f" | surface scale {float(diagnostics.get('surface_scale', 1.0)):.3f}x"
             reasons = deepslice_review_reasons(disagreement, diagnostics)
             review_text = f" — REVIEW: {', '.join(reasons)}" if reasons else ""
@@ -3803,7 +4278,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         elif self.landmark_mode.isChecked():
             self.status.setText("Point target: transform landmarks")
         else:
-            self.status.setText("Point target: probe trajectory")
+            selected_probe = self.probe_name.currentText().strip()
+            self.status.setText(
+                f"Point target: {selected_probe} trajectory"
+                if selected_probe
+                else "Point target: select a probe before adding trajectory points"
+            )
 
     def _trajectory_weighting_changed(self, enabled: bool) -> None:
         self._refresh_3d()
@@ -3859,7 +4339,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         elif self.landmark_mode.isChecked():
             allowed = {"atlas_landmark", "slice_landmark"}
         else:
-            allowed = {"probe"}
+            probe_name = self._active_probe_name()
+            allowed = {f"probe:{probe_name}"} if probe_name else set()
         history_index = next(
             (index for index in range(len(session.point_history) - 1, -1, -1) if session.point_history[index] in allowed),
             None,
@@ -3885,15 +4366,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.slice_landmarks.pop()
             self._invalidate_transform_after_landmark_edit(session)
             self.status.setText("Undid slice transform landmark")
-        elif action == "probe" and session.probe_slice_points:
-            if session.probe_atlas_points:
-                session.probe_atlas_points.pop()
-            session.probe_slice_points.pop()
-            if session.probe_volume_points:
-                session.probe_volume_points.pop()
-            if session.probe_signal_values:
-                session.probe_signal_values.pop()
-            self.status.setText("Undid probe point")
+        elif action.startswith("probe:"):
+            probe_name = action.partition(":")[2]
+            trace = session.probe_traces.get(probe_name)
+            if trace is not None and trace.slice_points:
+                if trace.atlas_points:
+                    trace.atlas_points.pop()
+                trace.slice_points.pop()
+                if trace.volume_points:
+                    trace.volume_points.pop()
+                if trace.signal_values:
+                    trace.signal_values.pop()
+                self.status.setText(f"Undid {probe_name} trajectory point")
         self._refresh_atlas()
         self._refresh_points()
         self._refresh_3d()
@@ -3921,12 +4405,20 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self._invalidate_transform_after_landmark_edit(session)
             self.status.setText("Cleared transform landmarks on current slice")
         else:
-            session.probe_atlas_points.clear()
-            session.probe_slice_points.clear()
-            session.probe_volume_points.clear()
-            session.probe_signal_values.clear()
-            session.point_history = [action for action in session.point_history if action != "probe"]
-            self.status.setText("Cleared probe points on current slice")
+            probe_name = self._active_probe_name()
+            trace = session.probe_traces.get(probe_name)
+            if trace is not None:
+                trace.atlas_points.clear()
+                trace.slice_points.clear()
+                trace.volume_points.clear()
+                trace.signal_values.clear()
+            token = f"probe:{probe_name}"
+            session.point_history = [action for action in session.point_history if action != token]
+            self.status.setText(
+                f"Cleared {probe_name} trajectory on current slice"
+                if probe_name
+                else "Select a probe before clearing trajectory points"
+            )
         self._refresh_atlas()
         self._refresh_points()
         self._refresh_3d()
@@ -4081,6 +4573,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     display_outline,
                     selection_crop,
                     session.brain_outline_closed,
+                    (
+                        None
+                        if session.brain_brush_selection_mask is None
+                        else session.brain_brush_selection_mask.copy()
+                    ),
                 )
             )
             filename_to_session[filename] = session_index
@@ -4093,7 +4590,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "Preparing DeepSlice...",
             "Cancel",
             0,
-            5,
+            100,
             self,
         )
         progress.setWindowTitle("DeepSlice auto-alignment")
@@ -4109,12 +4606,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._set_auto_constraint_controls_enabled(False)
         self._refresh_point_counts()
         scope = f"{len(session_indices)} outlined slices" if global_alignment else self.sessions[session_indices[0]].name
-        self.status.setText(f"DeepSlice is aligning {scope}; the rest of the interface remains available.")
+        self.status.setText(f"DeepSlice and atlas refinement are aligning {scope}; the interface remains available.")
         future = self.deepslice_executor.submit(
             prepare_run_and_solve_deepslice,
             image_jobs,
             filename_to_session,
             self.atlas_volume.shape,
+            self.atlas_volume,
             self.annotation_volume,
             outline_snapshot,
             ap_bounds,
@@ -4227,18 +4725,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
         order_names = [self.sessions[index].name for index in order_snapshot]
         for _, _, _, _, _, _, _, diagnostics in prepared:
-            diagnostics["preconstraint_ap_um"] = float(
-                (diagnostics["preconstraint_ap_index"] - float(self.bregma_voxel[0]))
+            diagnostics["raw_deepslice_ap_um"] = float(
+                (diagnostics["raw_deepslice_ap_index"] - float(self.bregma_voxel[0]))
                 * VOXEL_UM
                 * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]
             )
-            diagnostics["constrained_ap_um"] = float(
-                (diagnostics["constrained_ap_index"] - float(self.bregma_voxel[0]))
+            diagnostics["refined_ap_um"] = float(
+                (diagnostics["refined_ap_index"] - float(self.bregma_voxel[0]))
                 * VOXEL_UM
                 * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]
             )
-            diagnostics["ap_constraint_shift_um"] = float(
-                diagnostics.pop("ap_constraint_shift_index")
+            diagnostics["ap_search_shift_um"] = float(
+                diagnostics.pop("ap_search_shift_index")
                 * VOXEL_UM
                 * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]
             )
@@ -4261,9 +4759,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.auto_alignment_score = float(diagnostics["surface_rms_after_atlas_px"])
             session.auto_alignment_affine = matrix.tolist()
             session.auto_alignment_global = global_alignment
-            session.auto_alignment_extent = "trusted_surface"
+            session.auto_alignment_extent = "internal_anatomy_and_trusted_surface"
             session.auto_alignment_method = (
-                f"DeepSlice {deepslice_version} two-model ensemble + trusted-surface scale/translation calibration"
+                f"DeepSlice {deepslice_version} ensemble + bounded MIND atlas search + trusted-surface calibration"
                 + (" with shared-angle integration" if global_alignment else "")
             )
             session.auto_alignment_engine = "DeepSlice"
@@ -4303,7 +4801,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 else ""
             )
             self.status.setText(
-                f"DeepSlice aligned {len(prepared)} outlined slices{bounds_text}{order_text}; exact shared L-R "
+                f"DeepSlice + atlas search aligned {len(prepared)} outlined slices{bounds_text}{order_text}; exact shared L-R "
                 f"{shared_tilt[0]:+.1f}°, D-V {shared_tilt[1]:+.1f}° (independent spread before integration "
                 f"{pre_spread[0]:.1f}° / {pre_spread[1]:.1f}°; {runtime_info.get('device', 'unknown')}).{review_text}"
             )
@@ -4311,12 +4809,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session = self.sessions[prepared[0][0]]
             disagreement = session.deepslice_ensemble_disagreement
             diagnostics = session.auto_alignment_diagnostics
-            shift = diagnostics["ap_constraint_shift_um"]
-            shift_text = f", AP prior shift {shift:+.0f} um" if abs(shift) >= 0.5 else ""
+            shift = diagnostics["ap_search_shift_um"]
+            shift_text = f", AP search shift {shift:+.0f} um" if abs(shift) >= 0.5 else ""
             reasons = deepslice_review_reasons(disagreement, diagnostics)
             review_text = f" REVIEW: {', '.join(reasons)}." if reasons else ""
             self.status.setText(
-                f"DeepSlice aligned {session.name}: AP {self._ap_index_to_um(session.atlas_index):+d} um, "
+                f"DeepSlice + atlas search aligned {session.name}: AP {self._ap_index_to_um(session.atlas_index):+d} um, "
                 f"L-R {session.atlas_tilt_ml_deg:+.1f}°, D-V {session.atlas_tilt_dv_deg:+.1f}°, "
                 f"surface scale {diagnostics['surface_scale']:.3f}x{shift_text}; "
                 f"{runtime_info.get('device', 'unknown')}.{review_text}"
@@ -4368,44 +4866,52 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _recompute_probe_points_from_slice_points(self, session: SliceSession) -> None:
         if session.slice_to_atlas_x is None or session.slice_to_atlas_y is None:
             return
-        atlas_points: list[tuple[float, float]] = []
-        for sx, sy in self._slice_raw_to_display_points(session, session.probe_slice_points):
-            atlas_point = (float(session.slice_to_atlas_x(sx, sy)), float(session.slice_to_atlas_y(sx, sy)))
-            atlas_points.append(atlas_point)
-        session.probe_atlas_points = atlas_points
+        for trace in session.probe_traces.values():
+            trace.atlas_points = [
+                (
+                    float(session.slice_to_atlas_x(sx, sy)),
+                    float(session.slice_to_atlas_y(sx, sy)),
+                )
+                for sx, sy in self._slice_raw_to_display_points(session, trace.slice_points)
+            ]
         self._recompute_session_volume_points(session)
 
     def _recompute_session_volume_points(self, session: SliceSession) -> None:
         if self.atlas_volume is None:
             return
-        session.probe_volume_points = [
-            point_to_volume(
-                point,
-                session.atlas_plane,
-                session.atlas_index,
-                self.atlas_volume.shape,
-                session.atlas_tilt_ml_deg,
-                session.atlas_tilt_dv_deg,
-            ).tolist()
-            for point in session.probe_atlas_points
-        ]
+        for trace in session.probe_traces.values():
+            trace.volume_points = [
+                point_to_volume(
+                    point,
+                    session.atlas_plane,
+                    session.atlas_index,
+                    self.atlas_volume.shape,
+                    session.atlas_tilt_ml_deg,
+                    session.atlas_tilt_dv_deg,
+                ).tolist()
+                for point in trace.atlas_points
+            ]
 
-    def all_probe_volume_points(self) -> np.ndarray:
+    def all_probe_volume_points(self, probe_name: str) -> np.ndarray:
         points = []
         for session in self.sessions:
-            points.extend(session.probe_volume_points)
-        return np.asarray(points, dtype=np.float64)
+            trace = session.probe_traces.get(probe_name)
+            if trace is not None:
+                points.extend(trace.volume_points)
+        return np.asarray(points, dtype=np.float64).reshape(-1, 3)
 
-    def all_probe_signal_values(self) -> np.ndarray:
+    def all_probe_signal_values(self, probe_name: str) -> np.ndarray:
         values = []
         for session in self.sessions:
-            values.extend(session.probe_signal_values)
+            trace = session.probe_traces.get(probe_name)
+            if trace is not None:
+                values.extend(trace.signal_values)
         return np.asarray(values, dtype=np.float64)
 
-    def probe_regression_weights(self, n_points: int) -> np.ndarray:
+    def probe_regression_weights(self, probe_name: str, n_points: int) -> np.ndarray:
         if not self.brightness_weighting.isChecked():
             return np.ones(n_points, dtype=np.float64)
-        values = self.all_probe_signal_values()
+        values = self.all_probe_signal_values(probe_name)
         if len(values) != n_points or n_points < 2:
             return np.ones(n_points, dtype=np.float64)
         values = np.nan_to_num(values, nan=np.nanmedian(values), posinf=np.nanmax(values), neginf=np.nanmin(values))
@@ -4415,11 +4921,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         normalized = np.clip((values - lo) / (hi - lo), 0.0, 1.0)
         return 0.15 + 0.85 * normalized**2
 
-    def probe_regression(self) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
-        points = self.all_probe_volume_points()
+    def probe_regression(self, probe_name: str) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
+        points = self.all_probe_volume_points(probe_name)
         if len(points) < 2:
             return None, None
-        weights = self.probe_regression_weights(len(points))
+        weights = self.probe_regression_weights(probe_name, len(points))
         center = np.average(points, axis=0, weights=weights)
         _, _, vh = np.linalg.svd((points - center) * np.sqrt(weights[:, None]), full_matrices=False)
         direction = vh[0]
@@ -4428,9 +4934,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             direction = -direction
         return center, direction
 
-    def probe_line_geometry(self) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[None, None, None]:
-        points = self.all_probe_volume_points()
-        center, surface_direction = self.probe_regression()
+    def probe_line_geometry(self, probe_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[None, None, None]:
+        points = self.all_probe_volume_points(probe_name)
+        center, surface_direction = self.probe_regression(probe_name)
         if center is None or surface_direction is None or len(points) < 2:
             return None, None, None
         projection = (points - center) @ surface_direction
@@ -4508,30 +5014,47 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     )
                     self.view3d.addItem(label_item)
                     self.dynamic_gl_items.append(label_item)
-        points = self.all_probe_volume_points()
-        if len(points) == 0:
-            return
-        weights = self.probe_regression_weights(len(points))
-        scatter = gl.GLScatterPlotItem(pos=volume_to_gl(points), color=(1.0, 0.1, 0.45, 1.0), size=6 + 7 * weights)
-        self.view3d.addItem(scatter)
-        self.dynamic_gl_items.append(scatter)
-        above_brain, deep_endpoint, _ = self.probe_line_geometry()
-        if above_brain is None or deep_endpoint is None:
-            return
-        line = gl.GLLinePlotItem(
-            pos=volume_to_gl(np.vstack([above_brain, deep_endpoint])),
-            color=(1.0, 0.0, 0.0, 1.0),
-            width=4,
-            antialias=True,
+        probe_names = sorted(
+            {
+                probe_name
+                for session in self.sessions
+                for probe_name, trace in session.probe_traces.items()
+                if trace.volume_points
+            }
         )
-        endpoints = gl.GLScatterPlotItem(
-            pos=volume_to_gl(np.vstack([above_brain, deep_endpoint])),
-            color=np.asarray([[0.15, 0.85, 1.0, 1.0], [1.0, 0.85, 0.10, 1.0]], dtype=np.float32),
-            size=np.asarray([11.0, 13.0], dtype=np.float32),
-        )
-        self.view3d.addItem(line)
-        self.view3d.addItem(endpoints)
-        self.dynamic_gl_items.extend([line, endpoints])
+        selected_probe = self._active_probe_name()
+        for probe_name in probe_names:
+            points = self.all_probe_volume_points(probe_name)
+            if len(points) == 0:
+                continue
+            selected = probe_name == selected_probe
+            rgb = np.asarray(probe_color(probe_name), dtype=np.float32) / 255.0
+            alpha = 1.0 if selected else 0.58
+            weights = self.probe_regression_weights(probe_name, len(points))
+            scatter = gl.GLScatterPlotItem(
+                pos=volume_to_gl(points),
+                color=(*rgb, alpha),
+                size=(7.0 if selected else 5.0) + (6.0 if selected else 3.0) * weights,
+            )
+            self.view3d.addItem(scatter)
+            self.dynamic_gl_items.append(scatter)
+            above_brain, deep_endpoint, _ = self.probe_line_geometry(probe_name)
+            if above_brain is None or deep_endpoint is None:
+                continue
+            line = gl.GLLinePlotItem(
+                pos=volume_to_gl(np.vstack([above_brain, deep_endpoint])),
+                color=(*rgb, alpha),
+                width=4 if selected else 2,
+                antialias=True,
+            )
+            endpoints = gl.GLScatterPlotItem(
+                pos=volume_to_gl(np.vstack([above_brain, deep_endpoint])),
+                color=(*rgb, alpha),
+                size=np.asarray([11.0, 13.0] if selected else [8.0, 10.0], dtype=np.float32),
+            )
+            self.view3d.addItem(line)
+            self.view3d.addItem(endpoints)
+            self.dynamic_gl_items.extend([line, endpoints])
 
     def _resolve_data_folder(self, run_folder: Path) -> Path:
         if (run_folder / "channels.csv").exists() and (run_folder / "units.csv").exists():
@@ -4540,20 +5063,46 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _refresh_probe_names(self) -> None:
         selected = self.probe_name.currentText()
+        blocker = QtCore.QSignalBlocker(self.probe_name)
         self.probe_name.clear()
         data_folder = self._resolve_data_folder(Path(self.run_folder.text().strip()))
         channels_path = data_folder / "channels.csv"
         if not channels_path.exists():
+            del blocker
+            self._probe_selection_changed()
             return
         try:
             channels = canonical_channel_keys(pd.read_csv(channels_path))
         except Exception as exc:
+            del blocker
             self.status.setText(f"Could not read probe names: {exc}")
+            self._probe_selection_changed()
             return
         names = sorted(channels["probe_name"].dropna().astype(str).unique())
-        self.probe_name.addItems(names)
+        for name in names:
+            color = probe_color(name)
+            swatch = QtGui.QPixmap(12, 12)
+            swatch.fill(QtGui.QColor(*color))
+            self.probe_name.addItem(QtGui.QIcon(swatch), name)
         if selected in names:
             self.probe_name.setCurrentText(selected)
+        del blocker
+        self._probe_selection_changed()
+
+    def _probe_selection_changed(self, *_: object) -> None:
+        probe_name = self._active_probe_name()
+        self.probe_mode.setEnabled(bool(probe_name))
+        self.map_btn.setEnabled(bool(probe_name))
+        self.probe_undo_point_btn.setText(
+            f"Undo {probe_name} point" if probe_name else "Undo trajectory point"
+        )
+        self.probe_clear_points_btn.setText(
+            f"Clear {probe_name} trajectory" if probe_name else "Clear trajectory"
+        )
+        self._refresh_points()
+        self._refresh_3d()
+        if self.probe_mode.isChecked():
+            self._point_target_changed()
 
     def _sample_region(self, coord: np.ndarray) -> tuple[int | None, str, str, tuple[int | None, int | None, int | None]]:
         if self.annotation_volume is None:
@@ -4576,10 +5125,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if not channels_path.exists() or not units_path.exists():
             QtWidgets.QMessageBox.warning(self, "CSV files missing", f"Missing channels.csv or units.csv in:\n{data_folder}")
             return
+        selected_probe = self._active_probe_name()
+        if not selected_probe:
+            QtWidgets.QMessageBox.warning(self, "Probe missing", "Select imec0, imec1, or another available probe.")
+            return
         stale_sessions = [
             session.name
             for session in self.sessions
-            if session.probe_volume_points
+            if (
+                (trace := self._probe_trace(session, selected_probe)) is not None
+                and trace.volume_points
+            )
             and (session.auto_alignment_diagnostics or {}).get("alignment_run_stale", False)
         ]
         if stale_sessions:
@@ -4590,10 +5146,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 f"mapping these probe-bearing slices: {', '.join(stale_sessions)}",
             )
             return
-        points = self.all_probe_volume_points()
-        _, marked_endpoint, surface_direction = self.probe_line_geometry()
+        points = self.all_probe_volume_points(selected_probe)
+        _, marked_endpoint, surface_direction = self.probe_line_geometry(selected_probe)
         if marked_endpoint is None or surface_direction is None or len(points) < 2:
-            QtWidgets.QMessageBox.warning(self, "Probe line missing", "Add at least two probe points before mapping channels.")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Probe line missing",
+                f"Add at least two {selected_probe} points before mapping channels.",
+            )
             return
         if self.probe_type.currentText() == "Neuropixels 2.0 four-shank":
             QtWidgets.QMessageBox.warning(
@@ -4602,10 +5162,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 "This trajectory fit has no probe-roll measurement, so four-shank contacts cannot be assigned "
                 "to atlas regions unambiguously.",
             )
-            return
-        selected_probe = self.probe_name.currentText().strip()
-        if not selected_probe:
-            QtWidgets.QMessageBox.warning(self, "Probe missing", "Select imec0, imec1, or another available probe.")
             return
         endpoint_reference = self.endpoint_reference.currentData()
         if endpoint_reference is None:
@@ -4773,6 +5329,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     ) -> None:
         anatomy_dir = data_folder / "anatomy"
         anatomy_dir.mkdir(exist_ok=True)
+
+        def output_trace(session: SliceSession) -> ProbeTrace:
+            return self._probe_trace(session, probe_name) or ProbeTrace()
+
         alignment_runs = {}
         for session in self.sessions:
             diagnostics = session.auto_alignment_diagnostics or {}
@@ -4787,7 +5347,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                         "order_constraint_anterior_to_posterior",
                         [],
                     ),
-                    "ap_bounds_index": diagnostics.get("ap_bounds_index"),
+                    "ap_search_bounds_index": diagnostics.get("ap_search_bounds_index"),
                     "shared_tilt_lr_dv_deg": diagnostics.get("shared_tilt_lr_dv_deg"),
                     "runtime_backend": diagnostics.get("runtime_backend"),
                     "runtime_device": diagnostics.get("runtime_device"),
@@ -4825,7 +5385,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             ),
             "brightness_weighted_trajectory": self.brightness_weighting.isChecked(),
             "automatic_alignment_engine": (
-                "DeepSlice 1.2.8 two-model mouse ensemble" if alignment_runs else None
+                "DeepSlice 1.2.8 mouse ensemble with bounded MIND atlas refinement"
+                if alignment_runs
+                else None
             ),
             "automatic_alignment_runs": alignment_runs,
             "marked_endpoint_voxel_ap_dv_ml": marked_endpoint.tolist(),
@@ -4876,11 +5438,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     "deepslice_version": session.deepslice_version,
                     "deepslice_model_sha256": session.deepslice_model_hashes,
                     "deepslice_ensemble_disagreement": session.deepslice_ensemble_disagreement,
-                    "probe_atlas_points": session.probe_atlas_points,
-                    "probe_slice_points": self._slice_raw_to_display_points(session, session.probe_slice_points),
-                    "probe_slice_points_raw": session.probe_slice_points,
-                    "probe_volume_points": session.probe_volume_points,
-                    "probe_signal_values": session.probe_signal_values,
+                    "probe_atlas_points": output_trace(session).atlas_points,
+                    "probe_slice_points": self._slice_raw_to_display_points(
+                        session,
+                        output_trace(session).slice_points,
+                    ),
+                    "probe_slice_points_raw": output_trace(session).slice_points,
+                    "probe_volume_points": output_trace(session).volume_points,
+                    "probe_signal_values": output_trace(session).signal_values,
                 }
                 for session in self.sessions
             ],

@@ -19,53 +19,35 @@ sys.modules[SPEC.name] = TRACKER
 SPEC.loader.exec_module(TRACKER)
 
 
-def test_ap_constraints_are_noop_when_unspecified():
-    predicted = {0: 201.25, 1: 187.5, 2: 246.75}
-
-    constrained, shifts = TRACKER.constrain_deepslice_ap_indices(predicted, None, [])
-
-    assert constrained == predicted
-    assert shifts == {0: 0.0, 1: 0.0, 2: 0.0}
+def test_unspecified_ap_search_is_local_not_whole_atlas():
+    assert TRACKER.ap_candidate_indices(201.25, 528, None, 4) == [193, 197, 201, 205, 209, 210]
 
 
-def test_reversed_ap_bounds_are_sorted_and_project_exactly():
-    predicted = {0: 90.0, 1: 125.5, 2: 180.0}
-
-    constrained, shifts = TRACKER.constrain_deepslice_ap_indices(
-        predicted,
-        (160, 100),
-        [],
-    )
-
-    assert constrained == {0: 100.0, 1: 125.5, 2: 160.0}
-    assert shifts == {0: 10.0, 1: 0.0, 2: -20.0}
+def test_reversed_ap_bounds_define_the_actual_candidate_grid():
+    assert TRACKER.ap_candidate_indices(90.0, 528, (160, 100), 25) == [100, 125, 150, 160]
 
 
-def test_partial_anterior_to_posterior_order_is_isotonic_and_unchecked_slices_are_unchanged():
-    predicted = {0: 220.0, 1: 400.0, 2: 180.0, 3: 120.0}
+def test_partial_anterior_to_posterior_order_uses_lattice_and_leaves_unchecked_best():
+    lattices = {
+        0: {100: (0.1, {}), 110: (0.0, {}), 120: (0.2, {})},
+        1: {100: (0.0, {}), 110: (0.5, {}), 120: (0.6, {})},
+        2: {100: (0.0, {}), 110: (0.1, {}), 120: (0.2, {})},
+    }
 
-    constrained, shifts = TRACKER.constrain_deepslice_ap_indices(
-        predicted,
-        None,
-        [0, 2, 3],
-    )
+    assignments, _ = TRACKER.solve_ordered_lattice(lattices, [0, 2])
 
-    assert constrained[0] == pytest.approx(172.33333333333334)
-    assert constrained[2] == pytest.approx(173.33333333333334)
-    assert constrained[3] == pytest.approx(174.33333333333334)
-    assert constrained[0] < constrained[2] < constrained[3]
-    assert constrained[1] == predicted[1]
-    assert shifts[1] == 0.0
+    assert assignments[0] < assignments[2]
+    assert assignments[1] == 100
 
 
-def test_order_remains_strict_inside_a_bounded_ap_range():
-    constrained, _ = TRACKER.constrain_deepslice_ap_indices(
-        {0: 160.0, 1: 100.0, 2: 120.0},
-        (100, 160),
-        [0, 1, 2],
-    )
+def test_order_rejects_a_range_without_enough_distinct_sections():
+    lattices = {
+        index: {100: (0.0, {}), 101: (0.0, {})}
+        for index in range(3)
+    }
 
-    assert 100.0 <= constrained[0] < constrained[1] < constrained[2] <= 160.0
+    with pytest.raises(ValueError, match="too narrow"):
+        TRACKER.solve_ordered_lattice(lattices, [0, 1, 2])
 
 
 def _ellipse_case(missing_arc: bool = False):
@@ -298,17 +280,22 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
             "alignment_run_id": "global-test",
             "preintegration_tilt_spread_deg": [2.0, 2.0],
         }
-        prepared, shared_tilt = TRACKER.solve_deepslice_alignment(
-            records,
-            {"slice_0000.png": 0, "slice_0001.png": 1},
-            shape,
-            window.annotation_volume,
-            {0: surface, 1: surface},
-            None,
-            [],
-            runtime_info,
-            global_alignment=True,
-        )
+        shared_tilt = (3.0, -2.0)
+        prepared = []
+        for index, (record, atlas_index) in enumerate(zip(records, (2, 5))):
+            diagnostics = {
+                "raw_deepslice_ap_index": float(atlas_index),
+                "refined_ap_index": float(atlas_index),
+                "ap_search_shift_index": 0.0,
+                "ap_search_bounds_index": None,
+                "alignment_batch_session_indices": [0, 1],
+                "alignment_run_id": "global-test",
+                "surface_scale": 1.0,
+                "surface_rms_after_atlas_px": 0.0,
+            }
+            prepared.append(
+                (index, atlas_index, *shared_tilt, np.eye(3), np.eye(3), record, diagnostics)
+            )
         window._apply_deepslice_results(
             prepared,
             "1.2.8",
@@ -385,10 +372,10 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
             worker_started.set()
             release_worker.wait(3.0)
             diagnostics = {
-                "preconstraint_ap_index": 3.0,
-                "constrained_ap_index": 3.0,
-                "ap_constraint_shift_index": 0.0,
-                "ap_bounds_index": None,
+                "raw_deepslice_ap_index": 3.0,
+                "refined_ap_index": 3.0,
+                "ap_search_shift_index": 0.0,
+                "ap_search_bounds_index": None,
                 "order_constraint_applied": False,
                 "alignment_batch_session_indices": [0],
                 "order_constraint_session_indices": [],

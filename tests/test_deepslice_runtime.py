@@ -145,8 +145,8 @@ def test_smart_selection_crop_flip_and_surface_fit_recover_known_oblique_plane()
     )
     messages = queue.SimpleQueue()
     cancel = threading.Event()
-    records, _, _, _, runtime_info = TRACKER.prepare_and_run_deepslice(
-        [(str(source_path), 0.0, True, False, points, crop, True)],
+    records, _, _, _, runtime_info, _ = TRACKER.prepare_and_run_deepslice(
+        [(str(source_path), 0.0, True, False, points, crop, True, selection)],
         False,
         messages,
         cancel,
@@ -155,23 +155,108 @@ def test_smart_selection_crop_flip_and_surface_fit_recover_known_oblique_plane()
         str(ROOT / "tests" / "data" / "allen_oblique_ap280_lr6_dv-4_mask.png"),
         cv2.IMREAD_GRAYSCALE,
     ) > 0
-    annotation = np.broadcast_to(mask, TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML)
-    prepared, shared_tilt = TRACKER.solve_deepslice_alignment(
-        records,
-        {"slice_0000.png": 0},
-        TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML,
-        annotation,
-        {0: points},
-        None,
-        [],
-        runtime_info,
-        global_alignment=False,
+    atlas_index, tilt_lr, tilt_dv, matrix = TRACKER.quicknii_to_tracker_alignment(
+        records[0], TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML
     )
+    crop_info = runtime_info["input_crops"]["slice_0000.png"]
+    matrix = matrix @ np.asarray(
+        [
+            [1.0, 0.0, -crop_info["crop_x0_oriented_display_px"]],
+            [0.0, 1.0, -crop_info["crop_y0_oriented_display_px"]],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    matrix, diagnostics = TRACKER.fit_surface_scale_translation(matrix, points, mask)
 
-    _, atlas_index, tilt_lr, tilt_dv, matrix, _, _, diagnostics = prepared[0]
-    assert shared_tilt is None
     assert abs(atlas_index - 280) < 5
     assert abs(tilt_lr - 6.0) < 5.0
     assert abs(tilt_dv + 4.0) < 5.0
     assert matrix[0, 0] > 0.0
-    assert diagnostics["surface_rms_after_atlas_px"] < 3.0
+    assert diagnostics["rms_after_atlas_px"] < 3.0
+
+
+def test_bounded_mind_search_recovers_known_pose_instead_of_clipping_to_bound():
+    atlas_folder = ROOT / "data" / "Allen Brain Atlas 25um"
+    if not (atlas_folder / "average_template_25.nrrd").exists():
+        pytest.skip("Local Allen atlas is not installed")
+
+    source = cv2.imread(
+        str(ROOT / "tests" / "data" / "allen_oblique_ap280_lr6_dv-4_source_fliph.png"),
+        cv2.IMREAD_GRAYSCALE,
+    )
+    oriented, _ = TRACKER.transform_slice_image(source, 0.0, True, False)
+    _, selection = TRACKER.smart_brain_surface_selection(
+        oriented,
+        [(330.0, 240.0), (220.0, 240.0), (440.0, 240.0)],
+        [(20.0, 20.0), (680.0, 480.0)],
+        50.0,
+        50,
+    )
+    atlas = TRACKER.nrrd.read(str(atlas_folder / "average_template_25.nrrd"))[0]
+    annotation = TRACKER.nrrd.read(str(atlas_folder / "annotation_25.nrrd"))[0]
+
+    pose, diagnostics, _ = TRACKER.refine_deepslice_pose_search(
+        {0: (250.0, 0.0, 0.0, np.eye(3))},
+        {0: {"Filenames": "known.png"}},
+        atlas,
+        annotation,
+        {"known.png": {"image": oriented, "brain_mask": selection}},
+        {"known.png": {"ap_um": 800.0, "lr_deg": 8.0, "dv_deg": 8.0}},
+        (260, 300),
+        [],
+        None,
+        threading.Event(),
+        global_alignment=False,
+    )
+
+    assert pose[0] == (280, 6.0, -4.0)
+    assert not diagnostics[0]["pose_search_boundary"]
+    assert diagnostics[0]["pose_search_margin"] > 0.01
+
+
+def test_global_mind_search_recovers_ordered_planes_with_one_shared_tilt():
+    atlas_folder = ROOT / "data" / "Allen Brain Atlas 25um"
+    if not (atlas_folder / "average_template_25.nrrd").exists():
+        pytest.skip("Local Allen atlas is not installed")
+
+    atlas = TRACKER.nrrd.read(str(atlas_folder / "average_template_25.nrrd"))[0]
+    annotation = TRACKER.nrrd.read(str(atlas_folder / "annotation_25.nrrd"))[0]
+    known = {0: (275, 5.0, -3.0), 1: (287, 5.0, -3.0)}
+    prepared_inputs = {}
+    records = {}
+    converted = {}
+    disagreement = {}
+    for index, (ap, tilt_lr, tilt_dv) in known.items():
+        filename = f"known_{index}.png"
+        prepared_inputs[filename] = {
+            "image": TRACKER.coronal_oblique_slice_resampled(
+                atlas, ap, tilt_lr, tilt_dv, order=1
+            ),
+            "brain_mask": TRACKER.coronal_oblique_slice_resampled(
+                annotation, ap, tilt_lr, tilt_dv, order=0
+            )
+            > 0,
+        }
+        records[index] = {"Filenames": filename}
+        converted[index] = (292.0 - 22.0 * index, 0.0, 0.0, np.eye(3))
+        disagreement[filename] = {"ap_um": 800.0, "lr_deg": 8.0, "dv_deg": 8.0}
+
+    pose, _, shared_tilt = TRACKER.refine_deepslice_pose_search(
+        converted,
+        records,
+        atlas,
+        annotation,
+        prepared_inputs,
+        disagreement,
+        (265, 297),
+        [0, 1],
+        None,
+        threading.Event(),
+        global_alignment=True,
+    )
+
+    assert pose[0][0] < pose[1][0]
+    assert pose[0][0] == pytest.approx(known[0][0], abs=1)
+    assert pose[1][0] == pytest.approx(known[1][0], abs=1)
+    assert shared_tilt == pytest.approx((5.0, -3.0), abs=1.0)
+    assert pose[0][1:] == pose[1][1:] == shared_tilt
