@@ -1,6 +1,7 @@
 import csv
 import inspect
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -728,7 +729,7 @@ def test_export_is_verified_and_promotion_is_explicit(tmp_path):
     model_path = export_folder / "atlas_pose.onnx"
     assert metadata["sha256"] == file_sha256(model_path)
     assert metadata["preprocessing_version"] == "smart-mask-scale-invariant-v2"
-    assert metadata["automatic_brain_mask_version"] == "border-distance-conditional-hull-v5"
+    assert metadata["automatic_brain_mask_version"] == "border-distance-conditional-hull-v6"
     assert metadata["quicknii_coordinate_contract"] == "quicknii-ras-to-allen-pir-v2"
     assert metadata["preprocessing_contract_sha256"] == trainer.atlas_pose_preprocessing_contract_sha256()
     assert metadata["verification_sample_count"] == 2
@@ -947,10 +948,11 @@ def test_export_is_verified_and_promotion_is_explicit(tmp_path):
         promote_export(export_folder, release, tmp_path / "tampered-promotion")
 
 
-def test_registered_provenance_binds_download_manifest_and_ordinary_holdout_excludes_sealed(tmp_path):
-    image = tmp_path / "images" / "1.jpg"
-    image.parent.mkdir()
-    image.write_bytes(b"registered-image")
+def test_registered_provenance_cache_reuses_stats_and_detects_tampering(tmp_path, monkeypatch):
+    images = (tmp_path / "images" / "1.jpg", tmp_path / "images" / "2.jpg")
+    images[0].parent.mkdir()
+    images[0].write_bytes(b"registered-image-1")
+    images[1].write_bytes(b"registered-image-2")
     (tmp_path / "datasets.jsonl").write_text("{}\n", encoding="utf-8")
     (tmp_path / "sections.jsonl").write_text(
         "\n".join(
@@ -963,8 +965,13 @@ def test_registered_provenance_binds_download_manifest_and_ordinary_holdout_excl
                 },
                 {
                     "section_image_id": 2,
-                    "split": "sealed_deepslice_s2p",
+                    "split": "validation",
                     "relative_path": "images/2.jpg",
+                },
+                {
+                    "section_image_id": 3,
+                    "split": "sealed_deepslice_s2p",
+                    "relative_path": "images/3.jpg",
                 },
             )
         )
@@ -974,8 +981,9 @@ def test_registered_provenance_binds_download_manifest_and_ordinary_holdout_excl
     (tmp_path / "downloads.jsonl").write_text(
         "\n".join(
             (
-                json.dumps({"section_image_id": 1, "sha256": file_sha256(image)}),
-                json.dumps({"section_image_id": 2, "sha256": "f" * 64}),
+                json.dumps({"section_image_id": 1, "sha256": file_sha256(images[0])}),
+                json.dumps({"section_image_id": 2, "sha256": file_sha256(images[1])}),
+                json.dumps({"section_image_id": 3, "sha256": "f" * 64}),
             )
         )
         + "\n",
@@ -983,7 +991,31 @@ def test_registered_provenance_binds_download_manifest_and_ordinary_holdout_excl
     )
     (tmp_path / "provenance.json").write_text("{}", encoding="utf-8")
     (tmp_path / "registered_image_quality.json").write_text("{}", encoding="utf-8")
+    original_file_sha256 = trainer.file_sha256
+    image_hash_calls = []
+
+    def tracked_file_sha256(path):
+        if Path(path) in images:
+            image_hash_calls.append(Path(path))
+        return original_file_sha256(path)
+
+    monkeypatch.setattr(trainer, "file_sha256", tracked_file_sha256)
     hashes = registered_data_hashes(tmp_path)
+    assert image_hash_calls == list(images)
+    receipt = tmp_path / ".atlas_pose_cache" / "registered_data_hashes_v1.json"
+    assert receipt.is_file()
+    receipt_mtime_ns = receipt.stat().st_mtime_ns
+    assert registered_data_hashes(tmp_path) == hashes
+    assert image_hash_calls == list(images)
+    assert receipt.stat().st_mtime_ns == receipt_mtime_ns
+    image_stat = images[1].stat()
+    os.utime(images[1], ns=(image_stat.st_atime_ns, image_stat.st_mtime_ns + 1_000_000_000))
+    assert registered_data_hashes(tmp_path) == hashes
+    assert image_hash_calls == [*images, images[1]]
+    (tmp_path / "provenance.json").write_text('{"revision":2}', encoding="utf-8")
+    refreshed_hashes = registered_data_hashes(tmp_path)
+    assert refreshed_hashes["provenance.json"] != hashes["provenance.json"]
+    assert image_hash_calls == [*images, images[1], *images]
     assert set(hashes) == {
         "datasets.jsonl",
         "sections.jsonl",
@@ -992,9 +1024,10 @@ def test_registered_provenance_binds_download_manifest_and_ordinary_holdout_excl
         "registered_image_quality.json",
         "nonsealed_image_tree_sha256",
     }
-    image.write_bytes(b"changed")
+    images[0].write_bytes(b"changed")
     with pytest.raises(RuntimeError, match="image checksum"):
         registered_data_hashes(tmp_path)
+    assert image_hash_calls == [*images, images[1], *images, images[0]]
     assert "sealed_deepslice_s2p" not in inspect.getsource(held_out_reports)
 
 

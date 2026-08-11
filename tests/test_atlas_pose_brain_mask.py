@@ -57,7 +57,7 @@ def test_automatic_brain_mask_retains_deep_tissue_in_low_contrast_nissl():
 
 def test_mask_version_is_separate_from_the_onnx_tensor_preprocessing_contract(monkeypatch):
     contract = runtime.atlas_pose_preprocessing_contract_sha256()
-    assert runtime.AUTOMATIC_BRAIN_MASK_VERSION == "border-distance-conditional-hull-v5"
+    assert runtime.AUTOMATIC_BRAIN_MASK_VERSION == "border-distance-conditional-hull-v6"
     monkeypatch.setattr(runtime, "automatic_brain_mask", lambda image: np.ones(image.shape[:2], bool))
     assert runtime.atlas_pose_preprocessing_contract_sha256() == contract
 
@@ -82,6 +82,23 @@ def test_automatic_brain_mask_ignores_a_dark_slide_edge_during_retry():
 
     assert intersection / union > 0.90
     assert not detected[-1].any()
+
+
+def test_automatic_brain_mask_recovers_extremely_pale_brightfield_tissue():
+    rng = np.random.default_rng(72)
+    height, width = 240, 298
+    yy, xx = np.mgrid[:height, :width]
+    expected = ((xx - 150.0) / 135.0) ** 2 + ((yy - 115.0) / 105.0) ** 2 <= 1.0
+    image = rng.normal(253.0, 0.5, (height, width))
+    image[expected] -= 2.0
+    cv2.circle(image, (112, 72), 6, 60.0, 1)
+    cv2.circle(image, (154, 179), 6, 60.0, 1)
+
+    detected = automatic_brain_mask(np.rint(image).astype(np.uint8))
+    intersection = np.logical_and(detected, expected).sum()
+    union = np.logical_or(detected, expected).sum()
+
+    assert intersection / union > 0.90
 
 
 def test_preprocessing_contract_is_source_bound_and_not_cpython_bytecode_bound():

@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -224,6 +225,16 @@ def registered_data_hashes(root: Path) -> dict[str, str]:
     missing = [name for name in names if not (root / name).is_file()]
     if missing:
         raise RuntimeError(f"Registered dataset is incomplete; missing {missing}")
+    hashes = {name: file_sha256(root / name) for name in names}
+    receipt_path = root / ".atlas_pose_cache" / "registered_data_hashes_v1.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
+    receipt = receipt if isinstance(receipt, dict) else {}
+    cached_images = receipt.get("images", [])
+    cached_images = cached_images if isinstance(cached_images, list) else []
+    cache_matches_manifests = (
+        receipt.get("version") == 1
+        and receipt.get("source_manifest_sha256") == hashes
+    )
     sections = [
         json.loads(line)
         for line in (root / "sections.jsonl").read_text(encoding="utf-8").splitlines()
@@ -237,22 +248,64 @@ def registered_data_hashes(root: Path) -> dict[str, str]:
     downloads = {int(row["section_image_id"]): row["sha256"] for row in download_rows}
     if len(downloads) != len(download_rows):
         raise RuntimeError("Registered download manifest contains duplicate section IDs")
+    sections = [record for record in sections if record["split"] != ATLAS_POSE_SEALED_SPLIT]
+    cache_matches_manifests &= len(cached_images) == len(sections)
     image_hashes = []
-    for record in sections:
-        if record["split"] == ATLAS_POSE_SEALED_SPLIT:
-            continue
+    verified_images = []
+    for index, record in enumerate(sections):
         section_id = int(record["section_image_id"])
-        path = root / record["relative_path"]
+        relative_path = str(record["relative_path"]).replace("\\", "/")
+        path = root / relative_path
         expected = downloads.get(section_id)
-        if expected is None or not path.is_file() or file_sha256(path) != expected:
+        if expected is None or not path.is_file():
             raise RuntimeError(f"Registered image checksum failed for section {section_id}")
+        stat = path.stat()
+        identity = {
+            "section_image_id": section_id,
+            "relative_path": relative_path,
+            "sha256": expected,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+        cached = cached_images[index] if cache_matches_manifests else None
+        if cached != identity:
+            actual = file_sha256(path)
+            verified_stat = path.stat()
+            if (verified_stat.st_size, verified_stat.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
+                raise RuntimeError(f"Registered image changed during checksum for section {section_id}")
+            if actual != expected:
+                raise RuntimeError(f"Registered image checksum failed for section {section_id}")
+        verified_images.append(identity)
         image_hashes.append((section_id, expected))
     if not image_hashes:
         raise RuntimeError("Registered dataset contains no non-sealed images")
-    hashes = {name: file_sha256(root / name) for name in names}
     hashes["nonsealed_image_tree_sha256"] = hashlib.sha256(
         json.dumps(sorted(image_hashes), separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+    if not cache_matches_manifests or verified_images != cached_images:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=receipt_path.parent,
+            prefix=f".{receipt_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            json.dump(
+                {
+                    "version": 1,
+                    "source_manifest_sha256": {name: hashes[name] for name in names},
+                    "images": verified_images,
+                },
+                stream,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary = Path(stream.name)
+        os.replace(temporary, receipt_path)
     return hashes
 
 

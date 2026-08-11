@@ -19,7 +19,7 @@ POSE_ORIENTATION_OUTPUT_NAME = "orientation_inverted_logit"
 POSE_INFERENCE_BATCH_SIZE = 16
 QUICKNII_COORDINATE_CONTRACT_VERSION = "quicknii-ras-to-allen-pir-v2"
 ATLAS_POSE_PREPROCESSING_VERSION = "smart-mask-scale-invariant-v2"
-AUTOMATIC_BRAIN_MASK_VERSION = "border-distance-conditional-hull-v5"
+AUTOMATIC_BRAIN_MASK_VERSION = "border-distance-conditional-hull-v6"
 APPROVED_ATLAS_POSE_MODEL_SHA256: str | None = None
 APPROVED_ATLAS_POSE_METADATA_SHA256: str | None = None
 APPROVED_ATLAS_POSE_EVIDENCE_SHA256: str | None = None
@@ -160,6 +160,7 @@ def automatic_brain_mask(image: np.ndarray) -> np.ndarray:
         retries = (
             _brain_mask_from_distance(distance, border_retry),
             _brain_mask_from_distance(distance, max(border_retry, 0.15 * float(otsu_threshold))),
+            _brain_mask_from_distance(distance, max(border_retry, 0.20 * float(otsu_threshold))),
         )
         retries = [
             retry
