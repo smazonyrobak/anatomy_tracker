@@ -1,4 +1,5 @@
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *.exe
 *.lnk
@@ -6,6 +7,7 @@ __pycache__/
 !TrajectoryTracker.spec
 _internal/
 build/
+dist/
 data/
 !tests/data/
 !tests/data/*

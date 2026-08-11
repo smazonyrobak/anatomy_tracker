@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 
 ROOT = Path(__file__).parents[1]
@@ -16,6 +17,93 @@ sys.modules[SPEC.name] = TRACKER
 SPEC.loader.exec_module(TRACKER)
 
 
+@pytest.mark.parametrize("failing_model", ["primary", "secondary"])
+def test_directml_run_failure_retries_both_models_on_cpu_once(monkeypatch, failing_model):
+    prediction = np.asarray(
+        [[0.0, 312.0, 320.0, 456.0, 0.0, 0.0, 0.0, 0.0, -320.0]],
+        dtype=np.float32,
+    )
+
+    class Session:
+        def __init__(self, *, fail=False):
+            self.fail = fail
+            self.calls = 0
+
+        def run(self, *_args):
+            self.calls += 1
+            if self.fail:
+                raise RuntimeError("simulated DirectML failure")
+            return [prediction]
+
+    dml = {name: Session(fail=name == failing_model) for name in ("primary", "secondary")}
+    cpu = {"primary": Session(), "secondary": Session()}
+    loader_calls = []
+
+    def load_sessions(force_cpu=False):
+        loader_calls.append(force_cpu)
+        return (cpu, {}, "CPUExecutionProvider", None) if force_cpu else (
+            dml,
+            {},
+            "DmlExecutionProvider",
+            None,
+        )
+
+    monkeypatch.setattr(TRACKER, "load_deepslice_onnx_sessions", load_sessions)
+    monkeypatch.setattr(
+        TRACKER,
+        "preprocess_deepslice_images",
+        lambda _paths: (np.zeros((1, 299, 299, 3), dtype=np.float32), [456], [320]),
+    )
+
+    records, _, _, _, runtime = TRACKER.run_deepslice_inference(
+        ["slice.png"],
+        False,
+        queue.SimpleQueue(),
+        threading.Event(),
+    )
+
+    assert loader_calls == [False, True]
+    assert [dml["primary"].calls, dml["secondary"].calls] == (
+        [1, 0] if failing_model == "primary" else [1, 1]
+    )
+    assert [cpu["primary"].calls, cpu["secondary"].calls] == [1, 1]
+    assert runtime["backend"] == "ONNX Runtime CPU"
+    assert runtime["gpu_fallback_reason"] == "DirectML inference failed: RuntimeError: simulated DirectML failure"
+    assert records[0]["Filenames"] == "slice.png"
+
+
+def test_cancellation_between_models_skips_secondary_inference(monkeypatch):
+    cancel = threading.Event()
+
+    class Session:
+        def __init__(self, cancel_after_run=False):
+            self.cancel_after_run = cancel_after_run
+            self.calls = 0
+
+        def run(self, *_args):
+            self.calls += 1
+            if self.cancel_after_run:
+                cancel.set()
+            return [np.zeros((1, 9), dtype=np.float32)]
+
+    sessions = {"primary": Session(True), "secondary": Session()}
+    monkeypatch.setattr(
+        TRACKER,
+        "load_deepslice_onnx_sessions",
+        lambda *_args: (sessions, {}, "DmlExecutionProvider", None),
+    )
+    monkeypatch.setattr(
+        TRACKER,
+        "preprocess_deepslice_images",
+        lambda _paths: (np.zeros((1, 299, 299, 3), dtype=np.float32), [456], [320]),
+    )
+
+    with pytest.raises(InterruptedError):
+        TRACKER.run_deepslice_inference(["slice.png"], False, queue.SimpleQueue(), cancel)
+
+    assert [sessions["primary"].calls, sessions["secondary"].calls] == [1, 0]
+
+
 def test_validated_deepslice_runtime_recovers_known_atlas_planes():
     expected_indices = np.asarray([120.0, 216.0, 320.0])
     image_paths = [
@@ -23,35 +111,22 @@ def test_validated_deepslice_runtime_recovers_known_atlas_planes():
         for index in expected_indices.astype(int)
     ]
 
-    sessions, hashes, provider, _fallback_reason = TRACKER.load_deepslice_onnx_sessions()
-    inputs, widths, heights = TRACKER.preprocess_deepslice_images(image_paths)
-    primary = sessions["primary"].run(["Identity:0"], {"images": inputs})[0]
-    secondary = sessions["secondary"].run(["Identity:0"], {"images": inputs})[0]
-    predictions = (primary + secondary) / 2.0
-    columns = ("ox", "oy", "oz", "ux", "uy", "uz", "vx", "vy", "vz")
-    actual_indices = []
-    actual_tilts = []
-    for path, row, width, height in zip(image_paths, predictions, widths, heights):
-        record = {
-            "Filenames": Path(path).name,
-            "width": width,
-            "height": height,
-            **{column: float(value) for column, value in zip(columns, row)},
-        }
-        alignment = TRACKER.quicknii_to_tracker_alignment(
-            record,
-            TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML,
-        )
-        actual_indices.append(alignment[0])
-        actual_tilts.append(alignment[1:3])
+    records, _, hashes, _, runtime = TRACKER.run_deepslice_inference(
+        image_paths, False, queue.SimpleQueue(), threading.Event()
+    )
+    by_filename = {
+        record["Filenames"]: TRACKER.quicknii_to_tracker_alignment(record, TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML)[:3]
+        for record in records
+    }
+    alignments = np.asarray([by_filename[Path(path).name] for path in image_paths])
 
     assert hashes == TRACKER.DEEPSLICE_ONNX_SHA256
-    assert provider in {"DmlExecutionProvider", "CPUExecutionProvider"}
-    assert np.max(np.abs(np.asarray(actual_indices) - expected_indices)) < 5.0
-    assert np.max(np.abs(np.asarray(actual_tilts))) < TRACKER.DEEPSLICE_REVIEW_TILT_DEG
+    assert runtime["backend"] in {"ONNX Runtime DirectML", "ONNX Runtime CPU"}
+    assert np.max(np.abs(alignments[:, 0] - expected_indices)) < 5.0
+    assert np.max(np.abs(alignments[:, 1:])) < TRACKER.DEEPSLICE_REVIEW_TILT_DEG
 
 
-def test_smart_selection_crop_flip_and_surface_fit_recover_known_oblique_plane(tmp_path):
+def test_smart_selection_crop_flip_and_surface_fit_recover_known_oblique_plane():
     source_path = ROOT / "tests" / "data" / "allen_oblique_ap280_lr6_dv-4_source_fliph.png"
     source = cv2.imread(str(source_path), cv2.IMREAD_GRAYSCALE)
     oriented, _ = TRACKER.transform_slice_image(source, 0.0, True, False)
@@ -68,11 +143,10 @@ def test_smart_selection_crop_flip_and_surface_fit_recover_known_oblique_plane(t
         selection.shape,
         0.04,
     )
-    model_input = tmp_path / "slice_0000.png"
     messages = queue.SimpleQueue()
     cancel = threading.Event()
     records, _, _, _, runtime_info = TRACKER.prepare_and_run_deepslice(
-        [(str(source_path), str(model_input), 0.0, True, False, points, crop, True)],
+        [(str(source_path), 0.0, True, False, points, crop, True)],
         False,
         messages,
         cancel,

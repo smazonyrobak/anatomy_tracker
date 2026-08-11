@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -219,14 +220,6 @@ def test_offscreen_ui_requires_surfaces_and_global_alignment_uses_only_outlined_
         monkeypatch.setattr(window, "_start_deepslice_alignment", capture_start)
         window.auto_align_all_slices()
         assert called == {"indices": [0, 2], "global_alignment": True}
-
-        shared_lr, shared_dv = 3.125, -1.75
-        for index in called["indices"]:
-            window.sessions[index].atlas_tilt_ml_deg = shared_lr
-            window.sessions[index].atlas_tilt_dv_deg = shared_dv
-            window.sessions[index].auto_alignment_global = True
-        assert {window.sessions[index].atlas_tilt_ml_deg for index in called["indices"]} == {shared_lr}
-        assert {window.sessions[index].atlas_tilt_dv_deg for index in called["indices"]} == {shared_dv}
     finally:
         window.close()
         app.processEvents()
@@ -361,6 +354,8 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
 def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypatch):
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
     window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    release_worker = threading.Event()
+    release_close_worker = threading.Event()
     try:
         shape = (8, 32, 40)
         image = np.zeros(shape[1:], dtype=np.uint8)
@@ -384,9 +379,11 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
         window.current_session_index = 0
 
         prediction = _quicknii_record("slice_0000.png", shape, 3.0, 1.0, -1.0)
+        worker_started = threading.Event()
 
         def fake_worker(*_args):
-            time.sleep(0.15)
+            worker_started.set()
+            release_worker.wait(3.0)
             diagnostics = {
                 "preconstraint_ap_index": 3.0,
                 "constrained_ap_index": 3.0,
@@ -404,16 +401,18 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
             }
             prepared = [(0, 3, 1.0, -1.0, np.eye(3), np.eye(3), prediction, diagnostics)]
             disagreement = {"slice_0000.png": {"ap_um": 0.0, "lr_deg": 0.0, "dv_deg": 0.0}}
-            return [prediction], "1.2.8", {}, disagreement, {"device": "test"}, prepared, None
+            return "1.2.8", {}, disagreement, {"device": "test"}, prepared, None
 
         monkeypatch.setattr(TRACKER, "prepare_run_and_solve_deepslice", fake_worker)
         started = time.perf_counter()
         window._start_deepslice_alignment([0], global_alignment=False)
         assert time.perf_counter() - started < 0.10
         assert window.auto_alignment_busy
+        assert worker_started.wait(2.0)
 
         window._switch_slice(1)
         assert window.current_session_index == 1
+        release_worker.set()
         deadline = time.perf_counter() + 3.0
         while window.auto_alignment_busy and time.perf_counter() < deadline:
             app.processEvents()
@@ -424,12 +423,36 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
         assert window.sessions[0].auto_alignment_engine == "DeepSlice"
         assert window._deepslice_timer is None
         assert window._deepslice_progress is None
-    finally:
+
+        close_worker_started = threading.Event()
+
+        def held_worker(*args):
+            close_worker_started.set()
+            release_close_worker.wait(3.0)
+            if args[-1].is_set():
+                raise InterruptedError
+
+        monkeypatch.setattr(TRACKER, "prepare_run_and_solve_deepslice", held_worker)
+        window._start_deepslice_alignment([0], global_alignment=False)
+        assert close_worker_started.wait(2.0)
+        cancel_event = window._deepslice_cancel_event
         window.close()
         app.processEvents()
 
+        assert cancel_event.is_set()
+        assert not window.auto_alignment_busy
+        assert window._deepslice_cancel_event is None
+        assert window._deepslice_timer is None
+        assert window._deepslice_progress is None
+    finally:
+        release_worker.set()
+        release_close_worker.set()
+        window.close()
+        window.deepslice_executor.shutdown(wait=True, cancel_futures=True)
+        app.processEvents()
 
-def test_manual_surface_edit_does_not_reuse_stale_smart_brush_crop(tmp_path, monkeypatch):
+
+def test_surface_edits_preserve_authoritative_crop_and_alignment_state(tmp_path, monkeypatch):
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
     window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
     try:
@@ -471,8 +494,29 @@ def test_manual_surface_edit_does_not_reuse_stale_smart_brush_crop(tmp_path, mon
 
         assert session.brain_brush_selection_mask is mask
         assert not session.brain_brush_strokes
-        assert captured["image_jobs"][0][6] is None
+        assert captured["image_jobs"][0][5] is None
         assert not window.auto_alignment_busy
+
+        transform = object()
+        session.brain_brush_strokes = [(False, [(20.0, 16.0)])]
+        session.brain_outline_points = outline.copy()
+        session.brain_brush_selection_mask = mask
+        session.slice_to_atlas_x = transform
+        session.atlas_to_slice_x = transform
+        session.auto_alignment_engine = "DeepSlice"
+
+        def fail_segmentation(*_args):
+            raise RuntimeError("segmentation failed")
+
+        monkeypatch.setattr(TRACKER, "smart_brain_surface_selection", fail_segmentation)
+        window.smart_surface_mode.setChecked(True)
+        window._smart_surface_stroke([(20.0, 16.0)], False)
+
+        assert session.brain_brush_strokes == [(False, [(20.0, 16.0)])]
+        assert session.brain_outline_points == outline
+        assert session.brain_brush_selection_mask is mask
+        assert session.slice_to_atlas_x is transform
+        assert session.auto_alignment_engine == "DeepSlice"
     finally:
         window.close()
         app.processEvents()

@@ -387,23 +387,32 @@ def run_deepslice_inference(
         raise InterruptedError
     progress_messages.put((2, f"Running the DeepSlice two-model ensemble on {provider}..."))
     inference_started = time.perf_counter()
+    inference_error = None
     try:
-        primary = sessions["primary"].run(["Identity:0"], {"images": inputs})[0].astype(np.float64)
+        primary_result = sessions["primary"].run(["Identity:0"], {"images": inputs})
+    except Exception as exc:
+        inference_error = exc
+    if inference_error is None:
         if cancel_event.is_set():
             raise InterruptedError
-        secondary = sessions["secondary"].run(["Identity:0"], {"images": inputs})[0].astype(np.float64)
-    except InterruptedError:
-        raise
-    except Exception as exc:
+        try:
+            secondary_result = sessions["secondary"].run(["Identity:0"], {"images": inputs})
+        except Exception as exc:
+            inference_error = exc
+    if inference_error is not None:
         if provider != "DmlExecutionProvider":
-            raise
-        fallback_reason = f"DirectML inference failed: {type(exc).__name__}: {exc}"
+            raise inference_error
+        fallback_reason = f"DirectML inference failed: {type(inference_error).__name__}: {inference_error}"
         progress_messages.put((2, "DirectML failed; retrying the validated models on CPU..."))
         sessions, model_hashes, provider, _ = load_deepslice_onnx_sessions(True)
-        primary = sessions["primary"].run(["Identity:0"], {"images": inputs})[0].astype(np.float64)
+        primary_result = sessions["primary"].run(["Identity:0"], {"images": inputs})
         if cancel_event.is_set():
             raise InterruptedError
-        secondary = sessions["secondary"].run(["Identity:0"], {"images": inputs})[0].astype(np.float64)
+        secondary_result = sessions["secondary"].run(["Identity:0"], {"images": inputs})
+    if cancel_event.is_set():
+        raise InterruptedError
+    primary = primary_result[0].astype(np.float64)
+    secondary = secondary_result[0].astype(np.float64)
     inference_seconds = time.perf_counter() - inference_started
     ensemble = np.mean([primary, secondary], axis=0)
     coordinate_columns = ("ox", "oy", "oz", "ux", "uy", "uz", "vx", "vy", "vz")
@@ -448,7 +457,6 @@ def run_deepslice_inference(
     progress_messages.put((4, "Converting DeepSlice coordinates into the tracker atlas..."))
     runtime_info = {
         "backend": "ONNX Runtime DirectML" if provider == "DmlExecutionProvider" else "ONNX Runtime CPU",
-        "provider": provider,
         "onnxruntime_version": ort.__version__,
         "device": "GPU (DirectML device 0)" if provider == "DmlExecutionProvider" else "CPU",
         "gpu_fallback_reason": fallback_reason,
@@ -464,77 +472,77 @@ def run_deepslice_inference(
 
 
 def prepare_and_run_deepslice(
-    image_jobs: list[tuple[str, str, float, bool, bool, list[tuple[float, float]], tuple[int, int, int, int] | None, bool]],
+    image_jobs: list[tuple[str, float, bool, bool, list[tuple[float, float]], tuple[int, int, int, int] | None, bool]],
     propagate_angles: bool,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
 ) -> tuple[list[dict], str, dict[str, str], dict[str, dict[str, float]], dict]:
     image_paths = []
     input_crops = {}
-    for sequence, (
-        source_path,
-        output_path,
-        rotation_deg,
-        flip_horizontal,
-        flip_vertical,
-        surface_points,
-        selection_crop,
-        outline_closed,
-    ) in enumerate(image_jobs):
-        if cancel_event.is_set():
-            raise InterruptedError
-        progress_messages.put((0, f"Preparing DeepSlice input {sequence + 1} / {len(image_jobs)}..."))
-        path = Path(source_path)
-        raw = tifffile.imread(str(path)) if path.suffix.lower() in {".tif", ".tiff"} else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-        source_gray = as_gray(raw)
-        source_height, source_width = source_gray.shape[:2]
-        display_raw, display_scale = downsample_for_display(source_gray)
-        image, _ = transform_slice_image(
-            normalize_u8(display_raw),
+    with tempfile.TemporaryDirectory(prefix="trajectory_deepslice_") as temporary_folder:
+        for sequence, (
+            source_path,
             rotation_deg,
             flip_horizontal,
             flip_vertical,
+            surface_points,
+            selection_crop,
+            outline_closed,
+        ) in enumerate(image_jobs):
+            if cancel_event.is_set():
+                raise InterruptedError
+            progress_messages.put((0, f"Preparing DeepSlice input {sequence + 1} / {len(image_jobs)}..."))
+            path = Path(source_path)
+            output_path = Path(temporary_folder) / f"slice_{sequence:04d}.png"
+            raw = tifffile.imread(str(path)) if path.suffix.lower() in {".tif", ".tiff"} else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+            source_gray = as_gray(raw)
+            source_height, source_width = source_gray.shape[:2]
+            display_raw, display_scale = downsample_for_display(source_gray)
+            image, _ = transform_slice_image(
+                normalize_u8(display_raw),
+                rotation_deg,
+                flip_horizontal,
+                flip_vertical,
+            )
+            if selection_crop is not None:
+                crop = selection_crop
+            elif outline_closed:
+                crop = surface_crop_bounds(surface_points, image.shape, 0.06)
+            else:
+                crop = (0, 0, image.shape[1], image.shape[0])
+            x0, y0, x1, y1 = crop
+            if not cv2.imwrite(str(output_path), image[y0:y1, x0:x1]):
+                raise RuntimeError(f"Could not prepare {path.name} for DeepSlice")
+            image_paths.append(str(output_path))
+            input_crops[output_path.name] = {
+                "source_path": str(path),
+                "source_size_bytes": int(path.stat().st_size),
+                "source_modified_ns": int(path.stat().st_mtime_ns),
+                "rotation_deg": float(rotation_deg),
+                "flip_horizontal": bool(flip_horizontal),
+                "flip_vertical": bool(flip_vertical),
+                "outline_closed": bool(outline_closed),
+                "coordinate_frame": "oriented_downsampled_display_pixels",
+                "trusted_surface_points_oriented_display_px": [
+                    [float(point[0]), float(point[1])] for point in surface_points
+                ],
+                "crop_x0_oriented_display_px": int(x0),
+                "crop_y0_oriented_display_px": int(y0),
+                "crop_x1_oriented_display_px": int(x1),
+                "crop_y1_oriented_display_px": int(y1),
+                "oriented_display_width_px": int(image.shape[1]),
+                "oriented_display_height_px": int(image.shape[0]),
+                "source_raw_width_px": int(source_width),
+                "source_raw_height_px": int(source_height),
+                "display_downsample_factor": float(display_scale),
+                "model_input_png_sha256": file_sha256(output_path),
+            }
+        records, deepslice_version, model_hashes, disagreement, runtime_info = run_deepslice_inference(
+            image_paths,
+            propagate_angles,
+            progress_messages,
+            cancel_event,
         )
-        if selection_crop is not None:
-            crop = selection_crop
-        elif outline_closed:
-            crop = surface_crop_bounds(surface_points, image.shape, 0.06)
-        else:
-            crop = (0, 0, image.shape[1], image.shape[0])
-        x0, y0, x1, y1 = crop
-        cropped = image[y0:y1, x0:x1]
-        if not cv2.imwrite(output_path, cropped):
-            raise RuntimeError(f"Could not prepare {path.name} for DeepSlice")
-        image_paths.append(output_path)
-        input_crops[Path(output_path).name] = {
-            "source_path": str(path),
-            "source_size_bytes": int(path.stat().st_size),
-            "source_modified_ns": int(path.stat().st_mtime_ns),
-            "rotation_deg": float(rotation_deg),
-            "flip_horizontal": bool(flip_horizontal),
-            "flip_vertical": bool(flip_vertical),
-            "outline_closed": bool(outline_closed),
-            "coordinate_frame": "oriented_downsampled_display_pixels",
-            "trusted_surface_points_oriented_display_px": [
-                [float(point[0]), float(point[1])] for point in surface_points
-            ],
-            "crop_x0_oriented_display_px": int(x0),
-            "crop_y0_oriented_display_px": int(y0),
-            "crop_x1_oriented_display_px": int(x1),
-            "crop_y1_oriented_display_px": int(y1),
-            "oriented_display_width_px": int(image.shape[1]),
-            "oriented_display_height_px": int(image.shape[0]),
-            "source_raw_width_px": int(source_width),
-            "source_raw_height_px": int(source_height),
-            "display_downsample_factor": float(display_scale),
-            "model_input_png_sha256": file_sha256(Path(output_path)),
-        }
-    records, deepslice_version, model_hashes, disagreement, runtime_info = run_deepslice_inference(
-        image_paths,
-        propagate_angles,
-        progress_messages,
-        cancel_event,
-    )
     runtime_info["input_crops"] = input_crops
     return records, deepslice_version, model_hashes, disagreement, runtime_info
 
@@ -1241,7 +1249,7 @@ def prepare_run_and_solve_deepslice(
     global_alignment: bool,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
-) -> tuple[list[dict], str, dict[str, str], dict[str, dict[str, float]], dict, list[tuple], tuple[float, float] | None]:
+) -> tuple[str, dict[str, str], dict[str, dict[str, float]], dict, list[tuple], tuple[float, float] | None]:
     alignment_started = time.perf_counter()
     records, version, hashes, disagreement, runtime_info = prepare_and_run_deepslice(
         image_jobs,
@@ -1274,7 +1282,7 @@ def prepare_run_and_solve_deepslice(
     if cancel_event.is_set():
         raise InterruptedError
     progress_messages.put((5, "Alignment ready"))
-    return records, version, hashes, disagreement, runtime_info, prepared, shared_tilt
+    return version, hashes, disagreement, runtime_info, prepared, shared_tilt
 
 
 def atlas_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:
@@ -2037,9 +2045,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.brain_mesh_item: gl.GLMeshItem | None = None
         self.auto_alignment_busy = False
         self.deepslice_executor = ThreadPoolExecutor(max_workers=1)
-        self._closing = False
         self._deepslice_cancel_event: threading.Event | None = None
-        self._deepslice_future = None
         self._deepslice_timer: QtCore.QTimer | None = None
         self._deepslice_progress: QtWidgets.QProgressDialog | None = None
 
@@ -2092,8 +2098,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
         self.plane_box = QtWidgets.QComboBox()
         self.plane_box.addItems(["coronal", "sagittal", "horizontal"])
-        self.section_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal, controls)
-        self.section_slider.hide()
         self.axis_label = QtWidgets.QLabel("AP position")
         self.axis_position_um = QtWidgets.QSpinBox()
         self.axis_position_um.setKeyboardTracking(False)
@@ -2497,7 +2501,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.browse_atlas_btn.clicked.connect(self._browse_atlas)
         self.load_atlas_btn.clicked.connect(lambda: self.load_atlas_folder(Path(self.atlas_path.text().strip())))
         self.plane_box.currentTextChanged.connect(self._plane_changed)
-        self.section_slider.valueChanged.connect(self._section_changed)
         self.section_scroll.valueChanged.connect(self._section_changed)
         self.atlas_tilt_ml.valueChanged.connect(self._atlas_tilt_changed)
         self.atlas_tilt_dv.valueChanged.connect(self._atlas_tilt_changed)
@@ -2731,13 +2734,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             return
         axis = plane_axis(self.plane_box.currentText())
         index = int(np.clip(round(float(self.bregma_voxel[axis])), 0, self.atlas_volume.shape[axis] - 1))
-        self.section_slider.blockSignals(True)
         self.section_scroll.blockSignals(True)
-        self.section_slider.setRange(0, self.atlas_volume.shape[axis] - 1)
         self.section_scroll.setRange(0, self.atlas_volume.shape[axis] - 1)
-        self.section_slider.setValue(index)
         self.section_scroll.setValue(index)
-        self.section_slider.blockSignals(False)
         self.section_scroll.blockSignals(False)
         self._update_axis_control(index)
         self._update_tilt_controls()
@@ -2797,8 +2796,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _auto_align_index_bounds(self) -> tuple[int, int]:
         if self.atlas_volume is None:
             return 0, 0
-        if not self.limit_auto_align_ap.isChecked():
-            return 10, self.atlas_volume.shape[0] - 11
         first = self._ap_um_to_index(self.auto_align_ap_min.value())
         second = self._ap_um_to_index(self.auto_align_ap_max.value())
         return min(first, second), max(first, second)
@@ -2836,18 +2833,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 self._mark_alignment_run_stale(session, "contributor atlas plane changed")
                 self._clear_slice_transform(session)
             session.atlas_plane = self.plane_box.currentText()
-            session.atlas_index = self.section_slider.value()
+            session.atlas_index = self.section_scroll.value()
             self._recompute_session_volume_points(session)
         self._refresh_atlas()
         self._refresh_3d()
         self._refresh_point_counts()
 
     def _section_changed(self, value: int) -> None:
-        self.section_slider.blockSignals(True)
         self.section_scroll.blockSignals(True)
-        self.section_slider.setValue(value)
         self.section_scroll.setValue(value)
-        self.section_slider.blockSignals(False)
         self.section_scroll.blockSignals(False)
         self._update_axis_control(value)
         session = self.current_session()
@@ -2874,7 +2868,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if self.atlas_volume is None or self.annotation_volume is None:
             return
         plane = self.plane_box.currentText()
-        index = self.section_slider.value()
+        index = self.section_scroll.value()
         tilt_ml, tilt_dv = self._current_atlas_tilts()
         if plane == "coronal" and (tilt_ml != 0.0 or tilt_dv != 0.0):
             self.current_atlas_image = normalize_u8(
@@ -2924,7 +2918,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             name=path.name,
             path=str(path),
             atlas_plane=self.plane_box.currentText(),
-            atlas_index=self.section_slider.value(),
+            atlas_index=self.section_scroll.value(),
             atlas_tilt_ml_deg=self._current_atlas_tilts()[0],
             atlas_tilt_dv_deg=self._current_atlas_tilts()[1],
         )
@@ -2980,11 +2974,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.plane_box.setCurrentText(session.atlas_plane)
         self.plane_box.blockSignals(False)
         self._set_plane_limits()
-        self.section_slider.blockSignals(True)
         self.section_scroll.blockSignals(True)
-        self.section_slider.setValue(session.atlas_index)
         self.section_scroll.setValue(session.atlas_index)
-        self.section_slider.blockSignals(False)
         self.section_scroll.blockSignals(False)
         self.atlas_tilt_ml.blockSignals(True)
         self.atlas_tilt_dv.blockSignals(True)
@@ -3073,7 +3064,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.flip_vertical = bool(flip_vertical)
         self._update_slice_image(clear_transform=True)
         if session.brain_brush_strokes:
-            self._recompute_smart_surface_selection(session)
+            self._apply_smart_surface_selection(session, session.brain_brush_strokes)
         n_pairs = min(len(session.atlas_landmarks), len(session.slice_landmarks))
         if had_transform and n_pairs >= 3 and self._rebuild_slice_transform(session):
             self._recompute_probe_points_from_slice_points(session)
@@ -3303,21 +3294,24 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self._erase_surface_points(session, display_points)
             return
         raw_points = [self._slice_display_to_raw_point(session, point) for point in display_points]
-        session.brain_brush_strokes.append((bool(exclude), raw_points))
-        session.point_history.append("brain_brush")
-        self._invalidate_auto_alignment_after_surface_edit(session)
+        strokes = [*session.brain_brush_strokes, (bool(exclude), raw_points)]
         self.setCursor(QtCore.Qt.CursorShape.WaitCursor)
         action = "Subtracting from" if exclude else "Growing"
         self.status.setText(f"{action} the smart brain selection from local contrast...")
-        QtWidgets.QApplication.processEvents()
         try:
-            self._recompute_smart_surface_selection(session)
-        except Exception as exc:
-            session.brain_brush_strokes.pop()
-            session.point_history.pop()
+            point_count = self._apply_smart_surface_selection(session, strokes)
+        except (RuntimeError, cv2.error) as exc:
             self.status.setText(f"Smart surface selection failed: {exc}")
+            return
         finally:
             self.unsetCursor()
+        session.point_history.append("brain_brush")
+        self._invalidate_auto_alignment_after_surface_edit(session)
+        operation = "refined" if any(stroke_excludes for stroke_excludes, _ in strokes) else "selected"
+        self.status.setText(
+            f"Smart brush {operation} the brain object and created {point_count} editable surface points. "
+            "Paint again to add evidence or Shift-paint to subtract."
+        )
         self._refresh_points()
 
     def _store_surface_edit_undo(self, session: SliceSession) -> None:
@@ -3475,18 +3469,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             f"Removed {int(np.count_nonzero(remove))} unreliable surface points; gaps are excluded from alignment"
         )
 
-    def _recompute_smart_surface_selection(self, session: SliceSession) -> None:
+    def _compute_smart_surface_selection(
+        self,
+        session: SliceSession,
+        strokes: list[tuple[bool, list[tuple[float, float]]]],
+    ) -> tuple[list[tuple[float, float]], np.ndarray | None]:
         foreground_points: list[tuple[float, float]] = []
         background_points: list[tuple[float, float]] = []
-        for exclude, raw_points in session.brain_brush_strokes:
+        for exclude, raw_points in strokes:
             display_points = self._slice_raw_to_display_points(session, raw_points)
             (background_points if exclude else foreground_points).extend(display_points)
         if not foreground_points:
-            session.brain_outline_points.clear()
-            session.brain_outline_segment_starts = [0]
-            session.brain_outline_closed = False
-            session.brain_brush_selection_mask = None
-            return
+            return [], None
         surface, selection_mask = smart_brain_surface_selection(
             session.weight_image,
             foreground_points,
@@ -3494,15 +3488,20 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.brush_radius.value(),
             self.outline_point_count.value(),
         )
-        session.brain_outline_points = [self._slice_display_to_raw_point(session, point) for point in surface]
+        return [self._slice_display_to_raw_point(session, point) for point in surface], selection_mask
+
+    def _apply_smart_surface_selection(
+        self,
+        session: SliceSession,
+        strokes: list[tuple[bool, list[tuple[float, float]]]],
+    ) -> int:
+        surface, selection_mask = self._compute_smart_surface_selection(session, strokes)
+        session.brain_brush_strokes = strokes
+        session.brain_outline_points = surface
         session.brain_outline_segment_starts = [0]
-        session.brain_outline_closed = True
+        session.brain_outline_closed = bool(surface)
         session.brain_brush_selection_mask = selection_mask
-        operation = "refined" if background_points else "selected"
-        self.status.setText(
-            f"Smart brush {operation} the brain object and created {len(surface)} editable surface points. "
-            "Paint again to add evidence or Shift-paint to subtract."
-        )
+        return len(surface)
 
     def _outline_point_count_changed(self, point_count: int) -> None:
         session = self.current_session()
@@ -3811,8 +3810,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             if not session.brain_brush_strokes:
                 self.status.setText("No smart brush stroke to undo on current slice")
                 return
-            self._invalidate_auto_alignment_after_surface_edit(session)
-            session.brain_brush_strokes.pop()
+            strokes = session.brain_brush_strokes[:-1]
             history_index = next(
                 (
                     index
@@ -3821,15 +3819,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 ),
                 None,
             )
-            if history_index is not None:
-                session.point_history.pop(history_index)
             self.setCursor(QtCore.Qt.CursorShape.WaitCursor)
-            QtWidgets.QApplication.processEvents()
             try:
-                self._recompute_smart_surface_selection(session)
-                self.status.setText("Undid the last smart surface brush stroke")
+                self._apply_smart_surface_selection(session, strokes)
             finally:
                 self.unsetCursor()
+            if history_index is not None:
+                session.point_history.pop(history_index)
+            self._invalidate_auto_alignment_after_surface_edit(session)
+            self.status.setText("Undid the last smart surface brush stroke")
             self._refresh_points()
             return
         if self.auto_outline_mode.isChecked():
@@ -4004,15 +4002,34 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.atlas_volume.shape,
             tuple(self.bregma_voxel),
         )
-        temporary_folder = Path(tempfile.mkdtemp(prefix="trajectory_deepslice_"))
         image_jobs = []
         filename_to_session: dict[str, int] = {}
         geometry_snapshot: dict[int, tuple] = {}
         outline_snapshot: dict[int, list[tuple[float, float]]] = {}
+
+        def alignment_input_snapshot(session: SliceSession) -> tuple:
+            return (
+                session.path,
+                session.rotation_deg,
+                session.flip_horizontal,
+                session.flip_vertical,
+                tuple(session.brain_outline_points),
+                tuple(session.brain_outline_segment_starts),
+                session.brain_outline_closed,
+                session.atlas_plane,
+                session.atlas_index,
+                session.atlas_tilt_ml_deg,
+                session.atlas_tilt_dv_deg,
+                tuple(session.atlas_landmarks),
+                tuple(session.slice_landmarks),
+                tuple(session.probe_slice_points),
+                id(session.slice_to_atlas_x),
+                id(session.atlas_to_slice_x),
+            )
+
         for sequence, session_index in enumerate(session_indices):
             session = self.sessions[session_index]
             filename = f"slice_{sequence:04d}.png"
-            image_path = temporary_folder / filename
             display_outline = self._slice_raw_to_display_points(
                 session,
                 session.brain_outline_points,
@@ -4035,7 +4052,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             image_jobs.append(
                 (
                     session.path,
-                    str(image_path),
                     session.rotation_deg,
                     session.flip_horizontal,
                     session.flip_vertical,
@@ -4045,24 +4061,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 )
             )
             filename_to_session[filename] = session_index
-            geometry_snapshot[session_index] = (
-                session.path,
-                session.rotation_deg,
-                session.flip_horizontal,
-                session.flip_vertical,
-                tuple(session.brain_outline_points),
-                tuple(session.brain_outline_segment_starts),
-                session.brain_outline_closed,
-                session.atlas_plane,
-                session.atlas_index,
-                session.atlas_tilt_ml_deg,
-                session.atlas_tilt_dv_deg,
-                tuple(session.atlas_landmarks),
-                tuple(session.slice_landmarks),
-                tuple(session.probe_slice_points),
-                id(session.slice_to_atlas_x),
-                id(session.atlas_to_slice_x),
-            )
+            geometry_snapshot[session_index] = alignment_input_snapshot(session)
             outline_snapshot[session_index] = display_outline
 
         messages: queue.SimpleQueue = queue.SimpleQueue()
@@ -4088,37 +4087,24 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_point_counts()
         scope = f"{len(session_indices)} outlined slices" if global_alignment else self.sessions[session_indices[0]].name
         self.status.setText(f"DeepSlice is aligning {scope}; the rest of the interface remains available.")
-        try:
-            future = self.deepslice_executor.submit(
-                prepare_run_and_solve_deepslice,
-                image_jobs,
-                filename_to_session,
-                self.atlas_volume.shape,
-                self.annotation_volume,
-                outline_snapshot,
-                ap_bounds,
-                order_snapshot,
-                alignment_run_id,
-                global_alignment,
-                messages,
-                cancel_event,
-            )
-        except Exception:
-            self.auto_alignment_busy = False
-            self._set_auto_constraint_controls_enabled(True)
-            progress.close()
-            progress.deleteLater()
-            shutil.rmtree(temporary_folder, ignore_errors=True)
-            self._refresh_point_counts()
-            raise
-        future.add_done_callback(lambda _: shutil.rmtree(temporary_folder, ignore_errors=True))
+        future = self.deepslice_executor.submit(
+            prepare_run_and_solve_deepslice,
+            image_jobs,
+            filename_to_session,
+            self.atlas_volume.shape,
+            self.annotation_volume,
+            outline_snapshot,
+            ap_bounds,
+            order_snapshot,
+            alignment_run_id,
+            global_alignment,
+            messages,
+            cancel_event,
+        )
         timer = QtCore.QTimer(self)
         timer.setInterval(100)
 
         def poll() -> None:
-            if self._closing:
-                timer.stop()
-                return
             while True:
                 try:
                     value, label = messages.get_nowait()
@@ -4130,12 +4116,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 return
             timer.stop()
             was_cancelled = cancel_event.is_set()
-            self.auto_alignment_busy = False
             try:
                 if was_cancelled:
                     raise InterruptedError
                 (
-                    _records,
                     deepslice_version,
                     model_hashes,
                     disagreement,
@@ -4154,25 +4138,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     raise RuntimeError("The atlas changed while DeepSlice was running; result discarded")
                 for session_index, expected in geometry_snapshot.items():
                     session = self.sessions[session_index]
-                    current = (
-                        session.path,
-                        session.rotation_deg,
-                        session.flip_horizontal,
-                        session.flip_vertical,
-                        tuple(session.brain_outline_points),
-                        tuple(session.brain_outline_segment_starts),
-                        session.brain_outline_closed,
-                        session.atlas_plane,
-                        session.atlas_index,
-                        session.atlas_tilt_ml_deg,
-                        session.atlas_tilt_dv_deg,
-                        tuple(session.atlas_landmarks),
-                        tuple(session.slice_landmarks),
-                        tuple(session.probe_slice_points),
-                        id(session.slice_to_atlas_x),
-                        id(session.atlas_to_slice_x),
-                    )
-                    if current != expected:
+                    if alignment_input_snapshot(session) != expected:
                         raise RuntimeError(
                             f"{session.name} was edited while DeepSlice was running; result discarded"
                         )
@@ -4193,26 +4159,29 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.critical(self, "DeepSlice alignment failed", str(exc))
                 self.status.setText(f"DeepSlice alignment failed: {exc}")
             finally:
-                progress.blockSignals(True)
-                progress.close()
-                progress.blockSignals(False)
-                timer.timeout.disconnect(poll)
-                timer.deleteLater()
-                progress.deleteLater()
-                if self._deepslice_future is future:
-                    self._deepslice_cancel_event = None
-                    self._deepslice_future = None
-                    self._deepslice_timer = None
-                    self._deepslice_progress = None
-                self._set_auto_constraint_controls_enabled(True)
-                self._refresh_point_counts()
+                self._finish_deepslice_alignment_ui()
 
         timer.timeout.connect(poll)
-        timer.start()
         self._deepslice_timer = timer
         self._deepslice_progress = progress
         self._deepslice_cancel_event = cancel_event
-        self._deepslice_future = future
+        timer.start()
+
+    def _finish_deepslice_alignment_ui(self) -> None:
+        timer, self._deepslice_timer = self._deepslice_timer, None
+        progress, self._deepslice_progress = self._deepslice_progress, None
+        self._deepslice_cancel_event = None
+        self.auto_alignment_busy = False
+        if timer is not None:
+            timer.stop()
+            timer.timeout.disconnect()
+            timer.deleteLater()
+        if progress is not None:
+            progress.blockSignals(True)
+            progress.close()
+            progress.deleteLater()
+        self._set_auto_constraint_controls_enabled(True)
+        self._refresh_point_counts()
 
     def _apply_deepslice_results(
         self,
@@ -4887,13 +4856,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        self._closing = True
         if self._deepslice_cancel_event is not None:
             self._deepslice_cancel_event.set()
-        if self._deepslice_timer is not None:
-            self._deepslice_timer.stop()
-        if self._deepslice_progress is not None:
-            self._deepslice_progress.close()
+        self._finish_deepslice_alignment_ui()
         self.deepslice_executor.shutdown(wait=False, cancel_futures=True)
         super().closeEvent(event)
 
