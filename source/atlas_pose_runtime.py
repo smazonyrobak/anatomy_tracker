@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import time
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,11 +17,46 @@ POSE_INPUT_NAME = "images"
 POSE_OUTPUT_NAME = "pose_ap_um_lr_deg_dv_deg"
 POSE_ORIENTATION_OUTPUT_NAME = "orientation_inverted_logit"
 POSE_INFERENCE_BATCH_SIZE = 16
-ATLAS_POSE_PREPROCESSING_VERSION = "smart-mask-scale-invariant-v1"
-AUTOMATIC_BRAIN_MASK_VERSION = "border-distance-low-contrast-retry-v3"
+QUICKNII_COORDINATE_CONTRACT_VERSION = "quicknii-ras-to-allen-pir-v2"
+ATLAS_POSE_PREPROCESSING_VERSION = "smart-mask-scale-invariant-v2"
+AUTOMATIC_BRAIN_MASK_VERSION = "border-distance-conditional-hull-v4"
 APPROVED_ATLAS_POSE_MODEL_SHA256: str | None = None
 APPROVED_ATLAS_POSE_METADATA_SHA256: str | None = None
 APPROVED_ATLAS_POSE_EVIDENCE_SHA256: str | None = None
+ATLAS_POSE_RELEASE_GATE_THRESHOLDS = {
+    "mean_ap_um": 60.0,
+    "mean_lr_deg": 0.90,
+    "mean_dv_deg": 1.75,
+    "absolute_ap_bias_um": 25.0,
+    "ap_p95_um": 150.0,
+    "worst_ap_band_mae_um": 90.0,
+    "worst_product_mae_um": 90.0,
+    "ap_bootstrap_upper95_um": 60.0,
+    "per_animal_p90_ap_um": 90.0,
+    "per_animal_p90_lr_deg": 1.50,
+    "per_animal_p90_dv_deg": 2.50,
+    "worst_group_p90_ap_um": 90.0,
+    "worst_group_p90_lr_deg": 1.50,
+    "worst_group_p90_dv_deg": 2.50,
+}
+ATLAS_POSE_SEALED_METHODS = {
+    "deepslice_ai",
+    "deepslice_mens_ai",
+    "deepslice_mens_ai_ci",
+    "atlas_pose",
+}
+ATLAS_POSE_SEALED_SECTION_COUNT = 1400
+ATLAS_POSE_SEALED_EXPERIMENT_COUNT = 10
+ATLAS_POSE_SEALED_BENCHMARK_ID = "deepslice_s2p_1400_quicknii_ras_v2"
+ATLAS_POSE_SEALED_SPLIT = "sealed_deepslice_s2p"
+ATLAS_POSE_RELEASE_CONFIDENCE = 0.95
+ATLAS_POSE_SEALED_SOURCE_FILES = (
+    "datasets.jsonl",
+    "sections.jsonl",
+    "provenance.json",
+    "downloads.jsonl",
+    "registered_image_quality.json",
+)
 
 
 def _brain_mask_from_distance(distance: np.ndarray, threshold: float) -> np.ndarray | None:
@@ -121,6 +158,11 @@ def automatic_brain_mask(image: np.ndarray) -> np.ndarray:
         )
         if retry is not None and retry.mean() > result.mean():
             result = retry
+    y, x = np.nonzero(result)
+    hull = np.zeros_like(result, dtype=np.uint8)
+    cv2.fillConvexPoly(hull, cv2.convexHull(np.column_stack((x, y)).astype(np.int32)), 1)
+    if result.sum() < 0.9 * hull.sum():
+        result = hull.astype(bool)
     if result.shape != (original_height, original_width):
         result = cv2.resize(
             result.astype(np.uint8),
@@ -167,14 +209,18 @@ def canonicalize_brain_orientation(image: np.ndarray, mask: np.ndarray) -> tuple
     return oriented, oriented_mask
 
 
-def preprocess_atlas_pose_image(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    gray, mask = canonicalize_brain_orientation(image, mask)
+def canonical_brain_sampling_grid(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     y, x = np.nonzero(mask)
     center_x = (float(x.min()) + float(x.max())) / 2.0
     center_y = (float(y.min()) + float(y.max())) / 2.0
     side = max(float(x.max() - x.min()), float(y.max() - y.min())) * 1.14
     axis = np.linspace(-0.5, 0.5, POSE_IMAGE_SIZE, dtype=np.float32)
-    sample_x, sample_y = np.meshgrid(center_x + axis * side, center_y + axis * side)
+    return np.meshgrid(center_x + axis * side, center_y + axis * side)
+
+
+def preprocess_atlas_pose_image(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    gray, mask = canonicalize_brain_orientation(image, mask)
+    sample_x, sample_y = canonical_brain_sampling_grid(mask)
     canonical = cv2.remap(gray, sample_x, sample_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
     canonical_mask = cv2.remap(
         mask.astype(np.uint8),
@@ -193,12 +239,13 @@ ATLAS_POSE_PREPROCESSING_CONTRACT_FUNCTIONS = (
     "as_gray",
     "brain_orientation_affine",
     "canonicalize_brain_orientation",
+    "canonical_brain_sampling_grid",
     "preprocess_atlas_pose_image",
 )
 # Generated from normalized source text for the functions above. Runtime uses this immutable
 # value so the contract is identical across CPython versions and inside a PyInstaller bundle.
 ATLAS_POSE_PREPROCESSING_CONTRACT_SHA256 = (
-    "1d09f801a569f66107162bf49fc4272a874f23dd25e98bb71e72764afa3e7f07"
+    "0be931fd9b3d04d1ac04c5103905539e99b6ecb3bfc6b95e7895ffa9370d8cab"
 )
 
 
@@ -305,12 +352,155 @@ def _valid_hash_tree(value) -> bool:
     )
 
 
+def atlas_pose_release_quality_gate_valid(quality: dict) -> bool:
+    values = quality.get("values", {})
+    thresholds = quality.get("thresholds", {})
+    passed = quality.get("passed", {})
+    names = set(ATLAS_POSE_RELEASE_GATE_THRESHOLDS)
+    if thresholds != ATLAS_POSE_RELEASE_GATE_THRESHOLDS or set(values) != names or set(passed) != names:
+        return False
+    try:
+        expected = {
+            name: bool(
+                np.isfinite(float(values[name]))
+                and float(values[name]) <= ATLAS_POSE_RELEASE_GATE_THRESHOLDS[name]
+            )
+            for name in names
+        }
+    except (TypeError, ValueError):
+        return False
+    return (
+        all(isinstance(passed[name], bool) for name in names)
+        and passed == expected
+        and quality.get("all_gates_passed") is all(expected.values())
+    )
+
+
+def verify_atlas_pose_sealed_predictions(path: str | Path) -> dict:
+    required = {
+        "sealed",
+        "split",
+        "method",
+        "experiment_id",
+        "specimen_id",
+        "section_image_id",
+        "section_number",
+        "relative_path",
+        "product",
+        "ap_band",
+        "in_training_ap_domain",
+        *(
+            f"{prefix}_{axis}"
+            for prefix in ("gt", "pred", "error", "absolute_error")
+            for axis in ("ap_um", "lr_deg", "dv_deg")
+        ),
+    }
+    seen = set()
+    sections = {method: set() for method in ATLAS_POSE_SEALED_METHODS}
+    experiments = set()
+    section_truth = {}
+    with Path(path).open("r", encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+            raise RuntimeError("AtlasPose sealed predictions have an incomplete schema")
+        for row in reader:
+            method = row["method"]
+            if (
+                method not in ATLAS_POSE_SEALED_METHODS
+                or row["sealed"] != "True"
+                or row["split"] != ATLAS_POSE_SEALED_SPLIT
+                or row["in_training_ap_domain"] not in {"True", "False"}
+            ):
+                raise RuntimeError("AtlasPose sealed predictions contain an invalid cohort row")
+            try:
+                section_id = int(row["section_image_id"])
+                experiment_id = int(row["experiment_id"])
+                int(row["specimen_id"])
+                int(row["section_number"])
+                for axis in ("ap_um", "lr_deg", "dv_deg"):
+                    ground_truth = float(row[f"gt_{axis}"])
+                    prediction = float(row[f"pred_{axis}"])
+                    error = float(row[f"error_{axis}"])
+                    absolute_error = float(row[f"absolute_error_{axis}"])
+                    if (
+                        not np.isfinite((ground_truth, prediction, error, absolute_error)).all()
+                        or not np.isclose(error, prediction - ground_truth, rtol=1e-12, atol=1e-9)
+                        or not np.isclose(absolute_error, abs(error), rtol=1e-12, atol=1e-9)
+                    ):
+                        raise ValueError
+            except (TypeError, ValueError) as error:
+                raise RuntimeError("AtlasPose sealed predictions contain invalid pose values") from error
+            key = (method, section_id)
+            if key in seen:
+                raise RuntimeError("AtlasPose sealed predictions contain duplicate method/section rows")
+            truth = (
+                experiment_id,
+                int(row["specimen_id"]),
+                int(row["section_number"]),
+                row["relative_path"],
+                row["product"],
+                row["ap_band"],
+                row["in_training_ap_domain"],
+                *(float(row[f"gt_{axis}"]) for axis in ("ap_um", "lr_deg", "dv_deg")),
+            )
+            if section_id in section_truth and section_truth[section_id] != truth:
+                raise RuntimeError("AtlasPose methods do not share one paired ground-truth cohort")
+            section_truth[section_id] = truth
+            seen.add(key)
+            sections[method].add(section_id)
+            experiments.add(experiment_id)
+    cohort = next(iter(sections.values()))
+    if (
+        len(cohort) != ATLAS_POSE_SEALED_SECTION_COUNT
+        or any(ids != cohort for ids in sections.values())
+        or len(seen) != ATLAS_POSE_SEALED_SECTION_COUNT * len(ATLAS_POSE_SEALED_METHODS)
+        or len(experiments) != ATLAS_POSE_SEALED_EXPERIMENT_COUNT
+    ):
+        raise RuntimeError("AtlasPose sealed predictions do not cover the complete paired cohort")
+    return {
+        "section_count": len(cohort),
+        "experiment_count": len(experiments),
+        "methods": sorted(sections),
+    }
+
+
+def atlas_pose_evaluator_environment_valid(environment: dict) -> bool:
+    if not isinstance(environment, dict):
+        return False
+    payload = dict(environment)
+    commitment = payload.pop("commitment_sha256", None)
+    dependencies = payload.get("dependencies", {})
+    return (
+        payload.get("contract_version") == 1
+        and _valid_hash_tree(payload.get("source_sha256"))
+        and _valid_hash_tree(payload.get("deepslice_model_sha256"))
+        and isinstance(dependencies, dict)
+        and bool(dependencies)
+        and all(isinstance(name, str) and isinstance(value, str) and value for name, value in dependencies.items())
+        and commitment == _canonical_json_sha256(payload)
+    )
+
+
+def atlas_pose_evidence_timestamps_valid(claim: dict, receipt: dict) -> bool:
+    try:
+        claimed = datetime.fromisoformat(claim["claimed_at_utc"])
+        completed = datetime.fromisoformat(receipt["completed_at_utc"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return claimed.tzinfo is not None and completed.tzinfo is not None and claimed <= completed
+
+
 def _metadata_training_data_sha256(metadata: dict) -> dict:
     return {
         "synthetic_manifests": metadata.get("manifest_sha256"),
         "registered_data": metadata.get("registered_data", {}).get("sha256"),
         "atlas_data": metadata.get("atlas_data_sha256"),
     }
+
+
+def _metadata_sealed_source_sha256(metadata: dict) -> dict:
+    registered = metadata.get("registered_data", {}).get("sha256", {})
+    return {name: registered.get(name) for name in ATLAS_POSE_SEALED_SOURCE_FILES}
 
 
 def verify_atlas_pose_candidate_bundle(model_path: str | Path) -> tuple[str, str, dict]:
@@ -325,9 +515,200 @@ def verify_atlas_pose_candidate_bundle(model_path: str | Path) -> tuple[str, str
         raise RuntimeError("AtlasPose candidate model checksum does not match its metadata")
     if metadata.get("preprocessing_version") != ATLAS_POSE_PREPROCESSING_VERSION:
         raise RuntimeError("AtlasPose candidate preprocessing version differs from the runtime")
+    if metadata.get("automatic_brain_mask_version") != AUTOMATIC_BRAIN_MASK_VERSION:
+        raise RuntimeError("AtlasPose candidate brain-mask version differs from the runtime")
+    if metadata.get("quicknii_coordinate_contract") != QUICKNII_COORDINATE_CONTRACT_VERSION:
+        raise RuntimeError("AtlasPose candidate coordinate contract differs from the runtime")
     if metadata.get("preprocessing_contract_sha256") != atlas_pose_preprocessing_contract_sha256():
         raise RuntimeError("AtlasPose candidate preprocessing checksum differs from the runtime")
     return model_sha256, metadata_sha256, metadata
+
+
+@lru_cache(maxsize=8)
+def _verify_atlas_pose_candidate_bundle_cached(
+    model_path: str,
+    model_size: int,
+    model_modified_ns: int,
+    metadata_size: int,
+    metadata_modified_ns: int,
+) -> tuple[str, str, dict]:
+    del model_size, model_modified_ns, metadata_size, metadata_modified_ns
+    return verify_atlas_pose_candidate_bundle(model_path)
+
+
+def _verified_atlas_pose_candidate_bundle(path: Path) -> tuple[str, str, dict]:
+    metadata_path = path.with_suffix(".json")
+    if not path.is_file() or not metadata_path.is_file():
+        return verify_atlas_pose_candidate_bundle(path)
+    model_stat = path.stat()
+    metadata_stat = metadata_path.stat()
+    return _verify_atlas_pose_candidate_bundle_cached(
+        str(path.resolve()),
+        model_stat.st_size,
+        model_stat.st_mtime_ns,
+        metadata_stat.st_size,
+        metadata_stat.st_mtime_ns,
+    )
+
+
+def verify_atlas_pose_release_bundle(
+    model_path: str | Path,
+    evidence_path: str | Path | None = None,
+) -> tuple[str, str, str, dict, dict]:
+    path = Path(model_path)
+    metadata_path = path.with_suffix(".json")
+    evidence_path = Path(evidence_path) if evidence_path is not None else path.with_name("RELEASE_REPORT.json")
+    sealed_metrics_path = evidence_path.with_name("SEALED_metrics.json")
+    sealed_predictions_path = evidence_path.with_name("SEALED_predictions.csv")
+    presealed_path = evidence_path.with_name("PRESEALED_COMMITMENT.json")
+    sealed_claim_path = evidence_path.with_name("SEALED_CLAIM.json")
+    receipt_path = evidence_path.with_name("SEALED_CONSUMPTION_RECEIPT.json")
+    missing = [
+        candidate
+        for candidate in (
+            path,
+            metadata_path,
+            evidence_path,
+            sealed_metrics_path,
+            sealed_predictions_path,
+            presealed_path,
+            sealed_claim_path,
+            receipt_path,
+        )
+        if not candidate.is_file()
+    ]
+    if missing:
+        raise RuntimeError(f"AtlasPose approved release bundle is incomplete: {missing}")
+    model_sha256, metadata_sha256, metadata = verify_atlas_pose_candidate_bundle(path)
+    evidence_sha256 = _file_sha256(evidence_path)
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    integrity = evidence.pop("release_integrity_sha256", None)
+    if integrity != _canonical_json_sha256(evidence):
+        raise RuntimeError("AtlasPose sealed release evidence integrity check failed")
+    training_data_sha256 = _metadata_training_data_sha256(metadata)
+    expected = {
+        "release_report_version": 3,
+        "sealed": True,
+        "benchmark_role": "final_release_gate",
+        "release_approved": True,
+        "promotion_ready": True,
+        "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "preprocessing_contract_sha256": atlas_pose_preprocessing_contract_sha256(),
+        "training_source_sha256": metadata.get("source_sha256"),
+        "training_data_sha256": training_data_sha256,
+        "sealed_metrics_sha256": _file_sha256(sealed_metrics_path),
+        "sealed_predictions_sha256": _file_sha256(sealed_predictions_path),
+        "presealed_commitment_sha256": _file_sha256(presealed_path),
+        "sealed_claim_sha256": _file_sha256(sealed_claim_path),
+        "consumption_receipt_sha256": _file_sha256(receipt_path),
+    }
+    mismatched = [key for key, value in expected.items() if evidence.get(key) != value]
+    component_passed = evidence.get("deepslice_component_passed", {})
+    hashes = (
+        training_data_sha256,
+        metadata.get("source_sha256"),
+        evidence.get("sealed_data_sha256"),
+        evidence.get("evaluator_sha256"),
+        evidence.get("evaluator_environment_sha256"),
+    )
+    if mismatched or not all(_valid_hash_tree(value) for value in hashes):
+        raise RuntimeError(
+            "AtlasPose sealed release evidence contract failed"
+            + (f": {', '.join(mismatched)}" if mismatched else "")
+        )
+    if set(component_passed) != {"ap_um", "lr_deg", "dv_deg"} or not all(component_passed.values()):
+        raise RuntimeError("AtlasPose did not pass every sealed DeepSlice component gate")
+    simultaneous = evidence.get("deepslice_simultaneous_superiority", {})
+    if (
+        simultaneous.get("candidate") != "atlas_pose"
+        or simultaneous.get("reference") != "deepslice_mens_ai_ci"
+        or simultaneous.get("simultaneous_superiority_passed") is not True
+    ):
+        raise RuntimeError("AtlasPose did not pass simultaneous sealed DeepSlice superiority")
+    quality = evidence.get("quality_gate", {})
+    if not atlas_pose_release_quality_gate_valid(quality) or not quality["all_gates_passed"]:
+        raise RuntimeError("AtlasPose did not pass every sealed absolute-quality gate")
+    sealed_metrics = json.loads(sealed_metrics_path.read_text(encoding="utf-8"))
+    prediction_cohort = verify_atlas_pose_sealed_predictions(sealed_predictions_path)
+    comparison_rows = [
+        row
+        for row in sealed_metrics.get("animal_level_paired_bootstrap", [])
+        if row.get("candidate") == "atlas_pose"
+        and row.get("reference") == "deepslice_mens_ai_ci"
+        and row.get("metric") in {
+            "absolute_error_ap_um",
+            "absolute_error_lr_deg",
+            "absolute_error_dv_deg",
+        }
+    ]
+    comparisons = {
+        row["metric"].removeprefix("absolute_error_"): row for row in comparison_rows
+    }
+    expected_component_passed = {
+        axis: bool(
+            row.get("delta_candidate_minus_reference", np.inf) < 0.0
+            and row.get("probability_candidate_lower_error", 0.0)
+            >= ATLAS_POSE_RELEASE_CONFIDENCE
+        )
+        for axis, row in comparisons.items()
+    }
+    sealed_data = {
+        key: sealed_metrics.get("source", {}).get(key)
+        for key in ATLAS_POSE_SEALED_SOURCE_FILES
+    }
+    sealed_data["sealed_image_tree_sha256"] = sealed_metrics.get("source", {}).get(
+        "sealed_image_tree_sha256"
+    )
+    presealed = json.loads(presealed_path.read_text(encoding="utf-8"))
+    claim = json.loads(sealed_claim_path.read_text(encoding="utf-8"))
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if (
+        sealed_metrics.get("benchmark_id") != ATLAS_POSE_SEALED_BENCHMARK_ID
+        or sealed_metrics.get("benchmark_role") != "final_test_only"
+        or sealed_metrics.get("section_count") != prediction_cohort["section_count"]
+        or sealed_metrics.get("experiment_count") != prediction_cohort["experiment_count"]
+        or len(comparison_rows) != 3
+        or set(comparisons) != {"ap_um", "lr_deg", "dv_deg"}
+        or evidence.get("deepslice_comparisons") != comparisons
+        or evidence.get("deepslice_component_passed") != expected_component_passed
+        or evidence.get("sealed_data_sha256") != sealed_data
+        or evidence.get("evaluator_sha256") != sealed_metrics.get("evaluator_sha256")
+        or evidence.get("evaluator_environment_sha256")
+        != sealed_metrics.get("evaluator_environment_sha256")
+        or evidence.get("deepslice_simultaneous_superiority")
+        != sealed_metrics.get("animal_level_joint_superiority")
+        or presealed.get("contract_version") != 1
+        or presealed.get("benchmark_id") != ATLAS_POSE_SEALED_BENCHMARK_ID
+        or presealed.get("model_sha256") != model_sha256
+        or presealed.get("metadata_sha256") != metadata_sha256
+        or presealed.get("training_source_sha256") != metadata.get("source_sha256")
+        or presealed.get("training_data_sha256") != training_data_sha256
+        or presealed.get("sealed_source_sha256")
+        != _metadata_sealed_source_sha256(metadata)
+        or presealed.get("evaluator_environment", {}).get("commitment_sha256")
+        != evidence.get("evaluator_environment_sha256")
+        or not atlas_pose_evaluator_environment_valid(presealed.get("evaluator_environment"))
+        or claim.get("contract_version") != 1
+        or claim.get("benchmark_id") != ATLAS_POSE_SEALED_BENCHMARK_ID
+        or claim.get("sealed_access_permitted_after_claim_only") is not True
+        or claim.get("model_sha256") != model_sha256
+        or claim.get("metadata_sha256") != metadata_sha256
+        or claim.get("presealed_commitment_sha256") != _file_sha256(presealed_path)
+        or receipt.get("contract_version") != 1
+        or receipt.get("benchmark_id") != ATLAS_POSE_SEALED_BENCHMARK_ID
+        or receipt.get("status") != "completed"
+        or receipt.get("model_sha256") != model_sha256
+        or receipt.get("claim_sha256") != _file_sha256(sealed_claim_path)
+        or receipt.get("presealed_commitment_sha256") != _file_sha256(presealed_path)
+        or receipt.get("sealed_predictions_sha256") != _file_sha256(sealed_predictions_path)
+        or receipt.get("sealed_metrics_sha256") != _file_sha256(sealed_metrics_path)
+        or not atlas_pose_evidence_timestamps_valid(claim, receipt)
+    ):
+        raise RuntimeError("AtlasPose release evidence does not bind its sealed evaluation data")
+    if metadata.get("sha256") != model_sha256:
+        raise RuntimeError("AtlasPose metadata does not bind the approved model")
+    return model_sha256, metadata_sha256, evidence_sha256, metadata, evidence
 
 
 def verify_atlas_pose_model_bundle(model_path: str | Path) -> tuple[str, str, str, dict, dict]:
@@ -341,84 +722,10 @@ def verify_atlas_pose_model_bundle(model_path: str | Path) -> tuple[str, str, st
             "AtlasPose is not release-approved: model, metadata, and sealed-evidence hashes "
             "must be pinned in application source"
         )
-    path = Path(model_path)
-    metadata_path = path.with_suffix(".json")
-    evidence_path = path.with_name("RELEASE_REPORT.json")
-    sealed_metrics_path = path.with_name("SEALED_metrics.json")
-    missing = [
-        candidate
-        for candidate in (path, metadata_path, evidence_path, sealed_metrics_path)
-        if not candidate.is_file()
-    ]
-    if missing:
-        raise RuntimeError(f"AtlasPose approved release bundle is incomplete: {missing}")
-    model_sha256, metadata_sha256, metadata = verify_atlas_pose_candidate_bundle(path)
-    evidence_sha256 = _file_sha256(evidence_path)
-    if (
-        model_sha256 != APPROVED_ATLAS_POSE_MODEL_SHA256
-        or metadata_sha256 != APPROVED_ATLAS_POSE_METADATA_SHA256
-        or evidence_sha256 != APPROVED_ATLAS_POSE_EVIDENCE_SHA256
-    ):
+    verified = verify_atlas_pose_release_bundle(model_path)
+    if verified[:3] != pins:
         raise RuntimeError("AtlasPose release bundle does not match the source-pinned hashes")
-    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    integrity = evidence.pop("release_integrity_sha256", None)
-    if integrity != _canonical_json_sha256(evidence):
-        raise RuntimeError("AtlasPose sealed release evidence integrity check failed")
-    training_data_sha256 = _metadata_training_data_sha256(metadata)
-    expected = {
-        "release_report_version": 2,
-        "sealed": True,
-        "benchmark_role": "final_release_gate",
-        "release_approved": True,
-        "promotion_ready": True,
-        "model_sha256": model_sha256,
-        "metadata_sha256": metadata_sha256,
-        "preprocessing_contract_sha256": atlas_pose_preprocessing_contract_sha256(),
-        "training_source_sha256": metadata.get("source_sha256"),
-        "training_data_sha256": training_data_sha256,
-        "sealed_metrics_sha256": _file_sha256(sealed_metrics_path),
-    }
-    mismatched = [key for key, value in expected.items() if evidence.get(key) != value]
-    component_passed = evidence.get("deepslice_component_passed", {})
-    hashes = (
-        training_data_sha256,
-        metadata.get("source_sha256"),
-        evidence.get("sealed_data_sha256"),
-        evidence.get("evaluator_sha256"),
-    )
-    if mismatched or not all(_valid_hash_tree(value) for value in hashes):
-        raise RuntimeError(
-            "AtlasPose sealed release evidence contract failed"
-            + (f": {', '.join(mismatched)}" if mismatched else "")
-        )
-    if set(component_passed) != {"ap_um", "lr_deg", "dv_deg"} or not all(component_passed.values()):
-        raise RuntimeError("AtlasPose did not pass every sealed DeepSlice component gate")
-    quality = evidence.get("quality_gate", {})
-    if (
-        not quality.get("all_gates_passed")
-        or not quality.get("passed")
-        or not all(quality["passed"].values())
-    ):
-        raise RuntimeError("AtlasPose did not pass every sealed absolute-quality gate")
-    sealed_metrics = json.loads(sealed_metrics_path.read_text(encoding="utf-8"))
-    sealed_data = {
-        key: sealed_metrics.get("source", {}).get(key)
-        for key in (
-            "sections_sha256",
-            "datasets_sha256",
-            "provenance_sha256",
-            "downloads_sha256",
-            "registered_image_quality_manifest_sha256",
-        )
-    }
-    if (
-        evidence.get("sealed_data_sha256") != sealed_data
-        or evidence.get("evaluator_sha256") != sealed_metrics.get("evaluator_sha256")
-    ):
-        raise RuntimeError("AtlasPose release evidence does not bind its sealed evaluation data")
-    if metadata.get("sha256") != model_sha256:
-        raise RuntimeError("AtlasPose metadata does not bind the approved model")
-    return model_sha256, metadata_sha256, evidence_sha256, metadata, evidence
+    return verified
 
 
 @lru_cache(maxsize=4)
@@ -486,7 +793,7 @@ def _run_atlas_pose_onnx(
             verify_atlas_pose_model_bundle(path)
         )
     else:
-        model_sha256, metadata_sha256, metadata = verify_atlas_pose_candidate_bundle(path)
+        model_sha256, metadata_sha256, metadata = _verified_atlas_pose_candidate_bundle(path)
         evidence_sha256 = None
     preprocessing_contract_sha256 = metadata["preprocessing_contract_sha256"]
     inputs = []
@@ -553,6 +860,7 @@ def _run_atlas_pose_onnx(
         "orientation_inverted": (orientation_logit > 0.0).tolist(),
         "orientation_inverted_logit": orientation_logit.tolist(),
         "preprocessing_version": ATLAS_POSE_PREPROCESSING_VERSION,
+        "automatic_brain_mask_version": AUTOMATIC_BRAIN_MASK_VERSION,
         "preprocessing_contract_sha256": preprocessing_contract_sha256,
         "metadata": metadata,
     }

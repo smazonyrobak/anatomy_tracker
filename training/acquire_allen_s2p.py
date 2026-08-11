@@ -13,6 +13,7 @@ import numpy as np
 import requests
 from PIL import Image
 
+from source.atlas_pose_runtime import QUICKNII_COORDINATE_CONTRACT_VERSION
 from source.registered_image_quality import build_registered_image_quality_manifest
 
 
@@ -201,9 +202,9 @@ def quicknii_to_tracker_pose(ouv: np.ndarray) -> np.ndarray:
         normal = -normal
     if abs(normal[1]) < 1e-9:
         raise ValueError("Alignment is not a coronal plane")
-    ap_per_ml = -normal[0] / normal[1]
+    ap_per_ml = normal[0] / normal[1]
     ap_per_dv = -normal[2] / normal[1]
-    origin_ml = QUICKNII_SHAPE[0] - origin[0]
+    origin_ml = origin[0]
     origin_ap = QUICKNII_SHAPE[1] - origin[1]
     origin_dv = QUICKNII_SHAPE[2] - origin[2]
     ap_index = (
@@ -509,7 +510,7 @@ def acquire(
             "sections_in_training_ap_domain": sum(row["in_training_ap_domain"] for row in split_sections),
         }
     provenance = {
-        "schema_version": 1,
+        "schema_version": 2,
         "snapshot_date_utc": snapshot_date,
         "api_root": API_ROOT,
         "trainable_query": {
@@ -529,6 +530,7 @@ def acquire(
             "allen2quicknii": "https://github.com/Neural-Systems-at-UIO/allen2quicknii/blob/master/allen2quicknii.py",
         },
         "pose_convention": "AP um from bregma (+ anterior); L-R and D-V tilt in degrees",
+        "quicknii_coordinate_contract": QUICKNII_COORDINATE_CONTRACT_VERSION,
         "training_ap_domain_um": [AP_MIN_UM, AP_MAX_UM],
         "download": {
             "format": "JPEG",

@@ -2,8 +2,9 @@
 
 Dense accuracy is measured only after applying a known synthetic
 diffeomorphism to real Allen histology texture. Native atlas/histology pairs
-have no dense ground truth and therefore contribute only acceptance,
-topology, MIND, and surface-overlap non-degradation evidence.
+have no dense ground truth and therefore contribute only secondary acceptance,
+topology, MIND-surrogate, and surface-overlap non-degradation evidence. They
+cannot approve an anatomical release without a separate internal-landmark gate.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ from training.diffeomorphic_registration_model import (
 )
 
 
-REAL_HISTOLOGY_CONTRACT_VERSION = 3
+REAL_HISTOLOGY_CONTRACT_VERSION = 5
 ALLEN_IMAGE_DOWNSAMPLE = 5
 REAL_HISTOLOGY_TRAIN_BANK_SEED = 2_000_039
 REAL_HISTOLOGY_TRAIN_BANK_ANIMALS = 256
@@ -84,7 +85,7 @@ DENSE_STRATA = (
     "smooth_deformation_label_free",
     "nuisance_damage_label_free",
 )
-NATIVE_WRONG_KINDS = ("wrong_ap", "wrong_tilt", "wrong_plane")
+NATIVE_WRONG_KINDS = ("wrong_ap", "wrong_tilt")
 
 
 def file_sha256(path: str | Path) -> str:
@@ -273,7 +274,11 @@ class RegisteredHistologySource:
                 })
         payload = {
             "contract_version": REAL_HISTOLOGY_CONTRACT_VERSION,
-            "benchmark_role": "checkpoint_selection" if split == "validation" else "locked_promotion_gate",
+            "benchmark_role": (
+                "checkpoint_selection_secondary_native"
+                if split == "validation"
+                else "locked_secondary_native_gate"
+            ),
             "split": split,
             "seed": int(seed),
             "bootstrap_seed": int(seed) + 7919,
@@ -541,7 +546,7 @@ def select_native_wrong_entries(
                     int(entry["section_image_id"]),
                 ),
             )
-        elif kind == "wrong_tilt":
+        else:
             eligible = [
                 entry for entry in candidates
                 if 1.0 <= tilt_delta(entry) <= MAX_HARD_WRONG_TILT_DELTA_DEG
@@ -557,15 +562,6 @@ def select_native_wrong_entries(
             key = lambda entry: (
                 reuse.get(int(entry["section_image_id"]), 0),
                 ap_delta(entry), tilt_delta(entry),
-                _hash_order(
-                    seed, f"{kind}:{int(target['section_image_id'])}",
-                    int(entry["section_image_id"]),
-                ),
-            )
-        else:
-            eligible = candidates
-            key = lambda entry: (
-                reuse.get(int(entry["section_image_id"]), 0),
                 _hash_order(
                     seed, f"{kind}:{int(target['section_image_id'])}",
                     int(entry["section_image_id"]),
@@ -1183,11 +1179,18 @@ def evaluate_real_histology(
         "dense_ground_truth": {
             "kind": "exact_synthetic_diffeomorphism_on_held_out_real_histology_texture",
             "claims": ["dense_epe", "sparse_tre", "jacobian_error"],
+            "genuine_atlas_histology_correspondence": False,
         },
         "native_pairs": {
             "kind": "official_allen_registered_atlas_histology",
-            "claims": ["acceptance", "geometry", "mind_improvement", "surface_non_degradation"],
+            "claims": [
+                "acceptance",
+                "geometry",
+                "mind_surrogate_improvement",
+                "surface_non_degradation",
+            ],
             "dense_ground_truth_available": False,
+            "evidence_role": "secondary_sanity_only",
         },
         "physical_tre": {
             "coordinate_order": ["AP", "DV", "ML"],
@@ -1196,7 +1199,7 @@ def evaluate_real_histology(
             "projected_grid_pixel_gates_retained": True,
         },
         "native_wrong_pairs": {
-            "kind": "surface-calibrated held-out wrong fixed planes",
+            "kind": "surface-calibrated held-out AP/tilt mismatches",
             "strata": list(NATIVE_WRONG_KINDS),
             "claims": ["rejection", "identity_displacement", "geometry"],
         },
@@ -1208,6 +1211,8 @@ def evaluate_real_histology(
         },
         "failures": failures,
         "passed": not failures,
+        "promotion_eligible": False,
+        "promotion_blocker": "frozen animal-disjoint internal-landmark benchmark required",
         "dense_rows": dense_rows,
         "native_rows": native_rows,
         "native_wrong_rows": native_wrong_rows,

@@ -19,10 +19,10 @@ def test_quicknii_adapter_recovers_tracker_plane_exactly():
         lr_slope = np.tan(np.deg2rad(tilt_lr))
         dv_slope = np.tan(np.deg2rad(tilt_dv))
         prediction = {
-            "ox": 456.0,
+            "ox": 0.0,
             "oy": 528 - (index - lr_slope * 227.5 - dv_slope * 159.5),
             "oz": 320.0,
-            "ux": -456.0,
+            "ux": 456.0,
             "uy": -lr_slope * 456,
             "uz": 0.0,
             "vx": 0.0,

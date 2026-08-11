@@ -79,9 +79,9 @@ def quicknii_to_tracker_pose(values: np.ndarray) -> np.ndarray:
     normal[normal[:, 1] < 0.0] *= -1.0
     if np.any(np.abs(normal[:, 1]) < 1e-9):
         raise ValueError("Ground truth contains a non-coronal plane")
-    ap_per_ml = -normal[:, 0] / normal[:, 1]
+    ap_per_ml = normal[:, 0] / normal[:, 1]
     ap_per_dv = -normal[:, 2] / normal[:, 1]
-    origin_ml = 456.0 - origin[:, 0]
+    origin_ml = origin[:, 0]
     origin_ap = 528.0 - origin[:, 1]
     origin_dv = 320.0 - origin[:, 2]
     ap_index = origin_ap + ap_per_ml * (227.5 - origin_ml) + ap_per_dv * (159.5 - origin_dv)

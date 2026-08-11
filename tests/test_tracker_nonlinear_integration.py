@@ -18,6 +18,8 @@ SPEC = importlib.util.spec_from_file_location("trajectory_tracker_nonlinear_test
 TRACKER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = TRACKER
 SPEC.loader.exec_module(TRACKER)
+from nonlinear_registration import RUNTIME_GATE_VERSION, array_sha256
+from diffeomorphic_registration_runtime import _correspondence_diagnostics, _gray_unit
 
 
 def _worker_inputs():
@@ -26,10 +28,63 @@ def _worker_inputs():
     mask = np.ones(shape[1:], dtype=bool)
     prediction = {"Filenames": "slice_0000.png"}
     transform = TRACKER.SliceAtlasTransform2D(np.eye(3), image.shape, image.shape)
-    diagnostics = {"alignment_run_id": "test-run"}
+    diagnostics = {
+        "alignment_run_id": "test-run",
+        "input_crop": {"source_image_sha256": "c" * 64},
+    }
     prepared = [(0, 1, 2.0, -3.0, transform, prediction, diagnostics)]
     runtime = {"component_provenance": {}}
     return shape, image, mask, prediction, prepared, runtime
+
+
+def _accepted_diagnostics(warp, atlas_mask, affine_mask, fixed, moving, source_sha256):
+    correspondence = _correspondence_diagnostics(
+        _gray_unit(fixed, atlas_mask),
+        _gray_unit(moving, affine_mask),
+        atlas_mask,
+        affine_mask,
+        warp.atlas_to_affine_xy,
+    )
+    return {
+        **warp.diagnostics(atlas_mask, affine_mask),
+        **correspondence,
+        "modeled_trusted_fraction": 1.0,
+        "rejection_probability": 0.0,
+        "model_sha256": "a" * 64,
+        "manifest_sha256": "b" * 64,
+        "source_image_sha256": source_sha256,
+        "atlas_image_sha256": array_sha256(fixed),
+        "moving_affine_sha256": array_sha256(moving),
+        "runtime_gate_version": RUNTIME_GATE_VERSION,
+        "pixel_spacing_um": TRACKER.VOXEL_UM,
+    }
+
+
+def _bound_transform(window, source_path, atlas_index, warp, mask):
+    raw = TRACKER.tifffile.imread(str(source_path))
+    display_raw, _ = TRACKER.downsample_for_display(TRACKER.as_gray(raw))
+    display_image, _ = TRACKER.transform_slice_image(
+        TRACKER.normalize_u8(display_raw), 0.0, False, False
+    )
+    affine = TRACKER.SliceAtlasTransform2D(np.eye(3), display_image.shape, mask.shape)
+    fixed = TRACKER.coronal_oblique_slice(
+        window.atlas_volume, atlas_index, 0.0, 0.0, order=1
+    )
+    moving = affine.render_display_image_in_atlas(display_image)
+    diagnostics = _accepted_diagnostics(
+        warp,
+        mask,
+        mask,
+        fixed,
+        moving,
+        TRACKER.file_sha256(source_path),
+    )
+    attestation = TRACKER.NonlinearWarpAttestation.from_runtime(
+        warp, mask, mask, diagnostics
+    )
+    return TRACKER.SliceAtlasTransform2D(
+        np.eye(3), display_image.shape, mask.shape, warp, attestation
+    ), diagnostics
 
 
 def test_worker_runs_post_affine_on_raw_normalized_image_and_exact_atlas_plane(monkeypatch):
@@ -52,20 +107,17 @@ def test_worker_runs_post_affine_on_raw_normalized_image_and_exact_atlas_plane(m
 
     from nonlinear_registration import NonlinearWarp2D
 
-    monkeypatch.setattr(
-        TRACKER,
-        "run_diffeomorphic_registration",
-        lambda fixed, moving, fixed_mask, moving_mask, *_args, **_kwargs: (
-            captured.update(
-                fixed=fixed.copy(),
-                moving=moving.copy(),
-                fixed_mask=fixed_mask.copy(),
-                moving_mask=moving_mask.copy(),
-            )
-            or NonlinearWarp2D.identity(mask.shape),
-            {"model_sha256": "a" * 64, "manifest_sha256": "b" * 64},
-        ),
-    )
+    def accept(fixed, moving, fixed_mask, moving_mask, *_args, **kwargs):
+        captured.update(
+            fixed=fixed.copy(), moving=moving.copy(),
+            fixed_mask=fixed_mask.copy(), moving_mask=moving_mask.copy(),
+        )
+        warp = NonlinearWarp2D.identity(mask.shape)
+        return warp, _accepted_diagnostics(
+            warp, fixed_mask, moving_mask, fixed, moving, kwargs["source_image_sha256"]
+        )
+
+    monkeypatch.setattr(TRACKER, "run_diffeomorphic_registration", accept)
     messages = queue.SimpleQueue()
     result = TRACKER.prepare_run_and_solve_alignment(
         [],
@@ -101,7 +153,13 @@ def test_worker_runs_post_affine_on_raw_normalized_image_and_exact_atlas_plane(m
     assert any(90 <= value <= 99 for value in progress)
 
 
-def test_worker_rejection_keeps_the_frozen_affine_transform(monkeypatch):
+@pytest.mark.parametrize(
+    ("category", "mapping_blocking"),
+    (("correspondence", False), ("wrong_plane", True), ("affine_input", True)),
+)
+def test_worker_rejection_keeps_the_frozen_affine_transform(
+    monkeypatch, category, mapping_blocking
+):
     _, image, mask, prediction, prepared, runtime = _worker_inputs()
     atlas = np.zeros((4, *image.shape), dtype=np.float32)
     annotation = np.ones_like(atlas, dtype=np.uint16)
@@ -119,13 +177,16 @@ def test_worker_rejection_keeps_the_frozen_affine_transform(monkeypatch):
     monkeypatch.setattr(TRACKER, "solve_pose_alignment", lambda *_args, **_kwargs: (prepared, None))
 
     def reject(*_args, **_kwargs):
-        raise TRACKER.DiffeomorphicRegistrationRejected(["pair rejected"], {"rejection_probability": 0.9})
+        raise TRACKER.DiffeomorphicRegistrationRejected(
+            [(category, "pair rejected")], {"rejection_probability": 0.9}
+        )
 
     monkeypatch.setattr(TRACKER, "run_diffeomorphic_registration", reject)
+    messages = queue.SimpleQueue()
     result = TRACKER.prepare_run_and_solve_alignment(
         [], {"slice_0000.png": 0}, 2.0, atlas, annotation, {0: []}, None, [], "test-run",
         False, TRACKER.POSE_ENGINE_DEEPSLICE, 0.2, True, None, "model.onnx",
-        queue.SimpleQueue(), threading.Event(),
+        messages, threading.Event(),
     )
 
     transform = result[4][0][4]
@@ -134,6 +195,126 @@ def test_worker_rejection_keeps_the_frozen_affine_transform(monkeypatch):
     assert transform.nonlinear is None
     assert diagnostics["status"] == "rejected"
     assert diagnostics["reason"] == "pair rejected"
+    assert diagnostics["rejection_categories"] == [category]
+    assert diagnostics["mapping_blocking"] is mapping_blocking
+    progress_labels = []
+    while not messages.empty():
+        progress_labels.append(messages.get()[1])
+    assert any("rejected" in label for label in progress_labels)
+    assert not any("passed runtime gates" in label for label in progress_labels)
+
+
+def test_mapping_blocking_rejection_blocks_export_but_other_rejection_requires_review(tmp_path):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    try:
+        trace = {"imec0": TRACKER.ProbeTrace(volume_points=[[1.0, 2.0, 3.0]])}
+        session = TRACKER.SliceSession(
+            "slice",
+            auto_alignment_diagnostics={
+                "nonlinear_refinement": {"status": "rejected", "mapping_blocking": True}
+            },
+            probe_traces=trace,
+        )
+        window.sessions = [session]
+        arguments = (
+            tmp_path, "imec0", "y0_contact",
+            np.ones(3), np.ones(3), np.array([0.0, -1.0, 0.0]),
+        )
+        with pytest.raises(RuntimeError, match="pose/input"):
+            window._write_manifest(*arguments)
+
+        session.auto_alignment_diagnostics["nonlinear_refinement"] = {
+            "status": "rejected", "mapping_blocking": False
+        }
+        with pytest.raises(RuntimeError, match="explicitly reviewed"):
+            window._write_manifest(*arguments)
+        session.auto_alignment_diagnostics["nonlinear_refinement"][
+            "affine_review_acknowledged_at"
+        ] = "2026-08-11T00:00:00+02:00"
+        window._write_manifest(*arguments)
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_mapping_blocked_points_remain_stored_but_do_not_enter_live_trajectory(tmp_path):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    try:
+        blocked_trace = TRACKER.ProbeTrace(
+            volume_points=[[100.0, 100.0, 100.0]], signal_values=[255.0]
+        )
+        valid_trace = TRACKER.ProbeTrace(
+            volume_points=[[1.0, 2.0, 3.0], [3.0, 2.0, 3.0]], signal_values=[10.0, 20.0]
+        )
+        window.sessions = [
+            TRACKER.SliceSession(
+                "blocked",
+                auto_alignment_diagnostics={
+                    "nonlinear_refinement": {"mapping_blocking": True}
+                },
+                probe_traces={"imec0": blocked_trace},
+            ),
+            TRACKER.SliceSession("valid", probe_traces={"imec0": valid_trace}),
+        ]
+
+        assert blocked_trace.volume_points == [[100.0, 100.0, 100.0]]
+        assert np.array_equal(
+            window.all_probe_volume_points("imec0"),
+            np.asarray(valid_trace.volume_points),
+        )
+        assert np.array_equal(
+            window.all_probe_signal_values("imec0"),
+            np.asarray(valid_trace.signal_values),
+        )
+        center, _ = window.probe_regression("imec0")
+        assert np.allclose(center, [2.0, 2.0, 3.0])
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_changed_source_invalidates_alignment_when_slice_is_reloaded(tmp_path):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    try:
+        source = tmp_path / "slice.tif"
+        TRACKER.tifffile.imwrite(source, np.zeros((12, 16), dtype=np.uint8))
+        session = TRACKER.SliceSession(
+            "slice",
+            path=str(source),
+            slice_atlas_transform=TRACKER.SliceAtlasTransform2D(
+                np.eye(3), (12, 16), (12, 16)
+            ),
+            auto_alignment_run_id="run",
+            auto_alignment_diagnostics={"alignment_run_id": "run"},
+            alignment_source_sha256=TRACKER.file_sha256(source),
+            probe_traces={
+                "imec0": TRACKER.ProbeTrace(
+                    atlas_points=[(1.0, 2.0)], volume_points=[[1.0, 2.0, 3.0]]
+                )
+            },
+        )
+        window.sessions = [session]
+        TRACKER.tifffile.imwrite(source, np.ones((12, 16), dtype=np.uint8))
+
+        with pytest.raises(RuntimeError, match="source image changed"):
+            window._write_manifest(
+                tmp_path,
+                "imec0",
+                "y0_contact",
+                np.ones(3),
+                np.ones(3),
+                np.array([0.0, -1.0, 0.0]),
+            )
+        assert window._load_session_image(session)
+        assert session.slice_atlas_transform is None
+        assert session.alignment_source_sha256 is None
+        assert not session.probe_traces["imec0"].volume_points
+    finally:
+        window.close()
+        app.processEvents()
 
 
 def test_brightness_preserves_composite_geometry_but_rotation_invalidates_it(tmp_path):
@@ -167,7 +348,7 @@ def test_brightness_preserves_composite_geometry_but_rotation_invalidates_it(tmp
         app.processEvents()
 
 
-def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_path):
+def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_path, monkeypatch):
     from nonlinear_registration import NonlinearWarp2D
 
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
@@ -175,22 +356,37 @@ def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_p
     try:
         shape = (12, 16)
         mask = np.ones(shape, dtype=bool)
-        attestation = TRACKER.NonlinearWarpAttestation(mask, mask, "a" * 64, "b" * 64)
-        transform = TRACKER.SliceAtlasTransform2D(
-            np.eye(3),
-            shape,
-            shape,
-            NonlinearWarp2D.identity(shape),
-            attestation,
+        source_path = tmp_path / "slice.tif"
+        TRACKER.tifffile.imwrite(source_path, np.arange(np.prod(shape), dtype=np.uint8).reshape(shape))
+        window.atlas_volume = np.zeros((4, *shape), dtype=np.float32)
+        warp = NonlinearWarp2D.identity(shape)
+        transform, runtime = _bound_transform(
+            window, source_path, 1, warp, mask
+        )
+        monkeypatch.setattr(
+            TRACKER,
+            "verify_diffeomorphic_model_bundle",
+            lambda _path: ("a" * 64, "b" * 64, {}),
         )
         session = TRACKER.SliceSession(
             "slice",
-            path="slice.tif",
+            path=str(source_path),
+            atlas_index=1,
             slice_atlas_transform=transform,
             auto_alignment_run_id="accepted-run",
             auto_alignment_diagnostics={"nonlinear_refinement": {"status": "accepted"}},
+            alignment_source_sha256=runtime["source_image_sha256"],
         )
         window.sessions = [session]
+        window._verify_nonlinear_binding(session, transform)
+        window.atlas_volume[1, 0, 0] = 1.0
+        with pytest.raises(RuntimeError, match="atlas plane"):
+            window._verify_nonlinear_binding(session, transform)
+        window.atlas_volume[1, 0, 0] = 0.0
+        session.flip_horizontal = True
+        with pytest.raises(RuntimeError, match="affine slice input"):
+            window._verify_nonlinear_binding(session, transform)
+        session.flip_horizontal = False
         window._write_manifest(
             tmp_path,
             "imec0",
@@ -209,6 +405,20 @@ def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_p
         assert restored.nonlinear is not None
         assert restored.nonlinear_attestation.model_sha256 == "a" * 64
 
+        session.auto_alignment_run_id = "replacement-run"
+        window._write_manifest(
+            tmp_path,
+            "imec0",
+            "y0_contact",
+            np.array([1.0, 2.0, 3.0]),
+            np.array([1.0, 2.0, 3.0]),
+            np.array([0.0, -1.0, 0.0]),
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        replacement = manifest["slices"][0]["slice_atlas_transform"]["sidecar"]
+        assert replacement["relative_path"] == reference["relative_path"]
+        assert len(list(sidecar_path.parent.glob("*.npz"))) == 1
+
         row = {"probe_name": "imec0", "probe_channel_number": 0}
         row.update({name: 1 for name in TRACKER.ANATOMY_MAPPING_COLUMNS})
         channels = TRACKER.pd.DataFrame([row])
@@ -222,6 +432,10 @@ def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_p
             ("coordinate_convention", "wrong convention"),
             ("model_sha256", "c" * 64),
             ("manifest_sha256", "d" * 64),
+            ("source_image_sha256", "e" * 64),
+            ("atlas_image_sha256", "f" * 64),
+            ("moving_affine_sha256", "0" * 64),
+            ("runtime_gate_version", 99),
             ("pixel_spacing_um", 50.0),
         ):
             changed = json.loads(json.dumps(manifest))
@@ -230,12 +444,29 @@ def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_p
             with pytest.raises(RuntimeError, match="metadata disagrees"):
                 TRACKER.verify_staged_mapping_outputs(tmp_path, 1, 1, "imec0")
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        monkeypatch.setattr(
+            TRACKER,
+            "verify_diffeomorphic_model_bundle",
+            lambda _path: ("c" * 64, "d" * 64, {}),
+        )
+        rejected_folder = tmp_path / "rejected"
+        rejected_folder.mkdir()
+        with pytest.raises(RuntimeError, match="installed model bundle"):
+            window._write_manifest(
+                rejected_folder,
+                "imec0",
+                "y0_contact",
+                np.ones(3),
+                np.ones(3),
+                np.array([0.0, -1.0, 0.0]),
+            )
     finally:
         window.close()
         app.processEvents()
 
 
-def test_nonidentity_warp_has_one_overlay_probe_volume_and_export_convention(tmp_path):
+def test_nonidentity_warp_has_one_overlay_probe_volume_and_export_convention(tmp_path, monkeypatch):
     from nonlinear_registration import NonlinearWarp2D
 
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
@@ -278,19 +509,30 @@ def test_nonidentity_warp_has_one_overlay_probe_volume_and_export_convention(tmp
             np.stack((xx + shift, yy), axis=-1),
             np.stack((inverse_x, yy), axis=-1),
         )
-        transform = TRACKER.SliceAtlasTransform2D(
-            np.eye(3),
-            shape,
-            shape,
-            warp,
-            TRACKER.NonlinearWarpAttestation(mask, mask, "a" * 64, "b" * 64),
-        )
         expected_atlas = np.array([32.0, 16.0])
-        display_point = tuple(transform.map_atlas_to_display(expected_atlas[None])[0])
         image = np.broadcast_to(np.arange(shape[1], dtype=np.float32), shape).copy()
+        source_image = np.random.default_rng(9).integers(0, 256, shape, dtype=np.uint8)
+        source_path = tmp_path / "slice.tif"
+        TRACKER.tifffile.imwrite(source_path, source_image)
+        window.atlas_volume = np.zeros((40, *shape), dtype=np.uint8)
+        normalized = TRACKER.normalize_u8(source_image)
+        window.atlas_volume[20] = TRACKER.cv2.remap(
+            normalized,
+            warp.atlas_to_affine_xy[..., 0],
+            warp.atlas_to_affine_xy[..., 1],
+            TRACKER.cv2.INTER_LINEAR,
+            borderMode=TRACKER.cv2.BORDER_CONSTANT,
+        )
+        transform, runtime = _bound_transform(window, source_path, 20, warp, mask)
+        monkeypatch.setattr(
+            TRACKER,
+            "verify_diffeomorphic_model_bundle",
+            lambda _path: ("a" * 64, "b" * 64, {}),
+        )
+        display_point = tuple(transform.map_atlas_to_display(expected_atlas[None])[0])
         session = TRACKER.SliceSession(
             "slice",
-            path="slice.tif",
+            path=str(source_path),
             raw_display=image,
             adjusted=image,
             rotated=image,
@@ -299,10 +541,10 @@ def test_nonidentity_warp_has_one_overlay_probe_volume_and_export_convention(tmp
             slice_atlas_transform=transform,
             auto_alignment_run_id="nonidentity-run",
             auto_alignment_diagnostics={"nonlinear_refinement": {"status": "accepted"}},
+            alignment_source_sha256=runtime["source_image_sha256"],
             probe_traces={"imec0": TRACKER.ProbeTrace(slice_points=[display_point])},
         )
         window.sessions = [session]
-        window.atlas_volume = np.zeros((40, *shape), dtype=np.uint8)
 
         overlay = TRACKER.render_session_slice_in_atlas(session, image, shape)
         window._recompute_probe_points_from_slice_points(session)
@@ -441,19 +683,27 @@ def test_mapping_promotion_failure_rolls_back_every_output(tmp_path, monkeypatch
 
         shape = (30, 30)
         mask = np.ones(shape, dtype=bool)
-        transform = TRACKER.SliceAtlasTransform2D(
-            np.eye(3),
-            shape,
-            shape,
-            NonlinearWarp2D.identity(shape),
-            TRACKER.NonlinearWarpAttestation(mask, mask, "a" * 64, "b" * 64),
+        source_path = tmp_path / "slice.tif"
+        TRACKER.tifffile.imwrite(source_path, np.arange(np.prod(shape), dtype=np.uint16).reshape(shape))
+        window.atlas_volume = np.zeros((30, *shape), dtype=np.uint8)
+        window.annotation_volume = np.ones((30, *shape), dtype=np.uint16)
+        warp = NonlinearWarp2D.identity(shape)
+        transform, runtime = _bound_transform(
+            window, source_path, 10, warp, mask
+        )
+        monkeypatch.setattr(
+            TRACKER,
+            "verify_diffeomorphic_model_bundle",
+            lambda _path: ("a" * 64, "b" * 64, {}),
         )
         session = TRACKER.SliceSession(
             "slice",
-            path="slice.tif",
+            path=str(source_path),
+            atlas_index=10,
             slice_atlas_transform=transform,
             auto_alignment_run_id="accepted-run",
             auto_alignment_diagnostics={"nonlinear_refinement": {"status": "accepted"}},
+            alignment_source_sha256=runtime["source_image_sha256"],
             probe_traces={
                 "imec0": TRACKER.ProbeTrace(
                     volume_points=[[10.0, 20.0, 10.0], [10.0, 15.0, 10.0]],
@@ -461,7 +711,7 @@ def test_mapping_promotion_failure_rolls_back_every_output(tmp_path, monkeypatch
             },
         )
         identity = hashlib.sha256(
-            b"0|slice.tif|accepted-run"
+            f"0|{source_path.resolve()}".encode()
         ).hexdigest()[:16]
         old_transform_path = transform_dir / f"slice_atlas_transform_{identity}.npz"
         old_outputs[old_transform_path] = b"old nonlinear provenance\n"
@@ -469,8 +719,6 @@ def test_mapping_promotion_failure_rolls_back_every_output(tmp_path, monkeypatch
             path.write_bytes(content)
 
         window.sessions = [session]
-        window.atlas_volume = np.zeros((30, *shape), dtype=np.uint8)
-        window.annotation_volume = np.ones((30, *shape), dtype=np.uint16)
         window.bregma_voxel = np.array([10.0, 10.0, 10.0])
         window.region_names = {1: ("Brain", "BR")}
         window.run_folder.setText(str(tmp_path))

@@ -7,19 +7,37 @@ import sys
 ROOT = Path(SPECPATH)
 DEEPSLICE_MODELS = ROOT / "models" / "DeepSlice"
 ATLAS_POSE_MODELS = ROOT / "models" / "AtlasPose"
-NONLINEAR_MODEL = ROOT / "models" / "DiffeomorphicRegistration" / "diffeomorphic.onnx"
+NONLINEAR_MODELS = ROOT / "models" / "DiffeomorphicRegistration"
 sys.path.insert(0, str(ROOT / "source"))
 from diffeomorphic_registration_runtime import verify_diffeomorphic_model_bundle
 from atlas_pose_runtime import verify_atlas_pose_model_bundle
 
-verify_diffeomorphic_model_bundle(NONLINEAR_MODEL)
-NONLINEAR_DATAS = [
-    (str(NONLINEAR_MODEL), "models/DiffeomorphicRegistration"),
-    (str(NONLINEAR_MODEL.with_suffix(".manifest.json")), "models/DiffeomorphicRegistration"),
+NONLINEAR_FILES = [
+    NONLINEAR_MODELS / name
+    for name in (
+        "diffeomorphic.onnx",
+        "diffeomorphic.manifest.json",
+        "diffeomorphic.prelocked.json",
+    )
 ]
+NONLINEAR_DATAS = []
+if all(path.is_file() for path in NONLINEAR_FILES):
+    verify_diffeomorphic_model_bundle(NONLINEAR_FILES[0])
+    NONLINEAR_DATAS = [
+        (str(path), "models/DiffeomorphicRegistration") for path in NONLINEAR_FILES
+    ]
 ATLAS_POSE_FILES = [
     ATLAS_POSE_MODELS / name
-    for name in ("atlas_pose.onnx", "atlas_pose.json", "RELEASE_REPORT.json", "SEALED_metrics.json")
+    for name in (
+        "atlas_pose.onnx",
+        "atlas_pose.json",
+        "RELEASE_REPORT.json",
+        "SEALED_metrics.json",
+        "SEALED_predictions.csv",
+        "PRESEALED_COMMITMENT.json",
+        "SEALED_CLAIM.json",
+        "SEALED_CONSUMPTION_RECEIPT.json",
+    )
 ]
 ATLAS_POSE_DATAS = []
 if all(path.is_file() for path in ATLAS_POSE_FILES):

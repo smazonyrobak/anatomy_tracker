@@ -155,15 +155,15 @@ def test_official_image_to_reference_allen2quicknii_and_tracker_pose_math():
     origin_ap = center_index - ml_slope * (227.5 - origin_ml) - dv_slope * (159.5 - origin_dv)
     tilted_ouv = np.asarray(
         [
-            456.0 - origin_ml,
+            origin_ml,
             528.0 - origin_ap,
             320.0 - origin_dv,
             100.0,
-            ml_slope * 100.0,
+            -ml_slope * 100.0,
             0.0,
             0.0,
-            dv_slope * 100.0,
-            100.0,
+            -dv_slope * 100.0,
+            -100.0,
         ]
     )
     assert np.allclose(quicknii_to_tracker_pose(tilted_ouv), [ap_um, lr_deg, dv_deg])

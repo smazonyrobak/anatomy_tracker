@@ -15,7 +15,6 @@ from diffeomorphic_registration_runtime import (
     MODEL_PIXEL_SPACING_UM,
     MODEL_SHAPE,
     _correspondence_diagnostics,
-    _correspondence_failures,
     _gray_unit,
     _mind_descriptor,
     _verified_model_manifest,
@@ -27,7 +26,9 @@ from nonlinear_registration import (
     MODEL_INPUT_NAMES,
     MODEL_OUTPUT_NAMES,
     MODEL_SPATIAL_CONTRACT,
+    NonlinearWarp2D,
     RUNTIME_GATE_CONTRACT,
+    nonlinear_runtime_acceptance_issues,
 )
 from training.diffeomorphic_registration_model import mind_descriptor, preprocess_registration_tensor
 from training.train_diffeomorphic_registration import write_model_manifest
@@ -100,16 +101,21 @@ def inputs(shape):
 
 
 def write_manifest(model_path, **changes):
-    commitment = {
+    native_commitment = changes.get("locked_native_histology_commitment", {
         "source": {"sections_sha256": "3" * 64},
         "evaluation_manifest_sha256": "2" * 64,
-    }
+    })
+    landmark_commitment = changes.get("locked_internal_landmark_commitment", {
+        "source": {"annotations_sha256": "6" * 64},
+        "evaluation_manifest_sha256": "5" * 64,
+    })
     evidence_path = model_path.with_suffix(".prelocked.json")
     evidence_path.write_text(json.dumps({
         "model_sha256": hashlib.sha256(model_path.read_bytes()).hexdigest(),
         "synthetic_gate": {"passed": True},
         "onnx_gate": {"passed": True},
-        "locked_real_histology_commitment": commitment,
+        "locked_native_histology_commitment": native_commitment,
+        "locked_internal_landmark_commitment": landmark_commitment,
     }), encoding="utf-8")
     payload = {
         "format_version": MODEL_CONTRACT_VERSION,
@@ -123,12 +129,17 @@ def write_manifest(model_path, **changes):
         "runtime_gates": RUNTIME_GATE_CONTRACT,
         "prelocked_evidence_file": evidence_path.name,
         "prelocked_evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
-        "locked_real_histology_commitment": commitment,
+        "locked_native_histology_commitment": native_commitment,
+        "locked_internal_landmark_commitment": landmark_commitment,
         "onnx_gate_passed": True,
-        "real_histology_gate_passed": True,
-        "real_histology_gate_report_sha256": "1" * 64,
-        "real_histology_evaluation_manifest_sha256": "2" * 64,
-        "real_histology_benchmark_role": "locked_promotion_gate",
+        "native_histology_secondary_gate_passed": True,
+        "native_histology_secondary_gate_report_sha256": "1" * 64,
+        "native_histology_secondary_evaluation_manifest_sha256": "2" * 64,
+        "native_histology_secondary_benchmark_role": "locked_secondary_native_gate",
+        "internal_landmark_gate_passed": True,
+        "internal_landmark_gate_report_sha256": "4" * 64,
+        "internal_landmark_evaluation_manifest_sha256": "5" * 64,
+        "internal_landmark_benchmark_role": "locked_promotion_gate",
         "promotion_ready": True,
     }
     payload.update(changes)
@@ -181,6 +192,30 @@ def test_model_rejection_is_explicit_and_returns_no_warp():
 
     assert "model rejection probability" in str(error.value)
     assert error.value.diagnostics["rejection_probability"] > 0.99
+    assert error.value.categories == ("wrong_plane",)
+
+
+def test_low_fractional_affine_overlap_is_input_blocking_not_wrong_plane():
+    fixed, moving, fixed_mask, moving_mask = inputs((40, 64))
+    fixed_mask[:] = False
+    moving_mask[:] = False
+    fixed_mask[5:35, 5:35] = True
+    moving_mask[5:35, 25:55] = True
+
+    with pytest.raises(DiffeomorphicRegistrationRejected) as error:
+        run_diffeomorphic_registration(
+            fixed,
+            moving,
+            fixed_mask,
+            moving_mask,
+            session=FakeSession(),
+            pixel_spacing_um=MODEL_PIXEL_SPACING_UM,
+        )
+
+    assert error.value.diagnostics["prewarp_overlap_pixels"] == 300
+    assert error.value.diagnostics["prewarp_overlap_fraction"] == pytest.approx(1.0 / 3.0)
+    assert RUNTIME_GATE_CONTRACT["minimum_prewarp_overlap_fraction"] == 0.40
+    assert error.value.categories == ("affine_input",)
 
 
 def test_folded_map_is_rejected_before_caller_can_install_it():
@@ -192,6 +227,7 @@ def test_folded_map_is_rejected_before_caller_can_install_it():
 
     assert "Jacobian" in str(error.value)
     assert error.value.diagnostics["fold_count"] > 0
+    assert "geometry" in error.value.categories
 
 
 def test_one_cell_fold_is_rejected_before_caller_can_install_it():
@@ -266,7 +302,18 @@ def test_safe_but_anatomically_worse_warp_is_rejected():
     shift = 0.75 * np.sin(12.0 * np.pi * yy / (shape[0] - 1.0))
     forward = np.stack((xx + shift, yy), axis=-1)
     diagnostics = _correspondence_diagnostics(fixed, moving, mask, mask, forward)
-    failures = _correspondence_failures(diagnostics)
+    gate_diagnostics = {
+        **NonlinearWarp2D.identity(shape).diagnostics(mask, mask),
+        **diagnostics,
+        "modeled_trusted_fraction": 1.0,
+        "rejection_probability": 0.0,
+        "displacement_max_px": 1.0,
+    }
+    failures = [
+        message
+        for category, message in nonlinear_runtime_acceptance_issues(gate_diagnostics)
+        if category == "correspondence"
+    ]
     assert diagnostics["mind_improvement"] < 0.0
     assert "nonlinear warp does not improve MIND correspondence" in failures
 
@@ -315,22 +362,35 @@ def test_center_crop_rejects_tissue_outside_one_to_one_model_field():
         )
 
 
-def test_model_manifest_verifies_sha_contract_evidence_and_source_pin(tmp_path, monkeypatch):
+def test_model_manifest_keeps_native_and_landmark_hashes_separate_and_source_pinned(
+    tmp_path, monkeypatch
+):
     model_path = tmp_path / "diffeomorphic.onnx"
     model_path.write_bytes(b"validated model")
     report = {
         "synthetic_gate": {"passed": True},
         "onnx_gate": {"passed": True},
-        "real_histology_ground_truth_gate": {
+        "native_histology_secondary_gate": {
             "passed": True,
             "report_sha256": "1" * 64,
             "evaluation_manifest_sha256": "2" * 64,
             "source": {"sections_sha256": "3" * 64},
+            "benchmark_role": "locked_secondary_native_gate",
+        },
+        "internal_landmark_gate": {
+            "passed": True,
+            "report_sha256": "4" * 64,
+            "evaluation_manifest_sha256": "5" * 64,
+            "source": {"annotations_sha256": "6" * 64},
             "benchmark_role": "locked_promotion_gate",
         },
-        "locked_real_histology_commitment": {
+        "locked_native_histology_commitment": {
             "source": {"sections_sha256": "3" * 64},
             "evaluation_manifest_sha256": "2" * 64,
+        },
+        "locked_internal_landmark_commitment": {
+            "source": {"annotations_sha256": "6" * 64},
+            "evaluation_manifest_sha256": "5" * 64,
         },
         "promotion_ready": True,
     }
@@ -340,17 +400,22 @@ def test_model_manifest_verifies_sha_contract_evidence_and_source_pin(tmp_path, 
     approved = {
         "model_sha256": hashlib.sha256(model_path.read_bytes()).hexdigest(),
         "manifest_sha256": written_manifest_sha,
-        "real_histology_gate_report_sha256": "1" * 64,
-        "real_histology_evaluation_manifest_sha256": "2" * 64,
+        "native_histology_secondary_gate_report_sha256": "1" * 64,
+        "native_histology_secondary_evaluation_manifest_sha256": "2" * 64,
+        "internal_landmark_gate_report_sha256": "4" * 64,
+        "internal_landmark_evaluation_manifest_sha256": "5" * 64,
     }
     monkeypatch.setattr(registration_runtime, "APPROVED_NONLINEAR_RELEASE", approved)
     model_sha, manifest_sha, manifest = _verified_model_manifest(model_path)
     assert model_sha == hashlib.sha256(model_path.read_bytes()).hexdigest()
     assert manifest_sha == written_manifest_sha
     assert manifest["spatial_contract"] == MODEL_SPATIAL_CONTRACT
-    assert manifest["real_histology_gate_report_sha256"] == "1" * 64
-    assert manifest["real_histology_evaluation_manifest_sha256"] == "2" * 64
-    assert manifest["real_histology_benchmark_role"] == "locked_promotion_gate"
+    assert manifest["native_histology_secondary_gate_report_sha256"] == "1" * 64
+    assert manifest["native_histology_secondary_evaluation_manifest_sha256"] == "2" * 64
+    assert manifest["internal_landmark_gate_report_sha256"] == "4" * 64
+    assert manifest["internal_landmark_evaluation_manifest_sha256"] == "5" * 64
+    assert "real_histology_gate_report_sha256" not in manifest
+    assert "real_histology_evaluation_manifest_sha256" not in manifest
 
     write_manifest(model_path, promotion_ready=False)
     with pytest.raises(RuntimeError, match="promotion_ready"):
@@ -359,21 +424,63 @@ def test_model_manifest_verifies_sha_contract_evidence_and_source_pin(tmp_path, 
     with pytest.raises(RuntimeError, match="model_sha256"):
         _verified_model_manifest(model_path)
 
-    write_manifest(model_path, real_histology_gate_report_sha256="not-a-hash")
-    with pytest.raises(RuntimeError, match="real_histology_gate_report_sha256"):
+    write_manifest(model_path, native_histology_secondary_gate_report_sha256="not-a-hash")
+    with pytest.raises(RuntimeError, match="native_histology_secondary_gate_report_sha256"):
         _verified_model_manifest(model_path)
-    write_manifest(model_path, real_histology_evaluation_manifest_sha256=None)
-    with pytest.raises(RuntimeError, match="real_histology_evaluation_manifest_sha256"):
+    write_manifest(model_path, internal_landmark_evaluation_manifest_sha256=None)
+    with pytest.raises(RuntimeError, match="locked_internal_landmark_commitment"):
         _verified_model_manifest(model_path)
-    write_manifest(model_path, real_histology_benchmark_role="validation")
-    with pytest.raises(RuntimeError, match="real_histology_benchmark_role"):
+    write_manifest(model_path, internal_landmark_benchmark_role="validation")
+    with pytest.raises(RuntimeError, match="internal_landmark_benchmark_role"):
+        _verified_model_manifest(model_path)
+
+    write_manifest(
+        model_path,
+        internal_landmark_gate_report_sha256="1" * 64,
+        internal_landmark_evaluation_manifest_sha256="2" * 64,
+        locked_internal_landmark_commitment={
+            "source": {"annotations_sha256": "6" * 64},
+            "evaluation_manifest_sha256": "2" * 64,
+        },
+    )
+    with pytest.raises(RuntimeError, match="must be independent"):
         _verified_model_manifest(model_path)
 
     write_manifest(model_path)
     monkeypatch.setattr(
         registration_runtime,
         "APPROVED_NONLINEAR_RELEASE",
-        {**approved, "real_histology_gate_report_sha256": "f" * 64},
+        {key: value for key, value in approved.items() if not key.startswith("internal_landmark")},
     )
     with pytest.raises(RuntimeError, match="source-approved release"):
         _verified_model_manifest(model_path)
+
+
+def test_model_manifest_blocks_promotion_without_internal_landmark_evidence(tmp_path):
+    model_path = tmp_path / "candidate.onnx"
+    model_path.write_bytes(b"candidate")
+    report = {
+        "synthetic_gate": {"passed": True},
+        "onnx_gate": {"passed": True},
+        "native_histology_secondary_gate": {
+            "passed": True,
+            "report_sha256": "1" * 64,
+            "evaluation_manifest_sha256": "2" * 64,
+        },
+        "locked_native_histology_commitment": {
+            "source": {"sections_sha256": "3" * 64},
+            "evaluation_manifest_sha256": "2" * 64,
+        },
+        "locked_internal_landmark_commitment": None,
+        "promotion_ready": True,
+    }
+
+    manifest_path, _ = write_model_manifest(model_path, report)
+    manifest = json.loads(manifest_path.read_text())
+
+    assert manifest["native_histology_secondary_gate_passed"] is True
+    assert manifest["internal_landmark_gate_passed"] is False
+    assert manifest["internal_landmark_gate_report_sha256"] is None
+    assert manifest["internal_landmark_evaluation_manifest_sha256"] is None
+    assert manifest["promotion_ready"] is False
+    assert manifest["release_status"] == "experimental"

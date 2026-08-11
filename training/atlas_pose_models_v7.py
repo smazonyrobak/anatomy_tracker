@@ -26,7 +26,7 @@ ORIENTATION_LOSS_WEIGHT = 0.35
 FINAL_PHYSICAL_TILT_LOSS_WEIGHT = 0.15
 BINNED_AUXILIARY_LOSS_WEIGHT = 0.10
 OUV_AUXILIARY_LOSS_WEIGHT = 1.00
-PHYSICAL_POSE_LOSS_SCALE = (60.0, 2.0, 2.0)
+PHYSICAL_POSE_LOSS_SCALE = (60.0, 0.9, 1.75)
 
 VOXEL_UM = 25.0
 BREGMA_AP_INDEX = 216.0
@@ -104,11 +104,7 @@ def pose_to_quicknii_ouv(pose: torch.Tensor) -> torch.Tensor:
     slope_lr = torch.tan(tilt_lr_deg * (math.pi / 180.0))
     slope_dv = torch.tan(tilt_dv_deg * (math.pi / 180.0))
     ap_index = BREGMA_AP_INDEX - ap_um / VOXEL_UM
-    origin_ap = (
-        ap_index
-        + slope_lr * (QUICKNII_ML_AP_DV_SHAPE[0] - ATLAS_CENTER_ML_DV[0])
-        - slope_dv * ATLAS_CENTER_ML_DV[1]
-    )
+    origin_ap = ap_index - slope_lr * ATLAS_CENTER_ML_DV[0] - slope_dv * ATLAS_CENTER_ML_DV[1]
     zeros = torch.zeros_like(ap_um)
     return torch.stack(
         (
@@ -116,7 +112,7 @@ def pose_to_quicknii_ouv(pose: torch.Tensor) -> torch.Tensor:
             QUICKNII_ML_AP_DV_SHAPE[1] - origin_ap,
             zeros + QUICKNII_ML_AP_DV_SHAPE[2],
             zeros + QUICKNII_ML_AP_DV_SHAPE[0],
-            QUICKNII_ML_AP_DV_SHAPE[0] * slope_lr,
+            -QUICKNII_ML_AP_DV_SHAPE[0] * slope_lr,
             zeros,
             zeros,
             -QUICKNII_ML_AP_DV_SHAPE[2] * slope_dv,
@@ -131,9 +127,9 @@ def quicknii_ouv_to_pose(ouv: torch.Tensor) -> torch.Tensor:
     normal = torch.cross(ouv[..., 3:6], ouv[..., 6:9], dim=-1)
     normal = torch.where((normal[..., 1] < 0.0)[..., None], -normal, normal)
     denominator = normal[..., 1].clamp_min(1e-8)
-    ap_per_ml = -normal[..., 0] / denominator
+    ap_per_ml = normal[..., 0] / denominator
     ap_per_dv = -normal[..., 2] / denominator
-    origin_ml = QUICKNII_ML_AP_DV_SHAPE[0] - origin[..., 0]
+    origin_ml = origin[..., 0]
     origin_ap = QUICKNII_ML_AP_DV_SHAPE[1] - origin[..., 1]
     origin_dv = QUICKNII_ML_AP_DV_SHAPE[2] - origin[..., 2]
     ap_index = (

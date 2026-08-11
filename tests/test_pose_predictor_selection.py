@@ -1,3 +1,4 @@
+import csv
 import importlib.util
 import json
 import os
@@ -10,6 +11,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+
+from source.atlas_pose_runtime import plane_normal_from_tilts, tilts_from_plane_normal
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -27,12 +30,12 @@ def _quicknii_prediction(filename: str, atlas_index: float, tilt_lr: float, tilt
     dv_slope = np.tan(np.deg2rad(tilt_dv))
     record = {
         "Filenames": filename,
-        "ox": float(ml_size),
+        "ox": 0.0,
         "oy": ap_size - (
             atlas_index - lr_slope * ((ml_size - 1) / 2.0) - dv_slope * ((dv_size - 1) / 2.0)
         ),
         "oz": float(dv_size),
-        "ux": -float(ml_size),
+        "ux": float(ml_size),
         "uy": -lr_slope * ml_size,
         "uz": 0.0,
         "vx": 0.0,
@@ -54,10 +57,10 @@ def test_weighted_vote_fuses_ap_directly_and_tilts_as_plane_normals():
 
     fused = TRACKER.fuse_pose_predictions(poses, weights)
     expected_normal = sum(
-        weight * TRACKER.plane_normal_from_tilts(pose[1], pose[2])
+        weight * plane_normal_from_tilts(pose[1], pose[2])
         for pose, weight in zip(poses, weights)
     )
-    expected_tilts = TRACKER.tilts_from_plane_normal(expected_normal)
+    expected_tilts = tilts_from_plane_normal(expected_normal)
 
     assert fused[0] == pytest.approx(-880.0)
     assert fused[1:] == pytest.approx(expected_tilts)
@@ -145,6 +148,8 @@ def test_own_runtime_preprocesses_the_supplied_mask_and_missing_model_is_clear(t
             {
                 "sha256": runtime._file_sha256(model),
                 "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
+                "automatic_brain_mask_version": runtime.AUTOMATIC_BRAIN_MASK_VERSION,
+                "quicknii_coordinate_contract": runtime.QUICKNII_COORDINATE_CONTRACT_VERSION,
                 "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
             }
         ),
@@ -195,6 +200,8 @@ def test_own_runtime_batches_many_slices(tmp_path, monkeypatch):
             {
                 "sha256": runtime._file_sha256(model),
                 "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
+                "automatic_brain_mask_version": runtime.AUTOMATIC_BRAIN_MASK_VERSION,
+                "quicknii_coordinate_contract": runtime.QUICKNII_COORDINATE_CONTRACT_VERSION,
                 "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
             }
         ),
@@ -222,6 +229,28 @@ def test_own_runtime_batches_many_slices(tmp_path, monkeypatch):
     assert info["orientation_inverted"] == [False] * len(images)
 
 
+def test_candidate_bundle_verification_is_cached_by_file_version(tmp_path, monkeypatch):
+    runtime = sys.modules[TRACKER.run_atlas_pose_onnx.__module__]
+    model = tmp_path / "atlas_pose.onnx"
+    metadata = model.with_suffix(".json")
+    model.write_bytes(b"model")
+    metadata.write_text("{}", encoding="utf-8")
+    calls = []
+
+    def verify(path):
+        calls.append(Path(path))
+        return "1" * 64, "2" * 64, {"verified": True}
+
+    runtime._verify_atlas_pose_candidate_bundle_cached.cache_clear()
+    monkeypatch.setattr(runtime, "verify_atlas_pose_candidate_bundle", verify)
+    first = runtime._verified_atlas_pose_candidate_bundle(model)
+    second = runtime._verified_atlas_pose_candidate_bundle(model)
+
+    assert first == second
+    assert len(calls) == 1
+    runtime._verify_atlas_pose_candidate_bundle_cached.cache_clear()
+
+
 def test_own_runtime_requires_and_verifies_source_pinned_release_evidence(tmp_path, monkeypatch):
     runtime = sys.modules[TRACKER.run_atlas_pose_onnx.__module__]
     model = tmp_path / "atlas_pose.onnx"
@@ -229,28 +258,179 @@ def test_own_runtime_requires_and_verifies_source_pinned_release_evidence(tmp_pa
     metadata = {
         "sha256": runtime._file_sha256(model),
         "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
+        "automatic_brain_mask_version": runtime.AUTOMATIC_BRAIN_MASK_VERSION,
+        "quicknii_coordinate_contract": runtime.QUICKNII_COORDINATE_CONTRACT_VERSION,
         "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
         "source_sha256": {"trainer.py": "1" * 64},
         "manifest_sha256": {"train": "2" * 64},
-        "registered_data": {"sha256": {"sections.jsonl": "3" * 64}},
+        "registered_data": {
+            "sha256": {
+                **{
+                    name: str(index) * 64
+                    for index, name in enumerate(
+                        runtime.ATLAS_POSE_SEALED_SOURCE_FILES,
+                        3,
+                    )
+                },
+                "nonsealed_image_tree_sha256": "8" * 64,
+            }
+        },
         "atlas_data_sha256": {"annotation_25.nrrd": "4" * 64},
     }
     metadata_path = model.with_suffix(".json")
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     sealed_source = {
-        "sections_sha256": "5" * 64,
-        "datasets_sha256": "6" * 64,
-        "provenance_sha256": "7" * 64,
-        "downloads_sha256": "8" * 64,
-        "registered_image_quality_manifest_sha256": "9" * 64,
+        **{
+            name: metadata["registered_data"]["sha256"][name]
+            for name in runtime.ATLAS_POSE_SEALED_SOURCE_FILES
+        },
+        "sealed_image_tree_sha256": "9" * 64,
     }
+    comparisons = {
+        axis: {
+            "metric": f"absolute_error_{axis}",
+            "candidate": "atlas_pose",
+            "reference": "deepslice_mens_ai_ci",
+            "delta_candidate_minus_reference": -1.0,
+            "probability_candidate_lower_error": 1.0,
+        }
+        for axis in ("ap_um", "lr_deg", "dv_deg")
+    }
+    joint = {
+        "candidate": "atlas_pose",
+        "reference": "deepslice_mens_ai_ci",
+        "simultaneous_superiority_passed": True,
+    }
+    evaluator_environment = {
+        "contract_version": 1,
+        "source_sha256": {"evaluator.py": "a" * 64},
+        "deepslice_model_sha256": {"primary": "b" * 64, "secondary": "c" * 64},
+        "dependencies": {"python": "3.11"},
+    }
+    evaluator_environment["commitment_sha256"] = runtime._canonical_json_sha256(
+        evaluator_environment
+    )
+    evaluator_environment_sha256 = evaluator_environment["commitment_sha256"]
+    predictions_path = tmp_path / "SEALED_predictions.csv"
+    fieldnames = [
+        "sealed",
+        "split",
+        "method",
+        "experiment_id",
+        "specimen_id",
+        "section_image_id",
+        "section_number",
+        "relative_path",
+        "product",
+        "ap_band",
+        "in_training_ap_domain",
+        *(
+            f"{prefix}_{axis}"
+            for prefix in ("gt", "pred", "error", "absolute_error")
+            for axis in ("ap_um", "lr_deg", "dv_deg")
+        ),
+    ]
+    with predictions_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        for section_id in range(1400):
+            experiment_id = section_id // 140 + 1
+            for method in runtime.ATLAS_POSE_SEALED_METHODS:
+                error = 0.0 if method == "atlas_pose" else 1.0
+                row = {
+                    "sealed": True,
+                    "split": "sealed_deepslice_s2p",
+                    "method": method,
+                    "experiment_id": experiment_id,
+                    "specimen_id": experiment_id,
+                    "section_image_id": section_id,
+                    "section_number": section_id % 140,
+                    "relative_path": f"images/{section_id}.jpg",
+                    "product": "5" if experiment_id <= 5 else "8",
+                    "ap_band": "in_domain",
+                    "in_training_ap_domain": True,
+                }
+                for axis in ("ap_um", "lr_deg", "dv_deg"):
+                    row[f"gt_{axis}"] = 0.0
+                    row[f"pred_{axis}"] = error
+                    row[f"error_{axis}"] = error
+                    row[f"absolute_error_{axis}"] = error
+                writer.writerow(row)
     metrics_path = tmp_path / "SEALED_metrics.json"
     metrics_path.write_text(
-        json.dumps({"source": sealed_source, "evaluator_sha256": "a" * 64}),
+        json.dumps(
+            {
+                "benchmark_id": "deepslice_s2p_1400_quicknii_ras_v2",
+                "benchmark_role": "final_test_only",
+                "section_count": 1400,
+                "experiment_count": 10,
+                "source": sealed_source,
+                "evaluator_sha256": "b" * 64,
+                "evaluator_environment_sha256": evaluator_environment_sha256,
+                "animal_level_paired_bootstrap": list(comparisons.values()),
+                "animal_level_joint_superiority": joint,
+            }
+        ),
+        encoding="utf-8",
+    )
+    training_data = {
+        "synthetic_manifests": metadata["manifest_sha256"],
+        "registered_data": metadata["registered_data"]["sha256"],
+        "atlas_data": metadata["atlas_data_sha256"],
+    }
+    presealed_path = tmp_path / "PRESEALED_COMMITMENT.json"
+    presealed_path.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "benchmark_id": "deepslice_s2p_1400_quicknii_ras_v2",
+                "model_sha256": runtime._file_sha256(model),
+                "metadata_sha256": runtime._file_sha256(metadata_path),
+                "training_source_sha256": metadata["source_sha256"],
+                "training_data_sha256": training_data,
+                "sealed_source_sha256": {
+                    name: metadata["registered_data"]["sha256"][name]
+                    for name in runtime.ATLAS_POSE_SEALED_SOURCE_FILES
+                },
+                "evaluator_environment": evaluator_environment,
+            }
+        ),
+        encoding="utf-8",
+    )
+    claim_path = tmp_path / "SEALED_CLAIM.json"
+    claim_path.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "benchmark_id": "deepslice_s2p_1400_quicknii_ras_v2",
+                "model_sha256": runtime._file_sha256(model),
+                "metadata_sha256": runtime._file_sha256(metadata_path),
+                "presealed_commitment_sha256": runtime._file_sha256(presealed_path),
+                "sealed_access_permitted_after_claim_only": True,
+                "claimed_at_utc": "2026-08-11T10:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt_path = tmp_path / "SEALED_CONSUMPTION_RECEIPT.json"
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "benchmark_id": "deepslice_s2p_1400_quicknii_ras_v2",
+                "status": "completed",
+                "model_sha256": runtime._file_sha256(model),
+                "claim_sha256": runtime._file_sha256(claim_path),
+                "presealed_commitment_sha256": runtime._file_sha256(presealed_path),
+                "sealed_predictions_sha256": runtime._file_sha256(predictions_path),
+                "sealed_metrics_sha256": runtime._file_sha256(metrics_path),
+                "completed_at_utc": "2026-08-11T10:01:00+00:00",
+            }
+        ),
         encoding="utf-8",
     )
     evidence = {
-        "release_report_version": 2,
+        "release_report_version": 3,
         "sealed": True,
         "benchmark_role": "final_release_gate",
         "release_approved": True,
@@ -259,16 +439,24 @@ def test_own_runtime_requires_and_verifies_source_pinned_release_evidence(tmp_pa
         "metadata_sha256": runtime._file_sha256(metadata_path),
         "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
         "training_source_sha256": metadata["source_sha256"],
-        "training_data_sha256": {
-            "synthetic_manifests": metadata["manifest_sha256"],
-            "registered_data": metadata["registered_data"]["sha256"],
-            "atlas_data": metadata["atlas_data_sha256"],
-        },
+        "training_data_sha256": training_data,
         "sealed_data_sha256": sealed_source,
         "sealed_metrics_sha256": runtime._file_sha256(metrics_path),
-        "evaluator_sha256": "a" * 64,
-        "quality_gate": {"all_gates_passed": True, "passed": {"mean_ap_um": True}},
+        "sealed_predictions_sha256": runtime._file_sha256(predictions_path),
+        "presealed_commitment_sha256": runtime._file_sha256(presealed_path),
+        "sealed_claim_sha256": runtime._file_sha256(claim_path),
+        "consumption_receipt_sha256": runtime._file_sha256(receipt_path),
+        "evaluator_sha256": "b" * 64,
+        "evaluator_environment_sha256": evaluator_environment_sha256,
+        "quality_gate": {
+            "values": {name: 0.0 for name in runtime.ATLAS_POSE_RELEASE_GATE_THRESHOLDS},
+            "thresholds": runtime.ATLAS_POSE_RELEASE_GATE_THRESHOLDS,
+            "passed": {name: True for name in runtime.ATLAS_POSE_RELEASE_GATE_THRESHOLDS},
+            "all_gates_passed": True,
+        },
         "deepslice_component_passed": {"ap_um": True, "lr_deg": True, "dv_deg": True},
+        "deepslice_simultaneous_superiority": joint,
+        "deepslice_comparisons": comparisons,
     }
     evidence["release_integrity_sha256"] = runtime._canonical_json_sha256(evidence)
     evidence_path = tmp_path / "RELEASE_REPORT.json"
@@ -366,6 +554,8 @@ def test_own_runtime_rejects_a_preprocessing_contract_mismatch(tmp_path):
             {
                 "sha256": runtime._file_sha256(model),
                 "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
+                "automatic_brain_mask_version": runtime.AUTOMATIC_BRAIN_MASK_VERSION,
+                "quicknii_coordinate_contract": runtime.QUICKNII_COORDINATE_CONTRACT_VERSION,
                 "preprocessing_contract_sha256": "0" * 64,
             }
         ),
@@ -389,6 +579,8 @@ def test_own_runtime_cancels_after_session_construction(tmp_path, monkeypatch, c
             {
                 "sha256": runtime._file_sha256(model),
                 "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
+                "automatic_brain_mask_version": runtime.AUTOMATIC_BRAIN_MASK_VERSION,
+                "quicknii_coordinate_contract": runtime.QUICKNII_COORDINATE_CONTRACT_VERSION,
                 "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
             }
         ),

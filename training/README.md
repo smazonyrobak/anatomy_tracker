@@ -30,6 +30,8 @@ Synthetic views include the requested range of nonlinear warps, arbitrary rotati
 
 Registered Allen serial two-photon sections supply real-image training and validation. Dataset manifests, downloaded images, quality exclusions, atlas files, code, dependencies, and pretrained initialization are hashed in the run/export provenance. The published DeepSlice development set is excluded from selection. The final registered holdout is sealed and may be opened once, only after the candidate is frozen.
 
+The sealed evaluator requires a candidate and creates one fixed per-user, benchmark-wide exclusive claim before reading any sealed manifest, label, or image. A failed run consumes the claim. The frozen candidate binds the acquisition and quality manifests, atlas annotation, evaluator/import source tree, dependency versions, and both DeepSlice binaries; every sealed JPEG is checked against `downloads.jsonl` before inference and again before evidence is released. Generic `RegisteredSectionDataset` loaders cannot opt into the sealed split. The acquisition files remain co-located on disk for the current dataset layout, so operating-system access control and a future physically separate acquisition root remain deployment responsibilities rather than claims made by this repository.
+
 ## Prespecified experiment
 
 - Screen direct, binned, and OUV heads at 20,000 unique views with three training seeds.
@@ -39,15 +41,15 @@ Registered Allen serial two-photon sections supply real-image training and valid
 - Train the selected configuration on up to 1,000,000 unique views with validation-based early stopping.
 - Evaluate the registered test split after selection, then run the one-shot sealed DeepSlice comparison.
 
-Model-family decisions use registered-validation animal-level hierarchical bootstraps with a prespecified tie order. The release gate requires AP MAE <=60 um, L-R MAE <=0.90 degrees, D-V MAE <=1.75 degrees, absolute AP bias <=25 um, AP 95th percentile <=150 um, worst 500-um AP-band MAE <=90 um, and worst product MAE <=90 um. It must also beat the published DeepSlice ensemble independently on AP, L-R, and D-V in the sealed paired animal-level comparison. No v7 performance is claimed until that gate passes.
+Model-family decisions use registered-validation animal-level hierarchical bootstraps with a prespecified tie order. Smoke runs always report metrics, but cannot pass validation eligibility unless they contain at least 20 independent animals, at least 10 animals from each of Allen products 5 and 8, at least 20 animals in every 500-um AP band, and at least 10 animals in every preregistered L-R and D-V tilt bin. The release gate requires AP MAE and its deterministic animal-bootstrap upper 95% bound <=60 um, L-R MAE <=0.90 degrees, D-V MAE <=1.75 degrees, absolute AP bias <=25 um, AP 95th percentile <=150 um, per-animal and subgroup P90 limits of 90 um/1.50 degrees/2.50 degrees, worst 500-um AP-band MAE <=90 um, and worst product MAE <=90 um. Fixed synthetic validation must also pass overall, artifact-cohort, tilt-band, and paired-appearance invariance gates before a checkpoint is export-eligible. The final model must then pass the same registered and synthetic gates on locked test data and a single shared animal bootstrap must give at least 95% probability that AtlasPose has lower error than the DeepSlice 1.2.8 MEns-AI-CI comparator simultaneously on AP, L-R, and D-V. No v7 performance is claimed until that gate passes.
 
-Passing metrics alone does not deploy a model. The runtime accepts AtlasPose only when the ONNX model, metadata, and sealed release evidence exactly match hashes pinned in application source. Promotion emits proposed hashes for human review and never edits those source pins.
+Passing metrics alone does not deploy a model. The runtime accepts AtlasPose only when the ONNX model, metadata, raw sealed predictions, metrics, presealed commitment, exclusive claim, completion receipt, and release report form one verified hash chain whose model, metadata, and release-evidence hashes are pinned in application source. Promotion emits proposed hashes for human review and never edits those source pins.
 
 ## Residual nonlinear registration
 
 Nonlinear registration is a second-stage anatomical refinement, not a pose estimator. `train_diffeomorphic_registration.py` trains a bounded stationary-velocity U-Net only after the AP plane, cutting tilts, and surface affine are fixed. Its forward and inverse maps use one explicit 25-um atlas-pixel convention; global translation, rotation, scale, and shear are projected out so the model cannot hide a pose error inside the residual warp. Wrong-AP and unsafe predictions are rejected and retain the affine result.
 
-Selection uses animal-disjoint registered Allen histology. Dense accuracy is measured with exact held-out synthetic diffeomorphisms applied to real histology texture; native registered pairs must show statistically supported modality-independent MIND improvement while preserving tissue support, acceptance, and valid geometry. Promotion requires at least 20 animals and 80 sections, animal-level bootstrap gates, zero folds, bounded displacement and forward/inverse error, ONNX parity, and a separate one-shot locked test through `evaluate_locked_nonlinear_histology.py`. The GUI keeps refinement disabled until the model, manifest, and locked evidence hashes are pinned in application source.
+Selection uses animal-disjoint registered Allen histology. Dense accuracy is measured with exact held-out synthetic diffeomorphisms applied to real histology texture. Native registered pairs must show statistically supported modality-independent MIND improvement while preserving tissue support, acceptance, and valid geometry, but these are secondary surrogate checks rather than anatomical ground truth. `evaluate_locked_nonlinear_histology.py` consumes its benchmark release globally on first use and cannot promote a model by itself. Promotion additionally requires a frozen animal-disjoint benchmark of corresponding internal atlas/histology landmarks, with thresholds fixed from blinded rater agreement before model evaluation. Until that independent gate exists and passes, nonlinear refinement remains experimental and disabled in application source.
 
 ## Running v7
 
@@ -56,7 +58,7 @@ Use the CUDA environment and explicit workspace/data roots:
 ```powershell
 $env:PYTHONPATH = "$PWD"
 $env:ATLAS_POSE_V7_WORKSPACE = "J:\AtlasPoseTraining_v7"
-$env:ATLAS_POSE_REGISTERED = "J:\AtlasPoseTraining_v7\allen_registered_full_20260811"
+$env:ATLAS_POSE_REGISTERED = "J:\AtlasPoseTraining_v7\allen_registered_full_quicknii_ras_v2_20260811"
 $env:ATLAS_POSE_ATLAS = "$PWD\data\Allen Brain Atlas 25um"
 C:\Users\slic\miniconda3\envs\npixel_analysis\python.exe training\train_atlas_pose_v7.py
 ```

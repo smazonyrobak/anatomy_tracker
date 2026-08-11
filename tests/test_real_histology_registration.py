@@ -128,6 +128,8 @@ def test_registered_source_binds_provenance_split_and_deterministic_selection(tm
     manifest = source.evaluation_manifest("validation", 17)
     source.verify_manifest(manifest)
     assert manifest["split"] == "validation"
+    assert manifest["benchmark_role"] == "checkpoint_selection_secondary_native"
+    assert source.evaluation_manifest("test", 17)["benchmark_role"] == "locked_secondary_native_gate"
     assert manifest["sealed_data_used"] is False
     assert manifest["entries"][0]["synthetic_seeds"]
     training = source.training_bank_manifest()
@@ -284,7 +286,7 @@ def test_dense_tre_uses_exact_oblique_basis_for_ccf_microns():
     assert row["tre_p95_ccf_um"] == pytest.approx(25.0)
 
 
-def test_native_wrong_selection_encodes_ap_tilt_and_independent_plane_constraints():
+def test_native_wrong_selection_encodes_only_explicit_ap_and_tilt_constraints():
     entries = [
         {"section_image_id": 1, "specimen_id": 1, "ap_um": 0.0, "tilt_lr_deg": 0.0, "tilt_dv_deg": 0.0},
         {"section_image_id": 2, "specimen_id": 2, "ap_um": -1200.0, "tilt_lr_deg": 0.2, "tilt_dv_deg": 0.1},
@@ -295,11 +297,8 @@ def test_native_wrong_selection_encodes_ap_tilt_and_independent_plane_constraint
     target = entries[:1]
     assert select_native_wrong_entries(entries, target, "wrong_ap", 7)[0]["section_image_id"] == 5
     assert select_native_wrong_entries(entries, target, "wrong_tilt", 7)[0]["section_image_id"] == 4
-    plane = select_native_wrong_entries(entries, target, "wrong_plane", 7)[0]
-    assert plane["section_image_id"] != 1 and plane["specimen_id"] != 1
-
-    repeated = select_native_wrong_entries(entries, target * 3, "wrong_plane", 7)
-    assert len({entry["section_image_id"] for entry in repeated}) == 3
+    with pytest.raises(ValueError, match="Unknown native wrong-pair kind"):
+        select_native_wrong_entries(entries, target, "wrong_plane", 7)
 
 
 def test_native_similarity_cannot_improve_by_discarding_support():
@@ -403,20 +402,21 @@ def test_locked_evaluator_refuses_an_unbound_or_already_claimed_candidate(tmp_pa
         "model_sha256": hashlib.sha256(b"other").hexdigest(),
         "synthetic_gate_passed": True,
         "onnx_gate_passed": True,
-        "real_histology_gate_passed": False,
+        "native_histology_secondary_gate_passed": False,
+        "internal_landmark_gate_passed": False,
         "promotion_ready": False,
     }), encoding="utf-8")
     with pytest.raises(ValueError, match="differs from its manifest"):
         run_locked_evaluation(model_path, tmp_path / "unused", tmp_path / "out")
 
     payload = json.loads(manifest_path.read_text())
-    payload.update(model_sha256=file_sha256(model_path), real_histology_gate_passed=True)
+    payload.update(model_sha256=file_sha256(model_path), native_histology_secondary_gate_passed=True)
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="already claims"):
         run_locked_evaluation(model_path, tmp_path / "unused", tmp_path / "out")
 
 
-def test_locked_evaluator_atomically_consumes_candidate_before_test_and_cannot_retry(
+def test_locked_evaluator_globally_consumes_benchmark_release_across_registered_roots(
     tmp_path, monkeypatch
 ):
     model_path = tmp_path / "candidate.onnx"
@@ -431,26 +431,30 @@ def test_locked_evaluator_atomically_consumes_candidate_before_test_and_cannot_r
         "model_sha256": model_sha256,
         "synthetic_gate": {"passed": True},
         "onnx_gate": {"passed": True},
-        "locked_real_histology_commitment": commitment,
+        "locked_native_histology_commitment": commitment,
+        "locked_internal_landmark_commitment": None,
     }), encoding="utf-8")
     manifest_path = model_path.with_suffix(".manifest.json")
     manifest_path.write_text(json.dumps({
         "model_sha256": model_sha256,
         "prelocked_evidence_file": evidence_path.name,
         "prelocked_evidence_sha256": file_sha256(evidence_path),
-        "locked_real_histology_commitment": commitment,
+        "locked_native_histology_commitment": commitment,
+        "locked_internal_landmark_commitment": None,
         "synthetic_gate_passed": True,
         "onnx_gate_passed": True,
-        "real_histology_gate_passed": False,
+        "native_histology_secondary_gate_passed": False,
+        "internal_landmark_gate_passed": False,
         "promotion_ready": False,
     }), encoding="utf-8")
-    registered_root = tmp_path / "registered"
-    ledger = registered_root / ".nonlinear_locked_test_consumption"
+    registered_root = tmp_path / "registered-1"
+    ledger = tmp_path / "global-state"
+    monkeypatch.setattr(locked_evaluator, "NONLINEAR_EVALUATION_STATE_ROOT", ledger)
 
     class FakeSource:
         def __init__(self, *_):
-            assert (ledger / f"{model_sha256}.claim").is_file()
-            assert (ledger / f"{model_sha256}.json").is_file()
+            assert (ledger / f"{'a' * 64}.claim").is_file()
+            assert (ledger / f"{'a' * 64}.json").is_file()
             self.contract = {"source": "fixed-test-source"}
 
         def evaluation_manifest(self, split, seed):
@@ -461,7 +465,7 @@ def test_locked_evaluator_atomically_consumes_candidate_before_test_and_cannot_r
     monkeypatch.setattr(locked_evaluator, "OnnxRegistrationModel", lambda _: object())
 
     def fake_evaluate(*_args, **_kwargs):
-        assert (ledger / f"{model_sha256}.json").is_file()
+        assert (ledger / f"{'a' * 64}.json").is_file()
         return {"passed": True, "report_sha256": "b" * 64}
 
     monkeypatch.setattr(locked_evaluator, "evaluate_real_histology", fake_evaluate)
@@ -472,12 +476,33 @@ def test_locked_evaluator_atomically_consumes_candidate_before_test_and_cannot_r
         tmp_path / "atlas",
     )
     assert release["test_split_consumed"] is True
+    assert release["native_histology_secondary_evaluation_manifest_sha256"] == "a" * 64
+    assert release["native_histology_secondary_gate_report_sha256"] == "b" * 64
+    assert release["native_histology_secondary_gate_passed"] is True
+    assert release["internal_landmark_gate_passed"] is False
+    assert release["internal_landmark_gate_report_sha256"] is None
+    assert release["internal_landmark_evaluation_manifest_sha256"] is None
+    assert release["promotion_ready"] is False
     assert len(release["consumption_receipt_sha256"]) == 64
+    claim = json.loads((ledger / f"{'a' * 64}.claim").read_text())
+    receipt = json.loads((ledger / f"{'a' * 64}.json").read_text())
+    assert claim["native_histology_secondary_evaluation_manifest_sha256"] == "a" * 64
+    assert receipt["native_histology_secondary_evaluation_manifest_sha256"] == "a" * 64
+    assert receipt["claim_sha256"] == file_sha256(ledger / f"{'a' * 64}.claim")
+    proposed = json.loads((tmp_path / "output-1" / "proposed_model_manifest.json").read_text())
+    assert proposed["native_histology_secondary_gate_passed"] is True
+    assert proposed["native_histology_secondary_gate_report_sha256"] == "b" * 64
+    assert proposed["native_histology_secondary_evaluation_manifest_sha256"] == "a" * 64
+    assert proposed["internal_landmark_gate_report_sha256"] is None
+    assert proposed["internal_landmark_evaluation_manifest_sha256"] is None
+    assert "real_histology_gate_report_sha256" not in proposed
+    assert "real_histology_evaluation_manifest_sha256" not in proposed
+    assert proposed["promotion_ready"] is False
 
     with pytest.raises(RuntimeError, match="already consumed"):
         run_locked_evaluation(
             model_path,
-            registered_root,
+            tmp_path / "registered-2",
             tmp_path / "output-2",
             tmp_path / "atlas",
         )

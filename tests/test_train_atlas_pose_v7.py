@@ -2,6 +2,7 @@ import csv
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import onnxruntime as ort
@@ -11,14 +12,13 @@ from torch import nn
 import training.train_atlas_pose_v7 as trainer
 
 from training.train_atlas_pose_v7 import (
-    ABLATIONS_20K,
     COMPARISON_SEEDS,
     FINAL_GATE_THRESHOLDS,
-    SCHEDULE,
-    _canonical_json_sha256,
     atlas_data_hashes,
     bootstrap_seed_group_comparison,
+    checkpoint_selection_improved,
     cosine_learning_rate,
+    evaluated_rows_sha256,
     ema_state,
     ensure_fixed_manifest,
     ensure_paired_manifest,
@@ -31,19 +31,25 @@ from training.train_atlas_pose_v7 import (
     paired_invariance,
     promote_export,
     registered_data_hashes,
+    registered_sampling_weights,
     registered_report,
     registered_domain_reports,
     representative_onnx_batch,
+    rotation_180_counterfactual_diagnostics,
     seed_animal_component_errors,
     select_model_family,
     renderer_variant,
     registered_style,
     stratified_pose_metrics,
+    synthetic_acceptance_summary,
+    specimen_median_tilt_diagnostics,
     training_objective,
     update_ema,
     validation_selection_summary,
+    validation_selection_key,
 )
 from training.synthetic_atlas import APPEARANCE_MANIFEST_KEYS
+from source.atlas_pose_runtime import _canonical_json_sha256
 
 
 class ToyPoseModel(nn.Module):
@@ -81,6 +87,38 @@ class ToyPoseModel(nn.Module):
         return output["pose"], output["orientation_inverted_logit"]
 
 
+def test_training_source_commitment_includes_release_contract():
+    assert "training/atlas_pose_release_contract.py" in trainer.training_source_hashes()
+
+
+def test_git_source_provenance_includes_untracked_files(monkeypatch):
+    commands = []
+
+    class Result:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return Result("a" * 40 + "\n" if command[1] == "rev-parse" else "?? training/new.py\n")
+
+    monkeypatch.setattr(trainer.subprocess, "run", run)
+    provenance = trainer.git_source_provenance()
+
+    assert "--untracked-files=all" in commands[1]
+    assert provenance["tracked_source_dirty"] is True
+
+
+def test_export_refuses_dirty_training_source_before_writing(tmp_path):
+    with pytest.raises(RuntimeError, match="tracked-clean"):
+        export_onnx(
+            ToyPoseModel(),
+            tmp_path / "export",
+            {"git": {"tracked_source_dirty": True}},
+        )
+    assert not (tmp_path / "export").exists()
+
+
 def validation_rows(split="validation"):
     return [
         {
@@ -101,71 +139,102 @@ def validation_rows(split="validation"):
     ]
 
 
-def test_schedule_encodes_controlled_scientific_stages():
-    assert SCHEDULE == {
-        "head_screen_20k": 20_000,
-        "ablation_20k": 20_000,
-        "surviving_heads_100k": 100_000,
-        "backbones_100k": 100_000,
-        "final_unique_views": 1_000_000,
-    }
-    assert COMPARISON_SEEDS == (73191, 41777, 90217)
-    assert "full" not in ABLATIONS_20K
-    assert set(ABLATIONS_20K) == {"renderer_minimal", "no_consistency", "no_anatomy"}
-    assert ABLATIONS_20K["renderer_minimal"]["renderer"] == "minimal"
-    assert any(config.get("consistency") == 0.0 for config in ABLATIONS_20K.values())
-    assert any(config.get("anatomy") == 0.0 for config in ABLATIONS_20K.values())
+def gate_eligible_validation_rows():
+    rows = []
+    lr_values = (-2.0, 0.0, 2.0)
+    dv_values = (-8.0, -4.0, 0.0)
+    section_id = 0
+    for specimen in range(30):
+        for target_ap in np.arange(-4250.0, 500.0, 500.0):
+            rows.append(
+                {
+                    "split": "validation",
+                    "specimen_id": specimen,
+                    "experiment_id": specimen,
+                    "section_image_id": section_id,
+                    "product": "5" if specimen < 15 else "8",
+                    "target_ap": float(target_ap),
+                    "target_lr": lr_values[specimen % 3],
+                    "target_dv": dv_values[specimen % 3],
+                    "prediction_ap": float(target_ap + 20.0),
+                    "prediction_lr": lr_values[specimen % 3] + 0.5,
+                    "prediction_dv": dv_values[specimen % 3] + 1.0,
+                    "in_training_ap_domain": True,
+                }
+            )
+            section_id += 1
+    return rows
 
 
-def test_schedule_ablations_use_explicit_selected_backbone_control(tmp_path, monkeypatch):
-    calls = []
-
-    def comparison(name, samples, overrides):
-        calls.append((name, samples, dict(overrides)))
-        return [name]
-
-    summary = {
-        "component_mae": {"ap_um": 80.0, "lr_deg": 1.0, "dv_deg": 2.0},
-        "composite_score": 1.0,
-        "worst_gate_ratio": 1.2,
-    }
-    monkeypatch.setattr(trainer, "WORKSPACE", tmp_path)
-    monkeypatch.setattr(trainer, "run_comparison_group", comparison)
-    monkeypatch.setattr(trainer, "seed_group_selection_summary", lambda _results: summary)
-    monkeypatch.setattr(
-        trainer,
-        "bootstrap_seed_group_comparison",
-        lambda *_args, **_kwargs: {"probability_candidate_better": 0.5},
-    )
-    monkeypatch.setattr(
-        trainer,
-        "select_model_family",
-        lambda groups, label, *_args: {
-            "winner": "binned" if label == "pose head" else "maxvit_tiny",
-            "runner_up": next(iter(groups)),
-            "summaries": {name: summary for name in groups},
+def passing_synthetic_report():
+    component = {"count": 64, "mae": [50.0, 0.7, 1.2]}
+    return {
+        "overall": dict(component),
+        "artifact_severity": {
+            name: dict(component) for name in ("clean", "mild", "moderate", "severe")
         },
-    )
+        "tilt_bands": {
+            name: dict(component) for name in ("0:5", "5:15", "15:25", "25:35")
+        },
+        "artifact_invariance": {
+            "mean_absolute_prediction_shift": [40.0, 0.6, 1.0],
+            "p95_absolute_prediction_shift": [80.0, 1.2, 2.0],
+            "mean_absolute_error_change": [0.0, 0.0, 0.0],
+        },
+    }
+
+
+def test_first_stage_defaults_and_environment_overrides(monkeypatch):
+    assert trainer.DEFAULTS["data_workers"] == 8
+    assert trainer.DEFAULTS["registered_fraction"] == 0.50
+    assert trainer.DEFAULTS["validation_interval"] == 1_000
+    captured = {}
+    monkeypatch.setenv("ATLAS_POSE_V7_EXPERIMENT", "worker_override")
+    monkeypatch.setenv("ATLAS_POSE_V7_SAMPLES", "12")
+    monkeypatch.setenv("ATLAS_POSE_V7_DATA_WORKERS", "3")
+    monkeypatch.setenv("ATLAS_POSE_V7_VALIDATION_INTERVAL", "250")
     monkeypatch.setattr(
         trainer,
         "run_experiment",
-        lambda *_args, **_kwargs: {"held_out_reports": {"test": {}}},
+        lambda config, export=False: captured.update(config=config, export=export),
     )
-    result = trainer.run_schedule()
-    assert {call[0] for call in calls if call[0].startswith("20k_head_")} == {
-        "20k_head_direct", "20k_head_binned", "20k_head_ouv"
-    }
-    backbone_calls = [call[0] for call in calls if call[0].startswith("100k_backbone_")]
-    assert set(backbone_calls) == {
-        "100k_backbone_maxvit_tiny_binned",
-        "100k_backbone_xception_binned",
-    }
-    assert not any("convnext_tiny" in name for name in backbone_calls)
-    ablation_calls = [call for call in calls if call[0].startswith("20k_ablation")]
-    assert len(ablation_calls) == 4
-    assert all(call[2]["architecture"] == "maxvit_tiny" for call in ablation_calls)
-    assert all(call[2]["head"] == "binned" for call in ablation_calls)
-    assert result["ablation_control"] == summary
+    trainer.main()
+    assert captured["config"]["data_workers"] == 3
+    assert captured["config"]["validation_interval"] == 250
+
+
+def test_main_refuses_an_implicit_multi_stage_schedule(monkeypatch):
+    monkeypatch.delenv("ATLAS_POSE_V7_EXPERIMENT", raising=False)
+    monkeypatch.setattr(
+        trainer,
+        "run_experiment",
+        lambda *_args, **_kwargs: pytest.fail("an implicit training run was started"),
+    )
+    with pytest.raises(RuntimeError, match="ATLAS_POSE_V7_EXPERIMENT"):
+        trainer.main()
+
+
+def test_registered_sampling_is_product_and_specimen_balanced_without_tilt_strata():
+    dataset = SimpleNamespace(
+        datasets={
+            1: {"product_ids": [5]},
+            2: {"product_ids": [5]},
+            3: {"product_ids": [8]},
+        },
+        records=[
+            {"experiment_id": 1, "specimen_id": 101, "tilt_lr_deg": 0.0},
+            {"experiment_id": 1, "specimen_id": 101, "tilt_lr_deg": 30.0},
+            {"experiment_id": 2, "specimen_id": 102, "tilt_lr_deg": 0.0},
+            {"experiment_id": 3, "specimen_id": 103, "tilt_lr_deg": -30.0},
+            {"experiment_id": 3, "specimen_id": 103, "tilt_lr_deg": 0.0},
+            {"experiment_id": 3, "specimen_id": 103, "tilt_lr_deg": 30.0},
+        ],
+    )
+    weights = registered_sampling_weights(dataset).numpy()
+    assert weights[:2].sum() == pytest.approx(0.5)
+    assert weights[2] == pytest.approx(0.5)
+    assert weights[3:].sum() == pytest.approx(1.0)
+    assert weights[0] == weights[1]
 
 
 def test_fixed_latents_and_paired_views_are_reproducible_without_image_cache(tmp_path):
@@ -378,12 +447,141 @@ def test_validation_selection_equal_weights_each_specimen_ap_bin_and_enforces_ax
     assert failed["all_mean_gates_passed"] is False
 
 
+def test_checkpoint_key_prioritizes_full_performance_then_worst_ratio_then_composite():
+    higher_composite = {"composite_score": 0.95}
+    lower_composite = {"composite_score": 0.40}
+    passing = {"all_performance_gates_passed": True, "worst_gate_ratio": 0.99}
+    failing = {"all_performance_gates_passed": False, "worst_gate_ratio": 1.20}
+    lower_worst = {**failing, "worst_gate_ratio": 1.10}
+
+    assert validation_selection_key(higher_composite, passing) < validation_selection_key(
+        lower_composite, failing
+    )
+    assert validation_selection_key(higher_composite, lower_worst) < validation_selection_key(
+        lower_composite, failing
+    )
+    assert validation_selection_key(lower_composite, failing) < validation_selection_key(
+        higher_composite, failing
+    )
+
+
+def test_release_gate_requires_preregistered_real_data_coverage_and_animal_tails():
+    smoke = final_acceptance_summary(validation_rows(), "validation")
+    assert smoke["coverage"]["eligible"] is False
+    assert smoke["coverage"]["passed"]["animals"] is False
+    assert smoke["all_gates_passed"] is False
+
+    rows = gate_eligible_validation_rows()
+    passing = final_acceptance_summary(rows, "validation")
+    assert passing["coverage"]["eligible"] is True
+    assert passing["coverage"]["counts"]["animals"] == 30
+    assert passing["coverage"]["counts"]["animals_by_required_product"] == {"5": 15, "8": 15}
+    assert min(passing["coverage"]["counts"]["animals_by_ap_band"].values()) == 30
+    assert min(passing["coverage"]["counts"]["animals_by_lr_bin"].values()) == 10
+    assert min(passing["coverage"]["counts"]["animals_by_dv_bin"].values()) == 10
+    assert passing["values"]["ap_bootstrap_upper95_um"] == pytest.approx(20.0)
+    assert passing["values"]["per_animal_p90_ap_um"] == pytest.approx(20.0)
+    assert passing["values"]["worst_group_p90_dv_deg"] == pytest.approx(1.0)
+    assert passing["all_gates_passed"] is True
+
+    for row in rows:
+        if row["specimen_id"] < 4:
+            row["prediction_dv"] = row["target_dv"] + 4.0
+    failed = final_acceptance_summary(rows, "validation")
+    assert failed["passed"]["per_animal_p90_dv_deg"] is False
+    assert failed["passed"]["worst_group_p90_dv_deg"] is False
+    assert failed["all_gates_passed"] is False
+
+
+def test_selection_does_not_trade_a_product_tail_failure_for_a_better_global_mean():
+    tail_failure = gate_eligible_validation_rows()
+    robust = gate_eligible_validation_rows()
+    for row in tail_failure:
+        error = 100.0 if row["specimen_id"] >= 28 else (15.0 if row["specimen_id"] % 2 else -15.0)
+        row["prediction_ap"] = row["target_ap"] + error
+        row["product"] = "8" if row["specimen_id"] >= 28 else "5"
+    for row in robust:
+        error = 40.0 if row["specimen_id"] % 2 else -40.0
+        row["prediction_ap"] = row["target_ap"] + error
+        row["product"] = "8" if row["specimen_id"] >= 28 else "5"
+
+    tail_selection = validation_selection_summary(tail_failure)
+    robust_selection = validation_selection_summary(robust)
+    tail_gate = final_acceptance_summary(tail_failure, "validation")
+    robust_gate = final_acceptance_summary(robust, "validation")
+
+    assert tail_selection["composite_score"] < robust_selection["composite_score"]
+    assert tail_gate["passed"]["worst_product_mae_um"] is False
+    assert robust_gate["all_performance_gates_passed"] is True
+    assert validation_selection_key(robust_selection, robust_gate) < validation_selection_key(
+        tail_selection, tail_gate
+    )
+
+
+def test_synthetic_robustness_is_a_locked_eligibility_gate():
+    report = passing_synthetic_report()
+    passing = synthetic_acceptance_summary(report)
+    assert passing["coverage"]["eligible"] is True
+    assert passing["all_gates_passed"] is True
+
+    report["artifact_severity"]["severe"]["mae"] = [91.0, 0.7, 1.2]
+    failed = synthetic_acceptance_summary(report)
+    assert failed["passed"]["worst_artifact_mae_ap_um"] is False
+    assert failed["all_gates_passed"] is False
+
+    report = passing_synthetic_report()
+    del report["artifact_invariance"]
+    missing_pair = synthetic_acceptance_summary(report)
+    assert missing_pair["coverage"]["passed"]["paired_artifact_invariance"] is False
+    assert missing_pair["all_gates_passed"] is False
+
+    assert checkpoint_selection_improved(True, False, (10.0, 10.0, 10.0), (0.1, 0.1, 0.1), 0.0)
+    assert not checkpoint_selection_improved(False, True, (0.1, 0.1, 0.1), (10.0, 10.0, 10.0), 0.0)
+
+
+def test_evaluated_row_hash_is_order_invariant_and_prediction_bound():
+    rows = gate_eligible_validation_rows()
+    digest = evaluated_rows_sha256(rows)
+    assert digest == evaluated_rows_sha256(list(reversed(rows)))
+    rows[0]["prediction_ap"] += 1.0
+    assert evaluated_rows_sha256(rows) != digest
+
+
 def test_paired_invariance_reports_prediction_shift():
     target = np.zeros((6, 3))
     first = np.ones((6, 3))
     second = np.full((6, 3), 2.0)
     invariant = paired_invariance(target, first, second)
     assert invariant["mean_absolute_prediction_shift"] == [1.0, 1.0, 1.0]
+
+
+def test_nonselection_tilt_pooling_and_rotation_counterfactual_diagnostics():
+    rows = [
+        {
+            "specimen_id": specimen,
+            "target_lr": float(specimen),
+            "target_dv": -2.0,
+            "prediction_lr": float(specimen) + lr_error,
+            "prediction_dv": -1.75,
+        }
+        for specimen in (1, 2)
+        for lr_error in (0.5, 0.5, 100.0)
+    ]
+    pooled = specimen_median_tilt_diagnostics(rows)
+    assert pooled["role"] == "diagnostic_only_not_used_for_selection"
+    assert pooled["mae_deg"] == pytest.approx({"lr": 0.5, "dv": 0.25})
+
+    prediction = np.asarray([[10.0, 1.0, -2.0], [20.0, -1.0, 2.0]])
+    rotated = prediction + np.asarray([2.0, 0.2, -0.3])
+    diagnostic = rotation_180_counterfactual_diagnostics(
+        prediction,
+        rotated,
+        np.asarray([-2.0, 3.0]),
+        np.asarray([2.0, -3.0]),
+    )
+    assert diagnostic["mean_absolute_prediction_shift"] == pytest.approx([2.0, 0.2, 0.3])
+    assert diagnostic["orientation_logit_sign_flip_fraction"] == 1.0
+    assert diagnostic["mean_absolute_orientation_logit_sum"] == 0.0
 
 
 def test_model_family_selection_uses_paired_seed_and_animal_uncertainty(tmp_path):
@@ -494,20 +692,44 @@ def test_foreach_ema_matches_the_scalar_update_formula_exactly():
 def test_export_is_verified_and_promotion_is_explicit(tmp_path):
     model = ToyPoseModel().eval()
     export_folder = tmp_path / "workspace" / "run" / "export"
+    registered_hashes = {
+        name: str(index) * 64
+        for index, name in enumerate(
+            (
+                "datasets.jsonl",
+                "sections.jsonl",
+                "provenance.json",
+                "downloads.jsonl",
+                "registered_image_quality.json",
+            ),
+            1,
+        )
+    }
+    registered_hashes["nonsealed_image_tree_sha256"] = "9" * 64
     metadata = export_onnx(
         model,
         export_folder,
         {
             "selection_split": "validation",
             "manifest_sha256": {"toy": "a" * 64},
-            "registered_data": {"sha256": {"downloads.jsonl": "b" * 64}},
+            "registered_data": {
+                "sha256": registered_hashes,
+                "excluded_from_selection": ["test", "sealed_deepslice_s2p"],
+            },
             "atlas_data_sha256": {"average_template_25.nrrd": "c" * 64},
+            "git": {
+                "commit": "d" * 40,
+                "tracked_source_dirty": False,
+                "tracked_source_status": [],
+            },
         },
         representative_onnx_batch()[:2],
     )
     model_path = export_folder / "atlas_pose.onnx"
     assert metadata["sha256"] == file_sha256(model_path)
-    assert metadata["preprocessing_version"] == "smart-mask-scale-invariant-v1"
+    assert metadata["preprocessing_version"] == "smart-mask-scale-invariant-v2"
+    assert metadata["automatic_brain_mask_version"] == "border-distance-conditional-hull-v4"
+    assert metadata["quicknii_coordinate_contract"] == "quicknii-ras-to-allen-pir-v2"
     assert metadata["preprocessing_contract_sha256"] == trainer.atlas_pose_preprocessing_contract_sha256()
     assert metadata["verification_sample_count"] == 2
     assert "CPUExecutionProvider" in metadata["verification_by_provider"]
@@ -517,7 +739,7 @@ def test_export_is_verified_and_promotion_is_explicit(tmp_path):
     assert len(metadata["verification_input_sha256"]) == 64
     assert (export_folder / "atlas_pose.json").is_file()
     provenance = json.loads((export_folder / "provenance.json").read_text())
-    assert provenance["registered_data_sha256"]["downloads.jsonl"] == "b" * 64
+    assert provenance["registered_data_sha256"] == registered_hashes
     assert provenance["excluded_from_selection"] == [
         "registered_test", "sealed_deepslice_s2p"
     ]
@@ -528,40 +750,177 @@ def test_export_is_verified_and_promotion_is_explicit(tmp_path):
     sealed = tmp_path / "sealed"
     sealed.mkdir()
     metrics = sealed / "SEALED_metrics.json"
-    sealed_source = {
-        "sections_sha256": "1" * 64,
-        "datasets_sha256": "2" * 64,
-        "provenance_sha256": "3" * 64,
-        "downloads_sha256": "4" * 64,
-        "registered_image_quality_manifest_sha256": "5" * 64,
+    predictions = sealed / "SEALED_predictions.csv"
+    import pandas as pd
+    from training.evaluate_sealed_registered_holdout import (
+        POSE_AXES,
+        paired_animal_bootstrap,
+        paired_animal_joint_superiority,
+        sealed_release_report,
+    )
+
+    methods = {
+        "deepslice_ai": (120.0, 2.5, 3.5),
+        "deepslice_mens_ai": (110.0, 2.25, 3.25),
+        "deepslice_mens_ai_ci": (100.0, 2.0, 3.0),
+        "atlas_pose": (1.0, 0.01, 0.01),
     }
+    rows = []
+    for section_id in range(1400):
+        experiment_id = section_id // 140 + 1
+        ground_truth = (
+            -4500.0 + 5000.0 * section_id / 1399.0,
+            (-3.0, 0.0, 3.0)[section_id % 3],
+            (-10.0, -5.0, 1.0)[section_id % 3],
+        )
+        for method, errors in methods.items():
+            row = {
+                "sealed": True,
+                "split": "sealed_deepslice_s2p",
+                "method": method,
+                "experiment_id": experiment_id,
+                "specimen_id": experiment_id,
+                "section_image_id": section_id,
+                "section_number": section_id % 140,
+                "relative_path": f"images/{section_id}.jpg",
+                "product": "5" if experiment_id <= 5 else "8",
+                "ap_band": "in_domain",
+                "in_training_ap_domain": True,
+            }
+            for axis, truth, error in zip(POSE_AXES, ground_truth, errors):
+                row[f"gt_{axis}"] = truth
+                row[f"pred_{axis}"] = truth + error
+                row[f"error_{axis}"] = error
+                row[f"absolute_error_{axis}"] = abs(error)
+            rows.append(row)
+    prediction_table = pd.DataFrame(rows)
+    prediction_table.to_csv(predictions, index=False)
+    sealed_source = {
+        **{
+            name: value
+            for name, value in registered_hashes.items()
+            if name != "nonsealed_image_tree_sha256"
+        },
+        "sealed_image_tree_sha256": "6" * 64,
+    }
+    evaluator_environment = {
+        "contract_version": 1,
+        "source_sha256": {"evaluator.py": "7" * 64},
+        "deepslice_model_sha256": {"primary": "8" * 64, "secondary": "9" * 64},
+        "dependencies": {"python": "3.11"},
+    }
+    evaluator_environment["commitment_sha256"] = _canonical_json_sha256(
+        evaluator_environment
+    )
+    evaluator_environment_sha256 = evaluator_environment["commitment_sha256"]
+    comparisons = [
+        paired_animal_bootstrap(
+            prediction_table,
+            "atlas_pose",
+            "deepslice_mens_ai_ci",
+            f"absolute_error_{axis}",
+        )
+        for axis in POSE_AXES
+    ]
+    joint = paired_animal_joint_superiority(
+        prediction_table,
+        "atlas_pose",
+        "deepslice_mens_ai_ci",
+        tuple(f"absolute_error_{axis}" for axis in POSE_AXES),
+    )
     metrics.write_text(
-        json.dumps({"source": sealed_source, "evaluator_sha256": "6" * 64}),
+        json.dumps(
+            {
+                "benchmark_id": "deepslice_s2p_1400_quicknii_ras_v2",
+                "benchmark_role": "final_test_only",
+                "section_count": 1400,
+                "experiment_count": 10,
+                "source": sealed_source,
+                "evaluator_sha256": "8" * 64,
+                "evaluator_environment_sha256": evaluator_environment_sha256,
+                "animal_level_paired_bootstrap": comparisons,
+                "animal_level_joint_superiority": joint,
+            }
+        ),
         encoding="utf-8",
     )
     metadata_path = export_folder / "atlas_pose.json"
-    release_payload = {
-        "release_report_version": 2,
-        "sealed": True,
-        "benchmark_role": "final_release_gate",
-        "release_approved": True,
-        "promotion_ready": True,
-        "quality_gate": {"all_gates_passed": True, "passed": {"mean_ap_um": True}},
-        "deepslice_component_passed": {"ap_um": True, "lr_deg": True, "dv_deg": True},
-        "model_sha256": file_sha256(model_path),
-        "metadata_sha256": file_sha256(metadata_path),
-        "preprocessing_contract_sha256": metadata["preprocessing_contract_sha256"],
-        "training_source_sha256": metadata["source_sha256"],
-        "training_data_sha256": {
-            "synthetic_manifests": metadata["manifest_sha256"],
-            "registered_data": metadata["registered_data"]["sha256"],
-            "atlas_data": metadata["atlas_data_sha256"],
-        },
-        "sealed_data_sha256": sealed_source,
-        "sealed_metrics_sha256": file_sha256(metrics),
-        "evaluator_sha256": "6" * 64,
+    training_data = {
+        "synthetic_manifests": metadata["manifest_sha256"],
+        "registered_data": metadata["registered_data"]["sha256"],
+        "atlas_data": metadata["atlas_data_sha256"],
     }
-    release_payload["release_integrity_sha256"] = _canonical_json_sha256(release_payload)
+    presealed = sealed / "PRESEALED_COMMITMENT.json"
+    presealed.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "benchmark_id": "deepslice_s2p_1400_quicknii_ras_v2",
+                "model_sha256": file_sha256(model_path),
+                "metadata_sha256": file_sha256(metadata_path),
+                "training_source_sha256": metadata["source_sha256"],
+                "training_data_sha256": training_data,
+                "sealed_source_sha256": {
+                    name: value
+                    for name, value in registered_hashes.items()
+                    if name != "nonsealed_image_tree_sha256"
+                },
+                "evaluator_environment": evaluator_environment,
+            }
+        ),
+        encoding="utf-8",
+    )
+    claim = sealed / "SEALED_CLAIM.json"
+    claim.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "benchmark_id": "deepslice_s2p_1400_quicknii_ras_v2",
+                "model_sha256": file_sha256(model_path),
+                "metadata_sha256": file_sha256(metadata_path),
+                "presealed_commitment_sha256": file_sha256(presealed),
+                "sealed_access_permitted_after_claim_only": True,
+                "claimed_at_utc": "2026-08-11T10:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    receipt = sealed / "SEALED_CONSUMPTION_RECEIPT.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "benchmark_id": "deepslice_s2p_1400_quicknii_ras_v2",
+                "status": "completed",
+                "model_sha256": file_sha256(model_path),
+                "claim_sha256": file_sha256(claim),
+                "presealed_commitment_sha256": file_sha256(presealed),
+                "sealed_predictions_sha256": file_sha256(predictions),
+                "sealed_metrics_sha256": file_sha256(metrics),
+                "completed_at_utc": "2026-08-11T10:01:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    release_payload = sealed_release_report(
+        prediction_table,
+        comparisons,
+        joint,
+        file_sha256(model_path),
+        file_sha256(metadata_path),
+        metadata["preprocessing_contract_sha256"],
+        metadata["source_sha256"],
+        training_data,
+        sealed_source,
+        file_sha256(metrics),
+        file_sha256(predictions),
+        "8" * 64,
+        evaluator_environment_sha256,
+        file_sha256(presealed),
+        file_sha256(claim),
+        file_sha256(receipt),
+        "2026-08-11T10:01:00+00:00",
+    )
     release = sealed / "RELEASE_REPORT.json"
     release.write_text(json.dumps(release_payload), encoding="utf-8")
     destination = tmp_path / "promoted"
@@ -578,17 +937,64 @@ def test_export_is_verified_and_promotion_is_explicit(tmp_path):
         "provenance.json",
         "RELEASE_REPORT.json",
         "SEALED_metrics.json",
+        "SEALED_predictions.csv",
+        "PRESEALED_COMMITMENT.json",
+        "SEALED_CLAIM.json",
+        "SEALED_CONSUMPTION_RECEIPT.json",
     }
+    predictions.write_text("changed", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="sealed_predictions_sha256|raw predictions"):
+        promote_export(export_folder, release, tmp_path / "tampered-promotion")
 
 
 def test_registered_provenance_binds_download_manifest_and_ordinary_holdout_excludes_sealed(tmp_path):
-    for name in ("datasets.jsonl", "sections.jsonl", "provenance.json", "downloads.jsonl"):
-        (tmp_path / name).write_text(name, encoding="utf-8")
+    image = tmp_path / "images" / "1.jpg"
+    image.parent.mkdir()
+    image.write_bytes(b"registered-image")
+    (tmp_path / "datasets.jsonl").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "sections.jsonl").write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in (
+                {
+                    "section_image_id": 1,
+                    "split": "train",
+                    "relative_path": "images/1.jpg",
+                },
+                {
+                    "section_image_id": 2,
+                    "split": "sealed_deepslice_s2p",
+                    "relative_path": "images/2.jpg",
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "downloads.jsonl").write_text(
+        "\n".join(
+            (
+                json.dumps({"section_image_id": 1, "sha256": file_sha256(image)}),
+                json.dumps({"section_image_id": 2, "sha256": "f" * 64}),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "provenance.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "registered_image_quality.json").write_text("{}", encoding="utf-8")
     hashes = registered_data_hashes(tmp_path)
-    assert set(hashes) == {"datasets.jsonl", "sections.jsonl", "provenance.json", "downloads.jsonl"}
-    old = hashes["downloads.jsonl"]
-    (tmp_path / "downloads.jsonl").write_text("changed", encoding="utf-8")
-    assert registered_data_hashes(tmp_path)["downloads.jsonl"] != old
+    assert set(hashes) == {
+        "datasets.jsonl",
+        "sections.jsonl",
+        "provenance.json",
+        "downloads.jsonl",
+        "registered_image_quality.json",
+        "nonsealed_image_tree_sha256",
+    }
+    image.write_bytes(b"changed")
+    with pytest.raises(RuntimeError, match="image checksum"):
+        registered_data_hashes(tmp_path)
     assert "sealed_deepslice_s2p" not in inspect.getsource(held_out_reports)
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import os
 import pickle
@@ -15,15 +14,16 @@ import numpy as np
 import torch
 import PIL
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 
 from source.atlas_pose_runtime import (
+    ATLAS_POSE_SEALED_SPLIT as SEALED_SPLIT,
     ATLAS_POSE_PREPROCESSING_VERSION,
     AUTOMATIC_BRAIN_MASK_VERSION,
-    POSE_IMAGE_SIZE,
     automatic_brain_mask,
     atlas_pose_preprocessing_contract_sha256,
     brain_orientation_affine,
+    canonical_brain_sampling_grid,
     preprocess_atlas_pose_image,
 )
 from source.registered_image_quality import (
@@ -36,7 +36,6 @@ from source.registered_image_quality import (
 DOWNSAMPLE = 5
 DOWNSAMPLE_FACTOR = 2**DOWNSAMPLE
 VOXEL_UM = 25.0
-SEALED_SPLIT = "sealed_deepslice_s2p"
 COARSE_ANATOMY_CLASSES = (
     "exterior_background",
     "cortex",
@@ -96,21 +95,36 @@ def registered_image_cache_key(root: str | Path) -> str:
     ).hexdigest()
 
 
-def _callable_contract_sha256(function) -> str | None:
-    if function is None:
-        return None
-    source_path = Path(inspect.getsourcefile(function) or "")
-    if not source_path.is_file():
-        raise ValueError(f"Cannot hash augmentation source for {function.__qualname__}")
-    payload = {
-        "module": function.__module__,
-        "name": function.__qualname__,
-        "defaults": repr(function.__defaults__),
-        "source_sha256": _file_sha256(source_path),
-    }
+def _contract_sha256(contract: dict) -> str:
     return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def registered_static_cache_contract(
+    root: str | Path,
+    atlas_folder: str | Path,
+    augmentation=None,
+    seed: int = 0,
+    views: int = 1,
+) -> dict:
+    del augmentation, seed, views
+    root = Path(root)
+    atlas_folder = Path(atlas_folder)
+    return {
+        "cache_role": "registered-mask-and-anatomy-v1",
+        "image_contract_sha256": registered_image_cache_key(root),
+        "datasets_sha256": _file_sha256(root / "datasets.jsonl"),
+        "annotation_sha256": _file_sha256(atlas_folder / "annotation_25.nrrd"),
+        "atlas_labels_sha256": _file_sha256(atlas_folder / "atlas_labels.pkl"),
+        "registered_dataset_source_sha256": _file_sha256(Path(__file__)),
+        "dependency_versions": {
+            "numpy": np.__version__,
+            "opencv": cv2.__version__,
+            "pillow": PIL.__version__,
+            "pynrrd": version("pynrrd"),
+        },
+    }
 
 
 def registered_static_cache_key(
@@ -120,27 +134,27 @@ def registered_static_cache_key(
     seed: int = 0,
     views: int = 1,
 ) -> str:
-    root = Path(root)
-    atlas_folder = Path(atlas_folder)
-    contract = {
-        "image_contract_sha256": registered_image_cache_key(root),
-        "datasets_sha256": _file_sha256(root / "datasets.jsonl"),
-        "annotation_sha256": _file_sha256(atlas_folder / "annotation_25.nrrd"),
-        "atlas_labels_sha256": _file_sha256(atlas_folder / "atlas_labels.pkl"),
-        "registered_dataset_source_sha256": _file_sha256(Path(__file__)),
-        "augmentation_contract_sha256": _callable_contract_sha256(augmentation),
-        "dependency_versions": {
-            "numpy": np.__version__,
-            "opencv": cv2.__version__,
-            "pillow": PIL.__version__,
-            "pynrrd": version("pynrrd"),
-        },
-        "seed": int(seed),
-        "views": int(views),
-    }
-    return hashlib.sha256(
-        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return _contract_sha256(
+        registered_static_cache_contract(root, atlas_folder, augmentation, seed, views)
+    )
+
+
+def _ensure_cache_contract(folder: Path, contract: dict) -> Path:
+    cache_key = _contract_sha256(contract)
+    payload = {"cache_key": cache_key, "contract": contract}
+    path = folder / "contract.json"
+    if path.is_file():
+        if json.loads(path.read_text(encoding="utf-8")) != payload:
+            raise RuntimeError(f"Registered cache contract is corrupt: {path}")
+        return path
+    folder.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"contract.{os.getpid()}.tmp.json")
+    temporary.write_text(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+    return path
 
 
 def _coarse_lookup(annotation: np.ndarray, atlas_labels: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -232,12 +246,7 @@ def preprocess_anatomy_target(anatomy: np.ndarray, mask: np.ndarray) -> np.ndarr
     oriented_anatomy = cv2.warpAffine(
         anatomy.astype(np.uint8), matrix[:2], size, flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT
     )
-    y, x = np.nonzero(oriented_mask)
-    center_x = (float(x.min()) + float(x.max())) / 2.0
-    center_y = (float(y.min()) + float(y.max())) / 2.0
-    side = max(float(x.max() - x.min()), float(y.max() - y.min())) * 1.14
-    axis = np.linspace(-0.5, 0.5, POSE_IMAGE_SIZE, dtype=np.float32)
-    sample_x, sample_y = np.meshgrid(center_x + axis * side, center_y + axis * side)
+    sample_x, sample_y = canonical_brain_sampling_grid(oriented_mask)
     target = cv2.remap(
         oriented_anatomy, sample_x, sample_y, cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT
     )
@@ -257,7 +266,6 @@ class RegisteredSectionDataset(Dataset):
         augmentation=None,
         seed: int = 0,
         views: int = 1,
-        include_sealed: bool = False,
         brain_masker=automatic_brain_mask,
         include_anatomy: bool = True,
         cache_images: bool = False,
@@ -272,6 +280,11 @@ class RegisteredSectionDataset(Dataset):
         self.include_anatomy = bool(include_anatomy)
         self.cache_images = bool(cache_images)
         self.cache_static = bool(cache_static)
+        self._worker_rngs = {}
+        if split == SEALED_SPLIT:
+            raise RuntimeError(
+                "The generic registered dataset cannot load the globally sealed DeepSlice cohort"
+            )
         if self.views not in (1, 2):
             raise ValueError("Registered-section training supports one or two image views")
         if self.cache_images and (
@@ -288,7 +301,11 @@ class RegisteredSectionDataset(Dataset):
         ):
             raise ValueError("The immutable static cache supports production anatomy-enabled training")
 
-        datasets = _read_jsonl(self.root / "datasets.jsonl")
+        datasets = [
+            record
+            for record in _read_jsonl(self.root / "datasets.jsonl")
+            if record["split"] != SEALED_SPLIT
+        ]
         specimen_splits = {}
         for record in datasets:
             specimen_id = int(record["specimen_id"])
@@ -306,7 +323,7 @@ class RegisteredSectionDataset(Dataset):
             record
             for record in sections
             if (split is None or record["split"] == split)
-            and (include_sealed or record["split"] != SEALED_SPLIT)
+            and record["split"] != SEALED_SPLIT
         ]
         for record in requested_records:
             dataset = self.datasets[int(record["experiment_id"])]
@@ -334,20 +351,20 @@ class RegisteredSectionDataset(Dataset):
             if self.cache_images
             else None
         )
-        self.static_cache_folder = (
-            self.root
-            / ".atlas_pose_cache"
-            / registered_static_cache_key(
+        self.static_cache_contract_path = None
+        if self.cache_static:
+            contract = registered_static_cache_contract(
                 self.root,
                 self.atlas_folder,
                 augmentation=self.augmentation,
                 seed=self.seed,
                 views=self.views,
             )
-            / "training_static"
-            if self.cache_static
-            else None
-        )
+            cache_root = self.root / ".atlas_pose_cache" / _contract_sha256(contract)
+            self.static_cache_contract_path = _ensure_cache_contract(cache_root, contract)
+            self.static_cache_folder = cache_root / "training_static"
+        else:
+            self.static_cache_folder = None
 
     def __len__(self) -> int:
         return len(self.records)
@@ -366,6 +383,19 @@ class RegisteredSectionDataset(Dataset):
     def _static_cache_path(self, record: dict) -> Path:
         return self.static_cache_folder / record["split"] / f"{int(record['section_image_id'])}.npz"
 
+    def _augmentation_rng(self) -> np.random.Generator:
+        worker = get_worker_info()
+        worker_id = -1 if worker is None else int(worker.id)
+        worker_seed = self.seed if worker is None else int(worker.seed)
+        state = self._worker_rngs.get(worker_id)
+        if state is None or state[0] != worker_seed:
+            state = (
+                worker_seed,
+                np.random.default_rng(np.random.SeedSequence((self.seed, worker_seed))),
+            )
+            self._worker_rngs[worker_id] = state
+        return state[1]
+
     def __getitem__(self, index: int) -> dict:
         record = self.records[index]
         dataset = self.datasets[int(record["experiment_id"])]
@@ -375,25 +405,21 @@ class RegisteredSectionDataset(Dataset):
         cached_anatomy = None
         if static_cache_path is not None and static_cache_path.is_file():
             with np.load(static_cache_path, allow_pickle=False) as cached:
-                gray = cached["image"]
-                image = torch.from_numpy(
-                    np.repeat(gray[None], 3, axis=0)
-                    if self.views == 1
-                    else np.repeat(gray[:, None], 3, axis=1)
-                )
+                observed_mask = cached["mask"].astype(bool)
                 cached_anatomy = torch.from_numpy(cached["anatomy"].astype(np.int64))
-        elif cache_path is not None and cache_path.is_file():
+        if cache_path is not None and cache_path.is_file():
             gray = np.load(cache_path, allow_pickle=False)
             image = torch.from_numpy(np.repeat(gray[None], 3, axis=0))
         else:
             with Image.open(self.root / record["relative_path"]) as source:
                 latent = np.asarray(source).copy()
-            observed_mask = np.asarray(self.brain_masker(latent), dtype=bool)
+            if observed_mask is None:
+                observed_mask = np.asarray(self.brain_masker(latent), dtype=bool)
             images = []
+            rng = self._augmentation_rng()
             for view in range(self.views):
                 styled = latent
                 if self.augmentation is not None:
-                    rng = np.random.default_rng(np.random.SeedSequence((self.seed, index, view)))
                     styled = np.asarray(self.augmentation(latent.copy(), rng))
                     if styled.shape[:2] != latent.shape[:2]:
                         raise ValueError("Registered-section augmentation must preserve image geometry")
@@ -440,7 +466,7 @@ class RegisteredSectionDataset(Dataset):
                     )
                     np.savez_compressed(
                         temporary,
-                        image=(image[0] if self.views == 1 else image[:, 0]).numpy(),
+                        mask=observed_mask.astype(np.uint8),
                         anatomy=cached_anatomy.numpy().astype(np.uint8),
                     )
                     os.replace(temporary, static_cache_path)

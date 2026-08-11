@@ -30,9 +30,34 @@ def test_automatic_brain_mask_rejects_dim_textured_slide_background():
     assert not detected[:, [0, -1]].any()
 
 
+def test_automatic_brain_mask_retains_deep_tissue_in_low_contrast_nissl():
+    rng = np.random.default_rng(9)
+    height, width = 320, 440
+    yy, xx = np.mgrid[:height, :width]
+    expected = ((xx - 220.0) / 165.0) ** 2 + ((yy - 165.0) / 115.0) ** 2 <= 1.0
+    inner = ((xx - 220.0) / 145.0) ** 2 + ((yy - 165.0) / 95.0) ** 2 <= 1.0
+    image = np.clip(rng.normal(22.0, 2.0, (height, width)), 0, 255).astype(np.uint8)
+    image[expected] = np.clip(
+        42.0 + 5.0 * np.sin(xx[expected] / 13.0) + rng.normal(0.0, 2.0, expected.sum()),
+        0,
+        255,
+    )
+    cortex = expected & ~inner
+    image[cortex] = np.clip(
+        82.0 + 10.0 * np.sin(xx[cortex] / 17.0) + rng.normal(0.0, 4.0, cortex.sum()),
+        0,
+        255,
+    )
+
+    detected = automatic_brain_mask(image)
+
+    assert np.logical_and(detected, expected).sum() / expected.sum() > 0.90
+    assert detected[165, 220]
+
+
 def test_mask_version_is_separate_from_the_onnx_tensor_preprocessing_contract(monkeypatch):
     contract = runtime.atlas_pose_preprocessing_contract_sha256()
-    assert runtime.AUTOMATIC_BRAIN_MASK_VERSION == "border-distance-low-contrast-retry-v3"
+    assert runtime.AUTOMATIC_BRAIN_MASK_VERSION == "border-distance-conditional-hull-v4"
     monkeypatch.setattr(runtime, "automatic_brain_mask", lambda image: np.ones(image.shape[:2], bool))
     assert runtime.atlas_pose_preprocessing_contract_sha256() == contract
 

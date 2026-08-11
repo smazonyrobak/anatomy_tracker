@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import torch
 from PIL import Image
+from torch.utils.data import DataLoader
 
 from source.atlas_pose_runtime import automatic_brain_mask, preprocess_atlas_pose_image
 from source.registered_image_quality import build_registered_image_quality_manifest
@@ -17,12 +18,22 @@ from training.registered_section_dataset import (
     _coarse_lookup,
     project_annotation,
     registered_image_cache_key,
+    registered_static_cache_contract,
     registered_static_cache_key,
 )
 
 
 def write_jsonl(path: Path, records: list[dict]):
     path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+
+def noise_style(image, rng):
+    noise = rng.normal(0.0, 24.0, image.shape[:2])
+    return np.clip(image.astype(np.float32) + noise, 0.0, 255.0).astype(np.uint8)
+
+
+def full_mask(image):
+    return np.ones(image.shape[:2], dtype=bool)
 
 
 def fixture(tmp_path: Path):
@@ -120,27 +131,30 @@ def test_downsample_pixel_centers_project_exact_mask_and_nine_anatomy_classes(tm
 
 def test_dataset_uses_production_preprocessing_and_returns_deterministic_independent_views(tmp_path):
     atlas, annotation, labels, dataset_record, section_record, _ = fixture(tmp_path)
-
-    def style(image, rng):
-        noise = rng.normal(0.0, 24.0, image.shape[:2])
-        return np.clip(image.astype(np.float32) + noise, 0.0, 255.0).astype(np.uint8)
-
-    observed_mask = lambda image: np.ones(image.shape[:2], dtype=bool)
     dataset = RegisteredSectionDataset(
         tmp_path,
         atlas,
-        augmentation=style,
+        augmentation=noise_style,
         seed=71,
         views=2,
-        brain_masker=observed_mask,
+        brain_masker=full_mask,
     )
     assert dataset.annotation is None
     item = dataset[0]
     assert dataset.annotation is not None
     repeat = dataset[0]
+    replica = RegisteredSectionDataset(
+        tmp_path,
+        atlas,
+        augmentation=noise_style,
+        seed=71,
+        views=2,
+        brain_masker=full_mask,
+    )[0]
     assert item["image"].shape == (2, 3, 299, 299)
     assert not torch.equal(item["image"][0], item["image"][1])
-    assert torch.equal(item["image"], repeat["image"])
+    assert not torch.equal(item["image"], repeat["image"])
+    assert torch.equal(item["image"], replica["image"])
     assert item["anatomy"].shape == (299, 299)
     assert item["anatomy"].dtype == torch.int64
     assert set(torch.unique(item["anatomy"]).tolist()) <= set(range(9))
@@ -148,7 +162,7 @@ def test_dataset_uses_production_preprocessing_and_returns_deterministic_indepen
     assert (item["specimen_id"].item(), item["experiment_id"].item()) == (101, 1)
     assert item["in_training_ap_domain"].item() is True
 
-    single = RegisteredSectionDataset(tmp_path, atlas, views=1, brain_masker=observed_mask)[0]
+    single = RegisteredSectionDataset(tmp_path, atlas, views=1, brain_masker=full_mask)[0]
     keys, values = _coarse_lookup(annotation, labels)
     _, mask, _ = project_annotation(annotation, keys, values, dataset_record, section_record, (8, 8))
     with Image.open(tmp_path / section_record["relative_path"]) as source:
@@ -158,9 +172,30 @@ def test_dataset_uses_production_preprocessing_and_returns_deterministic_indepen
 
     dataset.annotation.fill(0)
     atlas_mask_counterfactual = dataset[0]
-    assert torch.equal(atlas_mask_counterfactual["image"], item["image"])
     assert torch.count_nonzero(item["anatomy"]) > 0
     assert torch.count_nonzero(atlas_mask_counterfactual["anatomy"]) == 0
+
+
+def test_worker_augmentation_stream_is_reproducible_and_changes_between_epochs(tmp_path):
+    atlas, *_ = fixture(tmp_path)
+
+    def loader():
+        dataset = RegisteredSectionDataset(
+            tmp_path,
+            atlas,
+            augmentation=noise_style,
+            seed=71,
+            include_anatomy=False,
+            brain_masker=full_mask,
+        )
+        return DataLoader(dataset, num_workers=1, generator=torch.Generator().manual_seed(19))
+
+    first_loader = loader()
+    second_loader = loader()
+    first_sequence = [next(iter(first_loader))["image"] for _ in range(2)]
+    second_sequence = [next(iter(second_loader))["image"] for _ in range(2)]
+    assert not torch.equal(first_sequence[0], first_sequence[1])
+    assert all(torch.equal(first, second) for first, second in zip(first_sequence, second_sequence))
 
 
 def test_registered_dataset_defaults_to_the_production_histology_masker(tmp_path):
@@ -236,7 +271,7 @@ def test_image_only_registered_cache_is_exact_persistent_and_never_loads_atlas(t
     assert registered_image_cache_key(tmp_path) != first_key
 
 
-def test_training_static_cache_is_exact_persistent_and_never_reloads_atlas(tmp_path):
+def test_training_static_cache_keeps_mask_and_anatomy_static_but_restyles_images(tmp_path):
     atlas, *_ = fixture(tmp_path)
     y, x = np.mgrid[:128, :160]
     image = np.full((128, 160), 18, dtype=np.uint8)
@@ -262,7 +297,7 @@ def test_training_static_cache_is_exact_persistent_and_never_reloads_atlas(tmp_p
     expected = first[0]
     assert first._static_cache_path(first.records[0]).is_file()
     with np.load(first._static_cache_path(first.records[0]), allow_pickle=False) as cached:
-        assert set(cached.files) == {"image", "anatomy"}
+        assert set(cached.files) == {"mask", "anatomy"}
     assert first.annotation is not None
 
     second = RegisteredSectionDataset(
@@ -273,33 +308,66 @@ def test_training_static_cache_is_exact_persistent_and_never_reloads_atlas(tmp_p
         views=2,
         cache_static=True,
     )
-    (tmp_path / "images/train/1/11.jpg").unlink()
     actual = second[0]
+    restyled = second[0]
     assert second.annotation is None
     assert torch.equal(actual["image"], expected["image"])
+    assert not torch.equal(restyled["image"], actual["image"])
     assert torch.equal(actual["anatomy"], expected["anatomy"])
     assert torch.equal(actual["pose"], expected["pose"])
 
     first_key = registered_static_cache_key(tmp_path, atlas, style, seed=71, views=2)
-    assert registered_static_cache_key(tmp_path, atlas, style, seed=72, views=2) != first_key
-    assert registered_static_cache_key(tmp_path, atlas, style, seed=71, views=1) != first_key
+    assert registered_static_cache_key(tmp_path, atlas, style, seed=72, views=2) == first_key
+    assert registered_static_cache_key(tmp_path, atlas, style, seed=71, views=1) == first_key
     write_jsonl(tmp_path / "downloads.jsonl", [{"section_image_id": 11, "sha256": "changed"}])
     assert registered_static_cache_key(tmp_path, atlas, style, seed=71, views=2) != first_key
 
 
-def test_sealed_sections_are_excluded_unless_explicitly_requested(tmp_path):
+def test_static_cache_contract_is_style_independent_and_self_verifying(tmp_path):
     atlas, *_ = fixture(tmp_path)
-    assert len(RegisteredSectionDataset(tmp_path, atlas, split=None)) == 1
-    assert len(RegisteredSectionDataset(tmp_path, atlas, split=None, include_sealed=True)) == 2
-    assert len(RegisteredSectionDataset(tmp_path, atlas, split="sealed_deepslice_s2p")) == 0
-    assert len(
+
+    def style(source, rng):
+        return np.clip(source.astype(np.float32) + rng.normal(0.0, 2.0, source.shape), 0, 255).astype(np.uint8)
+
+    expected_key = registered_static_cache_key(tmp_path, atlas, style, seed=71, views=2)
+    contract = registered_static_cache_contract(tmp_path, atlas, style, seed=71, views=2)
+    assert contract["cache_role"] == "registered-mask-and-anatomy-v1"
+    assert not {"augmentation", "seed", "views"} & set(contract)
+
+    dataset = RegisteredSectionDataset(
+        tmp_path,
+        atlas,
+        augmentation=style,
+        seed=71,
+        views=2,
+        cache_static=True,
+    )
+    payload = json.loads(dataset.static_cache_contract_path.read_text(encoding="utf-8"))
+    assert payload == {"cache_key": expected_key, "contract": contract}
+    payload["cache_key"] = "0" * 64
+    dataset.static_cache_contract_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="cache contract is corrupt"):
+        RegisteredSectionDataset(
+            tmp_path,
+            atlas,
+            augmentation=style,
+            seed=71,
+            views=2,
+            cache_static=True,
+        )
+
+
+def test_generic_registered_dataset_cannot_load_sealed_sections(tmp_path):
+    atlas, *_ = fixture(tmp_path)
+    dataset = RegisteredSectionDataset(tmp_path, atlas, split=None)
+    assert len(dataset) == 1
+    assert set(dataset.datasets) == {1}
+    with pytest.raises(RuntimeError, match="cannot load the globally sealed"):
         RegisteredSectionDataset(
             tmp_path,
             atlas,
             split="sealed_deepslice_s2p",
-            include_sealed=True,
         )
-    ) == 1
 
 
 def test_specimen_cannot_cross_recorded_splits(tmp_path):

@@ -84,6 +84,10 @@ SELECTION_STRATA = (
 LOCKED_STRATA = tuple(f"{name}_label_free" for name in SELECTION_STRATA)
 SELECTION_SEED_BASE = 1_000_000_000
 LOCKED_SEED_BASE = 2_000_000_000
+WRONG_AP_RANGES_UM = {
+    "wrong_ap_near": (500.0, 1000.0),
+    "wrong_ap_far": (1000.0, 1500.0),
+}
 # At the native 25 um grid these cap median/p95 dense landmark error at 25/50 um.
 MAX_LANDMARK_TRE_MEDIAN_PX = 1.0
 MAX_LANDMARK_TRE_P95_PX = 2.0
@@ -95,6 +99,13 @@ MIN_LABEL_DICE_IMPROVEMENT = 0.05
 
 def workspace_path() -> Path:
     return Path(os.environ.get("DIFFEO_WORKSPACE", str(DEFAULT_WORKSPACE)))
+
+
+def registered_root_path() -> Path:
+    value = os.environ.get("DIFFEO_REGISTERED_ROOT")
+    if not value:
+        raise RuntimeError("DIFFEO_REGISTERED_ROOT is required for nonlinear release training")
+    return Path(value)
 
 
 def _torch_generator(seed: int, device: torch.device) -> torch.Generator:
@@ -369,7 +380,6 @@ def make_synthetic_pair(
         "target_velocity": target_velocity,
         "atlas_supervision_mask": atlas_supervision_mask.float(),
         "affine_supervision_mask": affine_supervision_mask.float(),
-        "retained_overlap": atlas_supervision_mask.flatten(1).sum(1) / mask.flatten(1).sum(1).clamp_min(1.0),
         "wrong_pair": torch.full((batch,), is_wrong, device=device, dtype=torch.bool),
         "similarity_supervision": torch.full((batch,), not is_wrong, device=device, dtype=torch.bool),
         "dense_supervision": torch.full((batch,), not is_wrong, device=device, dtype=torch.bool),
@@ -405,7 +415,11 @@ def real_histology_training_batch(
             [torch.from_numpy(section["moving_mask"]) for section in sections]
         )[:, None].to(device).float()
         labels = torch.zeros_like(images, dtype=torch.long)
-        stratum = "nuisance_damage_label_free" if seed % 2 else "smooth_deformation_label_free"
+        stratum = (
+            "smooth_deformation_label_free",
+            "nuisance_damage_label_free",
+            "real_histology_interior_label_free",
+        )[seed % 3]
         pair = make_synthetic_pair(images, labels, masks, seed=seed, stratum=stratum)
         pair["plane_basis_um"] = torch.stack(
             [torch.from_numpy(section["plane_basis_um"]) for section in sections]
@@ -449,7 +463,7 @@ class AllenObliquePairGenerator:
             wrong_manifest = {name: np.array(value, copy=True) for name, value in manifest.items()}
             rng = np.random.default_rng(seed ^ 0x51CE)
             if base_stratum in {"wrong_ap_near", "wrong_ap_far"}:
-                bounds = (25.0, 500.0) if base_stratum == "wrong_ap_near" else (500.0, 1500.0)
+                bounds = WRONG_AP_RANGES_UM[base_stratum]
                 displacement = rng.uniform(*bounds, count).astype(np.float32)
                 direction = rng.choice(np.asarray([-1.0, 1.0], dtype=np.float32), count)
                 candidate = manifest["ap_um"] + displacement * direction
@@ -538,6 +552,23 @@ def label_dice_score(
     mask: torch.Tensor,
 ) -> torch.Tensor:
     return 1.0 - hierarchical_label_dice_loss(fixed_labels, moving_labels, atlas_to_affine, mask)
+
+
+def retained_overlap_after_warp(
+    fixed_mask: torch.Tensor,
+    moving_mask: torch.Tensor,
+    atlas_to_affine: torch.Tensor,
+) -> torch.Tensor:
+    fixed_hard = fixed_mask > 0.5
+    moving_hard = moving_mask > 0.5
+    warped_moving_hard = sample_at_pixel_map(
+        moving_mask, atlas_to_affine, padding_mode="zeros"
+    ) > 0.5
+    overlap = fixed_hard & moving_hard
+    return (
+        (overlap & warped_moving_hard).flatten(1).sum(1)
+        / overlap.flatten(1).sum(1).clamp_min(1)
+    )
 
 
 def registration_objective(
@@ -735,6 +766,9 @@ def validation_report(
             inverse_jacobian = jacobian_determinant(inverse)
             fixed_hard = batch["fixed_mask"] > 0.5
             moving_hard = batch["moving_mask"] > 0.5
+            retained_overlap = retained_overlap_after_warp(
+                batch["fixed_mask"], batch["moving_mask"], forward
+            )
             jacobian = torch.cat((forward_jacobian.flatten(), inverse_jacobian.flatten()))
             trusted_jacobian = torch.cat(
                 (
@@ -811,7 +845,7 @@ def validation_report(
                     _masked_percentile(inverse_displacement, moving_hard, 0.95),
                 ),
                 "valid_reject_rate": float((torch.sigmoid(reject_logit) >= 0.5).float().mean()),
-                "retained_overlap": float(batch["retained_overlap"].min()),
+                "retained_overlap": float(retained_overlap.min()),
             }
             rows.append(row)
         strata[stratum] = {
@@ -1042,7 +1076,8 @@ def write_prelocked_evidence(model_path: Path, report: dict) -> tuple[Path, str]
         "onnx_parity": report.get("onnx_parity"),
         "locked_pytorch": report.get("locked_pytorch"),
         "locked_onnx": report.get("locked_onnx"),
-        "locked_real_histology_commitment": report.get("locked_real_histology_commitment"),
+        "locked_native_histology_commitment": report.get("locked_native_histology_commitment"),
+        "locked_internal_landmark_commitment": report.get("locked_internal_landmark_commitment"),
     }
     evidence_path = model_path.with_suffix(".prelocked.json")
     evidence_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -1053,7 +1088,13 @@ def write_prelocked_evidence(model_path: Path, report: dict) -> tuple[Path, str]
 def write_model_manifest(model_path: Path, report: dict) -> tuple[Path, str]:
     model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
     evidence_path, evidence_sha256 = write_prelocked_evidence(model_path, report)
-    real_gate = report["real_histology_ground_truth_gate"]
+    native_gate = report.get("native_histology_secondary_gate", {})
+    landmark_gate = report.get("internal_landmark_gate", {})
+    promotion_ready = bool(
+        report.get("promotion_ready", False)
+        and native_gate.get("passed") is True
+        and landmark_gate.get("passed") is True
+    )
     payload = {
         "format_version": MODEL_CONTRACT_VERSION,
         "model_sha256": model_sha256,
@@ -1066,15 +1107,26 @@ def write_model_manifest(model_path: Path, report: dict) -> tuple[Path, str]:
         "runtime_gates": RUNTIME_GATE_CONTRACT,
         "prelocked_evidence_file": evidence_path.name,
         "prelocked_evidence_sha256": evidence_sha256,
-        "locked_real_histology_commitment": report.get("locked_real_histology_commitment"),
+        "locked_native_histology_commitment": report.get("locked_native_histology_commitment"),
+        "locked_internal_landmark_commitment": report.get("locked_internal_landmark_commitment"),
         "synthetic_gate_passed": bool(report["synthetic_gate"]["passed"]),
         "onnx_gate_passed": bool(report["onnx_gate"]["passed"]),
-        "real_histology_gate_passed": bool(real_gate["passed"]),
-        "real_histology_gate_report_sha256": real_gate.get("report_sha256"),
-        "real_histology_evaluation_manifest_sha256": real_gate.get("evaluation_manifest_sha256"),
-        "real_histology_source": real_gate.get("source"),
-        "real_histology_benchmark_role": real_gate.get("benchmark_role"),
-        "promotion_ready": bool(report["promotion_ready"]),
+        "native_histology_secondary_gate_passed": native_gate.get("passed") is True,
+        "native_histology_secondary_gate_report_sha256": native_gate.get("report_sha256"),
+        "native_histology_secondary_evaluation_manifest_sha256": native_gate.get(
+            "evaluation_manifest_sha256"
+        ),
+        "native_histology_secondary_source": native_gate.get("source"),
+        "native_histology_secondary_benchmark_role": native_gate.get("benchmark_role"),
+        "internal_landmark_gate_passed": landmark_gate.get("passed") is True,
+        "internal_landmark_gate_report_sha256": landmark_gate.get("report_sha256"),
+        "internal_landmark_evaluation_manifest_sha256": landmark_gate.get(
+            "evaluation_manifest_sha256"
+        ),
+        "internal_landmark_source": landmark_gate.get("source"),
+        "internal_landmark_benchmark_role": landmark_gate.get("benchmark_role"),
+        "release_status": "ready_for_source_review" if promotion_ready else "experimental",
+        "promotion_ready": promotion_ready,
     }
     manifest_path = model_path.with_suffix(".manifest.json")
     manifest_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -1138,14 +1190,15 @@ def train() -> dict:
     seed = int(os.environ.get("DIFFEO_SEED", "73051"))
     torch.manual_seed(seed)
 
-    generator = AllenObliquePairGenerator(ATLAS, device)
-    registered_root = os.environ.get("DIFFEO_REGISTERED_ROOT")
-    real_source = RegisteredHistologySource(registered_root, ATLAS) if registered_root else None
+    registered_root = registered_root_path()
     real_train_fraction = float(os.environ.get("DIFFEO_REAL_HISTOLOGY_TRAIN_FRACTION", "0.35"))
-    real_training_bank = real_source.training_bank_manifest() if real_source else None
-    real_selection_manifest = (
-        real_source.evaluation_manifest("validation", REAL_HISTOLOGY_SELECTION_SEED)
-        if real_source else None
+    if not 0.0 < real_train_fraction <= 1.0:
+        raise ValueError("DIFFEO_REAL_HISTOLOGY_TRAIN_FRACTION must be in (0, 1]")
+    generator = AllenObliquePairGenerator(ATLAS, device)
+    real_source = RegisteredHistologySource(registered_root, ATLAS)
+    real_training_bank = real_source.training_bank_manifest()
+    real_selection_manifest = real_source.evaluation_manifest(
+        "validation", REAL_HISTOLOGY_SELECTION_SEED
     )
     model = RegistrationWithRejector().to(device)
     ema = EMA(model)
@@ -1168,10 +1221,10 @@ def train() -> dict:
         if rng.random() < 0.35:
             stratum += "_label_free"
         training_seed = (seed + step * 1009 + 17) % 900_000_000
-        if real_source and rng.random() < real_train_fraction:
+        if rng.random() < real_train_fraction:
             real_mode = str(rng.choice(
                 np.asarray(("synthetic", "native_positive", *NATIVE_WRONG_KINDS)),
-                p=np.asarray((0.50, 0.25, 0.25 / 3.0, 0.25 / 3.0, 0.25 / 3.0)),
+                p=np.asarray((0.50, 0.25, 0.125, 0.125)),
             ))
             batch = real_histology_training_batch(
                 real_source, real_training_bank, training_seed, batch_size, device, real_mode
@@ -1199,17 +1252,14 @@ def train() -> dict:
                 strata_names=SELECTION_STRATA,
                 seed_base=SELECTION_SEED_BASE,
             )
-            real_selection = (
-                evaluate_real_histology(
-                    ema.model,
-                    real_source,
-                    real_selection_manifest,
-                    make_synthetic_pair,
-                    device,
-                    torch_model_sha256(ema.model),
-                    batch_size=min(batch_size, 4),
-                )
-                if real_source else None
+            real_selection = evaluate_real_histology(
+                ema.model,
+                real_source,
+                real_selection_manifest,
+                make_synthetic_pair,
+                device,
+                torch_model_sha256(ema.model),
+                batch_size=min(batch_size, 4),
             )
             gates = report["gates"]
             score = (
@@ -1217,15 +1267,14 @@ def train() -> dict:
                 + 5.0 * (1.0 - gates["label_dice"])
                 + 5.0 * (1.0 - gates["wrong_reject_rate"])
             )
-            if real_selection:
-                real_gates = real_selection["gates"]
-                score += (
-                    real_gates["dense_epe_median_px"]
-                    + 0.5 * real_gates["dense_epe_p95_px"]
-                    + 10.0 * real_gates["native_mind_delta"]
-                    + 5.0 * (1.0 - real_gates["native_accept_rate"])
-                    + 5.0 * (1.0 - real_gates["native_wrong_reject_rate"])
-                )
+            real_gates = real_selection["gates"]
+            score += (
+                real_gates["dense_epe_median_px"]
+                + 0.5 * real_gates["dense_epe_p95_px"]
+                + 10.0 * real_gates["native_mind_delta"]
+                + 5.0 * (1.0 - real_gates["native_accept_rate"])
+                + 5.0 * (1.0 - real_gates["native_wrong_reject_rate"])
+            )
             if not np.isfinite(score):
                 raise RuntimeError("Selection metrics became non-finite")
             selection_key = checkpoint_selection_key(report, real_selection, score)
@@ -1306,21 +1355,19 @@ def train() -> dict:
         else:
             onnx_failures = ["ONNX outputs do not match PyTorch within the parity tolerances"]
 
-    real_histology_gate = {
+    internal_landmark_gate = {
         "status": "blocked",
         "passed": False,
         "reason": (
-            "The locked animal-disjoint test gate is deliberately separate from training and checkpoint selection. "
-            "Run training.evaluate_locked_nonlinear_histology once for the frozen ONNX candidate."
+            "Native MIND and surface checks are secondary surrogate evidence, not anatomical ground truth. "
+            "Promotion requires a frozen animal-disjoint internal-landmark benchmark."
         ),
     }
-    locked_real_histology_commitment = None
-    if real_source is not None:
-        locked_manifest = real_source.evaluation_manifest("test", REAL_HISTOLOGY_LOCKED_SEED)
-        locked_real_histology_commitment = {
-            "source": real_source.contract,
-            "evaluation_manifest_sha256": locked_manifest["manifest_sha256"],
-        }
+    locked_manifest = real_source.evaluation_manifest("test", REAL_HISTOLOGY_LOCKED_SEED)
+    locked_native_histology_commitment = {
+        "source": real_source.contract,
+        "evaluation_manifest_sha256": locked_manifest["manifest_sha256"],
+    }
     final = {
         "device": str(device),
         "training_steps": history[-1]["step"],
@@ -1344,9 +1391,11 @@ def train() -> dict:
         "onnx_parity": parity,
         "locked_onnx": onnx_locked,
         "onnx_gate": {"passed": bool(parity and parity["passed"] and not onnx_failures), "failures": onnx_failures},
-        "real_histology_ground_truth_gate": real_histology_gate,
-        "locked_real_histology_commitment": locked_real_histology_commitment,
-        "real_histology_gate_artifact": None,
+        "native_histology_secondary_gate": {"status": "not_run", "passed": False},
+        "internal_landmark_gate": internal_landmark_gate,
+        "locked_native_histology_commitment": locked_native_histology_commitment,
+        "locked_internal_landmark_commitment": None,
+        "internal_landmark_gate_artifact": None,
         "promotion_ready": False,
         "promoted": False,
     }

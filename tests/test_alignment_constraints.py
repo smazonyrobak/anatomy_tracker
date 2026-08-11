@@ -226,10 +226,10 @@ def _pose_record(filename, shape, atlas_index, tilt_lr, tilt_dv):
     center_dv = (dv_size - 1) / 2.0
     record = {
         "Filenames": filename,
-        "ox": float(ml_size),
+        "ox": 0.0,
         "oy": ap_size - (atlas_index - lr_slope * center_ml - dv_slope * center_dv),
         "oz": float(dv_size),
-        "ux": -float(ml_size),
+        "ux": float(ml_size),
         "uy": -lr_slope * ml_size,
         "uz": 0.0,
         "vx": 0.0,
@@ -290,6 +290,10 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
         for session in window.sessions:
             window.slice_list.addItem(session.name)
 
+        for session in window.sessions:
+            session.path = str(tmp_path / f"{session.name}.tif")
+            cv2.imwrite(session.path, image)
+
         records = [
             _pose_record("slice_0000.png", shape, 2.0, 2.0, -1.0),
             _pose_record("slice_0001.png", shape, 5.0, 4.0, -3.0),
@@ -317,6 +321,9 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
                 "ap_search_bounds_index": None,
                 "alignment_batch_session_indices": [0, 1],
                 "alignment_run_id": "global-test",
+                "input_crop": {
+                    "source_image_sha256": TRACKER.file_sha256(Path(window.sessions[index].path))
+                },
                 "surface_scale": 1.0,
                 "surface_rms_after_atlas_px": 0.0,
             }
@@ -424,6 +431,9 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
                 "runtime_backend": "test",
                 "runtime_device": "test",
                 "alignment_run_id": "test-run",
+                "input_crop": {
+                    "source_image_sha256": TRACKER.file_sha256(Path(window.sessions[0].path))
+                },
                 "preintegration_tilt_spread_deg": [0.0, 0.0],
                 "surface_scale": 1.0,
                 "surface_rms_after_atlas_px": 0.0,

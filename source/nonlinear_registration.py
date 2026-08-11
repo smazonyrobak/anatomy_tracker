@@ -9,6 +9,7 @@ Atlas and affine-atlas coordinates are likewise pixel-center ``(x, y)``.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -17,7 +18,7 @@ import cv2
 import numpy as np
 
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 COORDINATE_CONVENTION = "display_xy->affine_atlas_xy->atlas_xy;pixel_centers"
 MODEL_CONTRACT_VERSION = 1
 MODEL_SHAPE = (320, 464)
@@ -38,8 +39,11 @@ REJECTION_PROBABILITY_THRESHOLD = 0.5
 MINIMUM_RUNTIME_MIND_IMPROVEMENT = 0.0
 MAXIMUM_RUNTIME_SURFACE_DICE_LOSS = 0.01
 MINIMUM_RUNTIME_RETAINED_COVERAGE = 0.95
+MINIMUM_PREWARP_OVERLAP_FRACTION = 0.40
 MINIMUM_EFFECTIVE_DISPLACEMENT_PX = 0.05
+RUNTIME_GATE_VERSION = 3
 RUNTIME_GATE_CONTRACT = {
+    "version": RUNTIME_GATE_VERSION,
     "minimum_jacobian": MINIMUM_JACOBIAN,
     "maximum_abs_log_jacobian_p99": MAXIMUM_ABS_LOG_JACOBIAN_P99,
     "maximum_abs_log_jacobian": MAXIMUM_ABS_LOG_JACOBIAN,
@@ -53,8 +57,18 @@ RUNTIME_GATE_CONTRACT = {
     "minimum_mind_improvement": MINIMUM_RUNTIME_MIND_IMPROVEMENT,
     "maximum_surface_dice_loss": MAXIMUM_RUNTIME_SURFACE_DICE_LOSS,
     "minimum_retained_coverage": MINIMUM_RUNTIME_RETAINED_COVERAGE,
+    "minimum_prewarp_overlap_fraction": MINIMUM_PREWARP_OVERLAP_FRACTION,
     "minimum_effective_displacement_px": MINIMUM_EFFECTIVE_DISPLACEMENT_PX,
 }
+
+
+def array_sha256(array: np.ndarray) -> str:
+    value = np.ascontiguousarray(array)
+    digest = hashlib.sha256()
+    digest.update(value.dtype.str.encode("ascii"))
+    digest.update(np.asarray(value.shape, dtype="<i8").tobytes())
+    digest.update(value.tobytes())
+    return digest.hexdigest()
 
 
 def _points(points_xy: np.ndarray) -> np.ndarray:
@@ -181,12 +195,62 @@ def nonlinear_acceptance_failures(diagnostics: dict[str, float | int]) -> list[s
     return [message for passed, message in checks if not passed]
 
 
+def nonlinear_runtime_acceptance_issues(diagnostics: dict) -> list[tuple[str, str]]:
+    issues: list[tuple[str, str]] = []
+    if diagnostics["modeled_trusted_fraction"] < 1.0:
+        issues.append(("geometry", "trusted tissue lies outside the model field of view"))
+    if diagnostics["rejection_probability"] >= REJECTION_PROBABILITY_THRESHOLD:
+        issues.append(
+            (
+                "wrong_plane",
+                f"model rejection probability {diagnostics['rejection_probability']:.3f} exceeds "
+                f"{REJECTION_PROBABILITY_THRESHOLD:.3f}",
+            )
+        )
+    if (
+        diagnostics["prewarp_overlap_pixels"] < 64
+        or diagnostics["prewarp_overlap_fraction"] < MINIMUM_PREWARP_OVERLAP_FRACTION
+    ):
+        issues.append(("affine_input", "affine brain-mask overlap is outside the validated range"))
+    if diagnostics["displacement_max_px"] > MINIMUM_EFFECTIVE_DISPLACEMENT_PX:
+        correspondence_checks = (
+            (
+                diagnostics["mind_improvement"] > MINIMUM_RUNTIME_MIND_IMPROVEMENT,
+                "nonlinear warp does not improve MIND correspondence",
+            ),
+            (
+                diagnostics["surface_dice_delta"] >= -MAXIMUM_RUNTIME_SURFACE_DICE_LOSS,
+                "nonlinear warp reduces surface Dice by more than 0.01",
+            ),
+            (
+                diagnostics["retained_coverage"] >= MINIMUM_RUNTIME_RETAINED_COVERAGE,
+                "nonlinear warp retains less than 95% of affine overlap",
+            ),
+        )
+        issues.extend(
+            ("correspondence", message)
+            for passed, message in correspondence_checks
+            if not passed
+        )
+    issues.extend(("geometry", message) for message in nonlinear_acceptance_failures(diagnostics))
+    return issues
+
+
+def _canonical_diagnostics_json(diagnostics: dict) -> str:
+    return json.dumps(diagnostics, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
 @dataclass(frozen=True)
 class NonlinearWarpAttestation:
     atlas_mask: np.ndarray
     affine_mask: np.ndarray
     model_sha256: str
     manifest_sha256: str
+    source_image_sha256: str
+    atlas_image_sha256: str
+    moving_affine_sha256: str
+    runtime_gate_version: int
+    acceptance_diagnostics_json: str
     pixel_spacing_um: float = MODEL_PIXEL_SPACING_UM
 
     def __post_init__(self) -> None:
@@ -194,9 +258,33 @@ class NonlinearWarpAttestation:
         affine_mask = np.asarray(self.affine_mask) > 0.5
         if atlas_mask.shape != affine_mask.shape or not atlas_mask.any() or not affine_mask.any():
             raise ValueError("Attestation masks must be non-empty and share one canvas")
-        for value in (self.model_sha256, self.manifest_sha256):
+        for value in (
+            self.model_sha256,
+            self.manifest_sha256,
+            self.source_image_sha256,
+            self.atlas_image_sha256,
+            self.moving_affine_sha256,
+        ):
             if len(value) != 64 or any(character not in "0123456789abcdef" for character in value.lower()):
                 raise ValueError("Attestation hashes must be lowercase SHA-256 hex digests")
+        if int(self.runtime_gate_version) != RUNTIME_GATE_VERSION:
+            raise ValueError("Nonlinear attestation uses a different runtime gate version")
+        diagnostics = json.loads(self.acceptance_diagnostics_json)
+        if self.acceptance_diagnostics_json != _canonical_diagnostics_json(diagnostics):
+            raise ValueError("Nonlinear acceptance diagnostics must use canonical JSON")
+        expected = {
+            "model_sha256": self.model_sha256.lower(),
+            "manifest_sha256": self.manifest_sha256.lower(),
+            "source_image_sha256": self.source_image_sha256.lower(),
+            "atlas_image_sha256": self.atlas_image_sha256.lower(),
+            "moving_affine_sha256": self.moving_affine_sha256.lower(),
+            "runtime_gate_version": RUNTIME_GATE_VERSION,
+        }
+        if any(diagnostics.get(key) != value for key, value in expected.items()):
+            raise ValueError("Nonlinear acceptance diagnostics do not match their bound inputs")
+        issues = nonlinear_runtime_acceptance_issues(diagnostics)
+        if issues:
+            raise ValueError("Nonlinear acceptance evidence contains a rejected result")
         if not np.isclose(float(self.pixel_spacing_um), MODEL_PIXEL_SPACING_UM):
             raise ValueError("Nonlinear warp attestation must use 25 um one-to-one atlas pixels")
         atlas_mask.setflags(write=False)
@@ -205,7 +293,45 @@ class NonlinearWarpAttestation:
         object.__setattr__(self, "affine_mask", affine_mask)
         object.__setattr__(self, "model_sha256", self.model_sha256.lower())
         object.__setattr__(self, "manifest_sha256", self.manifest_sha256.lower())
+        object.__setattr__(self, "source_image_sha256", self.source_image_sha256.lower())
+        object.__setattr__(self, "atlas_image_sha256", self.atlas_image_sha256.lower())
+        object.__setattr__(self, "moving_affine_sha256", self.moving_affine_sha256.lower())
+        object.__setattr__(self, "runtime_gate_version", int(self.runtime_gate_version))
         object.__setattr__(self, "pixel_spacing_um", float(self.pixel_spacing_um))
+
+    @classmethod
+    def from_runtime(
+        cls,
+        warp: "NonlinearWarp2D",
+        atlas_mask: np.ndarray,
+        affine_mask: np.ndarray,
+        diagnostics: dict,
+    ) -> "NonlinearWarpAttestation":
+        attestation = cls(
+            atlas_mask,
+            affine_mask,
+            diagnostics["model_sha256"],
+            diagnostics["manifest_sha256"],
+            diagnostics["source_image_sha256"],
+            diagnostics["atlas_image_sha256"],
+            diagnostics["moving_affine_sha256"],
+            diagnostics["runtime_gate_version"],
+            _canonical_diagnostics_json(diagnostics),
+            diagnostics["pixel_spacing_um"],
+        )
+        attestation.verify_warp(warp)
+        return attestation
+
+    @property
+    def acceptance_diagnostics(self) -> dict:
+        return json.loads(self.acceptance_diagnostics_json)
+
+    def verify_warp(self, warp: "NonlinearWarp2D") -> None:
+        observed = warp.diagnostics(self.atlas_mask, self.affine_mask)
+        attested = self.acceptance_diagnostics
+        for key, value in observed.items():
+            if key not in attested or not np.isclose(float(attested[key]), float(value), rtol=1e-6, atol=1e-6):
+                raise ValueError(f"Nonlinear map disagrees with attested diagnostic {key}")
 
 
 @dataclass(frozen=True)
@@ -328,6 +454,11 @@ def _attestation_sha256(warp: NonlinearWarp2D, attestation: NonlinearWarpAttesta
         digest.update(np.ascontiguousarray(array).tobytes())
     digest.update(attestation.model_sha256.encode("ascii"))
     digest.update(attestation.manifest_sha256.encode("ascii"))
+    digest.update(attestation.source_image_sha256.encode("ascii"))
+    digest.update(attestation.atlas_image_sha256.encode("ascii"))
+    digest.update(attestation.moving_affine_sha256.encode("ascii"))
+    digest.update(np.asarray(attestation.runtime_gate_version, dtype="<u4").tobytes())
+    digest.update(attestation.acceptance_diagnostics_json.encode("utf-8"))
     digest.update(np.asarray(attestation.pixel_spacing_um, dtype="<f8").tobytes())
     return digest.hexdigest()
 
@@ -360,6 +491,8 @@ class SliceAtlasTransform2D:
             raise ValueError("An affine-only transform cannot carry a nonlinear attestation")
         if self.nonlinear_attestation is not None and self.nonlinear_attestation.atlas_mask.shape != atlas_shape:
             raise ValueError("Nonlinear attestation masks must equal the atlas canvas shape")
+        if self.nonlinear is not None and self.nonlinear_attestation is not None:
+            self.nonlinear_attestation.verify_warp(self.nonlinear)
         homography.setflags(write=False)
         object.__setattr__(self, "display_to_affine_atlas_h", homography)
         object.__setattr__(self, "display_shape", display_shape)
@@ -491,6 +624,13 @@ class SliceAtlasTransform2D:
             affine_mask=empty_mask if attestation is None else attestation.affine_mask.astype(np.uint8),
             model_sha256=np.asarray("" if attestation is None else attestation.model_sha256),
             manifest_sha256=np.asarray("" if attestation is None else attestation.manifest_sha256),
+            source_image_sha256=np.asarray("" if attestation is None else attestation.source_image_sha256),
+            atlas_image_sha256=np.asarray("" if attestation is None else attestation.atlas_image_sha256),
+            moving_affine_sha256=np.asarray("" if attestation is None else attestation.moving_affine_sha256),
+            runtime_gate_version=np.asarray(0 if attestation is None else attestation.runtime_gate_version, dtype=np.uint16),
+            acceptance_diagnostics_json=np.asarray(
+                "" if attestation is None else attestation.acceptance_diagnostics_json
+            ),
             pixel_spacing_um=np.asarray(0.0 if attestation is None else attestation.pixel_spacing_um, dtype=np.float64),
             attestation_sha256=np.asarray(
                 "" if attestation is None else _attestation_sha256(self.nonlinear, attestation)
@@ -513,6 +653,11 @@ class SliceAtlasTransform2D:
                     values["affine_mask"],
                     str(values["model_sha256"]),
                     str(values["manifest_sha256"]),
+                    str(values["source_image_sha256"]),
+                    str(values["atlas_image_sha256"]),
+                    str(values["moving_affine_sha256"]),
+                    int(values["runtime_gate_version"]),
+                    str(values["acceptance_diagnostics_json"]),
                     float(values["pixel_spacing_um"]),
                 )
                 if str(values["attestation_sha256"]) != _attestation_sha256(nonlinear, attestation):

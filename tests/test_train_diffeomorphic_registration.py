@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 import torch
 
@@ -9,6 +10,8 @@ from training.diffeomorphic_registration_model import (
 from training.train_diffeomorphic_registration import (
     LOCKED_SEED_BASE,
     LOCKED_STRATA,
+    WRONG_AP_RANGES_UM,
+    AllenObliquePairGenerator,
     RegistrationWithRejector,
     SELECTION_SEED_BASE,
     SELECTION_STRATA,
@@ -19,6 +22,9 @@ from training.train_diffeomorphic_registration import (
     hierarchical_label_dice_loss,
     make_synthetic_pair,
     registration_objective,
+    real_histology_training_batch,
+    registered_root_path,
+    retained_overlap_after_warp,
     OnnxRegistrationModel,
     onnx_parity_report,
     surface_affine_calibrate,
@@ -61,6 +67,27 @@ def test_nuisance_damage_changes_observation_but_not_known_target_flow():
     assert damaged["moving_mask"].sum() <= smooth["moving_mask"].sum()
 
 
+def test_real_histology_synthetic_training_includes_interior_only_deformation():
+    template, _, mask = toy_plane(batch=1)
+    section = {
+        "moving": template[0, 0].numpy(),
+        "moving_mask": mask[0, 0].numpy().astype(bool),
+        "plane_basis_um": np.asarray(((0.0, 0.0), (0.0, 25.0), (25.0, 0.0)), np.float32),
+    }
+
+    class Source:
+        def section(self, _section_id):
+            return section
+
+    pair = real_histology_training_batch(
+        Source(), {"entries": [{"section_image_id": 1}]}, 2, 1, torch.device("cpu")
+    )
+    identity = pixel_identity_grid(1, *template.shape[-2:])
+
+    assert torch.equal(pair["fixed_mask"], pair["moving_mask"])
+    assert not torch.equal(pair["target_atlas_to_affine"], identity)
+
+
 def test_identity_extreme_modality_pair_has_exact_identity_target():
     template, labels, mask = toy_plane()
     pair = make_synthetic_pair(template, labels, mask, seed=7, stratum="identity_extreme")
@@ -71,7 +98,7 @@ def test_identity_extreme_modality_pair_has_exact_identity_target():
     assert (pair["fixed"] - pair["moving"]).abs().mean() > 0.05
 
 
-def test_wrong_plane_is_labelled_for_rejection_and_has_no_warp_target():
+def test_wrong_ap_is_labelled_for_rejection_and_has_no_warp_target():
     template, labels, mask = toy_plane()
     wrong_template = torch.flip(template, (-1,))
     wrong_labels = torch.flip(labels, (-1,))
@@ -90,6 +117,33 @@ def test_wrong_plane_is_labelled_for_rejection_and_has_no_warp_target():
     assert pair["wrong_pair"].all()
     assert torch.equal(pair["target_atlas_to_affine"], identity)
     assert torch.equal(pair["target_velocity"], torch.zeros_like(identity))
+
+
+@pytest.mark.parametrize("stratum", ("wrong_ap_near", "wrong_ap_far"))
+def test_wrong_ap_generator_uses_only_declared_material_mismatches(stratum):
+    class CapturingGenerator(AllenObliquePairGenerator):
+        def __init__(self):
+            self.ap_calls = []
+
+        def _neutral_manifest(self, count, _seed):
+            return {
+                "ap_um": np.linspace(-4000.0, 0.0, count, dtype=np.float32),
+                "tilt_lr_deg": np.zeros(count, dtype=np.float32),
+                "tilt_dv_deg": np.zeros(count, dtype=np.float32),
+            }
+
+        def _render(self, manifest):
+            self.ap_calls.append(np.array(manifest["ap_um"], copy=True))
+            template, labels, mask = toy_plane(batch=len(manifest["ap_um"]))
+            return template, mask, labels
+
+    generator = CapturingGenerator()
+    generator.batch(19, 8, stratum)
+    delta = np.abs(generator.ap_calls[1] - generator.ap_calls[0])
+    low, high = WRONG_AP_RANGES_UM[stratum]
+
+    assert np.all(delta >= low)
+    assert np.all(delta <= high)
 
 
 def test_hierarchical_dice_rewards_the_known_deformation():
@@ -168,7 +222,7 @@ def test_native_positive_has_finite_unsupervised_objective_without_fake_targets(
     assert torch.isfinite(model.registration.velocity_head.weight.grad).all()
 
 
-def test_native_wrong_plane_only_supervises_rejection_and_identity():
+def test_native_pose_mismatch_only_supervises_rejection_and_identity():
     template, _, mask = toy_plane(batch=1)
     target = {
         "fixed": template[0, 0].numpy(),
@@ -264,6 +318,25 @@ def test_export_gates_cover_geometry_accuracy_rejection_and_runtime():
     assert any("rejection" in failure for failure in failures)
 
 
+def test_retained_overlap_gate_uses_the_predicted_warp():
+    _, _, mask = toy_plane(batch=1)
+    escaping = pixel_identity_grid(1, *mask.shape[-2:]) + 100.0
+
+    assert retained_overlap_after_warp(mask, mask, escaping).item() == 0.0
+    metrics = passing_gate_metrics()
+    metrics["gates"]["retained_overlap"] = 0.0
+    assert any("overlap" in failure for failure in export_gate_failures(metrics))
+
+
+def test_release_training_requires_registered_histology(monkeypatch, tmp_path):
+    monkeypatch.delenv("DIFFEO_REGISTERED_ROOT", raising=False)
+    with pytest.raises(RuntimeError, match="DIFFEO_REGISTERED_ROOT is required"):
+        registered_root_path()
+
+    monkeypatch.setenv("DIFFEO_REGISTERED_ROOT", str(tmp_path))
+    assert registered_root_path() == tmp_path
+
+
 def test_export_gates_require_absolute_accuracy_and_material_improvement():
     metrics = passing_gate_metrics()
     metrics["gates"].update({
@@ -310,7 +383,7 @@ def test_label_free_locked_pair_does_not_leak_segmentation_palette():
     assert torch.equal(original["moving"], changed["moving"])
 
 
-def test_wrong_plane_surface_calibration_removes_outline_centroid_and_scale_shortcut():
+def test_wrong_pair_surface_calibration_removes_outline_centroid_and_scale_shortcut():
     template, labels, target_mask = toy_plane(batch=1)
     source_mask = torch.zeros_like(target_mask)
     source_mask[:, :, 9:25, 12:34] = 1.0

@@ -7,10 +7,13 @@ entry point.  Its outputs are test reports, never training metadata.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
+import importlib.util
 import json
 import os
+import platform
 import queue
-import sys
+import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,9 +21,33 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from source.atlas_pose_runtime import (
+    ATLAS_POSE_SEALED_BENCHMARK_ID as SEALED_BENCHMARK_ID,
+    ATLAS_POSE_SEALED_EXPERIMENT_COUNT as EXPECTED_EXPERIMENTS,
+    ATLAS_POSE_SEALED_SECTION_COUNT as EXPECTED_SECTIONS,
+    ATLAS_POSE_SEALED_SOURCE_FILES as SEALED_SOURCE_FILES,
+    ATLAS_POSE_SEALED_SPLIT as SEALED_SPLIT,
+    automatic_brain_mask,
+    run_atlas_pose_candidate_onnx,
+    verify_atlas_pose_candidate_bundle,
+)
+from source.deepslice_runtime import (
+    load_deepslice_onnx_sessions,
+    preprocess_deepslice_images,
+    run_deepslice_inference,
+)
 from source.registered_image_quality import (
-    REGISTERED_IMAGE_QUALITY_MANIFEST,
     load_registered_image_quality_manifest,
+)
+from training.atlas_pose_release_contract import (
+    POSE_AXES,
+    RELEASE_CONFIDENCE,
+    RELEASE_REFERENCE,
+    evaluation_domains,
+    paired_animal_bootstrap,
+    paired_animal_joint_superiority,
+    release_quality_gate,
+    validate_complete_method_cohort,
 )
 
 
@@ -28,7 +55,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ACQUISITION_ROOT = Path(
     os.environ.get(
         "ALLEN_REGISTERED_ROOT",
-        "J:/AtlasPoseTraining_v7/allen_s2p_pilot_d100_stratified",
+        "J:/AtlasPoseTraining_v7/allen_registered_full_quicknii_ras_v2_20260811",
     )
 )
 ANNOTATION_PATH = Path(
@@ -38,32 +65,24 @@ ANNOTATION_PATH = Path(
     )
 )
 ATLAS_POSE_MODEL = os.environ.get("ATLAS_POSE_SEALED_MODEL")
-SEALED_SPLIT = "sealed_deepslice_s2p"
-EXPECTED_SECTIONS = 1400
-EXPECTED_EXPERIMENTS = 10
+SEALED_EVALUATION_STATE_ROOT = (
+    Path.home() / "AppData/Local/Proprietary Anatomy Tracker/AtlasPose Sealed Evaluation"
+    if os.name == "nt"
+    else Path.home() / ".local/state/proprietary-anatomy-tracker/atlaspose-sealed-evaluation"
+)
+SEALED_CLAIM_NAME = f"{SEALED_BENCHMARK_ID}.claim.json"
+SEALED_RECEIPT_NAME = f"{SEALED_BENCHMARK_ID}.receipt.json"
 ATLAS_POSE_IMAGE_BATCH = 16
 VOXEL_UM = 25.0
 QUICKNII_SHAPE_ML_AP_DV = np.asarray((456.0, 528.0, 320.0))
 ATLAS_CENTER_ML_DV = np.asarray((227.5, 159.5))
 BREGMA_AP_INDEX = 216.0
 OUV_COLUMNS = ("ox", "oy", "oz", "ux", "uy", "uz", "vx", "vy", "vz")
-POSE_AXES = ("ap_um", "lr_deg", "dv_deg")
 POSE_TOLERANCES = {
     "ap_um": (50.0, 100.0, 250.0),
     "lr_deg": (1.0, 2.0, 5.0),
     "dv_deg": (1.0, 2.0, 5.0),
 }
-RELEASE_GATE_THRESHOLDS = {
-    "mean_ap_um": 60.0,
-    "mean_lr_deg": 0.90,
-    "mean_dv_deg": 1.75,
-    "absolute_ap_bias_um": 25.0,
-    "ap_p95_um": 150.0,
-    "worst_ap_band_mae_um": 90.0,
-    "worst_product_mae_um": 90.0,
-}
-RELEASE_REFERENCE = "deepslice_mens_ai_ci"
-RELEASE_CONFIDENCE = 0.95
 AP_BANDS = (
     ("above_+500_um", 500.0, np.inf),
     ("+500_to_0_um", 0.0, 500.0),
@@ -83,6 +102,240 @@ def read_jsonl(path: Path) -> list[dict]:
 def sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _is_sha256(value) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _valid_hash_tree(value) -> bool:
+    return bool(value) and (
+        _is_sha256(value)
+        or isinstance(value, dict)
+        and all(isinstance(key, str) and _valid_hash_tree(child) for key, child in value.items())
+    )
+
+
+def _atomic_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def _immutable_copy(source: Path, destination: Path, expected_sha256: str) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_file():
+        if sha256(destination) != expected_sha256:
+            raise RuntimeError(f"Frozen candidate snapshot differs from its commitment: {destination}")
+        return
+    temporary = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+    shutil.copyfile(source, temporary)
+    if sha256(temporary) != expected_sha256:
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(f"Candidate changed while it was being frozen: {source}")
+    os.replace(temporary, destination)
+
+
+def _distribution_version(name: str) -> str:
+    return importlib.metadata.version(name)
+
+
+def evaluator_environment_commitment() -> dict:
+    deepslice = importlib.util.find_spec("DeepSlice")
+    if deepslice is None or deepslice.submodule_search_locations is None:
+        raise RuntimeError("The validated DeepSlice package is unavailable")
+    package = Path(next(iter(deepslice.submodule_search_locations)))
+    source_paths = (
+        Path(__file__),
+        ROOT / "training" / "atlas_pose_release_contract.py",
+        ROOT / "source" / "atlas_pose_runtime.py",
+        ROOT / "source" / "deepslice_runtime.py",
+        ROOT / "source" / "registered_image_quality.py",
+        *sorted(package.rglob("*.py")),
+    )
+    model_paths = {
+        "primary": ROOT / "models/DeepSlice/deepslice_mouse_primary_opset18.onnx",
+        "secondary": ROOT / "models/DeepSlice/deepslice_mouse_secondary_opset18.onnx",
+    }
+    missing = [path for path in (*source_paths, *model_paths.values()) if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"Sealed evaluator dependencies are unavailable: {missing}")
+    source_hashes = {
+        (
+            path.resolve().relative_to(ROOT).as_posix()
+            if path.resolve().is_relative_to(ROOT)
+            else f"DeepSlice/{path.relative_to(package).as_posix()}"
+        ): sha256(path)
+        for path in source_paths
+    }
+    payload = {
+        "contract_version": 1,
+        "source_sha256": source_hashes,
+        "deepslice_model_sha256": {
+            name: sha256(path) for name, path in model_paths.items()
+        },
+        "dependencies": {
+            "python": platform.python_version(),
+            **{
+                name: _distribution_version(name)
+                for name in (
+                    "DeepSlice",
+                    "numpy",
+                    "pandas",
+                    "scipy",
+                    "scikit-learn",
+                    "scikit-image",
+                    "tensorflow",
+                    "h5py",
+                    "requests",
+                    "protobuf",
+                    "lxml",
+                    "urllib3",
+                    "Pillow",
+                    "opencv-python",
+                    "onnxruntime-directml",
+                )
+            },
+        },
+    }
+    payload["commitment_sha256"] = _canonical_json_sha256(payload)
+    return payload
+
+
+def freeze_candidate(model_path: Path) -> dict:
+    model_path = Path(model_path)
+    model_sha256, metadata_sha256, metadata = verify_atlas_pose_candidate_bundle(model_path)
+    registered = metadata.get("registered_data", {})
+    registered_commitment = registered.get("sha256")
+    source_commitment = {
+        name: (registered_commitment or {}).get(name) for name in SEALED_SOURCE_FILES
+    }
+    if (
+        set(registered_commitment or {})
+        != {*SEALED_SOURCE_FILES, "nonsealed_image_tree_sha256"}
+        or not _valid_hash_tree(source_commitment)
+        or not _is_sha256((registered_commitment or {}).get("nonsealed_image_tree_sha256"))
+        or SEALED_SPLIT not in registered.get("excluded_from_selection", [])
+        or not _valid_hash_tree(metadata.get("source_sha256"))
+        or not _valid_hash_tree(metadata.get("manifest_sha256"))
+        or not _valid_hash_tree(metadata.get("atlas_data_sha256"))
+        or metadata.get("git", {}).get("tracked_source_dirty") is not False
+    ):
+        raise RuntimeError(
+            "AtlasPose candidate lacks a clean training/source/atlas commitment or sealed exclusion"
+        )
+    snapshot = SEALED_EVALUATION_STATE_ROOT / "candidate" / model_sha256
+    frozen_model = snapshot / "atlas_pose.onnx"
+    frozen_metadata = snapshot / "atlas_pose.json"
+    _immutable_copy(model_path, frozen_model, model_sha256)
+    _immutable_copy(model_path.with_suffix(".json"), frozen_metadata, metadata_sha256)
+    presealed = {
+        "contract_version": 1,
+        "benchmark_id": SEALED_BENCHMARK_ID,
+        "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "training_source_sha256": metadata["source_sha256"],
+        "training_data_sha256": {
+            "synthetic_manifests": metadata.get("manifest_sha256"),
+            "registered_data": registered_commitment,
+            "atlas_data": metadata.get("atlas_data_sha256"),
+        },
+        "sealed_source_sha256": source_commitment,
+        "evaluator_environment": evaluator_environment_commitment(),
+    }
+    presealed_path = snapshot / "PRESEALED_COMMITMENT.json"
+    if presealed_path.is_file():
+        if json.loads(presealed_path.read_text(encoding="utf-8")) != presealed:
+            raise RuntimeError("Frozen candidate presealed commitment changed")
+    else:
+        _atomic_json(presealed_path, presealed)
+    return {
+        "model_path": frozen_model,
+        "metadata_path": frozen_metadata,
+        "presealed_path": presealed_path,
+        "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "metadata": metadata,
+        "presealed": presealed,
+        "presealed_sha256": sha256(presealed_path),
+    }
+
+
+def claim_sealed_benchmark(frozen: dict) -> tuple[dict, Path, Path]:
+    SEALED_EVALUATION_STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    claim_path = SEALED_EVALUATION_STATE_ROOT / SEALED_CLAIM_NAME
+    receipt_path = SEALED_EVALUATION_STATE_ROOT / SEALED_RECEIPT_NAME
+    claim = {
+        "contract_version": 1,
+        "benchmark_id": SEALED_BENCHMARK_ID,
+        "model_sha256": frozen["model_sha256"],
+        "metadata_sha256": frozen["metadata_sha256"],
+        "presealed_commitment_sha256": frozen["presealed_sha256"],
+        "claimed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "sealed_access_permitted_after_claim_only": True,
+    }
+    try:
+        with claim_path.open("x", encoding="utf-8") as stream:
+            json.dump(claim, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError as error:
+        raise RuntimeError(
+            f"SEALED EVALUATION REFUSED: {SEALED_BENCHMARK_ID} was already consumed"
+        ) from error
+    _atomic_json(
+        receipt_path,
+        {
+            "contract_version": 1,
+            "benchmark_id": SEALED_BENCHMARK_ID,
+            "claim_sha256": sha256(claim_path),
+            "model_sha256": frozen["model_sha256"],
+            "status": "claimed",
+        },
+    )
+    return claim, claim_path, receipt_path
+
+
+def verify_source_commitment(root: Path, annotation_path: Path, frozen: dict) -> dict:
+    expected = frozen["presealed"]["sealed_source_sha256"]
+    actual = {name: sha256(Path(root) / name) for name in SEALED_SOURCE_FILES}
+    if actual != expected:
+        raise RuntimeError("SEALED INFERENCE REFUSED: acquisition source differs from the frozen candidate")
+    atlas_expected = frozen["metadata"].get("atlas_data_sha256", {}).get("annotation_25.nrrd")
+    if not _is_sha256(atlas_expected) or sha256(annotation_path) != atlas_expected:
+        raise RuntimeError("SEALED INFERENCE REFUSED: Allen annotation differs from the candidate")
+    return actual
+
+
+def verify_complete_sealed_image_hashes(root: Path) -> str:
+    records = validate_sealed_boundary(read_jsonl(root / "sections.jsonl"))
+    download_rows = read_jsonl(root / "downloads.jsonl")
+    downloads = {int(row["section_image_id"]): row["sha256"] for row in download_rows}
+    if len(downloads) != len(download_rows) or any(not _is_sha256(value) for value in downloads.values()):
+        raise ValueError("Download manifest has duplicate IDs or invalid SHA-256 values")
+    if len(records) != EXPECTED_SECTIONS or len({int(row["experiment_id"]) for row in records}) != EXPECTED_EXPERIMENTS:
+        raise RuntimeError("SEALED INFERENCE REFUSED: sealed image cohort is incomplete")
+    verified = []
+    for record in records:
+        section_id = int(record["section_image_id"])
+        path = root / record["relative_path"]
+        expected = downloads.get(section_id)
+        if expected is None or not path.is_file() or sha256(path) != expected:
+            raise RuntimeError(f"SEALED INFERENCE REFUSED: image checksum failed for section {section_id}")
+        verified.append((section_id, expected))
+    return hashlib.sha256(
+        json.dumps(sorted(verified), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def validate_sealed_boundary(records: list[dict]) -> list[dict]:
@@ -191,6 +444,10 @@ def load_sealed_holdout(root: Path) -> tuple[list[dict], dict[int, dict], dict, 
         for record in records
         if int(record["section_image_id"]) in approved_section_ids
     ]
+    if len(records) != EXPECTED_SECTIONS:
+        raise RuntimeError(
+            "SEALED INFERENCE REFUSED: quality filtering removed one or more sealed sections"
+        )
     quality = {
         **quality,
         "sealed_source_record_count": len(source_section_ids),
@@ -239,9 +496,9 @@ def quicknii_to_tracker_pose(ouv: np.ndarray) -> np.ndarray:
     normal[normal[:, 1] < 0.0] *= -1.0
     if np.any(np.abs(normal[:, 1]) < 1e-9):
         raise ValueError("QuickNII OUV contains a non-coronal plane")
-    ap_per_ml = -normal[:, 0] / normal[:, 1]
+    ap_per_ml = normal[:, 0] / normal[:, 1]
     ap_per_dv = -normal[:, 2] / normal[:, 1]
-    origin_ml = QUICKNII_SHAPE_ML_AP_DV[0] - origin[:, 0]
+    origin_ml = origin[:, 0]
     origin_ap = QUICKNII_SHAPE_ML_AP_DV[1] - origin[:, 1]
     origin_dv = QUICKNII_SHAPE_ML_AP_DV[2] - origin[:, 2]
     ap_index = (
@@ -291,7 +548,7 @@ def annotation_brain_mask(
         (
             QUICKNII_SHAPE_ML_AP_DV[1] - quicknii[..., 1],
             QUICKNII_SHAPE_ML_AP_DV[2] - quicknii[..., 2],
-            QUICKNII_SHAPE_ML_AP_DV[0] - quicknii[..., 0],
+            quicknii[..., 0],
         ),
         axis=-1,
     )
@@ -401,45 +658,6 @@ def report_scopes(rows: pd.DataFrame) -> dict:
     }
 
 
-def paired_animal_bootstrap(
-    rows: pd.DataFrame,
-    candidate: str,
-    reference: str,
-    metric: str,
-    iterations: int = 10_000,
-    seed: int = 94731,
-) -> dict:
-    selected = rows[rows["method"].isin((candidate, reference))]
-    pivot = selected.pivot(index=["specimen_id", "section_image_id"], columns="method", values=metric).dropna()
-    if candidate not in pivot or reference not in pivot:
-        raise ValueError(f"No paired {metric} values for {candidate} and {reference}")
-    animal_delta = (pivot[candidate] - pivot[reference]).groupby(level="specimen_id").mean().to_numpy()
-    rng = np.random.default_rng(seed)
-    draws = rng.choice(animal_delta, (iterations, len(animal_delta)), replace=True).mean(axis=1)
-    return {
-        "unit": "specimen_id",
-        "animal_count": int(len(animal_delta)),
-        "paired_section_count": int(len(pivot)),
-        "metric": metric,
-        "candidate": candidate,
-        "reference": reference,
-        "delta_candidate_minus_reference": float(animal_delta.mean()),
-        "bootstrap_95_ci": np.percentile(draws, (2.5, 97.5)).tolist(),
-        "probability_candidate_lower_error": float(np.mean(draws < 0.0)),
-        "iterations": int(iterations),
-        "seed": int(seed),
-    }
-
-
-def _tracker_module():
-    source = str(ROOT / "source")
-    if source not in sys.path:
-        sys.path.insert(0, source)
-    import proprietary_trajectory_tool
-
-    return proprietary_trajectory_tool
-
-
 def _ordered_table(records: list[dict], predictions: list[dict]) -> pd.DataFrame:
     predicted = {Path(str(row["Filenames"])).name.casefold(): row for row in predictions}
     names = [Path(record["relative_path"]).name.casefold() for record in records]
@@ -461,16 +679,15 @@ def _propagate_angles(table: pd.DataFrame) -> pd.DataFrame:
 
 def run_deepslice_modes(records: list[dict], paths: list[Path]) -> tuple[dict[str, np.ndarray], dict]:
     """Run published AI, MEns-AI, and MEns-AI-CI states for one experiment."""
-    tracker = _tracker_module()
     messages = queue.SimpleQueue()
-    ensemble_records, version, hashes, _, runtime = tracker.run_deepslice_inference(
+    ensemble_records, version, hashes, _, runtime = run_deepslice_inference(
         list(map(str, paths)), messages, threading.Event()
     )
     ensemble = _ordered_table(records, ensemble_records)
 
-    inputs, widths, heights = tracker.preprocess_deepslice_images(list(map(str, paths)))
+    inputs, widths, heights = preprocess_deepslice_images(list(map(str, paths)))
     force_cpu = runtime["backend"] == "ONNX Runtime CPU"
-    sessions, _, _, _ = tracker.load_deepslice_onnx_sessions(force_cpu)
+    sessions, _, _, _ = load_deepslice_onnx_sessions(force_cpu)
     primary_values = sessions["primary"].run(["Identity:0"], {"images": inputs})[0]
     primary_records = [
         {
@@ -517,11 +734,6 @@ def run_deepslice_modes(records: list[dict], paths: list[Path]) -> tuple[dict[st
 def run_atlas_pose(records: list[dict], paths: list[Path], model_path: Path) -> tuple[np.ndarray, dict]:
     import cv2
 
-    source = str(ROOT / "source")
-    if source not in sys.path:
-        sys.path.insert(0, source)
-    from atlas_pose_runtime import automatic_brain_mask, run_atlas_pose_candidate_onnx
-
     predictions = []
     runtimes = []
     for start in range(0, len(paths), ATLAS_POSE_IMAGE_BATCH):
@@ -534,10 +746,24 @@ def run_atlas_pose(records: list[dict], paths: list[Path], model_path: Path) -> 
         predictions.append(prediction)
         runtimes.append(runtime)
     prediction = np.concatenate(predictions)
-    if prediction.shape != (len(records), 3):
+    if prediction.shape != (len(records), 3) or not np.isfinite(prediction).all():
         raise ValueError("AtlasPose returned the wrong number of predictions")
+    immutable_fields = (
+        "model_sha256",
+        "metadata_sha256",
+        "architecture",
+        "preprocessing_version",
+        "preprocessing_contract_sha256",
+    )
+    if any(
+        runtime.get(field) != runtimes[0].get(field)
+        for runtime in runtimes[1:]
+        for field in immutable_fields
+    ):
+        raise RuntimeError("AtlasPose candidate or preprocessing changed during sealed inference")
     return prediction, {
         "model_sha256": runtimes[0]["model_sha256"],
+        "metadata_sha256": runtimes[0]["metadata_sha256"],
         "device": runtimes[0]["device"],
         "onnxruntime_version": runtimes[0]["onnxruntime_version"],
         "architecture": runtimes[0]["architecture"],
@@ -564,6 +790,13 @@ def prediction_rows(
 ) -> list[dict]:
     ground_truth_ouv = np.asarray([record["quicknii_ouv"] for record in records], dtype=np.float64)
     ground_truth_pose = quicknii_to_tracker_pose(ground_truth_ouv)
+    predicted_pose = np.asarray(predicted_pose, dtype=np.float64)
+    if predicted_pose.shape != ground_truth_pose.shape or not np.isfinite(predicted_pose).all():
+        raise ValueError(f"{method} produced incomplete or non-finite pose predictions")
+    if predicted_ouv is not None:
+        predicted_ouv = np.asarray(predicted_ouv, dtype=np.float64)
+        if predicted_ouv.shape != ground_truth_ouv.shape or not np.isfinite(predicted_ouv).all():
+            raise ValueError(f"{method} produced incomplete or non-finite QuickNII predictions")
     output = []
     for index, record in enumerate(records):
         in_training_domain = -4500.0 <= float(ground_truth_pose[index, 0]) <= 500.0
@@ -602,79 +835,16 @@ def prediction_rows(
     return output
 
 
-def evaluation_domains(table: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    in_domain = table[table["in_training_ap_domain"].astype(bool)]
-    if in_domain.empty:
-        raise ValueError("The sealed holdout contains no sections inside the trained AP domain")
-    return in_domain, table[~table["in_training_ap_domain"].astype(bool)]
-
-
 def _canonical_json_sha256(payload: dict) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
-def _ap_500um_band(ap_um: float) -> str:
-    index = 9 if ap_um == 500.0 else int(np.floor((ap_um + 4500.0) / 500.0))
-    low = -4500 + 500 * index
-    return f"{low}:{low + 500}"
-
-
-def release_quality_gate(rows: pd.DataFrame) -> dict:
-    frame = rows[rows["in_training_ap_domain"].astype(bool)].copy()
-    if frame.empty or set(frame["method"]) != {"atlas_pose"}:
-        raise ValueError("Release quality gate requires in-domain AtlasPose rows only")
-    frame["ap_500um_band"] = frame["gt_ap_um"].map(_ap_500um_band)
-
-    component_mae = {}
-    for axis in POSE_AXES:
-        frame[f"absolute_{axis}"] = (frame[f"pred_{axis}"] - frame[f"gt_{axis}"]).abs()
-        per_bin = frame.groupby(["specimen_id", "ap_500um_band"])[f"absolute_{axis}"].mean()
-        per_specimen = per_bin.groupby(level="specimen_id").mean()
-        component_mae[axis] = float(per_specimen.mean())
-
-    frame["signed_ap_error"] = frame["pred_ap_um"] - frame["gt_ap_um"]
-    per_bin_bias = frame.groupby(["specimen_id", "ap_500um_band"])["signed_ap_error"].mean()
-    absolute_ap_bias = float(abs(per_bin_bias.groupby(level="specimen_id").mean().mean()))
-    band_mae = (
-        frame.groupby(["ap_500um_band", "specimen_id"])["absolute_ap_um"]
-        .mean()
-        .groupby(level="ap_500um_band")
-        .mean()
-    )
-    product_mae = (
-        frame.groupby(["product", "specimen_id"])["absolute_ap_um"]
-        .mean()
-        .groupby(level="product")
-        .mean()
-    )
-    values = {
-        "mean_ap_um": component_mae["ap_um"],
-        "mean_lr_deg": component_mae["lr_deg"],
-        "mean_dv_deg": component_mae["dv_deg"],
-        "absolute_ap_bias_um": absolute_ap_bias,
-        "ap_p95_um": float(np.percentile(frame["absolute_ap_um"], 95.0)),
-        "worst_ap_band_mae_um": float(band_mae.max()),
-        "worst_product_mae_um": float(product_mae.max()),
-    }
-    passed = {
-        name: bool(values[name] <= threshold)
-        for name, threshold in RELEASE_GATE_THRESHOLDS.items()
-    }
-    return {
-        "values": values,
-        "thresholds": dict(RELEASE_GATE_THRESHOLDS),
-        "passed": passed,
-        "all_gates_passed": all(passed.values()),
-        "worst_ap_band": str(band_mae.idxmax()),
-        "worst_product": str(product_mae.idxmax()),
-    }
-
-
 def sealed_release_report(
     primary_table: pd.DataFrame,
     comparisons: list[dict],
+    joint_superiority: dict,
     model_sha256: str,
     metadata_sha256: str,
     preprocessing_contract_sha256: str,
@@ -682,7 +852,12 @@ def sealed_release_report(
     training_data_sha256: dict,
     sealed_data_sha256: dict,
     sealed_metrics_sha256: str,
+    sealed_predictions_sha256: str,
     evaluator_sha256: str,
+    evaluator_environment_sha256: str,
+    presealed_commitment_sha256: str,
+    sealed_claim_sha256: str,
+    consumption_receipt_sha256: str,
     created_utc: str,
 ) -> dict:
     atlas_rows = primary_table[primary_table["method"] == "atlas_pose"]
@@ -704,9 +879,18 @@ def sealed_release_report(
         )
         for axis in POSE_AXES
     }
-    release_approved = bool(quality["all_gates_passed"] and all(component_passed.values()))
+    simultaneous_passed = bool(
+        joint_superiority.get("candidate") == "atlas_pose"
+        and joint_superiority.get("reference") == RELEASE_REFERENCE
+        and joint_superiority.get("simultaneous_superiority_passed") is True
+    )
+    release_approved = bool(
+        quality["all_gates_passed"]
+        and all(component_passed.values())
+        and simultaneous_passed
+    )
     payload = {
-        "release_report_version": 2,
+        "release_report_version": 3,
         "sealed": True,
         "benchmark_role": "final_release_gate",
         "created_utc": created_utc,
@@ -717,11 +901,17 @@ def sealed_release_report(
         "training_data_sha256": training_data_sha256,
         "sealed_data_sha256": sealed_data_sha256,
         "sealed_metrics_sha256": sealed_metrics_sha256,
+        "sealed_predictions_sha256": sealed_predictions_sha256,
         "evaluator_sha256": evaluator_sha256,
+        "evaluator_environment_sha256": evaluator_environment_sha256,
+        "presealed_commitment_sha256": presealed_commitment_sha256,
+        "sealed_claim_sha256": sealed_claim_sha256,
+        "consumption_receipt_sha256": consumption_receipt_sha256,
         "quality_gate": quality,
         "deepslice_reference": RELEASE_REFERENCE,
         "deepslice_confidence_threshold": RELEASE_CONFIDENCE,
         "deepslice_component_passed": component_passed,
+        "deepslice_simultaneous_superiority": joint_superiority,
         "deepslice_comparisons": {
             axis: comparison_by_metric[f"absolute_error_{axis}"] for axis in POSE_AXES
         },
@@ -736,174 +926,244 @@ def run_evaluation(
     acquisition_root: Path = ACQUISITION_ROOT,
     atlas_pose_model: Path | None = Path(ATLAS_POSE_MODEL) if ATLAS_POSE_MODEL else None,
 ) -> Path:
-    records, datasets, acquisition_provenance, image_quality = load_sealed_holdout(acquisition_root)
-    records = [
-        {
-            **record,
-            "product": "+".join(
-                map(str, datasets[int(record["experiment_id"])].get("product_ids", []))
-            ) or "unknown",
+    if atlas_pose_model is None:
+        raise ValueError("SEALED EVALUATION REFUSED: a frozen AtlasPose candidate is mandatory")
+    acquisition_root = Path(acquisition_root)
+    frozen = freeze_candidate(Path(atlas_pose_model))
+    _, claim_path, receipt_path = claim_sealed_benchmark(frozen)
+    claim_sha256 = sha256(claim_path)
+    try:
+        source_hashes = verify_source_commitment(acquisition_root, ANNOTATION_PATH, frozen)
+        image_tree_sha256 = verify_complete_sealed_image_hashes(acquisition_root)
+        records, datasets, acquisition_provenance, image_quality = load_sealed_holdout(acquisition_root)
+        records = [
+            {
+                **record,
+                "product": "+".join(
+                    map(str, datasets[int(record["experiment_id"])].get("product_ids", []))
+                ) or "unknown",
+            }
+            for record in records
+        ]
+        paths = require_complete_sealed_images(
+            acquisition_root,
+            records,
+            expected_sections=EXPECTED_SECTIONS,
+        )
+
+        import nrrd
+
+        annotation = nrrd.read(str(ANNOTATION_PATH))[0]
+        all_rows = []
+        deepslice_runtime = {}
+        atlas_pose_runtime = {}
+        path_by_section = {
+            int(record["section_image_id"]): path for record, path in zip(records, paths)
         }
-        for record in records
-    ]
-    paths = require_complete_sealed_images(
-        acquisition_root,
-        records,
-        expected_sections=image_quality["sealed_approved_record_count"],
-    )
-
-    import nrrd
-
-    annotation = nrrd.read(str(ANNOTATION_PATH))[0]
-    all_rows = []
-    deepslice_runtime = {}
-    atlas_pose_runtime = {}
-    path_by_section = {int(record["section_image_id"]): path for record, path in zip(records, paths)}
-    for experiment_id, experiment_records in ordered_experiment_groups(records).items():
-        experiment_paths = [path_by_section[int(record["section_image_id"])] for record in experiment_records]
-        modes, runtime = run_deepslice_modes(experiment_records, experiment_paths)
-        deepslice_runtime[str(experiment_id)] = runtime
-        for method, ouv in modes.items():
-            pose = quicknii_to_tracker_pose(ouv)
-            all_rows.extend(prediction_rows(experiment_records, method, pose, ouv, annotation))
-        if atlas_pose_model is not None:
-            pose, runtime = run_atlas_pose(experiment_records, experiment_paths, atlas_pose_model)
+        for experiment_id, experiment_records in ordered_experiment_groups(records).items():
+            experiment_paths = [
+                path_by_section[int(record["section_image_id"])] for record in experiment_records
+            ]
+            modes, runtime = run_deepslice_modes(experiment_records, experiment_paths)
+            deepslice_runtime[str(experiment_id)] = runtime
+            for method, ouv in modes.items():
+                pose = quicknii_to_tracker_pose(ouv)
+                all_rows.extend(prediction_rows(experiment_records, method, pose, ouv, annotation))
+            pose, runtime = run_atlas_pose(
+                experiment_records, experiment_paths, frozen["model_path"]
+            )
             atlas_pose_runtime[str(experiment_id)] = runtime
-            all_rows.extend(prediction_rows(experiment_records, "atlas_pose", pose, None, annotation))
-
-    table = pd.DataFrame(all_rows)
-    primary_table, out_of_domain_table = evaluation_domains(table)
-    methods = list(dict.fromkeys(table["method"]))
-    metrics = {
-        "primary_in_training_ap_domain": {
-            method: report_scopes(primary_table[primary_table["method"] == method])
-            for method in methods
-        },
-        "out_of_domain": {
-            method: report_scopes(out_of_domain_table[out_of_domain_table["method"] == method])
-            for method in methods
-        } if not out_of_domain_table.empty else None,
-    }
-    comparisons = []
-    pairs = [
-        ("deepslice_mens_ai", "deepslice_ai"),
-        ("deepslice_mens_ai_ci", "deepslice_mens_ai"),
-    ]
-    if "atlas_pose" in methods:
-        pairs.append(("atlas_pose", "deepslice_mens_ai_ci"))
-    for candidate, reference in pairs:
-        for metric in ("absolute_error_ap_um", "absolute_error_lr_deg", "absolute_error_dv_deg"):
-            comparisons.append(paired_animal_bootstrap(primary_table, candidate, reference, metric))
-        if candidate != "atlas_pose":
-            comparisons.append(
-                paired_animal_bootstrap(primary_table, candidate, reference, "plane_distance_um")
+            all_rows.extend(
+                prediction_rows(experiment_records, "atlas_pose", pose, None, annotation)
             )
 
-    input_hash = sha256(acquisition_root / "sections.jsonl")
-    model_hash = sha256(atlas_pose_model) if atlas_pose_model is not None else "deepslice-only"
-    atlas_pose_metadata = None
-    atlas_pose_metadata_hash = None
-    if atlas_pose_model is not None:
-        metadata_path = atlas_pose_model.with_suffix(".json")
-        atlas_pose_metadata_hash = sha256(metadata_path)
-        atlas_pose_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if atlas_pose_metadata.get("sha256") != model_hash:
-            raise RuntimeError("AtlasPose sealed candidate metadata does not bind its model")
-    run_id = hashlib.sha256(f"{input_hash}:{model_hash}".encode()).hexdigest()[:12]
-    output = acquisition_root / "SEALED_FINAL_EVALUATION" / run_id
-    output.mkdir(parents=True, exist_ok=False)
-    table.to_csv(output / "SEALED_predictions.csv", index=False)
-    report = {
-        "sealed": True,
-        "benchmark_role": "final_test_only",
-        "prohibited_uses": [
-            "training",
-            "validation",
-            "model_selection",
-            "hyperparameter_tuning",
-            "early_stopping",
-            "augmentation_selection",
-        ],
-        "created_utc": datetime.now(timezone.utc).isoformat(),
-        "section_count": len(records),
-        "in_training_ap_domain_section_count": int(
-            primary_table["section_image_id"].nunique()
-        ),
-        "out_of_domain_section_count": int(out_of_domain_table["section_image_id"].nunique()),
-        "experiment_count": len(ordered_experiment_groups(records)),
-        "coordinate_ground_truth": "exact Allen section alignment2d/alignment3d converted to recorded QuickNII OUV",
-        "plane_distance_definition": {
-            "unit": "25 um Allen CCF voxels",
-            "grid": "299 x 299 pixel centers",
-            "mask": "ground-truth plane samples whose nearest Allen annotation voxel is inside brain",
-            "statistic": "mean Euclidean distance between corresponding predicted and ground-truth CCF points",
-        },
-        "source": {
-            "acquisition_root": str(acquisition_root),
-            "sections_sha256": input_hash,
-            "datasets_sha256": sha256(acquisition_root / "datasets.jsonl"),
-            "provenance_sha256": sha256(acquisition_root / "provenance.json"),
-            "downloads_sha256": sha256(acquisition_root / "downloads.jsonl"),
-            "registered_image_quality_manifest_sha256": sha256(
-                acquisition_root / REGISTERED_IMAGE_QUALITY_MANIFEST
-            ),
-            "registered_image_quality": image_quality,
-            "acquisition_provenance": acquisition_provenance,
-        },
-        "predictors": {
-            "deepslice": deepslice_runtime,
-            "atlas_pose": {
-                "enabled": atlas_pose_model is not None,
-                "model_path": None if atlas_pose_model is None else str(atlas_pose_model),
-                "model_sha256": None if atlas_pose_model is None else model_hash,
-                "runtime": atlas_pose_runtime,
+        methods = (
+            "deepslice_ai",
+            "deepslice_mens_ai",
+            "deepslice_mens_ai_ci",
+            "atlas_pose",
+        )
+        table = pd.DataFrame(all_rows)
+        validate_complete_method_cohort(table, records, methods)
+        primary_table, out_of_domain_table = evaluation_domains(table)
+        metrics = {
+            "primary_in_training_ap_domain": {
+                method: report_scopes(primary_table[primary_table["method"] == method])
+                for method in methods
             },
-        },
-        "metrics": metrics,
-        "animal_level_paired_bootstrap": comparisons,
-        "selection_statement": "No ranking in this report is consumed by any trainer or model-selection code.",
-        "evaluator_sha256": sha256(Path(__file__)),
-    }
-    metrics_path = output / "SEALED_metrics.json"
-    metrics_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    if atlas_pose_model is not None:
-        training_data_sha256 = {
-            "synthetic_manifests": atlas_pose_metadata.get("manifest_sha256"),
-            "registered_data": atlas_pose_metadata.get("registered_data", {}).get("sha256"),
-            "atlas_data": atlas_pose_metadata.get("atlas_data_sha256"),
+            "out_of_domain": {
+                method: report_scopes(out_of_domain_table[out_of_domain_table["method"] == method])
+                for method in methods
+            } if not out_of_domain_table.empty else None,
         }
+        comparison_metrics = (
+            "absolute_error_ap_um",
+            "absolute_error_lr_deg",
+            "absolute_error_dv_deg",
+        )
+        comparisons = []
+        for candidate, reference in (
+            ("deepslice_mens_ai", "deepslice_ai"),
+            ("deepslice_mens_ai_ci", "deepslice_mens_ai"),
+            ("atlas_pose", RELEASE_REFERENCE),
+        ):
+            for metric in comparison_metrics:
+                comparisons.append(
+                    paired_animal_bootstrap(primary_table, candidate, reference, metric)
+                )
+            if candidate != "atlas_pose":
+                comparisons.append(
+                    paired_animal_bootstrap(
+                        primary_table, candidate, reference, "plane_distance_um"
+                    )
+                )
+        joint_superiority = paired_animal_joint_superiority(
+            primary_table,
+            "atlas_pose",
+            RELEASE_REFERENCE,
+            comparison_metrics,
+        )
+
+        if (
+            sha256(frozen["model_path"]) != frozen["model_sha256"]
+            or sha256(frozen["metadata_path"]) != frozen["metadata_sha256"]
+            or verify_source_commitment(acquisition_root, ANNOTATION_PATH, frozen) != source_hashes
+            or verify_complete_sealed_image_hashes(acquisition_root) != image_tree_sha256
+            or evaluator_environment_commitment() != frozen["presealed"]["evaluator_environment"]
+        ):
+            raise RuntimeError("SEALED EVALUATION REFUSED: candidate or evaluation source changed")
+
+        run_id = frozen["model_sha256"][:12]
+        output = acquisition_root / "SEALED_FINAL_EVALUATION" / run_id
+        output.mkdir(parents=True, exist_ok=False)
+        predictions_path = output / "SEALED_predictions.csv"
+        table.to_csv(predictions_path, index=False)
+        created_utc = datetime.now(timezone.utc).isoformat()
+        report = {
+            "sealed": True,
+            "benchmark_role": "final_test_only",
+            "benchmark_id": SEALED_BENCHMARK_ID,
+            "prohibited_uses": [
+                "training",
+                "validation",
+                "model_selection",
+                "hyperparameter_tuning",
+                "early_stopping",
+                "augmentation_selection",
+            ],
+            "created_utc": created_utc,
+            "section_count": len(records),
+            "in_training_ap_domain_section_count": int(
+                primary_table["section_image_id"].nunique()
+            ),
+            "out_of_domain_section_count": int(
+                out_of_domain_table["section_image_id"].nunique()
+            ),
+            "experiment_count": len(ordered_experiment_groups(records)),
+            "coordinate_ground_truth": "exact Allen section alignment2d/alignment3d converted to recorded QuickNII OUV",
+            "plane_distance_definition": {
+                "unit": "25 um Allen CCF voxels",
+                "grid": "299 x 299 pixel centers",
+                "mask": "ground-truth plane samples whose nearest Allen annotation voxel is inside brain",
+                "statistic": "mean Euclidean distance between corresponding predicted and ground-truth CCF points",
+            },
+            "source": {
+                "acquisition_root": str(acquisition_root.resolve()),
+                **source_hashes,
+                "sealed_image_tree_sha256": image_tree_sha256,
+                "registered_image_quality": image_quality,
+                "acquisition_provenance": acquisition_provenance,
+            },
+            "predictors": {
+                "deepslice": deepslice_runtime,
+                "atlas_pose": {
+                    "enabled": True,
+                    "model_path": str(frozen["model_path"]),
+                    "model_sha256": frozen["model_sha256"],
+                    "metadata_sha256": frozen["metadata_sha256"],
+                    "runtime": atlas_pose_runtime,
+                },
+            },
+            "metrics": metrics,
+            "animal_level_paired_bootstrap": comparisons,
+            "animal_level_joint_superiority": joint_superiority,
+            "selection_statement": "This globally consumed result cannot be reused by a trainer or model-selection entry point.",
+            "presealed_commitment_sha256": frozen["presealed_sha256"],
+            "sealed_claim_sha256": claim_sha256,
+            "evaluator_sha256": sha256(Path(__file__)),
+            "evaluator_environment_sha256": frozen["presealed"]["evaluator_environment"][
+                "commitment_sha256"
+            ],
+        }
+        metrics_path = output / "SEALED_metrics.json"
+        metrics_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        receipt = {
+            "contract_version": 1,
+            "benchmark_id": SEALED_BENCHMARK_ID,
+            "claim_sha256": claim_sha256,
+            "model_sha256": frozen["model_sha256"],
+            "presealed_commitment_sha256": frozen["presealed_sha256"],
+            "sealed_predictions_sha256": sha256(predictions_path),
+            "sealed_metrics_sha256": sha256(metrics_path),
+            "status": "completed",
+            "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        _atomic_json(receipt_path, receipt)
+        artifact_paths = {
+            "PRESEALED_COMMITMENT.json": frozen["presealed_path"],
+            "SEALED_CLAIM.json": claim_path,
+            "SEALED_CONSUMPTION_RECEIPT.json": receipt_path,
+        }
+        for name, source_path in artifact_paths.items():
+            _immutable_copy(source_path, output / name, sha256(source_path))
+
+        training_data_sha256 = frozen["presealed"]["training_data_sha256"]
         sealed_data_sha256 = {
-            key: report["source"][key]
-            for key in (
-                "sections_sha256",
-                "datasets_sha256",
-                "provenance_sha256",
-                "downloads_sha256",
-                "registered_image_quality_manifest_sha256",
-            )
+            **source_hashes,
+            "sealed_image_tree_sha256": image_tree_sha256,
         }
         release = sealed_release_report(
             primary_table,
             comparisons,
-            model_hash,
-            atlas_pose_metadata_hash,
-            atlas_pose_metadata.get("preprocessing_contract_sha256"),
-            atlas_pose_metadata.get("source_sha256"),
+            joint_superiority,
+            frozen["model_sha256"],
+            frozen["metadata_sha256"],
+            frozen["metadata"].get("preprocessing_contract_sha256"),
+            frozen["metadata"].get("source_sha256"),
             training_data_sha256,
             sealed_data_sha256,
             sha256(metrics_path),
+            sha256(predictions_path),
             sha256(Path(__file__)),
-            report["created_utc"],
+            frozen["presealed"]["evaluator_environment"]["commitment_sha256"],
+            frozen["presealed_sha256"],
+            claim_sha256,
+            sha256(receipt_path),
+            created_utc,
         )
-        (output / "RELEASE_REPORT.json").write_text(
-            json.dumps(release, indent=2),
+        (output / "DO_NOT_USE_FOR_MODEL_SELECTION.txt").write_text(
+            "SEALED FINAL TEST OUTPUT. Do not use these results for training, tuning, early stopping, or model selection.\n",
             encoding="utf-8",
         )
-    (output / "DO_NOT_USE_FOR_MODEL_SELECTION.txt").write_text(
-        "SEALED FINAL TEST OUTPUT. Do not use these results for training, tuning, early stopping, or model selection.\n",
-        encoding="utf-8",
-    )
-    return output
+        (output / "RELEASE_REPORT.json").write_text(
+            json.dumps(release, indent=2), encoding="utf-8"
+        )
+        return output
+    except BaseException as error:
+        _atomic_json(
+            receipt_path,
+            {
+                "contract_version": 1,
+                "benchmark_id": SEALED_BENCHMARK_ID,
+                "claim_sha256": claim_sha256,
+                "model_sha256": frozen["model_sha256"],
+                "presealed_commitment_sha256": frozen["presealed_sha256"],
+                "status": "failed",
+                "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "failure": f"{type(error).__name__}: {error}",
+            },
+        )
+        raise
 
 
 if __name__ == "__main__":

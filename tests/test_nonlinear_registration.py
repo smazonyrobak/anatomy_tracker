@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "source"))
 
 from nonlinear_registration import (
     MAXIMUM_ABS_LOG_JACOBIAN,
+    MODEL_PIXEL_SPACING_UM,
+    RUNTIME_GATE_VERSION,
     NonlinearWarp2D,
     NonlinearWarpAttestation,
     SliceAtlasTransform2D,
@@ -23,9 +25,27 @@ def smooth_inverse_warp(shape=(80, 96), amplitude=2.0):
     return NonlinearWarp2D(forward, inverse)
 
 
-def attestation(shape):
+def attestation(shape, warp=None):
     mask = np.ones(shape, bool)
-    return NonlinearWarpAttestation(mask, mask, "a" * 64, "b" * 64)
+    warp = NonlinearWarp2D.identity(shape) if warp is None else warp
+    diagnostics = {
+        **warp.diagnostics(mask, mask),
+        "modeled_trusted_fraction": 1.0,
+        "rejection_probability": 0.0,
+        "prewarp_overlap_pixels": int(mask.sum()),
+        "prewarp_overlap_fraction": 1.0,
+        "mind_improvement": 1.0,
+        "surface_dice_delta": 0.0,
+        "retained_coverage": 1.0,
+        "model_sha256": "a" * 64,
+        "manifest_sha256": "b" * 64,
+        "source_image_sha256": "c" * 64,
+        "atlas_image_sha256": "d" * 64,
+        "moving_affine_sha256": "e" * 64,
+        "runtime_gate_version": RUNTIME_GATE_VERSION,
+        "pixel_spacing_um": MODEL_PIXEL_SPACING_UM,
+    }
+    return NonlinearWarpAttestation.from_runtime(warp, mask, mask, diagnostics)
 
 
 def test_identity_preserves_display_image_points_and_diagnostics():

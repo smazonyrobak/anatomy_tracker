@@ -13,7 +13,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 
 os.environ.setdefault("PYQTGRAPH_QT_LIB", "PySide6")
@@ -25,7 +24,6 @@ import pandas as pd
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 import tifffile
-from PIL import Image
 from PySide6 import QtCore, QtGui, QtWidgets
 from scipy.interpolate import Rbf
 from scipy.ndimage import map_coordinates
@@ -38,13 +36,17 @@ from atlas_pose_runtime import (
     automatic_brain_mask,
     brain_mask_affine,
     fuse_pose_predictions,
-    plane_normal_from_tilts,
+    QUICKNII_COORDINATE_CONTRACT_VERSION,
     run_atlas_pose_onnx,
-    tilts_from_plane_normal,
+)
+from deepslice_runtime import (
+    quicknii_to_tracker_alignment,
+    run_deepslice_inference,
 )
 from diffeomorphic_registration_runtime import (
     DiffeomorphicRegistrationRejected,
     run_diffeomorphic_registration,
+    verify_diffeomorphic_attestation_inputs,
     verify_diffeomorphic_model_bundle,
 )
 from nonlinear_registration import NonlinearWarpAttestation, SliceAtlasTransform2D
@@ -69,11 +71,6 @@ DEFAULT_BREGMA_VOXEL_AP_DV_ML = (
     / VOXEL_UM
 )
 STEREOTAXIC_AXIS_SIGN_AP_DV_ML = np.array([-1.0, -1.0, 1.0], dtype=np.float64)
-DEEPSLICE_VERSION = "1.2.8"
-DEEPSLICE_ONNX_SHA256 = {
-    "primary": "90ce8d4662f53a602035a99d5145c0e6ae8924cde7f9de440cf6b74f79c791ac",
-    "secondary": "2d7b5e44d9dc4aa6009df6c3cc7e8a0cbb9fd33dc63a8bd2ac43ea5999237978",
-}
 DEEPSLICE_REVIEW_AP_UM = 400.0
 DEEPSLICE_REVIEW_TILT_DEG = 5.0
 DEEPSLICE_REVIEW_SURFACE_RMS_PX = 8.0
@@ -141,168 +138,6 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-@lru_cache(maxsize=2)
-def load_deepslice_onnx_sessions(force_cpu: bool = False):
-    import onnxruntime as ort
-
-    model_dir = RESOURCE_DIR / "models" / "DeepSlice"
-    model_paths = {
-        "primary": model_dir / "deepslice_mouse_primary_opset18.onnx",
-        "secondary": model_dir / "deepslice_mouse_secondary_opset18.onnx",
-    }
-    model_hashes = {name: file_sha256(path) for name, path in model_paths.items()}
-    if model_hashes != DEEPSLICE_ONNX_SHA256:
-        raise RuntimeError("Validated DeepSlice 1.2.8 ONNX model checksum validation failed")
-
-    options = ort.SessionOptions()
-    options.enable_mem_pattern = False
-    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    use_directml = not force_cpu and "DmlExecutionProvider" in ort.get_available_providers()
-    providers = (
-        [("DmlExecutionProvider", {"device_id": 0}), "CPUExecutionProvider"]
-        if use_directml
-        else ["CPUExecutionProvider"]
-    )
-    fallback_reason = None
-    try:
-        sessions = {
-            name: ort.InferenceSession(str(path), sess_options=options, providers=providers)
-            for name, path in model_paths.items()
-        }
-    except Exception as exc:
-        if not use_directml:
-            raise
-        fallback_reason = f"DirectML initialization failed: {type(exc).__name__}: {exc}"
-        sessions = {
-            name: ort.InferenceSession(
-                str(path),
-                sess_options=options,
-                providers=["CPUExecutionProvider"],
-            )
-            for name, path in model_paths.items()
-        }
-    for session in sessions.values():
-        model_input = session.get_inputs()[0]
-        model_output = session.get_outputs()[0]
-        if model_input.name != "images" or model_input.shape[1:] != [299, 299, 3]:
-            raise RuntimeError("DeepSlice ONNX input contract does not match the validated model")
-        if model_output.name != "Identity:0" or model_output.shape[-1] != 9:
-            raise RuntimeError("DeepSlice ONNX output contract does not match the validated model")
-    provider = sessions["primary"].get_providers()[0]
-    return sessions, model_hashes, provider, fallback_reason
-
-
-def preprocess_deepslice_images(image_paths: list[str]) -> tuple[np.ndarray, list[int], list[int]]:
-    images = []
-    widths = []
-    heights = []
-    grayscale_weights = np.asarray([0.2125, 0.7154, 0.0721], dtype=np.float32)
-    for path in image_paths:
-        with Image.open(path) as image:
-            widths.append(image.width)
-            heights.append(image.height)
-            rgb = np.asarray(
-                image.convert("RGB").resize((299, 299), Image.Resampling.NEAREST),
-                dtype=np.float32,
-            )
-        gray = rgb @ grayscale_weights
-        gray -= np.mean(gray, keepdims=True)
-        gray /= np.std(gray, keepdims=True) + np.float32(1e-6)
-        images.append(np.repeat(gray[..., None], 3, axis=-1).astype(np.float32))
-    return np.stack(images), widths, heights
-
-
-def run_deepslice_inference(
-    image_paths: list[str],
-    progress_messages: queue.SimpleQueue,
-    cancel_event: threading.Event,
-) -> tuple[list[dict], str, dict[str, str], dict[str, dict[str, float]], dict]:
-    import onnxruntime as ort
-
-    progress_messages.put((5, "Loading the validated DeepSlice GPU runtime..."))
-    started = time.perf_counter()
-    sessions, model_hashes, provider, fallback_reason = load_deepslice_onnx_sessions()
-    inputs, widths, heights = preprocess_deepslice_images(image_paths)
-    if cancel_event.is_set():
-        raise InterruptedError
-    progress_messages.put((15, f"Running the DeepSlice two-model ensemble on {provider}..."))
-    inference_started = time.perf_counter()
-    inference_error = None
-    try:
-        primary_result = sessions["primary"].run(["Identity:0"], {"images": inputs})
-    except Exception as exc:
-        inference_error = exc
-    if inference_error is None:
-        if cancel_event.is_set():
-            raise InterruptedError
-        try:
-            secondary_result = sessions["secondary"].run(["Identity:0"], {"images": inputs})
-        except Exception as exc:
-            inference_error = exc
-    if inference_error is not None:
-        if provider != "DmlExecutionProvider":
-            raise inference_error
-        fallback_reason = f"DirectML inference failed: {type(inference_error).__name__}: {inference_error}"
-        progress_messages.put((15, "DirectML failed; retrying the validated models on CPU..."))
-        sessions, model_hashes, provider, _ = load_deepslice_onnx_sessions(True)
-        primary_result = sessions["primary"].run(["Identity:0"], {"images": inputs})
-        if cancel_event.is_set():
-            raise InterruptedError
-        secondary_result = sessions["secondary"].run(["Identity:0"], {"images": inputs})
-    if cancel_event.is_set():
-        raise InterruptedError
-    primary = primary_result[0].astype(np.float64)
-    secondary = secondary_result[0].astype(np.float64)
-    inference_seconds = time.perf_counter() - inference_started
-    ensemble = np.mean([primary, secondary], axis=0)
-    coordinate_columns = ("ox", "oy", "oz", "ux", "uy", "uz", "vx", "vy", "vz")
-
-    def records_from(values: np.ndarray) -> list[dict]:
-        return [
-            {
-                "Filenames": Path(path).name,
-                **{name: float(value) for name, value in zip(coordinate_columns, row)},
-                "width": int(width),
-                "height": int(height),
-            }
-            for path, row, width, height in zip(image_paths, values, widths, heights)
-        ]
-
-    primary_records = records_from(primary)
-    secondary_records = records_from(secondary)
-    records = sorted(records_from(ensemble), key=lambda record: record["oy"])
-    for record in records:
-        record["raw_ensemble_ouv"] = [float(record[column]) for column in coordinate_columns]
-    disagreement = {}
-    for primary_record, secondary_record in zip(primary_records, secondary_records):
-        primary_alignment = quicknii_to_tracker_alignment(primary_record, ALLEN_CCF_25_SHAPE_AP_DV_ML)
-        secondary_alignment = quicknii_to_tracker_alignment(secondary_record, ALLEN_CCF_25_SHAPE_AP_DV_ML)
-        disagreement[primary_record["Filenames"]] = {
-            "ap_um": abs(primary_alignment[0] - secondary_alignment[0]) * VOXEL_UM,
-            "lr_deg": abs(primary_alignment[1] - secondary_alignment[1]),
-            "dv_deg": abs(primary_alignment[2] - secondary_alignment[2]),
-        }
-    preintegration_tilts = np.asarray(
-        [quicknii_to_tracker_alignment(record, ALLEN_CCF_25_SHAPE_AP_DV_ML)[1:3] for record in records]
-    )
-    progress_messages.put((27, "Converting DeepSlice coordinates into the tracker atlas..."))
-    runtime_info = {
-        "backend": "ONNX Runtime DirectML" if provider == "DmlExecutionProvider" else "ONNX Runtime CPU",
-        "onnxruntime_version": ort.__version__,
-        "device": "GPU (DirectML device 0)" if provider == "DmlExecutionProvider" else "CPU",
-        "gpu_fallback_reason": fallback_reason,
-        "inference_seconds": float(inference_seconds),
-        "total_backend_seconds": float(time.perf_counter() - started),
-        "preintegration_tilt_spread_deg": (
-            np.ptp(preintegration_tilts, axis=0).tolist()
-            if len(preintegration_tilts) > 1
-            else [0.0, 0.0]
-        ),
-    }
-    return records, DEEPSLICE_VERSION, dict(model_hashes), disagreement, runtime_info
-
-
 def prepare_pose_inputs(
     image_jobs: list[tuple],
     temporary_folder: str,
@@ -368,6 +203,7 @@ def prepare_pose_inputs(
         prepared_inputs[output_path.name] = {"image": image, "brain_mask": brain_mask}
         input_crops[output_path.name] = {
             "source_path": str(path),
+            "source_image_sha256": file_sha256(path),
             "source_size_bytes": int(path.stat().st_size),
             "source_modified_ns": int(path.stat().st_mtime_ns),
             "rotation_deg": float(rotation_deg),
@@ -573,6 +409,7 @@ def prepare_and_run_pose_predictions(
                     "onnxruntime_version",
                     "gpu_fallback_reason",
                     "preprocessing_version",
+                    "automatic_brain_mask_version",
                     "preprocessing_contract_sha256",
                 )
             }
@@ -596,6 +433,7 @@ def prepare_and_run_pose_predictions(
     ]
     runtime_info = {
         "engine": engine,
+        "coordinate_contract": QUICKNII_COORDINATE_CONTRACT_VERSION,
         "component_provenance": component_provenance,
         "component_runtimes": component_runtimes,
         "fusion": records[0]["fusion"],
@@ -613,44 +451,6 @@ def prepare_and_run_pose_predictions(
         "input_crops": input_crops,
     }
     return records, disagreement, runtime_info, prepared_inputs
-
-
-def quicknii_to_tracker_alignment(
-    prediction: dict,
-    atlas_shape: tuple[int, int, int],
-) -> tuple[float, float, float, np.ndarray]:
-    origin = np.asarray([prediction["ox"], prediction["oy"], prediction["oz"]], dtype=np.float64)
-    horizontal = np.asarray([prediction["ux"], prediction["uy"], prediction["uz"]], dtype=np.float64)
-    vertical = np.asarray([prediction["vx"], prediction["vy"], prediction["vz"]], dtype=np.float64)
-    normal = np.cross(horizontal, vertical)
-    if normal[1] < 0:
-        normal = -normal
-    if abs(normal[1]) < 1e-9:
-        raise ValueError("DeepSlice returned a non-coronal plane")
-    ap_per_ml = -normal[0] / normal[1]
-    ap_per_dv = -normal[2] / normal[1]
-    center_ml = (atlas_shape[2] - 1) / 2.0
-    center_dv = (atlas_shape[1] - 1) / 2.0
-    origin_ml = atlas_shape[2] - origin[0]
-    origin_ap = atlas_shape[0] - origin[1]
-    origin_dv = atlas_shape[1] - origin[2]
-    index = origin_ap + ap_per_ml * (center_ml - origin_ml) + ap_per_dv * (center_dv - origin_dv)
-    width = float(prediction["width"])
-    height = float(prediction["height"])
-    matrix = np.asarray(
-        [
-            [-horizontal[0] / width, -vertical[0] / height, origin_ml],
-            [-horizontal[2] / width, -vertical[2] / height, origin_dv],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
-    return (
-        float(index),
-        float(np.degrees(np.arctan(ap_per_ml))),
-        float(np.degrees(np.arctan(ap_per_dv))),
-        matrix,
-    )
 
 
 def _integer_series(values: pd.Series, label: str) -> pd.Series:
@@ -840,6 +640,10 @@ def verify_staged_mapping_outputs(
             sidecar.get("coordinate_convention") != restored.coordinate_convention
             or sidecar.get("model_sha256") != attestation.model_sha256
             or sidecar.get("manifest_sha256") != attestation.manifest_sha256
+            or sidecar.get("source_image_sha256") != attestation.source_image_sha256
+            or sidecar.get("atlas_image_sha256") != attestation.atlas_image_sha256
+            or sidecar.get("moving_affine_sha256") != attestation.moving_affine_sha256
+            or sidecar.get("runtime_gate_version") != attestation.runtime_gate_version
             or sidecar.get("pixel_spacing_um") != attestation.pixel_spacing_um
         ):
             raise RuntimeError("Staged nonlinear transform metadata disagrees with its sidecar")
@@ -1777,6 +1581,7 @@ def solve_pose_alignment(
             "alignment_batch_session_indices": sorted(filename_to_session.values()),
             "order_constraint_session_indices": list(order_snapshot),
             "runtime_backend": runtime_info.get("backend", "unknown"),
+            "coordinate_contract": runtime_info["coordinate_contract"],
             "runtime_device": runtime_info.get("device", "unknown"),
             "alignment_run_id": runtime_info.get("alignment_run_id"),
             "alignment_scope": "global" if global_alignment else "single",
@@ -1909,6 +1714,7 @@ def prepare_run_and_solve_alignment(
                 > 0
             )
             try:
+                source_sha256 = diagnostics["input_crop"]["source_image_sha256"]
                 warp, accepted_diagnostics = run_diffeomorphic_registration(
                     fixed_atlas,
                     moving_affine,
@@ -1916,21 +1722,25 @@ def prepare_run_and_solve_alignment(
                     moving_mask,
                     nonlinear_model_path,
                     pixel_spacing_um=VOXEL_UM,
+                    source_image_sha256=source_sha256,
                 )
             except DiffeomorphicRegistrationRejected as exc:
                 nonlinear_diagnostics = {
                     "requested": True,
                     "status": "rejected",
                     "reason": "; ".join(exc.failures),
+                    "rejection_categories": list(exc.categories),
+                    "mapping_blocking": bool(
+                        {"wrong_plane", "affine_input"}.intersection(exc.categories)
+                    ),
                     "runtime": exc.diagnostics,
                 }
             else:
-                attestation = NonlinearWarpAttestation(
+                attestation = NonlinearWarpAttestation.from_runtime(
+                    warp,
                     fixed_mask,
                     moving_mask,
-                    accepted_diagnostics["model_sha256"],
-                    accepted_diagnostics["manifest_sha256"],
-                    VOXEL_UM,
+                    accepted_diagnostics,
                 )
                 transform = SliceAtlasTransform2D(
                     affine_transform.display_to_affine_atlas_h,
@@ -1944,6 +1754,8 @@ def prepare_run_and_solve_alignment(
                     "requested": True,
                     "status": "accepted",
                     "reason": None,
+                    "rejection_categories": [],
+                    "mapping_blocking": False,
                     "runtime": accepted_diagnostics,
                 }
         diagnostics["nonlinear_refinement"] = nonlinear_diagnostics
@@ -1959,10 +1771,11 @@ def prepare_run_and_solve_alignment(
             )
         )
         if nonlinear_refinement:
+            refinement_status = nonlinear_diagnostics["status"]
             progress_messages.put(
                 (
                     90 + round(9 * sequence / max(len(prepared), 1)),
-                    f"Validated anatomical refinement {sequence} / {len(prepared)}",
+                    f"Experimental anatomical refinement {refinement_status} {sequence} / {len(prepared)}",
                 )
             )
     prepared = completed
@@ -2194,6 +2007,7 @@ class SliceSession:
     auto_alignment_run_id: str | None = None
     manual_refined_from_run_id: str | None = None
     auto_alignment_diagnostics: dict | None = None
+    alignment_source_sha256: str | None = None
     deepslice_raw_ensemble_ouv: list[float] | None = None
     deepslice_version: str | None = None
     deepslice_model_hashes: dict[str, str] | None = None
@@ -3078,15 +2892,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self._nonlinear_bundle_error = None
         except Exception as exc:
             self._nonlinear_bundle_error = str(exc)
-        self.nonlinear_refinement = QtWidgets.QCheckBox("Refine internal anatomy nonlinearly")
+        self.nonlinear_refinement = QtWidgets.QCheckBox("Experimental nonlinear anatomy refinement")
         self.nonlinear_refinement.setChecked(self._nonlinear_bundle_error is None)
         self.nonlinear_refinement.setEnabled(self._nonlinear_bundle_error is None)
         self.nonlinear_refinement.setToolTip(
-            "After pose and affine scale are frozen, deform only local anatomy with the promoted validated model. "
-            "A rejected result keeps the affine alignment unchanged."
+            "After pose and affine scale are frozen, an experimental model may deform local anatomy. "
+            "Only results passing conservative geometry and correspondence gates are used; a rejected result keeps "
+            "the affine alignment for review."
         )
         self.nonlinear_model_status = QtWidgets.QLabel(
-            "Promoted nonlinear model verified"
+            "Experimental nonlinear model bundle verified"
             if self._nonlinear_bundle_error is None
             else "No source-approved nonlinear release is available; automatic alignment remains affine-only."
         )
@@ -3779,13 +3594,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         else:
             self._update_slice_navigation()
 
-    def _load_session_image(self, session: SliceSession) -> None:
+    def _load_session_image(self, session: SliceSession) -> bool:
         path = Path(session.path)
+        source_changed = (
+            session.alignment_source_sha256 is not None
+            and file_sha256(path) != session.alignment_source_sha256
+        )
+        if source_changed:
+            self._mark_alignment_run_stale(session, "source image content changed")
+            self._clear_slice_transform(session)
         raw = tifffile.imread(str(path)) if path.suffix.lower() in {".tif", ".tiff"} else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
         raw = as_gray(raw)
         display_raw, scale = downsample_for_display(raw)
         session.display_scale = scale
         session.raw_display = normalize_u8(display_raw)
+        return source_changed
 
     def _switch_slice(self, index: int) -> None:
         if index < 0 or index >= len(self.sessions):
@@ -3800,8 +3623,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.current_session_index = index
         self.slice_panel.clear_outline_selection()
         session = self.sessions[index]
+        source_changed = False
         if session.raw_display is None:
-            self._load_session_image(session)
+            source_changed = self._load_session_image(session)
         self.rotation.blockSignals(True)
         self.rotation.setValue(session.rotation_deg)
         self.rotation.blockSignals(False)
@@ -3833,6 +3657,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._update_slice_image()
         self._update_slice_navigation()
         self._refresh_3d()
+        if source_changed:
+            self.status.setText(
+                f"{session.name} changed on disk; its alignment and derived probe coordinates were invalidated."
+            )
 
     def _step_slice(self, offset: int) -> None:
         index = self.current_session_index + offset
@@ -3988,6 +3816,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.auto_alignment_run_id = None
         session.manual_refined_from_run_id = None
         session.auto_alignment_diagnostics = None
+        session.alignment_source_sha256 = None
         session.deepslice_raw_ensemble_ouv = None
         session.deepslice_version = None
         session.deepslice_model_hashes = None
@@ -4002,6 +3831,70 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.atlas_to_slice_y = None
         self._clear_auto_alignment_metadata(session)
         self._clear_derived_probe_coordinates(session)
+
+    @staticmethod
+    def _source_binding_error(session: SliceSession) -> str | None:
+        if session.alignment_source_sha256 is None:
+            return None
+        path = Path(session.path)
+        if not path.is_file():
+            return f"{session.name}: source image is missing"
+        if file_sha256(path) != session.alignment_source_sha256:
+            return f"{session.name}: source image changed after alignment"
+        return None
+
+    def _verify_nonlinear_binding(
+        self,
+        session: SliceSession,
+        transform: SliceAtlasTransform2D,
+    ) -> None:
+        attestation = transform.nonlinear_attestation
+        if transform.nonlinear is None or attestation is None:
+            raise RuntimeError(f"{session.name} has no accepted nonlinear warp evidence")
+        source_error = self._source_binding_error(session)
+        if source_error is not None:
+            raise RuntimeError(source_error)
+        if file_sha256(Path(session.path)) != attestation.source_image_sha256:
+            raise RuntimeError(f"{session.name} nonlinear evidence does not match its source image")
+        model_sha256, manifest_sha256, _ = verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
+        if (
+            attestation.model_sha256 != model_sha256
+            or attestation.manifest_sha256 != manifest_sha256
+        ):
+            raise RuntimeError(f"{session.name} nonlinear evidence does not match the installed model bundle")
+        fixed_atlas = coronal_oblique_slice(
+            self.atlas_volume,
+            session.atlas_index,
+            session.atlas_tilt_ml_deg,
+            session.atlas_tilt_dv_deg,
+            order=1,
+        )
+        path = Path(session.path)
+        raw = (
+            tifffile.imread(str(path))
+            if path.suffix.lower() in {".tif", ".tiff"}
+            else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        )
+        display_raw, _ = downsample_for_display(as_gray(raw))
+        display_image, _ = transform_slice_image(
+            normalize_u8(display_raw),
+            session.rotation_deg,
+            session.flip_horizontal,
+            session.flip_vertical,
+        )
+        affine = SliceAtlasTransform2D(
+            transform.display_to_affine_atlas_h,
+            transform.display_shape,
+            transform.atlas_shape,
+        )
+        moving_affine = affine.render_display_image_in_atlas(display_image)
+        verify_diffeomorphic_attestation_inputs(
+            transform.nonlinear,
+            attestation,
+            fixed_atlas,
+            moving_affine,
+        )
+        transform.check_invariants()
 
     def _detach_auto_alignment_for_manual_pose(self, session: SliceSession) -> None:
         source_run_id = session.manual_refined_from_run_id or session.auto_alignment_run_id
@@ -4704,11 +4597,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             nonlinear = diagnostics.get("nonlinear_refinement", {})
             nonlinear_status = nonlinear.get("status", "not-run")
             nonlinear_text = {
-                "accepted": " | nonlinear accepted",
+                "accepted": " | experimental nonlinear gates passed",
                 "rejected": " | nonlinear rejected; affine retained",
                 "invalidated": " | nonlinear invalidated; affine retained",
                 "not-run": " | affine-only",
             }.get(nonlinear_status, f" | nonlinear {nonlinear_status}")
+            if nonlinear.get("mapping_blocking", False):
+                nonlinear_text = " | pose/input rejection; mapping blocked"
             if nonlinear_status == "rejected" and nonlinear.get("reason"):
                 reasons.append(str(nonlinear["reason"]))
             review_text = f" — REVIEW: {', '.join(reasons)}" if reasons else ""
@@ -5110,7 +5005,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._set_auto_constraint_controls_enabled(False)
         self._refresh_point_counts()
         scope = f"{len(session_indices)} outlined slices" if global_alignment else self.sessions[session_indices[0]].name
-        refinement_text = " with nonlinear anatomical refinement" if nonlinear_refinement else " (affine-only)"
+        refinement_text = " with experimental nonlinear refinement" if nonlinear_refinement else " (affine-only)"
         self.status.setText(
             f"{engine} and atlas refinement are aligning {scope}{refinement_text}; the interface remains available."
         )
@@ -5252,6 +5147,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             diagnostics = dict(original_diagnostics)
             if transform.atlas_shape != tuple(self.atlas_volume.shape[1:]):
                 raise RuntimeError(f"{session.name} transform does not match the loaded atlas canvas")
+            source_sha256 = diagnostics["input_crop"]["source_image_sha256"]
+            if file_sha256(Path(session.path)) != source_sha256:
+                raise RuntimeError(f"{session.name} changed on disk while automatic alignment was running")
+            diagnostics["source_image_sha256"] = source_sha256
             diagnostics["raw_model_ap_um"] = float(diagnostics["raw_model_pose_ap_um_lr_deg_dv_deg"][0])
             diagnostics["refined_ap_um"] = float(
                 (diagnostics["refined_ap_index"] - float(self.bregma_voxel[0]))
@@ -5360,7 +5259,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 f"{engine} initialization + bounded MIND atlas search + trusted-surface calibration"
                 + (" with exact shared-tilt integration" if global_alignment else "")
                 + (
-                    " + validated nonlinear anatomical refinement"
+                    " + experimental nonlinear anatomical refinement"
                     if nonlinear_accepted
                     else ""
                 )
@@ -5370,6 +5269,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.auto_alignment_run_id = diagnostics["alignment_run_id"]
             session.manual_refined_from_run_id = None
             session.auto_alignment_diagnostics = diagnostics
+            session.alignment_source_sha256 = diagnostics["source_image_sha256"]
             session.deepslice_raw_ensemble_ouv = deepslice_raw
             session.deepslice_version = deepslice_version
             session.deepslice_model_hashes = deepslice_hashes
@@ -5396,15 +5296,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
         accepted_count = sum(result["status"] == "accepted" for result in nonlinear_results)
         rejected = [result for result in nonlinear_results if result["status"] == "rejected"]
+        blocked = [result for result in rejected if result.get("mapping_blocking", False)]
         if accepted_count == len(nonlinear_results):
-            nonlinear_text = " Nonlinear anatomical refinement accepted."
+            nonlinear_text = " Experimental nonlinear refinement passed runtime gates."
+        elif blocked:
+            nonlinear_text = (
+                f" Pose/input rejection for {len(blocked)} slice(s); mapping is blocked until alignment is rerun: "
+                f"{blocked[0]['reason']}."
+            )
         elif rejected:
             nonlinear_text = (
-                f" Nonlinear refinement rejected for {len(rejected)} slice(s); affine results were retained for review: "
+                f" Experimental nonlinear refinement rejected for {len(rejected)} slice(s); affine results were retained for review: "
                 f"{rejected[0]['reason']}."
             )
         else:
-            nonlinear_text = f" Nonlinear refinement not run: {nonlinear_results[0]['reason']}."
+            nonlinear_text = f" Experimental nonlinear refinement not run: {nonlinear_results[0]['reason']}."
         if global_alignment:
             order_text = " + AP order" if len(order_snapshot) >= 2 else ""
             bounds_text = " + AP range" if ap_bounds is not None else ""
@@ -5494,6 +5400,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def all_probe_volume_points(self, probe_name: str) -> np.ndarray:
         points = []
         for session in self.sessions:
+            if (session.auto_alignment_diagnostics or {}).get(
+                "nonlinear_refinement", {}
+            ).get("mapping_blocking", False):
+                continue
             trace = session.probe_traces.get(probe_name)
             if trace is not None:
                 points.extend(trace.volume_points)
@@ -5502,6 +5412,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def all_probe_signal_values(self, probe_name: str) -> np.ndarray:
         values = []
         for session in self.sessions:
+            if (session.auto_alignment_diagnostics or {}).get(
+                "nonlinear_refinement", {}
+            ).get("mapping_blocking", False):
+                continue
             trace = session.probe_traces.get(probe_name)
             if trace is not None:
                 values.extend(trace.signal_values)
@@ -5742,14 +5656,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if not selected_probe:
             QtWidgets.QMessageBox.warning(self, "Probe missing", "Select imec0, imec1, or another available probe.")
             return
-        stale_sessions = [
-            session.name
+        probe_sessions = [
+            session
             for session in self.sessions
             if (
                 (trace := self._probe_trace(session, selected_probe)) is not None
                 and trace.volume_points
             )
-            and (session.auto_alignment_diagnostics or {}).get("alignment_run_stale", False)
+        ]
+        stale_sessions = [
+            session.name
+            for session in probe_sessions
+            if (session.auto_alignment_diagnostics or {}).get("alignment_run_stale", False)
         ]
         if stale_sessions:
             QtWidgets.QMessageBox.warning(
@@ -5759,6 +5677,62 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 f"mapping these probe-bearing slices: {', '.join(stale_sessions)}",
             )
             return
+        source_errors = [
+            error
+            for session in probe_sessions
+            if (error := self._source_binding_error(session)) is not None
+        ]
+        if source_errors:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Source image changed",
+                "Rerun alignment before mapping:\n" + "\n".join(source_errors),
+            )
+            return
+        blocked_sessions = [
+            session.name
+            for session in probe_sessions
+            if (session.auto_alignment_diagnostics or {})
+            .get("nonlinear_refinement", {})
+            .get("mapping_blocking", False)
+        ]
+        if blocked_sessions:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Alignment rejected",
+                "The nonlinear stage rejected the pose or affine input for these probe-bearing slices. "
+                "Rerun alignment before mapping: " + ", ".join(blocked_sessions),
+            )
+            return
+        review_sessions = [
+            session
+            for session in probe_sessions
+            if (
+                (result := (session.auto_alignment_diagnostics or {}).get("nonlinear_refinement", {}))
+                .get("status") == "rejected"
+                and not result.get("mapping_blocking", False)
+                and not result.get("affine_review_acknowledged_at")
+            )
+        ]
+        if review_sessions:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Review affine fallback",
+                "Experimental nonlinear refinement was rejected for "
+                + ", ".join(session.name for session in review_sessions)
+                + ". The affine alignments remain usable, but inspect their overlays before mapping. "
+                "Continue with the reviewed affine results?",
+            )
+            if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                self.status.setText("Mapping cancelled; affine fallback was not approved.")
+                return
+            acknowledged_at = datetime.now().astimezone().isoformat()
+            for session in review_sessions:
+                diagnostics = dict(session.auto_alignment_diagnostics or {})
+                result = dict(diagnostics["nonlinear_refinement"])
+                result["affine_review_acknowledged_at"] = acknowledged_at
+                diagnostics["nonlinear_refinement"] = result
+                session.auto_alignment_diagnostics = diagnostics
         points = self.all_probe_volume_points(selected_probe)
         _, marked_endpoint, surface_direction = self.probe_line_geometry(selected_probe)
         if marked_endpoint is None or surface_direction is None or len(points) < 2:
@@ -5962,15 +5936,33 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         def output_trace(session: SliceSession) -> ProbeTrace:
             return self._probe_trace(session, probe_name) or ProbeTrace()
 
+        for session in self.sessions:
+            if not output_trace(session).volume_points:
+                continue
+            source_error = self._source_binding_error(session)
+            if source_error is not None:
+                raise RuntimeError(source_error)
+            nonlinear_result = (session.auto_alignment_diagnostics or {}).get(
+                "nonlinear_refinement", {}
+            )
+            if nonlinear_result.get("mapping_blocking", False):
+                raise RuntimeError(f"{session.name} has a pose/input rejection; rerun alignment")
+            if (
+                nonlinear_result.get("status") == "rejected"
+                and not nonlinear_result.get("affine_review_acknowledged_at")
+            ):
+                raise RuntimeError(f"{session.name} affine fallback has not been explicitly reviewed")
+
         nonlinear_sidecars = {}
         for session_index, session in enumerate(self.sessions):
             transform = session.slice_atlas_transform
             if transform is None or transform.nonlinear is None:
                 continue
+            self._verify_nonlinear_binding(session, transform)
             sidecar_dir = anatomy_dir / "slice_atlas_transforms"
             sidecar_dir.mkdir(exist_ok=True)
             identity = hashlib.sha256(
-                f"{session_index}|{session.path}|{session.auto_alignment_run_id}".encode("utf-8")
+                f"{session_index}|{Path(session.path).resolve()}".encode("utf-8")
             ).hexdigest()[:16]
             sidecar_path = sidecar_dir / f"slice_atlas_transform_{identity}.npz"
             descriptor, temporary_name = tempfile.mkstemp(
@@ -5996,6 +5988,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 "coordinate_convention": transform.coordinate_convention,
                 "model_sha256": attestation.model_sha256,
                 "manifest_sha256": attestation.manifest_sha256,
+                "source_image_sha256": attestation.source_image_sha256,
+                "atlas_image_sha256": attestation.atlas_image_sha256,
+                "moving_affine_sha256": attestation.moving_affine_sha256,
+                "runtime_gate_version": attestation.runtime_gate_version,
                 "pixel_spacing_um": attestation.pixel_spacing_um,
             }
 
@@ -6072,6 +6068,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 {
                     "name": session.name,
                     "path": session.path,
+                    "alignment_source_sha256": session.alignment_source_sha256,
                     "display_scale": session.display_scale,
                     "rotation_deg": session.rotation_deg,
                     "flip_horizontal": session.flip_horizontal,

@@ -19,36 +19,37 @@ from nonlinear_registration import (
     MODEL_PIXEL_SPACING_UM,
     MODEL_SHAPE,
     MODEL_SPATIAL_CONTRACT,
-    MAXIMUM_RUNTIME_SURFACE_DICE_LOSS,
-    MINIMUM_EFFECTIVE_DISPLACEMENT_PX,
-    MINIMUM_RUNTIME_MIND_IMPROVEMENT,
-    MINIMUM_RUNTIME_RETAINED_COVERAGE,
     NonlinearWarp2D,
-    REJECTION_PROBABILITY_THRESHOLD,
+    NonlinearWarpAttestation,
     RUNTIME_GATE_CONTRACT,
-    nonlinear_acceptance_failures,
+    RUNTIME_GATE_VERSION,
+    array_sha256,
+    nonlinear_runtime_acceptance_issues,
 )
 
 
 INPUT_NAMES = MODEL_INPUT_NAMES
 OUTPUT_NAMES = MODEL_OUTPUT_NAMES
-# Deliberately unset until one locked real-histology candidate passes release review.
+# Deliberately unset until native-secondary and independent internal-landmark evidence pass review.
 APPROVED_NONLINEAR_RELEASE: dict[str, str] | None = None
 APPROVED_RELEASE_KEYS = (
     "model_sha256",
     "manifest_sha256",
-    "real_histology_gate_report_sha256",
-    "real_histology_evaluation_manifest_sha256",
+    "native_histology_secondary_gate_report_sha256",
+    "native_histology_secondary_evaluation_manifest_sha256",
+    "internal_landmark_gate_report_sha256",
+    "internal_landmark_evaluation_manifest_sha256",
 )
 
 
 class DiffeomorphicRegistrationRejected(RuntimeError):
     """A model result that failed a geometric or correspondence gate."""
 
-    def __init__(self, failures: list[str], diagnostics: dict):
-        self.failures = tuple(failures)
+    def __init__(self, issues: list[tuple[str, str]], diagnostics: dict):
+        self.categories = tuple(dict.fromkeys(category for category, _ in issues))
+        self.failures = tuple(message for _, message in issues)
         self.diagnostics = diagnostics
-        super().__init__("Nonlinear registration rejected: " + "; ".join(failures))
+        super().__init__("Nonlinear registration rejected: " + "; ".join(self.failures))
 
 
 def _file_sha256(path: Path) -> str:
@@ -78,8 +79,10 @@ def _verified_model_manifest(model_path: Path) -> tuple[str, str, dict]:
         "output_names": list(OUTPUT_NAMES),
         "runtime_gates": RUNTIME_GATE_CONTRACT,
         "onnx_gate_passed": True,
-        "real_histology_gate_passed": True,
-        "real_histology_benchmark_role": "locked_promotion_gate",
+        "native_histology_secondary_gate_passed": True,
+        "native_histology_secondary_benchmark_role": "locked_secondary_native_gate",
+        "internal_landmark_gate_passed": True,
+        "internal_landmark_benchmark_role": "locked_promotion_gate",
         "promotion_ready": True,
     }
     mismatched = [key for key, value in expected.items() if manifest.get(key) != value]
@@ -92,33 +95,57 @@ def _verified_model_manifest(model_path: Path) -> tuple[str, str, dict]:
         or manifest.get("prelocked_evidence_sha256") != _file_sha256(evidence_path)
     ):
         raise RuntimeError("Nonlinear model prelocked evidence is missing or fails its commitment")
-    commitment = manifest.get("locked_real_histology_commitment")
-    evaluation_sha256 = commitment.get("evaluation_manifest_sha256") if isinstance(commitment, dict) else None
-    if (
-        not isinstance(commitment, dict)
-        or not isinstance(commitment.get("source"), dict)
-        or not isinstance(evaluation_sha256, str)
-        or len(evaluation_sha256) != 64
+    prelocked_evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    if prelocked_evidence.get("model_sha256") != model_sha256:
+        raise RuntimeError("Nonlinear model prelocked evidence belongs to a different model")
+    for commitment_key, evaluation_key in (
+        (
+            "locked_native_histology_commitment",
+            "native_histology_secondary_evaluation_manifest_sha256",
+        ),
+        (
+            "locked_internal_landmark_commitment",
+            "internal_landmark_evaluation_manifest_sha256",
+        ),
     ):
-        raise RuntimeError("Nonlinear model has no valid locked real-histology commitment")
-    for key in (
-        "real_histology_gate_report_sha256",
-        "real_histology_evaluation_manifest_sha256",
-    ):
+        commitment = manifest.get(commitment_key)
+        evaluation_sha256 = (
+            commitment.get("evaluation_manifest_sha256") if isinstance(commitment, dict) else None
+        )
+        if (
+            not isinstance(commitment, dict)
+            or not isinstance(commitment.get("source"), dict)
+            or not isinstance(evaluation_sha256, str)
+            or len(evaluation_sha256) != 64
+            or manifest.get(evaluation_key) != evaluation_sha256
+            or prelocked_evidence.get(commitment_key) != commitment
+        ):
+            raise RuntimeError(f"Nonlinear model has no valid {commitment_key}")
+    evidence_hash_keys = (
+        "native_histology_secondary_gate_report_sha256",
+        "native_histology_secondary_evaluation_manifest_sha256",
+        "internal_landmark_gate_report_sha256",
+        "internal_landmark_evaluation_manifest_sha256",
+    )
+    for key in evidence_hash_keys:
         value = manifest.get(key)
         if not isinstance(value, str) or len(value) != 64 or any(
             character not in "0123456789abcdef" for character in value.lower()
         ):
             raise RuntimeError(f"Nonlinear model manifest has no valid {key}")
+    if (
+        manifest["native_histology_secondary_gate_report_sha256"].lower()
+        == manifest["internal_landmark_gate_report_sha256"].lower()
+        or manifest["native_histology_secondary_evaluation_manifest_sha256"].lower()
+        == manifest["internal_landmark_evaluation_manifest_sha256"].lower()
+    ):
+        raise RuntimeError("Native-histology and internal-landmark evidence hashes must be independent")
     if APPROVED_NONLINEAR_RELEASE is None:
         raise RuntimeError("No nonlinear model release is source-approved yet")
     actual_release = {
         "model_sha256": model_sha256,
         "manifest_sha256": manifest_sha256,
-        "real_histology_gate_report_sha256": manifest["real_histology_gate_report_sha256"].lower(),
-        "real_histology_evaluation_manifest_sha256": manifest[
-            "real_histology_evaluation_manifest_sha256"
-        ].lower(),
+        **{key: manifest[key].lower() for key in evidence_hash_keys},
     }
     release_mismatches = [
         key
@@ -188,6 +215,11 @@ def _correspondence_diagnostics(
     atlas_to_affine: np.ndarray,
 ) -> dict[str, float | int]:
     original_overlap = fixed_mask & moving_mask
+    overlap_pixels = int(np.count_nonzero(original_overlap))
+    overlap_fraction = float(
+        overlap_pixels
+        / max(np.count_nonzero(fixed_mask), np.count_nonzero(moving_mask), 1)
+    )
     map_x, map_y = atlas_to_affine[..., 0], atlas_to_affine[..., 1]
     warped_mask = cv2.remap(
         moving_mask.astype(np.uint8), map_x, map_y, cv2.INTER_LINEAR,
@@ -199,21 +231,22 @@ def _correspondence_diagnostics(
         cv2.remap(channel, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
         for channel in moving_descriptor
     ])
-    if np.count_nonzero(original_overlap):
+    if overlap_pixels:
         before = float(np.mean(np.abs(
             fixed_descriptor[:, original_overlap] - moving_descriptor[:, original_overlap]
         )))
         after = float(np.mean(np.abs(
             fixed_descriptor[:, original_overlap] - warped_descriptor[:, original_overlap]
         )))
-        retained = float(np.count_nonzero(original_overlap & warped_mask) / np.count_nonzero(original_overlap))
+        retained = float(np.count_nonzero(original_overlap & warped_mask) / overlap_pixels)
     else:
         before = after = float("inf")
         retained = 0.0
     surface_before = _dice(fixed_mask, moving_mask)
     surface_after = _dice(fixed_mask, warped_mask)
     return {
-        "prewarp_overlap_pixels": int(np.count_nonzero(original_overlap)),
+        "prewarp_overlap_pixels": overlap_pixels,
+        "prewarp_overlap_fraction": overlap_fraction,
         "mind_before": before,
         "mind_after": after,
         "mind_improvement": before - after,
@@ -224,23 +257,38 @@ def _correspondence_diagnostics(
     }
 
 
-def _correspondence_failures(diagnostics: dict[str, float | int]) -> list[str]:
-    checks = (
-        (diagnostics["prewarp_overlap_pixels"] >= 64, "affine brain overlap is too small"),
-        (
-            diagnostics["mind_improvement"] > MINIMUM_RUNTIME_MIND_IMPROVEMENT,
-            "nonlinear warp does not improve MIND correspondence",
+def verify_diffeomorphic_attestation_inputs(
+    warp: NonlinearWarp2D,
+    attestation: NonlinearWarpAttestation,
+    fixed_atlas: np.ndarray,
+    moving_affine_slice: np.ndarray,
+) -> None:
+    if array_sha256(fixed_atlas) != attestation.atlas_image_sha256:
+        raise RuntimeError("Nonlinear evidence does not match its atlas plane")
+    if array_sha256(moving_affine_slice) != attestation.moving_affine_sha256:
+        raise RuntimeError("Nonlinear evidence does not match its affine slice input")
+    observed = {
+        **_correspondence_diagnostics(
+            _gray_unit(fixed_atlas, attestation.atlas_mask),
+            _gray_unit(moving_affine_slice, attestation.affine_mask),
+            attestation.atlas_mask,
+            attestation.affine_mask,
+            warp.atlas_to_affine_xy,
         ),
-        (
-            diagnostics["surface_dice_delta"] >= -MAXIMUM_RUNTIME_SURFACE_DICE_LOSS,
-            "nonlinear warp reduces surface Dice by more than 0.01",
-        ),
-        (
-            diagnostics["retained_coverage"] >= MINIMUM_RUNTIME_RETAINED_COVERAGE,
-            "nonlinear warp retains less than 95% of affine overlap",
-        ),
-    )
-    return [message for passed, message in checks if not passed]
+        **warp.diagnostics(attestation.atlas_mask, attestation.affine_mask),
+    }
+    attested = attestation.acceptance_diagnostics
+    mismatched = [
+        key
+        for key, value in observed.items()
+        if key not in attested
+        or not np.isclose(float(attested[key]), float(value), rtol=1e-6, atol=1e-6)
+    ]
+    if mismatched:
+        raise RuntimeError(
+            "Nonlinear runtime evidence disagrees with recomputed diagnostics: "
+            + ", ".join(mismatched)
+        )
 
 
 def _center_geometry(native_shape: tuple[int, int]) -> tuple[int, int, int, int, int, int]:
@@ -327,6 +375,7 @@ def run_diffeomorphic_registration(
     model_path: str | Path | None = None,
     *,
     pixel_spacing_um: float | None = None,
+    source_image_sha256: str | None = None,
     session=None,
 ) -> tuple[NonlinearWarp2D, dict]:
     """Infer a residual warp at 25 um/pixel without resizing the native canvas."""
@@ -352,6 +401,12 @@ def run_diffeomorphic_registration(
 
     model_sha256 = manifest_sha256 = None
     if session is None:
+        if (
+            source_image_sha256 is None
+            or len(source_image_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in source_image_sha256.lower())
+        ):
+            raise ValueError("Production nonlinear registration requires the source image SHA-256")
         path = Path(model_path) if model_path is not None else None
         if path is None or not path.is_file():
             raise RuntimeError(f"Diffeomorphic ONNX model is unavailable: {path}")
@@ -399,6 +454,10 @@ def run_diffeomorphic_registration(
         "inference_seconds": inference_seconds,
         "model_sha256": model_sha256,
         "manifest_sha256": manifest_sha256,
+        "source_image_sha256": source_image_sha256,
+        "atlas_image_sha256": array_sha256(np.asarray(fixed_atlas)),
+        "moving_affine_sha256": array_sha256(np.asarray(moving_affine_slice)),
+        "runtime_gate_version": RUNTIME_GATE_VERSION,
         "native_shape": native_shape,
         "model_shape": MODEL_SHAPE,
         "pixel_spacing_um": MODEL_PIXEL_SPACING_UM,
@@ -412,17 +471,7 @@ def run_diffeomorphic_registration(
         **correspondence,
         **warp_diagnostics,
     }
-    failures = []
-    if modeled_trusted_fraction < 1.0:
-        failures.append("trusted tissue lies outside the model field of view")
-    if rejection_probability >= REJECTION_PROBABILITY_THRESHOLD:
-        failures.append(
-            f"model rejection probability {rejection_probability:.3f} exceeds "
-            f"{REJECTION_PROBABILITY_THRESHOLD:.3f}"
-        )
-    if warp_diagnostics["displacement_max_px"] > MINIMUM_EFFECTIVE_DISPLACEMENT_PX:
-        failures.extend(_correspondence_failures(correspondence))
-    failures.extend(nonlinear_acceptance_failures(warp_diagnostics))
-    if failures:
-        raise DiffeomorphicRegistrationRejected(failures, diagnostics)
+    issues = nonlinear_runtime_acceptance_issues(diagnostics)
+    if issues:
+        raise DiffeomorphicRegistrationRejected(issues, diagnostics)
     return warp, diagnostics

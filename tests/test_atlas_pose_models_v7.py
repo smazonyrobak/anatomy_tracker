@@ -145,6 +145,35 @@ def test_ouv_pose_round_trip_matches_existing_tracker_convention():
         assert np.allclose(quicknii_to_tracker_pose(plane), expected, atol=1e-9, rtol=0.0)
 
 
+def test_pose_to_quicknii_ouv_matches_known_allen_pir_corners():
+    pose = torch.tensor(
+        [[0.0, np.degrees(np.arctan(0.5)), np.degrees(np.arctan(-0.25))]],
+        dtype=torch.float64,
+    )
+    ouv = pose_to_quicknii_ouv(pose)[0]
+    origin, horizontal, vertical = ouv[:3], ouv[3:6], ouv[6:9]
+    quicknii_corners = torch.stack(
+        (origin, origin + horizontal, origin + vertical, origin + horizontal + vertical)
+    )
+    allen_pir_corners = torch.column_stack(
+        (
+            528.0 - quicknii_corners[:, 1],
+            320.0 - quicknii_corners[:, 2],
+            quicknii_corners[:, 0],
+        )
+    )
+    expected = torch.tensor(
+        [
+            [142.125, 0.0, 0.0],
+            [370.125, 0.0, 456.0],
+            [62.125, 320.0, 0.0],
+            [290.125, 320.0, 456.0],
+        ],
+        dtype=torch.float64,
+    )
+    assert torch.allclose(allen_pir_corners, expected, atol=1e-9, rtol=0.0)
+
+
 def test_ouv_ablation_head_returns_physical_pose_and_nine_coordinates():
     head = OUVPoseHead(16)
     features = torch.zeros(3, 16)
@@ -168,7 +197,7 @@ def test_direct_regression_baseline_decodes_physical_pose_and_trains():
 
 def test_every_head_uses_the_same_tolerance_normalized_physical_pose_objective():
     target = torch.tensor([[-1200.0, 4.0, -3.0]])
-    prediction = target + torch.tensor([[60.0, 2.0, 2.0]])
+    prediction = target + torch.tensor([[60.0, 0.9, 1.75]])
     orientation = torch.zeros(1)
     common = physical_pose_loss(prediction, target)
     assert common == pytest.approx(0.5)
