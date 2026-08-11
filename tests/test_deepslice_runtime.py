@@ -57,7 +57,6 @@ def test_directml_run_failure_retries_both_models_on_cpu_once(monkeypatch, faili
 
     records, _, _, _, runtime = TRACKER.run_deepslice_inference(
         ["slice.png"],
-        False,
         queue.SimpleQueue(),
         threading.Event(),
     )
@@ -99,7 +98,7 @@ def test_cancellation_between_models_skips_secondary_inference(monkeypatch):
     )
 
     with pytest.raises(InterruptedError):
-        TRACKER.run_deepslice_inference(["slice.png"], False, queue.SimpleQueue(), cancel)
+        TRACKER.run_deepslice_inference(["slice.png"], queue.SimpleQueue(), cancel)
 
     assert [sessions["primary"].calls, sessions["secondary"].calls] == [1, 0]
 
@@ -112,7 +111,7 @@ def test_validated_deepslice_runtime_recovers_known_atlas_planes():
     ]
 
     records, _, hashes, _, runtime = TRACKER.run_deepslice_inference(
-        image_paths, False, queue.SimpleQueue(), threading.Event()
+        image_paths, queue.SimpleQueue(), threading.Event()
     )
     by_filename = {
         record["Filenames"]: TRACKER.quicknii_to_tracker_alignment(record, TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML)[:3]
@@ -145,9 +144,11 @@ def test_smart_selection_crop_flip_and_surface_fit_recover_known_oblique_plane()
     )
     messages = queue.SimpleQueue()
     cancel = threading.Event()
-    records, _, _, _, runtime_info, _ = TRACKER.prepare_and_run_deepslice(
+    records, _, runtime_info, _ = TRACKER.prepare_and_run_pose_predictions(
         [(str(source_path), 0.0, True, False, points, crop, True, selection)],
-        False,
+        TRACKER.POSE_ENGINE_DEEPSLICE,
+        TRACKER.DEFAULT_OWN_CNN_WEIGHT,
+        float(TRACKER.DEFAULT_BREGMA_VOXEL_AP_DV_ML[0]),
         messages,
         cancel,
     )
@@ -155,17 +156,10 @@ def test_smart_selection_crop_flip_and_surface_fit_recover_known_oblique_plane()
         str(ROOT / "tests" / "data" / "allen_oblique_ap280_lr6_dv-4_mask.png"),
         cv2.IMREAD_GRAYSCALE,
     ) > 0
-    atlas_index, tilt_lr, tilt_dv, matrix = TRACKER.quicknii_to_tracker_alignment(
-        records[0], TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML
-    )
-    crop_info = runtime_info["input_crops"]["slice_0000.png"]
-    matrix = matrix @ np.asarray(
-        [
-            [1.0, 0.0, -crop_info["crop_x0_oriented_display_px"]],
-            [0.0, 1.0, -crop_info["crop_y0_oriented_display_px"]],
-            [0.0, 0.0, 1.0],
-        ]
-    )
+    atlas_index = records[0]["predicted_atlas_index"]
+    tilt_lr = records[0]["predicted_tilt_lr_deg"]
+    tilt_dv = records[0]["predicted_tilt_dv_deg"]
+    matrix = np.asarray(records[0]["initial_slice_to_atlas"])
     matrix, diagnostics = TRACKER.fit_surface_scale_translation(matrix, points, mask)
 
     assert abs(atlas_index - 280) < 5
@@ -195,7 +189,7 @@ def test_bounded_mind_search_recovers_known_pose_instead_of_clipping_to_bound():
     atlas = TRACKER.nrrd.read(str(atlas_folder / "average_template_25.nrrd"))[0]
     annotation = TRACKER.nrrd.read(str(atlas_folder / "annotation_25.nrrd"))[0]
 
-    pose, diagnostics, _ = TRACKER.refine_deepslice_pose_search(
+    pose, diagnostics, _ = TRACKER.refine_pose_search(
         {0: (250.0, 0.0, 0.0, np.eye(3))},
         {0: {"Filenames": "known.png"}},
         atlas,
@@ -241,7 +235,7 @@ def test_global_mind_search_recovers_ordered_planes_with_one_shared_tilt():
         converted[index] = (292.0 - 22.0 * index, 0.0, 0.0, np.eye(3))
         disagreement[filename] = {"ap_um": 800.0, "lr_deg": 8.0, "dv_deg": 8.0}
 
-    pose, _, shared_tilt = TRACKER.refine_deepslice_pose_search(
+    pose, _, shared_tilt = TRACKER.refine_pose_search(
         converted,
         records,
         atlas,

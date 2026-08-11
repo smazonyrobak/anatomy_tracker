@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import pickle
 import queue
@@ -32,6 +31,18 @@ from scipy.interpolate import Rbf
 from scipy.ndimage import map_coordinates
 from scipy.optimize import least_squares
 
+SOURCE_MODULE_DIR = str(Path(__file__).resolve().parent)
+if SOURCE_MODULE_DIR not in sys.path:
+    sys.path.insert(0, SOURCE_MODULE_DIR)
+from atlas_pose_runtime import (
+    automatic_brain_mask,
+    brain_mask_affine,
+    fuse_pose_predictions,
+    plane_normal_from_tilts,
+    run_atlas_pose_onnx,
+    tilts_from_plane_normal,
+)
+
 
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 RESOURCE_DIR = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else APP_DIR
@@ -60,6 +71,12 @@ DEEPSLICE_ONNX_SHA256 = {
 DEEPSLICE_REVIEW_AP_UM = 400.0
 DEEPSLICE_REVIEW_TILT_DEG = 5.0
 DEEPSLICE_REVIEW_SURFACE_RMS_PX = 8.0
+POSE_ENGINE_DEEPSLICE = "DeepSlice"
+POSE_ENGINE_OWN_CNN = "Own CNN"
+POSE_ENGINE_WEIGHTED = "Weighted vote"
+POSE_ENGINES = (POSE_ENGINE_DEEPSLICE, POSE_ENGINE_OWN_CNN, POSE_ENGINE_WEIGHTED)
+DEFAULT_OWN_CNN_WEIGHT = 0.20
+OWN_CNN_MODEL_PATH = RESOURCE_DIR / "models" / "AtlasPose" / "atlas_pose.onnx"
 MIND_CANONICAL_SIZE = (171, 120)
 MIND_AP_PRIOR_WEIGHT = 0.001
 MIND_TILT_PRIOR_WEIGHT = 0.0005
@@ -187,213 +204,8 @@ def preprocess_deepslice_images(image_paths: list[str]) -> tuple[np.ndarray, lis
     return np.stack(images), widths, heights
 
 
-def _deepslice_plane_equation(section: np.ndarray) -> tuple[np.ndarray, float]:
-    origin = np.asarray(section[0:3], dtype=np.float64)
-    horizontal = np.asarray(section[3:6], dtype=np.float64)
-    vertical = np.asarray(section[6:9], dtype=np.float64)
-    normal = np.cross(horizontal, vertical) / 9.0
-    return normal, -float(np.dot(origin, normal))
-
-
-def _deepslice_plane_angle(
-    section: np.ndarray,
-    normal: np.ndarray,
-    offset: float,
-    direction: str,
-) -> float:
-    points = np.asarray(section, dtype=np.float64).copy()
-    points[3:6] += points[0:3]
-    points[6:9] += points[0:3]
-    if direction == "ML":
-        first = points[0:2]
-        depth = -(((points[0] - 100.0) * normal[0]) + (points[2] * normal[2]) + offset) / normal[1]
-        second = np.asarray((points[0] - 100.0, depth))
-        third = second + (100.0, 0.0)
-    else:
-        first = points[1:3]
-        depth = -((points[0] * normal[0]) + ((points[2] - 100.0) * normal[2]) + offset) / normal[1]
-        second = np.asarray((depth, points[2] - 100.0))
-        third = second + (0.0, 100.0)
-    first_vector = first - second
-    reference_vector = third - second
-    cosine = np.dot(first_vector, reference_vector) / (
-        np.linalg.norm(first_vector) * np.linalg.norm(reference_vector)
-    )
-    angle = float(np.degrees(np.arccos(cosine)))
-    if direction == "ML" and second[1] > first[1]:
-        angle *= -1.0
-    if direction == "DV" and second[0] < first[0]:
-        angle *= -1.0
-    return angle
-
-
-def _deepslice_rotation_around_axis(axis: np.ndarray, angle_deg: float) -> np.ndarray:
-    angle = np.radians(angle_deg)
-    axis = axis / np.linalg.norm(axis)
-    a = math.cos(angle / 2.0)
-    b, c, d = axis * math.sin(angle / 2.0)
-    aa, bb, cc, dd = a * a, b * b, c * c, d * d
-    bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
-    return np.asarray(
-        [
-            [aa + bb - cc - dd, 2.0 * (bc - ad), 2.0 * (bd + ac)],
-            [2.0 * (bc + ad), aa + cc - bb - dd, 2.0 * (cd - ab)],
-            [2.0 * (bd - ac), 2.0 * (cd + ab), aa + dd - bb - cc],
-        ]
-    )
-
-
-def _deepslice_rotation_axis(
-    section: np.ndarray,
-    translation: np.ndarray,
-    direction: str,
-    section_plane: int,
-) -> np.ndarray:
-    normal, offset = _deepslice_plane_equation(section)
-    volume = np.asarray((528.0, 320.0, 456.0)) - translation
-    coronal_y = -(
-        ((volume[0] / 2.0) * normal[0]) + ((volume[2] / 2.0) * normal[2]) + offset
-    ) / normal[1]
-    sagittal_x = -(
-        ((volume[1] / 2.0) * normal[1]) + ((volume[2] / 2.0) * normal[2]) + offset
-    ) / normal[0]
-    horizontal_z = -(
-        ((volume[0] / 2.0) * normal[0]) + ((volume[1] / 2.0) * normal[1]) + offset
-    ) / normal[2]
-    if section_plane == 0:
-        axis = (volume[0] / 2.0, coronal_y, volume[2] / 2.0)
-        if direction == "DV":
-            predicted_y = -(
-                (volume[0] * normal[0]) + ((volume[2] / 2.0) * normal[2]) + offset
-            ) / normal[1]
-            second = (volume[0], predicted_y, volume[2] / 2.0)
-        else:
-            predicted_y = -(
-                ((volume[0] / 2.0) * normal[0]) + (volume[2] * normal[2]) + offset
-            ) / normal[1]
-            second = (volume[0] / 2.0, predicted_y, volume[2])
-    elif section_plane == 1:
-        axis = (sagittal_x, volume[1] / 2.0, volume[2] / 2.0)
-        if direction == "DV":
-            predicted_x = -(
-                (volume[1] * normal[1]) + ((volume[2] / 2.0) * normal[2]) + offset
-            ) / normal[0]
-            second = (predicted_x, volume[1], volume[2] / 2.0)
-        else:
-            predicted_x = -(
-                ((volume[1] / 2.0) * normal[1]) + (volume[2] * normal[2]) + offset
-            ) / normal[0]
-            second = (predicted_x, volume[1] / 2.0, volume[2])
-    else:
-        axis = (volume[0] / 2.0, volume[1] / 2.0, horizontal_z)
-        if direction == "DV":
-            predicted_z = -(
-                (volume[0] * normal[0]) + ((volume[1] / 2.0) * normal[1]) + offset
-            ) / normal[2]
-            second = (volume[0], volume[1] / 2.0, predicted_z)
-        else:
-            predicted_z = -(
-                ((volume[0] / 2.0) * normal[0]) + (volume[1] * normal[1]) + offset
-            ) / normal[2]
-            second = (volume[0] / 2.0, volume[1], predicted_z)
-    return np.asarray(axis) - np.asarray(second)
-
-
-def _deepslice_rotate_section(section: np.ndarray, angle_deg: float, direction: str) -> np.ndarray:
-    normal, offset = _deepslice_plane_equation(section)
-    points = np.asarray(section, dtype=np.float64).copy()
-    points[3:6] += points[0:3]
-    points[6:9] += points[0:3]
-    points = points.reshape(3, 3)
-    volume = np.asarray((528.0, 320.0, 456.0))
-    center = volume / 2.0
-    coronal_y = -(
-        ((volume[0] / 2.0) * normal[0]) + ((volume[2] / 2.0) * normal[2]) + offset
-    ) / normal[1]
-    sagittal_x = -(
-        ((volume[1] / 2.0) * normal[1]) + ((volume[2] / 2.0) * normal[2]) + offset
-    ) / normal[0]
-    horizontal_z = -(
-        ((volume[0] / 2.0) * normal[0]) + ((volume[1] / 2.0) * normal[1]) + offset
-    ) / normal[2]
-    section_plane = int(
-        np.argmin(
-            np.abs(
-                (
-                    coronal_y - center[1],
-                    sagittal_x - center[0],
-                    horizontal_z - center[2],
-                )
-            )
-        )
-    )
-    if section_plane == 0:
-        translation = np.asarray((volume[0] / 2.0, coronal_y, volume[2] / 2.0))
-    elif section_plane == 1:
-        translation = np.asarray((sagittal_x, volume[1] / 2.0, volume[2] / 2.0))
-    else:
-        translation = np.asarray((volume[0] / 2.0, volume[1] / 2.0, horizontal_z))
-    axis = _deepslice_rotation_axis(section, translation, direction, section_plane)
-    rotation = _deepslice_rotation_around_axis(axis, angle_deg)
-    rotated = ((points - translation) @ rotation + translation).reshape(9)
-    rotated[3:6] -= rotated[0:3]
-    rotated[6:9] -= rotated[0:3]
-    return rotated
-
-
-def _deepslice_adjust_section(section: np.ndarray, target_angle: float, direction: str) -> np.ndarray:
-    normal, offset = _deepslice_plane_equation(section)
-    current_angle = _deepslice_plane_angle(section, normal, offset, direction)
-    return _deepslice_rotate_section(section, -(current_angle - target_angle), direction)
-
-
-def _deepslice_propagate_angle_pass(sections: np.ndarray) -> np.ndarray:
-    dv_angles = []
-    ml_angles = []
-    depths = []
-    for section in sections:
-        normal, offset = _deepslice_plane_equation(section)
-        dv_angles.append(_deepslice_plane_angle(section, normal, offset, "DV"))
-        ml_angles.append(_deepslice_plane_angle(section, normal, offset, "ML"))
-        depths.append(-((228.0 * normal[0]) + (160.0 * normal[2]) + offset) / normal[1])
-    if len(sections) > 2:
-        weights = np.exp(-(np.linspace(-np.pi, np.pi, 528) ** 2) / 2.0) / np.sqrt(2.0 * np.pi)
-        depths = np.asarray(depths)
-        depths[depths < 0.0] = 0.0
-        depths[depths > 528.0] = 527.0
-        weights = weights[depths.astype(int)]
-    else:
-        weights = np.ones(len(sections), dtype=np.float64)
-    target_dv = float(np.average(dv_angles, weights=weights))
-    target_ml = float(np.average(ml_angles, weights=weights))
-    adjusted = []
-    for section in sections:
-        section = _deepslice_adjust_section(section, target_dv, "DV")
-        adjusted.append(_deepslice_adjust_section(section, target_ml, "ML"))
-    return np.asarray(adjusted)
-
-
-def propagate_deepslice_shared_angles(records: list[dict]) -> list[dict]:
-    if len(records) < 2:
-        return records
-    coordinate_columns = ("ox", "oy", "oz", "ux", "uy", "uz", "vx", "vy", "vz")
-    sections = np.asarray(
-        [[record[column] for column in coordinate_columns] for record in records],
-        dtype=np.float64,
-    )
-    for _ in range(2):
-        sections = _deepslice_propagate_angle_pass(sections)
-    propagated = []
-    for record, section in zip(records, sections):
-        adjusted = dict(record)
-        adjusted.update({column: float(value) for column, value in zip(coordinate_columns, section)})
-        propagated.append(adjusted)
-    return propagated
-
-
 def run_deepslice_inference(
     image_paths: list[str],
-    propagate_angles: bool,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
 ) -> tuple[list[dict], str, dict[str, str], dict[str, dict[str, float]], dict]:
@@ -465,15 +277,6 @@ def run_deepslice_inference(
     preintegration_tilts = np.asarray(
         [quicknii_to_tracker_alignment(record, ALLEN_CCF_25_SHAPE_AP_DV_ML)[1:3] for record in records]
     )
-    if propagate_angles and len(records) > 1:
-        progress_messages.put((22, "Integrating one shared cutting angle across slices..."))
-        records = propagate_deepslice_shared_angles(records)
-    for record in records:
-        record["shared_angle_ouv"] = (
-            [float(record[column]) for column in coordinate_columns]
-            if propagate_angles and len(records) > 1
-            else None
-        )
     progress_messages.put((27, "Converting DeepSlice coordinates into the tracker atlas..."))
     runtime_info = {
         "backend": "ONNX Runtime DirectML" if provider == "DmlExecutionProvider" else "ONNX Runtime CPU",
@@ -491,104 +294,316 @@ def run_deepslice_inference(
     return records, DEEPSLICE_VERSION, dict(model_hashes), disagreement, runtime_info
 
 
-def prepare_and_run_deepslice(
-    image_jobs: list[
-        tuple[
-            str,
-            float,
-            bool,
-            bool,
-            list[tuple[float, float]],
-            tuple[int, int, int, int] | None,
-            bool,
-            np.ndarray | None,
-        ]
-    ],
-    propagate_angles: bool,
+def prepare_pose_inputs(
+    image_jobs: list[tuple],
+    temporary_folder: str,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
-) -> tuple[list[dict], str, dict[str, str], dict[str, dict[str, float]], dict, dict[str, dict[str, np.ndarray]]]:
+) -> tuple[list[str], dict[str, dict], dict[str, dict[str, np.ndarray]]]:
     image_paths = []
     input_crops = {}
     prepared_inputs = {}
-    with tempfile.TemporaryDirectory(prefix="trajectory_deepslice_") as temporary_folder:
-        for sequence, (
-            source_path,
+    for sequence, (
+        source_path,
+        rotation_deg,
+        flip_horizontal,
+        flip_vertical,
+        surface_points,
+        selection_crop,
+        outline_closed,
+        selection_mask,
+    ) in enumerate(image_jobs):
+        if cancel_event.is_set():
+            raise InterruptedError
+        progress_messages.put((2, f"Preparing model input {sequence + 1} / {len(image_jobs)}..."))
+        path = Path(source_path)
+        output_path = Path(temporary_folder) / f"slice_{sequence:04d}.png"
+        raw = (
+            tifffile.imread(str(path))
+            if path.suffix.lower() in {".tif", ".tiff"}
+            else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        )
+        source_gray = as_gray(raw)
+        source_height, source_width = source_gray.shape[:2]
+        display_raw, display_scale = downsample_for_display(source_gray)
+        image, _ = transform_slice_image(
+            normalize_u8(display_raw),
             rotation_deg,
             flip_horizontal,
             flip_vertical,
-            surface_points,
-            selection_crop,
-            outline_closed,
-            selection_mask,
-        ) in enumerate(image_jobs):
-            if cancel_event.is_set():
-                raise InterruptedError
-            progress_messages.put((2, f"Preparing DeepSlice input {sequence + 1} / {len(image_jobs)}..."))
-            path = Path(source_path)
-            output_path = Path(temporary_folder) / f"slice_{sequence:04d}.png"
-            raw = tifffile.imread(str(path)) if path.suffix.lower() in {".tif", ".tiff"} else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-            source_gray = as_gray(raw)
-            source_height, source_width = source_gray.shape[:2]
-            display_raw, display_scale = downsample_for_display(source_gray)
-            image, _ = transform_slice_image(
-                normalize_u8(display_raw),
-                rotation_deg,
-                flip_horizontal,
-                flip_vertical,
-            )
-            if selection_mask is not None and selection_mask.shape == image.shape:
-                brain_mask = np.asarray(selection_mask, dtype=np.uint8) > 0
-            else:
-                brain_mask = np.zeros(image.shape, dtype=np.uint8)
-                hull = cv2.convexHull(np.rint(np.asarray(surface_points)).astype(np.int32))
-                cv2.drawContours(brain_mask, [hull], -1, 1, -1)
-                brain_mask = brain_mask.astype(bool)
-            if selection_crop is not None:
-                crop = selection_crop
-            elif surface_points:
-                crop = surface_crop_bounds(surface_points, image.shape, 0.06)
-            else:
-                crop = (0, 0, image.shape[1], image.shape[0])
-            x0, y0, x1, y1 = crop
-            if not cv2.imwrite(str(output_path), image[y0:y1, x0:x1]):
-                raise RuntimeError(f"Could not prepare {path.name} for DeepSlice")
-            image_paths.append(str(output_path))
-            prepared_inputs[output_path.name] = {
-                "image": image,
-                "brain_mask": brain_mask,
-            }
-            input_crops[output_path.name] = {
-                "source_path": str(path),
-                "source_size_bytes": int(path.stat().st_size),
-                "source_modified_ns": int(path.stat().st_mtime_ns),
-                "rotation_deg": float(rotation_deg),
-                "flip_horizontal": bool(flip_horizontal),
-                "flip_vertical": bool(flip_vertical),
-                "outline_closed": bool(outline_closed),
-                "coordinate_frame": "oriented_downsampled_display_pixels",
-                "trusted_surface_points_oriented_display_px": [
-                    [float(point[0]), float(point[1])] for point in surface_points
+        )
+        if selection_mask is not None and selection_mask.shape == image.shape:
+            brain_mask = np.asarray(selection_mask, dtype=np.uint8) > 0
+        elif outline_closed:
+            brain_mask = np.zeros(image.shape, dtype=np.uint8)
+            cv2.fillPoly(brain_mask, [np.rint(np.asarray(surface_points)).astype(np.int32)], 1)
+            brain_mask = brain_mask.astype(bool)
+        else:
+            brain_mask = automatic_brain_mask(image)
+        if selection_crop is not None:
+            crop = selection_crop
+        else:
+            mask_y, mask_x = np.nonzero(brain_mask)
+            crop = surface_crop_bounds(
+                [
+                    (float(mask_x.min()), float(mask_y.min())),
+                    (float(mask_x.max()), float(mask_y.max())),
                 ],
-                "crop_x0_oriented_display_px": int(x0),
-                "crop_y0_oriented_display_px": int(y0),
-                "crop_x1_oriented_display_px": int(x1),
-                "crop_y1_oriented_display_px": int(y1),
-                "oriented_display_width_px": int(image.shape[1]),
-                "oriented_display_height_px": int(image.shape[0]),
-                "source_raw_width_px": int(source_width),
-                "source_raw_height_px": int(source_height),
-                "display_downsample_factor": float(display_scale),
-                "model_input_png_sha256": file_sha256(output_path),
+                image.shape,
+                0.06,
+            )
+        x0, y0, x1, y1 = crop
+        if not cv2.imwrite(str(output_path), image[y0:y1, x0:x1]):
+            raise RuntimeError(f"Could not prepare {path.name} for automatic alignment")
+        image_paths.append(str(output_path))
+        prepared_inputs[output_path.name] = {"image": image, "brain_mask": brain_mask}
+        input_crops[output_path.name] = {
+            "source_path": str(path),
+            "source_size_bytes": int(path.stat().st_size),
+            "source_modified_ns": int(path.stat().st_mtime_ns),
+            "rotation_deg": float(rotation_deg),
+            "flip_horizontal": bool(flip_horizontal),
+            "flip_vertical": bool(flip_vertical),
+            "outline_closed": bool(outline_closed),
+            "coordinate_frame": "oriented_downsampled_display_pixels",
+            "trusted_surface_points_oriented_display_px": [
+                [float(point[0]), float(point[1])] for point in surface_points
+            ],
+            "crop_x0_oriented_display_px": int(x0),
+            "crop_y0_oriented_display_px": int(y0),
+            "crop_x1_oriented_display_px": int(x1),
+            "crop_y1_oriented_display_px": int(y1),
+            "oriented_display_width_px": int(image.shape[1]),
+            "oriented_display_height_px": int(image.shape[0]),
+            "source_raw_width_px": int(source_width),
+            "source_raw_height_px": int(source_height),
+            "display_downsample_factor": float(display_scale),
+            "model_input_png_sha256": file_sha256(output_path),
+        }
+    return image_paths, input_crops, prepared_inputs
+
+
+def combine_pose_predictions(
+    image_paths: list[str],
+    input_crops: dict[str, dict],
+    component_records: dict[str, dict[str, dict]],
+    deepslice_disagreement: dict[str, dict[str, float]],
+    engine: str,
+    own_cnn_weight: float,
+    bregma_ap_index: float,
+) -> tuple[list[dict], dict[str, dict[str, float]]]:
+    use_deepslice = engine in (POSE_ENGINE_DEEPSLICE, POSE_ENGINE_WEIGHTED)
+    use_own_cnn = engine in (POSE_ENGINE_OWN_CNN, POSE_ENGINE_WEIGHTED)
+    records = []
+    disagreement = {}
+    for path in image_paths:
+        filename = Path(path).name
+        components = {}
+        initial_matrix = None
+        if use_deepslice:
+            prediction = component_records[POSE_ENGINE_DEEPSLICE][filename]
+            atlas_index, tilt_lr, tilt_dv, matrix = quicknii_to_tracker_alignment(
+                prediction,
+                ALLEN_CCF_25_SHAPE_AP_DV_ML,
+            )
+            if use_deepslice:
+                crop = input_crops[filename]
+                full_to_crop = np.asarray(
+                    [
+                        [1.0, 0.0, -float(crop["crop_x0_oriented_display_px"])],
+                        [0.0, 1.0, -float(crop["crop_y0_oriented_display_px"])],
+                        [0.0, 0.0, 1.0],
+                    ]
+                )
+                initial_matrix = matrix @ full_to_crop
+            deepslice_pose = np.asarray(
+                [(bregma_ap_index - atlas_index) * VOXEL_UM, tilt_lr, tilt_dv],
+                dtype=np.float64,
+            )
+            components[POSE_ENGINE_DEEPSLICE] = {
+                "pose_ap_um_lr_deg_dv_deg": deepslice_pose.tolist(),
+                "raw_ensemble_ouv_quicknii_ml_ap_dv": list(prediction["raw_ensemble_ouv"]),
+                "ensemble_disagreement": dict(deepslice_disagreement[filename]),
             }
-        records, deepslice_version, model_hashes, disagreement, runtime_info = run_deepslice_inference(
-            image_paths,
-            propagate_angles,
+        if use_own_cnn:
+            own_pose = np.asarray(
+                component_records[POSE_ENGINE_OWN_CNN][filename]["pose_ap_um_lr_deg_dv_deg"],
+                dtype=np.float64,
+            )
+            components[POSE_ENGINE_OWN_CNN] = {
+                "pose_ap_um_lr_deg_dv_deg": own_pose.tolist(),
+                "orientation_inverted": bool(
+                    component_records[POSE_ENGINE_OWN_CNN][filename]["orientation_inverted"]
+                ),
+                "orientation_inverted_logit": float(
+                    component_records[POSE_ENGINE_OWN_CNN][filename]["orientation_inverted_logit"]
+                ),
+            }
+
+        if engine == POSE_ENGINE_DEEPSLICE:
+            pose = deepslice_pose
+            model_difference = dict(deepslice_disagreement[filename])
+        elif engine == POSE_ENGINE_OWN_CNN:
+            pose = own_pose
+            model_difference = {}
+        else:
+            pose = fuse_pose_predictions(
+                np.stack([deepslice_pose, own_pose]),
+                np.asarray([1.0 - own_cnn_weight, own_cnn_weight]),
+            )
+            component_delta = np.abs(deepslice_pose - own_pose)
+            internal = deepslice_disagreement[filename]
+            model_difference = {
+                "ap_um": max(float(component_delta[0]), float(internal["ap_um"])),
+                "lr_deg": max(float(component_delta[1]), float(internal["lr_deg"])),
+                "dv_deg": max(float(component_delta[2]), float(internal["dv_deg"])),
+            }
+        disagreement[filename] = model_difference
+        records.append(
+            {
+                "Filenames": filename,
+                "pose_ap_um_lr_deg_dv_deg": pose.tolist(),
+                "predicted_atlas_index": float(bregma_ap_index - pose[0] / VOXEL_UM),
+                "predicted_tilt_lr_deg": float(pose[1]),
+                "predicted_tilt_dv_deg": float(pose[2]),
+                "initial_slice_to_atlas": None if initial_matrix is None else initial_matrix.tolist(),
+                "initial_orientation_inverted": bool(
+                    components.get(POSE_ENGINE_OWN_CNN, {}).get("orientation_inverted", False)
+                ),
+                "model_uncertainty": dict(
+                    component_records.get(POSE_ENGINE_OWN_CNN, {}).get(filename, {}).get("model_uncertainty", {})
+                ),
+                "component_predictions": components,
+                "fusion": (
+                    {
+                        "method": "AP weighted arithmetic; tilts weighted in plane-normal space",
+                        "own_cnn_weight": float(own_cnn_weight),
+                        "deepslice_weight": float(1.0 - own_cnn_weight),
+                    }
+                    if engine == POSE_ENGINE_WEIGHTED
+                    else None
+                ),
+            }
+        )
+    return records, disagreement
+
+
+def prepare_and_run_pose_predictions(
+    image_jobs: list[tuple],
+    engine: str,
+    own_cnn_weight: float,
+    bregma_ap_index: float,
+    progress_messages: queue.SimpleQueue,
+    cancel_event: threading.Event,
+    own_cnn_model_path: str | Path = OWN_CNN_MODEL_PATH,
+) -> tuple[list[dict], dict[str, dict[str, float]], dict, dict[str, dict[str, np.ndarray]]]:
+    if engine not in POSE_ENGINES:
+        raise ValueError(f"Unknown pose-prediction engine: {engine}")
+    if not 0.0 <= own_cnn_weight <= 1.0:
+        raise ValueError("Own CNN vote weight must be between 0 and 1")
+    use_deepslice = engine in (POSE_ENGINE_DEEPSLICE, POSE_ENGINE_WEIGHTED)
+    use_own_cnn = engine in (POSE_ENGINE_OWN_CNN, POSE_ENGINE_WEIGHTED)
+    started = time.perf_counter()
+    with tempfile.TemporaryDirectory(prefix="trajectory_pose_") as temporary_folder:
+        image_paths, input_crops, prepared_inputs = prepare_pose_inputs(
+            image_jobs,
+            temporary_folder,
             progress_messages,
             cancel_event,
         )
-    runtime_info["input_crops"] = input_crops
-    return records, deepslice_version, model_hashes, disagreement, runtime_info, prepared_inputs
+        component_records: dict[str, dict[str, dict]] = {}
+        component_provenance = {}
+        component_runtimes = {}
+        deepslice_disagreement: dict[str, dict[str, float]] = {}
+        if use_deepslice:
+            deepslice_records, version, hashes, deepslice_disagreement, deepslice_runtime = run_deepslice_inference(
+                image_paths,
+                progress_messages,
+                cancel_event,
+            )
+            component_records[POSE_ENGINE_DEEPSLICE] = {
+                Path(str(record["Filenames"])).name: record for record in deepslice_records
+            }
+            component_runtimes[POSE_ENGINE_DEEPSLICE] = deepslice_runtime
+            component_provenance[POSE_ENGINE_DEEPSLICE] = {
+                "version": version,
+                "model_sha256": hashes,
+                "backend": deepslice_runtime.get("backend"),
+                "device": deepslice_runtime.get("device"),
+                "onnxruntime_version": deepslice_runtime.get("onnxruntime_version"),
+                "gpu_fallback_reason": deepslice_runtime.get("gpu_fallback_reason"),
+            }
+        if use_own_cnn:
+            progress_messages.put((28 if use_deepslice else 12, "Running own atlas-pose CNN..."))
+            own_prediction, own_runtime = run_atlas_pose_onnx(
+                [prepared_inputs[Path(path).name]["image"] for path in image_paths],
+                [prepared_inputs[Path(path).name]["brain_mask"] for path in image_paths],
+                own_cnn_model_path,
+                cancel_event,
+            )
+            benchmark = own_runtime["metadata"].get("real_histology_benchmark", {})
+            model_uncertainty = dict(benchmark.get("raw_in_domain", {}))
+            component_records[POSE_ENGINE_OWN_CNN] = {
+                Path(path).name: {
+                    "Filenames": Path(path).name,
+                    "pose_ap_um_lr_deg_dv_deg": [float(value) for value in pose],
+                    "orientation_inverted": bool(own_runtime["orientation_inverted"][index]),
+                    "orientation_inverted_logit": float(own_runtime["orientation_inverted_logit"][index]),
+                    "model_uncertainty": model_uncertainty,
+                }
+                for index, (path, pose) in enumerate(zip(image_paths, own_prediction))
+            }
+            component_runtimes[POSE_ENGINE_OWN_CNN] = own_runtime
+            component_provenance[POSE_ENGINE_OWN_CNN] = {
+                key: own_runtime.get(key)
+                for key in (
+                    "architecture",
+                    "model_sha256",
+                    "backend",
+                    "device",
+                    "onnxruntime_version",
+                    "gpu_fallback_reason",
+                    "preprocessing_version",
+                    "preprocessing_source_sha256",
+                )
+            }
+        if cancel_event.is_set():
+            raise InterruptedError
+        records, disagreement = combine_pose_predictions(
+            image_paths,
+            input_crops,
+            component_records,
+            deepslice_disagreement,
+            engine,
+            own_cnn_weight,
+            bregma_ap_index,
+        )
+
+    tilts = np.asarray(
+        [[record["predicted_tilt_lr_deg"], record["predicted_tilt_dv_deg"]] for record in records]
+    )
+    fallback_reasons = [
+        value.get("gpu_fallback_reason") for value in component_runtimes.values() if value.get("gpu_fallback_reason")
+    ]
+    runtime_info = {
+        "engine": engine,
+        "component_provenance": component_provenance,
+        "component_runtimes": component_runtimes,
+        "fusion": records[0]["fusion"],
+        "backend": " + ".join(value.get("backend", "unknown") for value in component_runtimes.values()),
+        "device": " + ".join(value.get("device", "unknown") for value in component_runtimes.values()),
+        "onnxruntime_version": " + ".join(
+            dict.fromkeys(str(value.get("onnxruntime_version", "unknown")) for value in component_runtimes.values())
+        ),
+        "gpu_fallback_reason": "; ".join(fallback_reasons) or None,
+        "inference_seconds": float(
+            sum(float(value.get("inference_seconds", 0.0)) for value in component_runtimes.values())
+        ),
+        "total_backend_seconds": float(time.perf_counter() - started),
+        "preintegration_tilt_spread_deg": np.ptp(tilts, axis=0).tolist() if len(tilts) > 1 else [0.0, 0.0],
+        "input_crops": input_crops,
+    }
+    return records, disagreement, runtime_info, prepared_inputs
 
 
 def quicknii_to_tracker_alignment(
@@ -1068,10 +1083,12 @@ def ap_candidate_indices(
     atlas_length: int,
     bounds: tuple[int, int] | None,
     step: int,
+    local_radius: int = 16,
 ) -> list[int]:
     if bounds is None:
-        minimum = max(0, int(np.floor(predicted_index)) - 8)
-        maximum = min(atlas_length - 1, int(np.ceil(predicted_index)) + 8)
+        center = float(np.clip(predicted_index, 0, atlas_length - 1))
+        minimum = max(0, int(np.floor(center)) - local_radius)
+        maximum = min(atlas_length - 1, int(np.ceil(center)) + local_radius)
     else:
         minimum, maximum = sorted(int(value) for value in bounds)
         minimum = int(np.clip(minimum, 0, atlas_length - 1))
@@ -1133,7 +1150,7 @@ def surface_crop_bounds(
     return x0, y0, x1, y1
 
 
-def deepslice_review_reasons(disagreement: dict, diagnostics: dict) -> list[str]:
+def alignment_review_reasons(disagreement: dict, diagnostics: dict) -> list[str]:
     reasons = []
     if diagnostics.get("alignment_run_stale", False):
         reasons.append("alignment input changed; rerun required")
@@ -1259,8 +1276,8 @@ def fit_surface_scale_translation(
     }
 
 
-def refine_deepslice_pose_search(
-    converted: dict[int, tuple[float, float, float, np.ndarray]],
+def refine_pose_search(
+    converted: dict[int, tuple[float, float, float, np.ndarray | None]],
     records_by_session: dict[int, dict],
     atlas_volume: np.ndarray,
     annotation_volume: np.ndarray,
@@ -1304,6 +1321,23 @@ def refine_deepslice_pose_search(
 
     evaluated_poses = {session_index: 0 for session_index in converted}
 
+    def candidates_for(session_index: int, step: int) -> list[int]:
+        record = records_by_session[session_index]
+        uncertainty = record.get("model_uncertainty", {})
+        radius_um = max(
+            400.0,
+            float(uncertainty.get("ap_p95_um", 0.0)),
+            float(disagreement.get(filenames[session_index], {}).get("ap_um", 0.0)),
+        )
+        radius = int(np.clip(np.ceil(radius_um / VOXEL_UM), 16, 32))
+        return ap_candidate_indices(
+            converted[session_index][0],
+            atlas_volume.shape[0],
+            ap_bounds,
+            step,
+            radius,
+        )
+
     def lattice(
         tilt_lr: float,
         tilt_dv: float,
@@ -1320,14 +1354,27 @@ def refine_deepslice_pose_search(
                     continue
                 predicted_ap, predicted_lr, predicted_dv, _ = converted[session_index]
                 model_difference = disagreement.get(filenames[session_index], {})
-                ap_sigma = max(8.0, float(model_difference.get("ap_um", 0.0)) / VOXEL_UM)
+                model_uncertainty = records_by_session[session_index].get("model_uncertainty", {})
+                ap_sigma = max(
+                    8.0,
+                    float(model_difference.get("ap_um", 0.0)) / VOXEL_UM,
+                    float(model_uncertainty.get("ap_mae_um", 0.0)) / VOXEL_UM,
+                )
                 if ap_bounds is not None:
                     minimum, maximum = sorted(ap_bounds)
                     if predicted_ap < minimum or predicted_ap > maximum:
                         distance = min(abs(predicted_ap - minimum), abs(predicted_ap - maximum))
                         ap_sigma = max(ap_sigma, float(maximum - minimum), 2.0 * distance)
-                lr_sigma = max(3.0, float(model_difference.get("lr_deg", 0.0)))
-                dv_sigma = max(3.0, float(model_difference.get("dv_deg", 0.0)))
+                lr_sigma = max(
+                    3.0,
+                    float(model_difference.get("lr_deg", 0.0)),
+                    float(model_uncertainty.get("lr_mae_deg", 0.0)),
+                )
+                dv_sigma = max(
+                    3.0,
+                    float(model_difference.get("dv_deg", 0.0)),
+                    float(model_uncertainty.get("dv_mae_deg", 0.0)),
+                )
                 source_descriptor, source_mask = sources[session_index]
                 if reference is None:
                     texture_distance = surface_distance = float("inf")
@@ -1348,8 +1395,8 @@ def refine_deepslice_pose_search(
                     {
                         "mind_texture_distance": float(texture_distance),
                         "surface_shape_distance": float(surface_distance),
-                        "deepslice_ap_prior": float(ap_prior),
-                        "deepslice_tilt_prior": float(tilt_prior),
+                        "model_ap_prior": float(ap_prior),
+                        "model_tilt_prior": float(tilt_prior),
                     },
                 )
                 evaluated_poses[session_index] += 1
@@ -1373,7 +1420,7 @@ def refine_deepslice_pose_search(
             axis=0,
         )
         coarse_candidates = {
-            index: ap_candidate_indices(converted[index][0], atlas_volume.shape[0], ap_bounds, 4)
+            index: candidates_for(index, 4)
             for index in session_indices
         }
         initial_lattice = lattice(float(predicted_tilt[0]), float(predicted_tilt[1]), coarse_candidates)
@@ -1403,7 +1450,7 @@ def refine_deepslice_pose_search(
         fine_candidates = {
             index: [
                 ap
-                for ap in ap_candidate_indices(converted[index][0], atlas_volume.shape[0], ap_bounds, 1)
+                for ap in candidates_for(index, 1)
                 if abs(ap - updated_assignment[index]) <= 3
             ]
             for index in session_indices
@@ -1432,7 +1479,7 @@ def refine_deepslice_pose_search(
         _, best_lr, best_dv, _ = min(fine_results, key=lambda item: item[0])
 
         final_candidates = {
-            index: ap_candidate_indices(converted[index][0], atlas_volume.shape[0], ap_bounds, 1)
+            index: candidates_for(index, 1)
             for index in session_indices
         }
         final_lattice = lattice(best_lr, best_dv, final_candidates)
@@ -1463,7 +1510,7 @@ def refine_deepslice_pose_search(
                 "pose_search_evaluated_pose_count": int(evaluated_poses[index]),
                 "pose_search_boundary": bool(ap in (minimum, maximum)),
                 "pose_search_explicit_bounds": ap_bounds is not None,
-                "pose_search_method": "coarse-to-fine MIND + disagreement-weighted DeepSlice prior",
+                "pose_search_method": "coarse-to-fine MIND + disagreement-weighted model prior",
             }
         return group_pose, group_diagnostics, (float(best_lr), float(best_dv))
 
@@ -1488,10 +1535,9 @@ def refine_deepslice_pose_search(
     return pose, diagnostics, shared_tilt
 
 
-def solve_deepslice_alignment(
+def solve_pose_alignment(
     records: list[dict],
     filename_to_session: dict[str, int],
-    atlas_shape: tuple[int, int, int],
     annotation_volume: np.ndarray,
     outline_snapshot: dict[int, list[tuple[float, float]]],
     ap_bounds: tuple[int, int] | None,
@@ -1510,23 +1556,23 @@ def solve_deepslice_alignment(
         for record in records
     }
     if len(records_by_session) != len(filename_to_session):
-        raise RuntimeError("DeepSlice did not return exactly one result for every input slice")
+        raise RuntimeError("The pose predictor did not return exactly one result for every input slice")
 
     converted = {}
     input_crops = runtime_info.get("input_crops", {})
     for index, record in records_by_session.items():
-        atlas_index, tilt_ml, tilt_dv, matrix = quicknii_to_tracker_alignment(record, atlas_shape)
-        crop = input_crops.get(Path(str(record["Filenames"])).name, {})
-        full_to_crop = np.asarray(
-            [
-                [1.0, 0.0, -float(crop.get("crop_x0_oriented_display_px", 0.0))],
-                [0.0, 1.0, -float(crop.get("crop_y0_oriented_display_px", 0.0))],
-                [0.0, 0.0, 1.0],
-            ]
+        atlas_index = float(record["predicted_atlas_index"])
+        tilt_ml = float(record["predicted_tilt_lr_deg"])
+        tilt_dv = float(record["predicted_tilt_dv_deg"])
+        matrix = record.get("initial_slice_to_atlas")
+        converted[index] = (
+            atlas_index,
+            tilt_ml,
+            tilt_dv,
+            None if matrix is None else np.asarray(matrix, dtype=np.float64),
         )
-        converted[index] = (atlas_index, tilt_ml, tilt_dv, matrix @ full_to_crop)
 
-    pose, search_diagnostics, shared_tilt = refine_deepslice_pose_search(
+    pose, search_diagnostics, shared_tilt = refine_pose_search(
         converted,
         records_by_session,
         atlas_volume,
@@ -1552,6 +1598,13 @@ def solve_deepslice_alignment(
             float(tilt_dv),
             order=0,
         ) > 0
+        if matrix is None:
+            filename = Path(str(records_by_session[session_index]["Filenames"])).name
+            matrix = brain_mask_affine(
+                prepared_inputs[filename]["brain_mask"],
+                atlas_mask,
+                bool(records_by_session[session_index].get("initial_orientation_inverted", False)),
+            )
         matrix, surface_fit = fit_surface_scale_translation(
             matrix,
             outline_snapshot[session_index],
@@ -1559,7 +1612,16 @@ def solve_deepslice_alignment(
         )
         inverse = np.linalg.inv(matrix)
         diagnostics = {
-            "raw_deepslice_ap_index": float(raw_atlas_index),
+            "raw_model_ap_index": float(raw_atlas_index),
+            "raw_model_pose_ap_um_lr_deg_dv_deg": list(
+                records_by_session[session_index]["pose_ap_um_lr_deg_dv_deg"]
+            ),
+            "component_predictions": records_by_session[session_index]["component_predictions"],
+            "prediction_fusion": records_by_session[session_index]["fusion"],
+            "model_uncertainty": records_by_session[session_index].get("model_uncertainty", {}),
+            "initial_orientation_inverted": bool(
+                records_by_session[session_index].get("initial_orientation_inverted", False)
+            ),
             "refined_ap_index": float(atlas_index),
             "ap_search_shift_index": float(atlas_index - raw_atlas_index),
             "ap_search_bounds_index": None if ap_bounds is None else list(ap_bounds),
@@ -1599,10 +1661,10 @@ def solve_deepslice_alignment(
     return prepared, shared_tilt
 
 
-def prepare_run_and_solve_deepslice(
+def prepare_run_and_solve_alignment(
     image_jobs: list[tuple],
     filename_to_session: dict[str, int],
-    atlas_shape: tuple[int, int, int],
+    bregma_ap_index: float,
     atlas_volume: np.ndarray,
     annotation_volume: np.ndarray,
     outline_snapshot: dict[int, list[tuple[float, float]]],
@@ -1610,13 +1672,17 @@ def prepare_run_and_solve_deepslice(
     order_snapshot: list[int],
     alignment_run_id: str,
     global_alignment: bool,
+    engine: str,
+    own_cnn_weight: float,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
-) -> tuple[str, dict[str, str], dict[str, dict[str, float]], dict, list[tuple], tuple[float, float] | None]:
+) -> tuple[str, dict, dict[str, dict[str, float]], dict, list[tuple], tuple[float, float] | None]:
     alignment_started = time.perf_counter()
-    records, version, hashes, disagreement, runtime_info, prepared_inputs = prepare_and_run_deepslice(
+    records, disagreement, runtime_info, prepared_inputs = prepare_and_run_pose_predictions(
         image_jobs,
-        global_alignment,
+        engine,
+        own_cnn_weight,
+        bregma_ap_index,
         progress_messages,
         cancel_event,
     )
@@ -1625,10 +1691,9 @@ def prepare_run_and_solve_deepslice(
         raise InterruptedError
     progress_messages.put((30, "Searching corresponding Allen atlas anatomy..."))
     solver_started = time.perf_counter()
-    prepared, shared_tilt = solve_deepslice_alignment(
+    prepared, shared_tilt = solve_pose_alignment(
         records,
         filename_to_session,
-        atlas_shape,
         annotation_volume,
         outline_snapshot,
         ap_bounds,
@@ -1649,7 +1714,7 @@ def prepare_run_and_solve_deepslice(
     if cancel_event.is_set():
         raise InterruptedError
     progress_messages.put((100, "Alignment ready"))
-    return version, hashes, disagreement, runtime_info, prepared, shared_tilt
+    return engine, runtime_info["component_provenance"], disagreement, runtime_info, prepared, shared_tilt
 
 
 def atlas_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:
@@ -1879,7 +1944,6 @@ class SliceSession:
     manual_refined_from_run_id: str | None = None
     auto_alignment_diagnostics: dict | None = None
     deepslice_raw_ensemble_ouv: list[float] | None = None
-    deepslice_shared_angle_ouv: list[float] | None = None
     deepslice_version: str | None = None
     deepslice_model_hashes: dict[str, str] | None = None
     deepslice_ensemble_disagreement: dict[str, float] | None = None
@@ -2463,10 +2527,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.dynamic_gl_items: list[object] = []
         self.brain_mesh_item: gl.GLMeshItem | None = None
         self.auto_alignment_busy = False
-        self.deepslice_executor = ThreadPoolExecutor(max_workers=1)
-        self._deepslice_cancel_event: threading.Event | None = None
-        self._deepslice_timer: QtCore.QTimer | None = None
-        self._deepslice_progress: QtWidgets.QProgressDialog | None = None
+        self.alignment_executor = ThreadPoolExecutor(max_workers=1)
+        self._alignment_cancel_event: threading.Event | None = None
+        self._alignment_timer: QtCore.QTimer | None = None
+        self._alignment_progress: QtWidgets.QProgressDialog | None = None
 
         self._build_ui(default_run_folder)
         if self.atlas_folder.exists():
@@ -2642,12 +2706,27 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         automatic_tab = QtWidgets.QWidget()
         automatic_layout = QtWidgets.QGridLayout(automatic_tab)
         automatic_help = QtWidgets.QLabel(
-            "Select at least 8 reliable outer-surface points. DeepSlice initializes the pose, then a bounded "
+            "Select at least 8 reliable outer-surface points. The selected model initializes the pose, then a bounded "
             "modality-independent atlas search matches internal anatomy; the surface fixes scale independently "
             "of the display brightness curve."
         )
         automatic_help.setWordWrap(True)
         automatic_help.setStyleSheet("color:#9fb4c8;")
+        self.pose_engine = QtWidgets.QComboBox()
+        self.pose_engine.addItems(POSE_ENGINES)
+        self.pose_engine.setToolTip("Pose initializer used before the same atlas search and surface calibration")
+        self.own_cnn_weight = QtWidgets.QSpinBox()
+        self.own_cnn_weight.setRange(1, 99)
+        self.own_cnn_weight.setValue(round(DEFAULT_OWN_CNN_WEIGHT * 100))
+        self.own_cnn_weight.setSuffix("% own CNN")
+        self.own_cnn_weight.setEnabled(False)
+        self.own_cnn_weight.setToolTip("Weighted vote only: remaining weight is assigned to DeepSlice")
+        engine_controls = QtWidgets.QWidget()
+        engine_layout = QtWidgets.QHBoxLayout(engine_controls)
+        engine_layout.setContentsMargins(0, 0, 0, 0)
+        engine_layout.addWidget(QtWidgets.QLabel("Pose model"))
+        engine_layout.addWidget(self.pose_engine, 1)
+        engine_layout.addWidget(self.own_cnn_weight)
         self.brush_radius = QtWidgets.QSpinBox()
         self.brush_radius.setRange(20, 1000)
         self.brush_radius.setSingleStep(20)
@@ -2672,13 +2751,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.auto_undo_point_btn = QtWidgets.QPushButton("Undo edit")
         self.auto_clear_points_btn = QtWidgets.QPushButton("Clear points")
         automatic_layout.addWidget(automatic_help, 0, 0, 1, 4)
-        automatic_layout.addWidget(self.smart_surface_mode, 1, 0)
-        automatic_layout.addWidget(brush_size, 1, 1, 1, 3)
-        automatic_layout.addWidget(self.auto_outline_mode, 2, 0, 1, 2)
-        automatic_layout.addWidget(self.erase_surface_mode, 2, 2, 1, 2)
-        automatic_layout.addWidget(self.new_outline_segment_btn, 3, 0)
-        automatic_layout.addWidget(self.auto_undo_point_btn, 3, 1, 1, 2)
-        automatic_layout.addWidget(self.auto_clear_points_btn, 3, 3)
+        automatic_layout.addWidget(engine_controls, 1, 0, 1, 4)
+        automatic_layout.addWidget(self.smart_surface_mode, 2, 0)
+        automatic_layout.addWidget(brush_size, 2, 1, 1, 3)
+        automatic_layout.addWidget(self.auto_outline_mode, 3, 0, 1, 2)
+        automatic_layout.addWidget(self.erase_surface_mode, 3, 2, 1, 2)
+        automatic_layout.addWidget(self.new_outline_segment_btn, 4, 0)
+        automatic_layout.addWidget(self.auto_undo_point_btn, 4, 1, 1, 2)
+        automatic_layout.addWidget(self.auto_clear_points_btn, 4, 3)
         self.auto_align_btn = QtWidgets.QPushButton("Auto-align current")
         self.auto_align_btn.setToolTip(
             "Align this outlined slice independently; its AP and both cutting tilts are estimated from this slice alone"
@@ -2689,8 +2769,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "Align all outlined slices together with one shared L-R/D-V cutting angle and a separate AP per slice"
         )
         self.auto_align_all_btn.setEnabled(False)
-        automatic_layout.addWidget(self.auto_align_btn, 4, 0, 1, 2)
-        automatic_layout.addWidget(self.auto_align_all_btn, 4, 2, 1, 2)
+        automatic_layout.addWidget(self.auto_align_btn, 5, 0, 1, 2)
+        automatic_layout.addWidget(self.auto_align_all_btn, 5, 2, 1, 2)
         self.limit_auto_align_ap = QtWidgets.QCheckBox("Limit AP search")
         self.limit_auto_align_ap.setToolTip(
             "Evaluate atlas candidates only inside this stereotaxic AP interval. This is a genuine bounded "
@@ -2706,23 +2786,23 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             control.setEnabled(False)
         self.auto_align_ap_min.setPrefix("From ")
         self.auto_align_ap_max.setPrefix("To ")
-        automatic_layout.addWidget(self.limit_auto_align_ap, 5, 0)
-        automatic_layout.addWidget(self.auto_align_ap_min, 5, 1)
-        automatic_layout.addWidget(self.auto_align_ap_max, 5, 2)
+        automatic_layout.addWidget(self.limit_auto_align_ap, 6, 0)
+        automatic_layout.addWidget(self.auto_align_ap_min, 6, 1)
+        automatic_layout.addWidget(self.auto_align_ap_max, 6, 2)
         order_label = QtWidgets.QLabel(
             "Optional AP-order constraint: drag slices into known anterior → posterior order and check only those "
             "whose relative order is known. Leave all unchecked to apply no order constraint."
         )
         order_label.setWordWrap(True)
         order_label.setStyleSheet("color:#9fb4c8;")
-        automatic_layout.addWidget(order_label, 6, 0, 1, 4)
+        automatic_layout.addWidget(order_label, 7, 0, 1, 4)
         self.auto_slice_order = QtWidgets.QListWidget()
         self.auto_slice_order.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.auto_slice_order.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
         self.auto_slice_order.setDefaultDropAction(QtCore.Qt.DropAction.MoveAction)
         self.auto_slice_order.setMinimumHeight(76)
         self.auto_slice_order.setMaximumHeight(112)
-        automatic_layout.addWidget(self.auto_slice_order, 7, 0, 1, 3)
+        automatic_layout.addWidget(self.auto_slice_order, 8, 0, 1, 3)
         order_buttons = QtWidgets.QWidget()
         order_buttons_layout = QtWidgets.QVBoxLayout(order_buttons)
         order_buttons_layout.setContentsMargins(0, 0, 0, 0)
@@ -2730,16 +2810,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.auto_order_down_btn = QtWidgets.QPushButton("Move later")
         order_buttons_layout.addWidget(self.auto_order_up_btn)
         order_buttons_layout.addWidget(self.auto_order_down_btn)
-        automatic_layout.addWidget(order_buttons, 7, 3)
+        automatic_layout.addWidget(order_buttons, 8, 3)
         self.alignment_summary = QtWidgets.QLabel("Auto-align: not run")
         self.alignment_summary.setToolTip(
-            "DeepSlice pose and raw primary/secondary-model disagreement; REVIEW is a guardrail, not a probability"
+            "Selected-model pose, component disagreement and atlas-refinement diagnostics; REVIEW is a guardrail"
         )
         self.alignment_summary.setWordWrap(True)
-        automatic_layout.addWidget(self.alignment_summary, 8, 0, 1, 4)
+        automatic_layout.addWidget(self.alignment_summary, 9, 0, 1, 4)
         for column in range(4):
             automatic_layout.setColumnStretch(column, 1)
-        automatic_layout.setRowStretch(9, 1)
+        automatic_layout.setRowStretch(10, 1)
         self.alignment_tabs.addTab(automatic_tab, "Automatic alignment")
 
         self.probe_type = QtWidgets.QComboBox()
@@ -2952,6 +3032,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.auto_slice_order.itemClicked.connect(self._auto_order_slice_clicked)
         self.auto_slice_order.itemChanged.connect(self._auto_order_constraint_changed)
         self.auto_slice_order.model().rowsMoved.connect(self._auto_order_constraint_changed)
+        self.pose_engine.currentTextChanged.connect(self._pose_engine_changed)
         self.limit_auto_align_ap.toggled.connect(self.auto_align_ap_min.setEnabled)
         self.limit_auto_align_ap.toggled.connect(self.auto_align_ap_max.setEnabled)
         self.undo_point_btn.clicked.connect(lambda: self._undo_for_mode(self.landmark_mode))
@@ -3191,7 +3272,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.atlas_tilt_dv_value.setText(f"{self.atlas_tilt_dv.value() / 10.0:+.1f}°")
         session = self.current_session()
         if session is not None:
-            manually_overridden = session.auto_alignment_engine == "DeepSlice"
+            manually_overridden = session.auto_alignment_engine is not None
             session.atlas_tilt_ml_deg = tilt_ml
             session.atlas_tilt_dv_deg = tilt_dv
             if manually_overridden:
@@ -3200,7 +3281,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_atlas()
         self._refresh_3d()
         if session is not None and manually_overridden:
-            self.status.setText("Atlas tilt adjusted manually; the refinement was recorded with its DeepSlice provenance.")
+            self.status.setText("Atlas tilt adjusted manually; the refinement was recorded with its model provenance.")
 
     def _index_to_um(self, index: int) -> int:
         axis = plane_axis(self.plane_box.currentText())
@@ -3261,7 +3342,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._set_plane_limits()
         session = self.current_session()
         if session is not None:
-            if session.auto_alignment_engine == "DeepSlice":
+            if session.auto_alignment_engine is not None:
                 self._mark_alignment_run_stale(session, "contributor atlas plane changed")
                 self._clear_slice_transform(session)
             session.atlas_plane = self.plane_box.currentText()
@@ -3278,7 +3359,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._update_axis_control(value)
         session = self.current_session()
         if session is not None:
-            manually_overridden = session.auto_alignment_engine == "DeepSlice"
+            manually_overridden = session.auto_alignment_engine is not None
             session.atlas_plane = self.plane_box.currentText()
             session.atlas_index = value
             if manually_overridden:
@@ -3287,7 +3368,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_atlas()
         self._refresh_3d()
         if session is not None and manually_overridden:
-            self.status.setText("Atlas position adjusted manually; the refinement was recorded with its DeepSlice provenance.")
+            self.status.setText("Atlas position adjusted manually; the refinement was recorded with its model provenance.")
 
     def _axis_um_changed(self, value_um: int) -> None:
         self._section_changed(self._um_to_index(value_um))
@@ -3492,7 +3573,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ):
             return
         had_transform = session.slice_to_atlas_x is not None and session.atlas_to_slice_x is not None and session.transformed_overlay is not None
-        if session.auto_alignment_engine == "DeepSlice":
+        if session.auto_alignment_engine is not None:
             self._mark_alignment_run_stale(session, "contributor slice geometry changed")
         if session.brain_brush_selection_mask is not None and session.raw_display is not None:
             new_shape, new_transform = slice_geometry_matrix(
@@ -3574,7 +3655,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.manual_refined_from_run_id = None
         session.auto_alignment_diagnostics = None
         session.deepslice_raw_ensemble_ouv = None
-        session.deepslice_shared_angle_ouv = None
         session.deepslice_version = None
         session.deepslice_model_hashes = None
         session.deepslice_ensemble_disagreement = None
@@ -3589,18 +3669,24 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._clear_derived_probe_coordinates(session)
 
     def _detach_auto_alignment_for_manual_pose(self, session: SliceSession) -> None:
-        run_id = session.auto_alignment_run_id
+        source_run_id = session.manual_refined_from_run_id or session.auto_alignment_run_id
         if session.auto_alignment_scope != "manual-refined":
-            session.manual_refined_from_run_id = run_id
+            session.manual_refined_from_run_id = session.auto_alignment_run_id
+            session.auto_alignment_run_id = (
+                f"{session.auto_alignment_run_id or 'alignment'}_manual_{time.time_ns()}"
+            )
             session.auto_alignment_global = False
             session.auto_alignment_scope = "manual-refined"
             session.auto_alignment_method = (
                 f"{session.auto_alignment_method} + manual pose refinement"
                 if session.auto_alignment_method
-                else f"Manual pose refinement derived from DeepSlice run {run_id}"
+                else f"Manual pose refinement derived from automatic-alignment run {source_run_id}"
             )
         diagnostics = dict(session.auto_alignment_diagnostics or {})
-        diagnostics["manual_refined_from_run_id"] = run_id
+        diagnostics["alignment_run_id"] = session.auto_alignment_run_id
+        diagnostics["alignment_scope"] = "manual-refined"
+        diagnostics["shared_tilt_lr_dv_deg"] = None
+        diagnostics["manual_refined_from_run_id"] = source_run_id
         diagnostics["manual_refined_pose"] = {
             "atlas_index": int(session.atlas_index),
             "tilt_lr_deg": float(session.atlas_tilt_ml_deg),
@@ -3609,11 +3695,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.auto_alignment_diagnostics = diagnostics
 
     def _mark_alignment_run_stale(self, session: SliceSession, reason: str) -> None:
-        run_id = session.auto_alignment_run_id
-        if run_id is None:
+        linked_run_ids = {
+            run_id
+            for run_id in (session.auto_alignment_run_id, session.manual_refined_from_run_id)
+            if run_id is not None
+        }
+        if not linked_run_ids:
             return
         for member in self.sessions:
-            if member.auto_alignment_run_id != run_id:
+            member_run_ids = {member.auto_alignment_run_id, member.manual_refined_from_run_id}
+            if linked_run_ids.isdisjoint(member_run_ids):
                 continue
             diagnostics = dict(member.auto_alignment_diagnostics or {})
             reasons = list(diagnostics.get("stale_reasons", []))
@@ -3675,7 +3766,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.status.setText("Transform landmarks changed; run transform again before adding new probe points.")
 
     def _invalidate_auto_alignment_after_surface_edit(self, session: SliceSession) -> None:
-        if session.auto_alignment_engine != "DeepSlice":
+        if session.auto_alignment_engine is None:
             return
         self._mark_alignment_run_stale(session, "contributor trusted surface changed")
         self._clear_slice_transform(session)
@@ -3790,6 +3881,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
 
     def _detach_smart_surface(self, session: SliceSession) -> None:
+        # Point edits change the trusted boundary, not the tissue mask used for brightness-independent inference.
         session.brain_brush_strokes.clear()
         session.point_history = [action for action in session.point_history if action != "brain_brush"]
 
@@ -4232,11 +4324,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             and self.plane_box.currentText() == "coronal"
             and not self.auto_alignment_busy
         )
-        if session.auto_alignment_engine == "DeepSlice":
+        if session.auto_alignment_engine is not None:
             ap_um = int(round((session.atlas_index - float(self.bregma_voxel[0])) * VOXEL_UM * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]))
             scope = session.auto_alignment_scope or ("global" if session.auto_alignment_global else "single")
-            disagreement = session.deepslice_ensemble_disagreement or {}
             diagnostics = session.auto_alignment_diagnostics or {}
+            disagreement = diagnostics.get("model_disagreement", {})
             disagreement_text = ""
             if disagreement:
                 disagreement_text = (
@@ -4246,10 +4338,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             search_shift = abs(float(diagnostics.get("ap_search_shift_um", 0.0)))
             constraint_text = f" | AP search shift {search_shift:.0f} um" if search_shift >= 0.5 else ""
             scale_text = f" | surface scale {float(diagnostics.get('surface_scale', 1.0)):.3f}x"
-            reasons = deepslice_review_reasons(disagreement, diagnostics)
+            reasons = alignment_review_reasons(disagreement, diagnostics)
             review_text = f" — REVIEW: {', '.join(reasons)}" if reasons else ""
             self.alignment_summary.setText(
-                f"DeepSlice {scope}: AP {ap_um:+d} um | L-R {session.atlas_tilt_ml_deg:+.1f}° | "
+                f"{session.auto_alignment_engine} {scope}: AP {ap_um:+d} um | L-R {session.atlas_tilt_ml_deg:+.1f}° | "
                 f"D-V {session.atlas_tilt_dv_deg:+.1f}°{scale_text}{constraint_text}{disagreement_text}{review_text}"
             )
         else:
@@ -4451,12 +4543,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.status.setText(f"Global auto-alignment failed: {exc}")
 
     def _set_auto_constraint_controls_enabled(self, enabled: bool) -> None:
+        self.pose_engine.setEnabled(enabled)
+        self.own_cnn_weight.setEnabled(enabled and self.pose_engine.currentText() == POSE_ENGINE_WEIGHTED)
         self.limit_auto_align_ap.setEnabled(enabled)
         self.auto_align_ap_min.setEnabled(enabled and self.limit_auto_align_ap.isChecked())
         self.auto_align_ap_max.setEnabled(enabled and self.limit_auto_align_ap.isChecked())
         self.auto_slice_order.setEnabled(enabled)
         self.auto_order_up_btn.setEnabled(enabled)
         self.auto_order_down_btn.setEnabled(enabled)
+
+    def _pose_engine_changed(self, engine: str) -> None:
+        self.own_cnn_weight.setEnabled(not self.auto_alignment_busy and engine == POSE_ENGINE_WEIGHTED)
 
     def auto_align_current_slice(self) -> None:
         session = self.current_session()
@@ -4469,7 +4566,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 "Select at least 8 reliable outer-surface points before automatic alignment.",
             )
             return
-        self._start_deepslice_alignment([self.current_session_index], global_alignment=False)
+        self._start_auto_alignment([self.current_session_index], global_alignment=False)
 
     def auto_align_all_slices(self) -> None:
         outlined_indices = [index for index, _ in self._outlined_auto_sessions()]
@@ -4480,16 +4577,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 "Select at least 8 reliable surface points on at least two slices.",
             )
             return
-        self._start_deepslice_alignment(outlined_indices, global_alignment=True)
+        self._start_auto_alignment(outlined_indices, global_alignment=True)
 
-    def _start_deepslice_alignment(self, session_indices: list[int], *, global_alignment: bool) -> None:
+    def _start_auto_alignment(self, session_indices: list[int], *, global_alignment: bool) -> None:
         if self.auto_alignment_busy or self.atlas_volume is None or self.annotation_volume is None or not session_indices:
             return
         if self.plane_box.currentText() != "coronal":
             QtWidgets.QMessageBox.warning(
                 self,
                 "Coronal sections only",
-                "DeepSlice currently supports coronal mouse-brain sections only.",
+                "Automatic pose models currently support coronal mouse-brain sections only.",
             )
             return
 
@@ -4510,6 +4607,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
         if len(order_snapshot) < 2:
             order_snapshot = []
+        engine = self.pose_engine.currentText()
+        own_cnn_weight = self.own_cnn_weight.value() / 100.0
+        if engine in (POSE_ENGINE_OWN_CNN, POSE_ENGINE_WEIGHTED) and (
+            not OWN_CNN_MODEL_PATH.is_file() or not OWN_CNN_MODEL_PATH.with_suffix(".json").is_file()
+        ):
+            raise RuntimeError(
+                "Own CNN model bundle is unavailable. Expected the trained ONNX model and atlas_pose.json at: "
+                f"{OWN_CNN_MODEL_PATH.parent}. "
+                "Choose DeepSlice until the final model is installed."
+            )
         alignment_run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
         atlas_snapshot = (
             id(self.atlas_volume),
@@ -4524,8 +4631,19 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         outline_snapshot: dict[int, list[tuple[float, float]]] = {}
 
         def alignment_input_snapshot(session: SliceSession) -> tuple:
+            source = Path(session.path)
+            source_stat = source.stat()
+            selection_digest = (
+                None
+                if session.brain_brush_selection_mask is None
+                else hashlib.sha256(
+                    np.ascontiguousarray(session.brain_brush_selection_mask).view(np.uint8)
+                ).hexdigest()
+            )
             return (
                 session.path,
+                source_stat.st_size,
+                source_stat.st_mtime_ns,
                 session.rotation_deg,
                 session.flip_horizontal,
                 session.flip_vertical,
@@ -4538,6 +4656,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 session.atlas_tilt_dv_deg,
                 tuple(session.atlas_landmarks),
                 tuple(session.slice_landmarks),
+                selection_digest,
                 id(session.slice_to_atlas_x),
                 id(session.atlas_to_slice_x),
             )
@@ -4587,13 +4706,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         messages: queue.SimpleQueue = queue.SimpleQueue()
         cancel_event = threading.Event()
         progress = QtWidgets.QProgressDialog(
-            "Preparing DeepSlice...",
+            f"Preparing {engine}...",
             "Cancel",
             0,
             100,
             self,
         )
-        progress.setWindowTitle("DeepSlice auto-alignment")
+        progress.setWindowTitle("Automatic alignment")
         progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
         progress.setMinimumDuration(0)
         progress.setAutoClose(False)
@@ -4606,12 +4725,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._set_auto_constraint_controls_enabled(False)
         self._refresh_point_counts()
         scope = f"{len(session_indices)} outlined slices" if global_alignment else self.sessions[session_indices[0]].name
-        self.status.setText(f"DeepSlice and atlas refinement are aligning {scope}; the interface remains available.")
-        future = self.deepslice_executor.submit(
-            prepare_run_and_solve_deepslice,
+        self.status.setText(f"{engine} and atlas refinement are aligning {scope}; the interface remains available.")
+        future = self.alignment_executor.submit(
+            prepare_run_and_solve_alignment,
             image_jobs,
             filename_to_session,
-            self.atlas_volume.shape,
+            float(self.bregma_voxel[0]),
             self.atlas_volume,
             self.annotation_volume,
             outline_snapshot,
@@ -4619,6 +4738,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             order_snapshot,
             alignment_run_id,
             global_alignment,
+            engine,
+            own_cnn_weight,
             messages,
             cancel_event,
         )
@@ -4641,8 +4762,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 if was_cancelled:
                     raise InterruptedError
                 (
-                    deepslice_version,
-                    model_hashes,
+                    completed_engine,
+                    component_provenance,
                     disagreement,
                     runtime_info,
                     prepared,
@@ -4656,17 +4777,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     tuple(self.bregma_voxel),
                 )
                 if current_atlas != atlas_snapshot:
-                    raise RuntimeError("The atlas changed while DeepSlice was running; result discarded")
+                    raise RuntimeError("The atlas changed while automatic alignment was running; result discarded")
                 for session_index, expected in geometry_snapshot.items():
                     session = self.sessions[session_index]
                     if alignment_input_snapshot(session) != expected:
                         raise RuntimeError(
-                            f"{session.name} was edited while DeepSlice was running; result discarded"
+                            f"{session.name} was edited while automatic alignment was running; result discarded"
                         )
-                self._apply_deepslice_results(
+                self._apply_auto_alignment_results(
                     prepared,
-                    deepslice_version,
-                    model_hashes,
+                    completed_engine,
+                    component_provenance,
                     disagreement,
                     runtime_info,
                     ap_bounds,
@@ -4675,23 +4796,23 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     shared_tilt=shared_tilt,
                 )
             except InterruptedError:
-                self.status.setText("DeepSlice cancelled; previous alignment results were kept unchanged.")
+                self.status.setText("Automatic alignment cancelled; previous results were kept unchanged.")
             except Exception as exc:
-                QtWidgets.QMessageBox.critical(self, "DeepSlice alignment failed", str(exc))
-                self.status.setText(f"DeepSlice alignment failed: {exc}")
+                QtWidgets.QMessageBox.critical(self, "Automatic alignment failed", str(exc))
+                self.status.setText(f"Automatic alignment failed: {exc}")
             finally:
-                self._finish_deepslice_alignment_ui()
+                self._finish_auto_alignment_ui()
 
         timer.timeout.connect(poll)
-        self._deepslice_timer = timer
-        self._deepslice_progress = progress
-        self._deepslice_cancel_event = cancel_event
+        self._alignment_timer = timer
+        self._alignment_progress = progress
+        self._alignment_cancel_event = cancel_event
         timer.start()
 
-    def _finish_deepslice_alignment_ui(self) -> None:
-        timer, self._deepslice_timer = self._deepslice_timer, None
-        progress, self._deepslice_progress = self._deepslice_progress, None
-        self._deepslice_cancel_event = None
+    def _finish_auto_alignment_ui(self) -> None:
+        timer, self._alignment_timer = self._alignment_timer, None
+        progress, self._alignment_progress = self._alignment_progress, None
+        self._alignment_cancel_event = None
         self.auto_alignment_busy = False
         if timer is not None:
             timer.stop()
@@ -4704,11 +4825,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._set_auto_constraint_controls_enabled(True)
         self._refresh_point_counts()
 
-    def _apply_deepslice_results(
+    def _apply_auto_alignment_results(
         self,
         prepared: list[tuple],
-        deepslice_version: str,
-        model_hashes: dict[str, str],
+        engine: str,
+        component_provenance: dict,
         disagreement: dict[str, dict[str, float]],
         runtime_info: dict,
         ap_bounds: tuple[int, int] | None,
@@ -4718,18 +4839,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         shared_tilt: tuple[float, float] | None,
     ) -> None:
         if self.atlas_volume is None or self.annotation_volume is None:
-            raise RuntimeError("Atlas was unloaded while DeepSlice was running")
+            raise RuntimeError("Atlas was unloaded while automatic alignment was running")
         batch_names = [
             self.sessions[index].name
             for index in prepared[0][7]["alignment_batch_session_indices"]
         ]
         order_names = [self.sessions[index].name for index in order_snapshot]
         for _, _, _, _, _, _, _, diagnostics in prepared:
-            diagnostics["raw_deepslice_ap_um"] = float(
-                (diagnostics["raw_deepslice_ap_index"] - float(self.bregma_voxel[0]))
-                * VOXEL_UM
-                * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]
-            )
+            diagnostics["raw_model_ap_um"] = float(diagnostics["raw_model_pose_ap_um_lr_deg_dv_deg"][0])
             diagnostics["refined_ap_um"] = float(
                 (diagnostics["refined_ap_index"] - float(self.bregma_voxel[0]))
                 * VOXEL_UM
@@ -4761,23 +4878,30 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.auto_alignment_global = global_alignment
             session.auto_alignment_extent = "internal_anatomy_and_trusted_surface"
             session.auto_alignment_method = (
-                f"DeepSlice {deepslice_version} ensemble + bounded MIND atlas search + trusted-surface calibration"
-                + (" with shared-angle integration" if global_alignment else "")
+                f"{engine} initialization + bounded MIND atlas search + trusted-surface calibration"
+                + (" with exact shared-tilt integration" if global_alignment else "")
             )
-            session.auto_alignment_engine = "DeepSlice"
+            session.auto_alignment_engine = engine
             session.auto_alignment_scope = "global" if global_alignment else "single"
             session.auto_alignment_run_id = diagnostics["alignment_run_id"]
             session.manual_refined_from_run_id = None
+            diagnostics["component_provenance"] = component_provenance
+            diagnostics["model_disagreement"] = dict(disagreement[Path(str(prediction["Filenames"])).name])
             session.auto_alignment_diagnostics = diagnostics
-            session.deepslice_raw_ensemble_ouv = list(prediction["raw_ensemble_ouv"])
-            session.deepslice_shared_angle_ouv = (
+            deepslice_component = prediction["component_predictions"].get(POSE_ENGINE_DEEPSLICE)
+            deepslice_provenance = component_provenance.get(POSE_ENGINE_DEEPSLICE)
+            session.deepslice_raw_ensemble_ouv = (
                 None
-                if prediction.get("shared_angle_ouv") is None
-                else [float(value) for value in prediction["shared_angle_ouv"]]
+                if deepslice_component is None
+                else list(deepslice_component["raw_ensemble_ouv_quicknii_ml_ap_dv"])
             )
-            session.deepslice_version = deepslice_version
-            session.deepslice_model_hashes = dict(model_hashes)
-            session.deepslice_ensemble_disagreement = dict(disagreement[Path(str(prediction["Filenames"])).name])
+            session.deepslice_version = None if deepslice_provenance is None else deepslice_provenance.get("version")
+            session.deepslice_model_hashes = (
+                None if deepslice_provenance is None else dict(deepslice_provenance["model_sha256"])
+            )
+            session.deepslice_ensemble_disagreement = (
+                None if deepslice_component is None else dict(deepslice_component["ensemble_disagreement"])
+            )
             session.transformed_overlay = None
             self._recompute_probe_points_from_slice_points(session)
 
@@ -4786,8 +4910,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         review_sessions = [
             self.sessions[session_index]
             for session_index, *_ in prepared
-            if deepslice_review_reasons(
-                self.sessions[session_index].deepslice_ensemble_disagreement,
+            if alignment_review_reasons(
+                self.sessions[session_index].auto_alignment_diagnostics.get("model_disagreement", {}),
                 self.sessions[session_index].auto_alignment_diagnostics,
             )
         ]
@@ -4801,20 +4925,20 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 else ""
             )
             self.status.setText(
-                f"DeepSlice + atlas search aligned {len(prepared)} outlined slices{bounds_text}{order_text}; exact shared L-R "
+                f"{engine} + atlas search aligned {len(prepared)} outlined slices{bounds_text}{order_text}; exact shared L-R "
                 f"{shared_tilt[0]:+.1f}°, D-V {shared_tilt[1]:+.1f}° (independent spread before integration "
                 f"{pre_spread[0]:.1f}° / {pre_spread[1]:.1f}°; {runtime_info.get('device', 'unknown')}).{review_text}"
             )
         else:
             session = self.sessions[prepared[0][0]]
-            disagreement = session.deepslice_ensemble_disagreement
             diagnostics = session.auto_alignment_diagnostics
+            disagreement = diagnostics.get("model_disagreement", {})
             shift = diagnostics["ap_search_shift_um"]
             shift_text = f", AP search shift {shift:+.0f} um" if abs(shift) >= 0.5 else ""
-            reasons = deepslice_review_reasons(disagreement, diagnostics)
+            reasons = alignment_review_reasons(disagreement, diagnostics)
             review_text = f" REVIEW: {', '.join(reasons)}." if reasons else ""
             self.status.setText(
-                f"DeepSlice + atlas search aligned {session.name}: AP {self._ap_index_to_um(session.atlas_index):+d} um, "
+                f"{engine} + atlas search aligned {session.name}: AP {self._ap_index_to_um(session.atlas_index):+d} um, "
                 f"L-R {session.atlas_tilt_ml_deg:+.1f}°, D-V {session.atlas_tilt_dv_deg:+.1f}°, "
                 f"surface scale {diagnostics['surface_scale']:.3f}x{shift_text}; "
                 f"{runtime_info.get('device', 'unknown')}.{review_text}"
@@ -5365,12 +5489,22 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     "stale": bool(diagnostics.get("alignment_run_stale", False)),
                     "stale_reasons": diagnostics.get("stale_reasons", []),
                     "input_snapshot": diagnostics.get("alignment_batch_inputs", {}),
+                    "pose_prediction_engine": session.auto_alignment_engine,
+                    "pose_prediction_provenance": diagnostics.get("component_provenance"),
+                    "prediction_fusion": diagnostics.get("prediction_fusion"),
                     "deepslice_version": session.deepslice_version,
                     "model_sha256": session.deepslice_model_hashes,
                 },
             )
             if diagnostics.get("alignment_batch_inputs"):
                 run["input_snapshot"] = diagnostics["alignment_batch_inputs"]
+        alignment_engines = sorted(
+            {
+                session.auto_alignment_engine
+                for session in self.sessions
+                if session.auto_alignment_engine is not None
+            }
+        )
         manifest = {
             "created_at": datetime.now().astimezone().isoformat(),
             "probe_name": probe_name,
@@ -5393,11 +5527,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 self.marked_tip_to_y0_um.value() if endpoint_reference == "physical_tip" else 0.0
             ),
             "brightness_weighted_trajectory": self.brightness_weighting.isChecked(),
-            "automatic_alignment_engine": (
-                "DeepSlice 1.2.8 mouse ensemble with bounded MIND atlas refinement"
-                if alignment_runs
-                else None
-            ),
+            "automatic_alignment_engine": alignment_engines[0] if len(alignment_engines) == 1 else None,
+            "automatic_alignment_engines": alignment_engines,
             "automatic_alignment_runs": alignment_runs,
             "marked_endpoint_voxel_ap_dv_ml": marked_endpoint.tolist(),
             "marked_endpoint_stereotaxic_um_ap_dv_ml": volume_to_stereotaxic_um(marked_endpoint, self.bregma_voxel).tolist(),
@@ -5443,7 +5574,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                         }
                     ),
                     "deepslice_raw_ensemble_ouv_quicknii_ml_ap_dv": session.deepslice_raw_ensemble_ouv,
-                    "deepslice_shared_angle_ouv_quicknii_ml_ap_dv": session.deepslice_shared_angle_ouv,
+                    "deepslice_shared_angle_ouv_quicknii_ml_ap_dv": None,
                     "deepslice_version": session.deepslice_version,
                     "deepslice_model_sha256": session.deepslice_model_hashes,
                     "deepslice_ensemble_disagreement": session.deepslice_ensemble_disagreement,
@@ -5463,10 +5594,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        if self._deepslice_cancel_event is not None:
-            self._deepslice_cancel_event.set()
-        self._finish_deepslice_alignment_ui()
-        self.deepslice_executor.shutdown(wait=False, cancel_futures=True)
+        if self._alignment_cancel_event is not None:
+            self._alignment_cancel_event.set()
+        self._finish_auto_alignment_ui()
+        self.alignment_executor.shutdown(wait=False, cancel_futures=True)
         super().closeEvent(event)
 
 

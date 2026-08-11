@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(SPECPATH)
 DEEPSLICE_MODELS = ROOT / "models" / "DeepSlice"
+ATLAS_POSE_MODELS = ROOT / "models" / "AtlasPose"
 
 a = Analysis(
     [str(ROOT / "source" / "proprietary_trajectory_tool.py")],
@@ -13,6 +14,8 @@ a = Analysis(
     datas=[
         (str(DEEPSLICE_MODELS / "deepslice_mouse_primary_opset18.onnx"), "models/DeepSlice"),
         (str(DEEPSLICE_MODELS / "deepslice_mouse_secondary_opset18.onnx"), "models/DeepSlice"),
+        (str(ATLAS_POSE_MODELS / "atlas_pose.onnx"), "models/AtlasPose"),
+        (str(ATLAS_POSE_MODELS / "atlas_pose.json"), "models/AtlasPose"),
         (str(ROOT / "licenses" / "DeepSlice-LICENSE.txt"), "licenses"),
     ],
     hiddenimports=[],

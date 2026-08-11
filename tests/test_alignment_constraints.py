@@ -20,7 +20,18 @@ SPEC.loader.exec_module(TRACKER)
 
 
 def test_unspecified_ap_search_is_local_not_whole_atlas():
-    assert TRACKER.ap_candidate_indices(201.25, 528, None, 4) == [193, 197, 201, 205, 209, 210]
+    assert TRACKER.ap_candidate_indices(201.25, 528, None, 4) == [
+        185,
+        189,
+        193,
+        197,
+        201,
+        205,
+        209,
+        213,
+        217,
+        218,
+    ]
 
 
 def test_reversed_ap_bounds_define_the_actual_candidate_grid():
@@ -199,7 +210,7 @@ def test_offscreen_ui_requires_surfaces_and_global_alignment_uses_only_outlined_
             called["indices"] = indices
             called["global_alignment"] = global_alignment
 
-        monkeypatch.setattr(window, "_start_deepslice_alignment", capture_start)
+        monkeypatch.setattr(window, "_start_auto_alignment", capture_start)
         window.auto_align_all_slices()
         assert called == {"indices": [0, 2], "global_alignment": True}
     finally:
@@ -207,7 +218,7 @@ def test_offscreen_ui_requires_surfaces_and_global_alignment_uses_only_outlined_
         app.processEvents()
 
 
-def _quicknii_record(filename, shape, atlas_index, tilt_lr, tilt_dv):
+def _pose_record(filename, shape, atlas_index, tilt_lr, tilt_dv):
     ap_size, dv_size, ml_size = shape
     lr_slope = np.tan(np.deg2rad(tilt_lr))
     dv_slope = np.tan(np.deg2rad(tilt_dv))
@@ -227,12 +238,27 @@ def _quicknii_record(filename, shape, atlas_index, tilt_lr, tilt_dv):
         "width": ml_size,
         "height": dv_size,
     }
-    record["raw_ensemble_ouv"] = [
+    raw_ensemble = [
         record[column]
         for column in ("ox", "oy", "oz", "ux", "uy", "uz", "vx", "vy", "vz")
     ]
-    record["shared_angle_ouv"] = None
-    return record
+    pose = [(3.0 - atlas_index) * TRACKER.VOXEL_UM, tilt_lr, tilt_dv]
+    return {
+        "Filenames": filename,
+        "pose_ap_um_lr_deg_dv_deg": pose,
+        "predicted_atlas_index": atlas_index,
+        "predicted_tilt_lr_deg": tilt_lr,
+        "predicted_tilt_dv_deg": tilt_dv,
+        "initial_slice_to_atlas": np.eye(3).tolist(),
+        "component_predictions": {
+            TRACKER.POSE_ENGINE_DEEPSLICE: {
+                "pose_ap_um_lr_deg_dv_deg": pose,
+                "raw_ensemble_ouv_quicknii_ml_ap_dv": raw_ensemble,
+                "ensemble_disagreement": {"ap_um": 1.0, "lr_deg": 1.0, "dv_deg": 1.0},
+            }
+        },
+        "fusion": None,
+    }
 
 
 def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
@@ -265,11 +291,9 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
             window.slice_list.addItem(session.name)
 
         records = [
-            _quicknii_record("slice_0000.png", shape, 2.0, 2.0, -1.0),
-            _quicknii_record("slice_0001.png", shape, 5.0, 4.0, -3.0),
+            _pose_record("slice_0000.png", shape, 2.0, 2.0, -1.0),
+            _pose_record("slice_0001.png", shape, 5.0, 4.0, -3.0),
         ]
-        for record in records:
-            record["shared_angle_ouv"] = record["raw_ensemble_ouv"].copy()
         disagreement = {
             record["Filenames"]: {"ap_um": 1.0, "lr_deg": 1.0, "dv_deg": 1.0}
             for record in records
@@ -284,7 +308,10 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
         prepared = []
         for index, (record, atlas_index) in enumerate(zip(records, (2, 5))):
             diagnostics = {
-                "raw_deepslice_ap_index": float(atlas_index),
+                "raw_model_ap_index": float(atlas_index),
+                "raw_model_pose_ap_um_lr_deg_dv_deg": record["pose_ap_um_lr_deg_dv_deg"],
+                "component_predictions": record["component_predictions"],
+                "prediction_fusion": None,
                 "refined_ap_index": float(atlas_index),
                 "ap_search_shift_index": 0.0,
                 "ap_search_bounds_index": None,
@@ -296,10 +323,15 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
             prepared.append(
                 (index, atlas_index, *shared_tilt, np.eye(3), np.eye(3), record, diagnostics)
             )
-        window._apply_deepslice_results(
+        window._apply_auto_alignment_results(
             prepared,
-            "1.2.8",
-            {},
+            TRACKER.POSE_ENGINE_DEEPSLICE,
+            {
+                TRACKER.POSE_ENGINE_DEEPSLICE: {
+                    "version": "1.2.8",
+                    "model_sha256": {},
+                }
+            },
             disagreement,
             runtime_info,
             None,
@@ -316,15 +348,14 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
         assert all(session.auto_alignment_global for session in window.sessions)
         assert all(session.auto_alignment_scope == "global" for session in window.sessions)
         assert all(session.auto_alignment_run_id == "global-test" for session in window.sessions)
-        assert [session.deepslice_shared_angle_ouv for session in window.sessions] == [
-            record["shared_angle_ouv"] for record in records
-        ]
-
         peer_transform = window.sessions[1].slice_to_atlas_x
         raw_ouv = window.sessions[0].deepslice_raw_ensemble_ouv.copy()
         window._section_changed(4)
         assert window.sessions[0].auto_alignment_scope == "manual-refined"
         assert window.sessions[0].manual_refined_from_run_id == "global-test"
+        assert window.sessions[0].auto_alignment_run_id != "global-test"
+        assert window.sessions[0].auto_alignment_diagnostics["alignment_scope"] == "manual-refined"
+        assert window.sessions[0].auto_alignment_diagnostics["shared_tilt_lr_dv_deg"] is None
         assert window.sessions[0].deepslice_raw_ensemble_ouv == raw_ouv
         assert window.sessions[1].auto_alignment_scope == "global"
         assert window.sessions[1].slice_to_atlas_x is peer_transform
@@ -361,18 +392,22 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
             )
             for index, name in enumerate(("target", "browse"))
         ]
+        cv2.imwrite(window.sessions[0].path, image)
         for session in window.sessions:
             window.slice_list.addItem(session.name)
         window.current_session_index = 0
 
-        prediction = _quicknii_record("slice_0000.png", shape, 3.0, 1.0, -1.0)
+        prediction = _pose_record("slice_0000.png", shape, 3.0, 1.0, -1.0)
         worker_started = threading.Event()
 
         def fake_worker(*_args):
             worker_started.set()
             release_worker.wait(3.0)
             diagnostics = {
-                "raw_deepslice_ap_index": 3.0,
+                "raw_model_ap_index": 3.0,
+                "raw_model_pose_ap_um_lr_deg_dv_deg": prediction["pose_ap_um_lr_deg_dv_deg"],
+                "component_predictions": prediction["component_predictions"],
+                "prediction_fusion": None,
                 "refined_ap_index": 3.0,
                 "ap_search_shift_index": 0.0,
                 "ap_search_bounds_index": None,
@@ -388,11 +423,14 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
             }
             prepared = [(0, 3, 1.0, -1.0, np.eye(3), np.eye(3), prediction, diagnostics)]
             disagreement = {"slice_0000.png": {"ap_um": 0.0, "lr_deg": 0.0, "dv_deg": 0.0}}
-            return "1.2.8", {}, disagreement, {"device": "test"}, prepared, None
+            provenance = {
+                TRACKER.POSE_ENGINE_DEEPSLICE: {"version": "1.2.8", "model_sha256": {}}
+            }
+            return TRACKER.POSE_ENGINE_DEEPSLICE, provenance, disagreement, {"device": "test"}, prepared, None
 
-        monkeypatch.setattr(TRACKER, "prepare_run_and_solve_deepslice", fake_worker)
+        monkeypatch.setattr(TRACKER, "prepare_run_and_solve_alignment", fake_worker)
         started = time.perf_counter()
-        window._start_deepslice_alignment([0], global_alignment=False)
+        window._start_auto_alignment([0], global_alignment=False)
         assert time.perf_counter() - started < 0.10
         assert window.auto_alignment_busy
         assert worker_started.wait(2.0)
@@ -408,8 +446,8 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
         assert not window.auto_alignment_busy
         assert window.current_session_index == 1
         assert window.sessions[0].auto_alignment_engine == "DeepSlice"
-        assert window._deepslice_timer is None
-        assert window._deepslice_progress is None
+        assert window._alignment_timer is None
+        assert window._alignment_progress is None
 
         close_worker_started = threading.Event()
 
@@ -419,23 +457,23 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
             if args[-1].is_set():
                 raise InterruptedError
 
-        monkeypatch.setattr(TRACKER, "prepare_run_and_solve_deepslice", held_worker)
-        window._start_deepslice_alignment([0], global_alignment=False)
+        monkeypatch.setattr(TRACKER, "prepare_run_and_solve_alignment", held_worker)
+        window._start_auto_alignment([0], global_alignment=False)
         assert close_worker_started.wait(2.0)
-        cancel_event = window._deepslice_cancel_event
+        cancel_event = window._alignment_cancel_event
         window.close()
         app.processEvents()
 
         assert cancel_event.is_set()
         assert not window.auto_alignment_busy
-        assert window._deepslice_cancel_event is None
-        assert window._deepslice_timer is None
-        assert window._deepslice_progress is None
+        assert window._alignment_cancel_event is None
+        assert window._alignment_timer is None
+        assert window._alignment_progress is None
     finally:
         release_worker.set()
         release_close_worker.set()
         window.close()
-        window.deepslice_executor.shutdown(wait=True, cancel_futures=True)
+        window.alignment_executor.shutdown(wait=True, cancel_futures=True)
         app.processEvents()
 
 
@@ -459,6 +497,7 @@ def test_surface_edits_preserve_authoritative_crop_and_alignment_state(tmp_path,
             brain_brush_strokes=[(False, [(20.0, 16.0)])],
             brain_brush_selection_mask=mask,
         )
+        cv2.imwrite(session.path, image)
         window.atlas_volume = np.zeros((8, 32, 40), dtype=np.uint8)
         window.annotation_volume = np.ones((8, 32, 40), dtype=np.uint8)
         window.sessions = [session]
@@ -472,8 +511,8 @@ def test_surface_edits_preserve_authoritative_crop_and_alignment_state(tmp_path,
             captured["image_jobs"] = args[0]
             raise InterruptedError
 
-        monkeypatch.setattr(TRACKER, "prepare_run_and_solve_deepslice", capture_worker)
-        window._start_deepslice_alignment([0], global_alignment=False)
+        monkeypatch.setattr(TRACKER, "prepare_run_and_solve_alignment", capture_worker)
+        window._start_auto_alignment([0], global_alignment=False)
         deadline = time.perf_counter() + 3.0
         while window.auto_alignment_busy and time.perf_counter() < deadline:
             app.processEvents()
