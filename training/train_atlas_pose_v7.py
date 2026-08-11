@@ -67,14 +67,16 @@ DEFAULTS = {
     "consistency": 0.15,
     "anatomy": 0.20,
     "registered_fraction": 0.20,
-    "batch_size": 24,
+    "batch_size": 12,
+    "evaluation_batch_size": 24,
+    "data_workers": 2,
     "learning_rate": 2e-4,
     "weight_decay": 1e-4,
     "warmup_fraction": 0.05,
     "ema_decay": 0.999,
     "gradient_clip": 1.0,
     "validation_interval": 10_000,
-    "validation_count": 4_096,
+    "validation_count": 1_024,
     "early_stopping_patience": 6,
     "early_stopping_min_delta": 0.002,
 }
@@ -202,8 +204,9 @@ def build_registered_loaders(
     manifest_root: Path,
     atlas_folder: Path,
     batch_size: int,
+    validation_batch_size: int,
     paired: bool,
-    workers: int = 4,
+    workers: int,
 ) -> tuple[DataLoader, DataLoader]:
     train = RegisteredSectionDataset(
         manifest_root,
@@ -222,7 +225,7 @@ def build_registered_loaders(
     options = {"num_workers": workers, "pin_memory": torch.cuda.is_available(), "persistent_workers": workers > 0}
     return (
         DataLoader(train, batch_size=batch_size, shuffle=True, drop_last=True, generator=generator, **options),
-        DataLoader(validation, batch_size=batch_size, shuffle=False, **options),
+        DataLoader(validation, batch_size=validation_batch_size, shuffle=False, **options),
     )
 
 
@@ -638,7 +641,7 @@ def train_experiment(
         if synthetic_start >= next_validation or synthetic_start == len(train_manifest["ap_um"]):
             current = _swap_to_ema(model, ema)
             synthetic_metrics, _ = evaluate_synthetic(
-                model, renderer, validation_manifest, validation_paired, config["batch_size"]
+                model, renderer, validation_manifest, validation_paired, config["evaluation_batch_size"]
             )
             registered_metrics, registered_rows = evaluate_registered(
                 model, registered_validation, device, "validation"
@@ -791,7 +794,9 @@ def run_experiment(config: dict, export: bool = False) -> dict:
         REGISTERED_ROOT,
         ATLAS_FOLDER,
         config["batch_size"],
+        config["evaluation_batch_size"],
         paired=config["consistency"] > 0.0,
+        workers=config["data_workers"],
     )
     torch.manual_seed(SEEDS["train"])
     model = AtlasPoseV7(config["architecture"], pretrained=True, pose_representation=config["head"])
@@ -868,7 +873,12 @@ def held_out_reports(result: dict) -> dict:
             split=split,
             include_sealed=split == "sealed_deepslice_s2p",
         )
-        loader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=False, num_workers=4)
+        loader = DataLoader(
+            dataset,
+            batch_size=config["evaluation_batch_size"],
+            shuffle=False,
+            num_workers=config["data_workers"],
+        )
         report, rows = evaluate_registered(model, loader, device, split)
         reports[split] = report
         _write_csv(run_folder / f"{split}_registered.csv", rows)
@@ -877,7 +887,7 @@ def held_out_reports(result: dict) -> dict:
     paired_test, _ = ensure_paired_manifest(WORKSPACE, test_manifest, "test", SEEDS["paired"] + 2)
     renderer = SyntheticAtlas(ATLAS_FOLDER, str(device))
     synthetic_report, synthetic_rows = evaluate_synthetic(
-        model, renderer, test_manifest, paired_test, config["batch_size"]
+        model, renderer, test_manifest, paired_test, config["evaluation_batch_size"]
     )
     reports["synthetic_test"] = synthetic_report
     _write_csv(run_folder / "synthetic_test.csv", synthetic_rows)
@@ -968,6 +978,9 @@ def main() -> None:
             "ATLAS_POSE_V7_HEAD": ("head", str),
             "ATLAS_POSE_V7_RENDERER": ("renderer", str),
             "ATLAS_POSE_V7_BATCH_SIZE": ("batch_size", int),
+            "ATLAS_POSE_V7_EVALUATION_BATCH_SIZE": ("evaluation_batch_size", int),
+            "ATLAS_POSE_V7_DATA_WORKERS": ("data_workers", int),
+            "ATLAS_POSE_V7_VALIDATION_COUNT": ("validation_count", int),
             "ATLAS_POSE_V7_CONSISTENCY": ("consistency", float),
             "ATLAS_POSE_V7_ANATOMY": ("anatomy", float),
             "ATLAS_POSE_V7_REGISTERED_FRACTION": ("registered_fraction", float),
