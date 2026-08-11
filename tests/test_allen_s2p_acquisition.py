@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import requests
 from PIL import Image
 
 from training.acquire_allen_s2p import (
@@ -224,6 +225,36 @@ def test_jpeg_download_is_hashed_atomic_and_resumable(tmp_path: Path):
     assert first == second == [{"section_image_id": 7, "sha256": digest}]
     assert len(calls) == 1
     assert (tmp_path / record["relative_path"]).read_bytes() == jpeg
+    assert not list(tmp_path.rglob("*.part"))
+
+
+def test_jpeg_download_retries_a_transient_gateway_failure(tmp_path: Path, monkeypatch):
+    stream = io.BytesIO()
+    Image.new("RGB", (12, 10), (10, 20, 30)).save(stream, format="JPEG")
+    responses = [requests.Response(), Response(content=stream.getvalue())]
+    responses[0].status_code = 502
+    monkeypatch.setattr("training.acquire_allen_s2p.time.sleep", lambda _: None)
+
+    def get(*_, **__):
+        return responses.pop(0)
+
+    record = {"section_image_id": 7, "relative_path": "7.jpg", "download_url": "unused"}
+    download_sections([record], tmp_path, get, workers=1)
+    assert not responses
+
+
+def test_jpeg_download_retries_an_invalid_success_payload(tmp_path: Path, monkeypatch):
+    stream = io.BytesIO()
+    Image.new("RGB", (12, 10), (10, 20, 30)).save(stream, format="JPEG")
+    responses = [Response(content=b"temporary upstream error"), Response(content=stream.getvalue())]
+    monkeypatch.setattr("training.acquire_allen_s2p.time.sleep", lambda _: None)
+
+    def get(*_, **__):
+        return responses.pop(0)
+
+    record = {"section_image_id": 7, "relative_path": "7.jpg", "download_url": "unused"}
+    download_sections([record], tmp_path, get, workers=1)
+    assert not responses
     assert not list(tmp_path.rglob("*.part"))
 
 

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -321,6 +322,20 @@ def _valid_jpeg(path: Path) -> bool:
         return False
 
 
+def _download_response(get, url: str, attempts: int = 8):
+    retryable = {429, 500, 502, 503, 504}
+    for attempt in range(attempts):
+        try:
+            response = get(url, stream=True, timeout=180)
+            response.raise_for_status()
+            return response
+        except requests.RequestException as error:
+            status = getattr(error.response, "status_code", None)
+            if attempt + 1 == attempts or (status is not None and status not in retryable):
+                raise
+            time.sleep(min(30.0, 2.0**attempt))
+
+
 def _download_section(record: dict, output: Path, expected_sha256: str | None, get) -> dict:
     destination = output / record["relative_path"]
     if _valid_jpeg(destination):
@@ -329,15 +344,18 @@ def _download_section(record: dict, output: Path, expected_sha256: str | None, g
             return {"section_image_id": record["section_image_id"], "sha256": digest}
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".part")
-    response = get(record["download_url"], stream=True, timeout=180)
-    response.raise_for_status()
-    with temporary.open("wb") as stream:
-        for block in response.iter_content(1024 * 1024):
-            if block:
-                stream.write(block)
-    if not _valid_jpeg(temporary):
+    for payload_attempt in range(8):
+        response = _download_response(get, record["download_url"])
+        with temporary.open("wb") as stream:
+            for block in response.iter_content(1024 * 1024):
+                if block:
+                    stream.write(block)
+        if _valid_jpeg(temporary):
+            break
         temporary.unlink(missing_ok=True)
-        raise RuntimeError(f"Allen returned an invalid JPEG for section {record['section_image_id']}")
+        if payload_attempt == 7:
+            raise RuntimeError(f"Allen repeatedly returned an invalid JPEG for section {record['section_image_id']}")
+        time.sleep(min(30.0, 2.0**payload_attempt))
     digest = _sha256_file(temporary)
     if expected_sha256 is not None and digest != expected_sha256:
         temporary.unlink(missing_ok=True)
