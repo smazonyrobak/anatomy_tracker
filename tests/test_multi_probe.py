@@ -99,10 +99,7 @@ def test_3d_slice_planes_require_both_surface_and_completed_alignment(window):
 
     def aligned_session(name, *, surface):
         session = TRACKER.SliceSession(name, brain_outline_points=[(1.0, 1.0)] if surface else [])
-        session.slice_to_atlas_x = TRACKER.AffineCoordinate(identity, 0)
-        session.slice_to_atlas_y = TRACKER.AffineCoordinate(identity, 1)
-        session.atlas_to_slice_x = TRACKER.AffineCoordinate(identity, 0)
-        session.atlas_to_slice_y = TRACKER.AffineCoordinate(identity, 1)
+        session.slice_atlas_transform = TRACKER.SliceAtlasTransform2D(identity, (12, 14), (12, 14))
         return session
 
     window.atlas_volume = np.zeros((10, 12, 14), dtype=np.uint8)
@@ -163,8 +160,11 @@ def test_undo_and_clear_touch_only_selected_probe(window):
 
 def test_pose_recompute_updates_every_probe_trace(window):
     session = TRACKER.SliceSession("slice")
-    session.slice_to_atlas_x = TRACKER.AffineCoordinate(np.eye(3), 0)
-    session.slice_to_atlas_y = TRACKER.AffineCoordinate(np.eye(3), 1)
+    session.slice_atlas_transform = TRACKER.SliceAtlasTransform2D(
+        np.eye(3),
+        (80, 60),
+        (80, 60),
+    )
     session.probe_traces = {
         "imec0": TRACKER.ProbeTrace(slice_points=[(10, 20)]),
         "imec1": TRACKER.ProbeTrace(slice_points=[(30, 40)]),

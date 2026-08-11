@@ -16,6 +16,52 @@ POSE_OUTPUT_NAME = "pose_ap_um_lr_deg_dv_deg"
 POSE_ORIENTATION_OUTPUT_NAME = "orientation_inverted_logit"
 POSE_INFERENCE_BATCH_SIZE = 16
 ATLAS_POSE_PREPROCESSING_VERSION = "smart-mask-scale-invariant-v1"
+AUTOMATIC_BRAIN_MASK_VERSION = "border-distance-low-contrast-retry-v3"
+APPROVED_ATLAS_POSE_MODEL_SHA256: str | None = None
+APPROVED_ATLAS_POSE_METADATA_SHA256: str | None = None
+APPROVED_ATLAS_POSE_EVIDENCE_SHA256: str | None = None
+
+
+def _brain_mask_from_distance(distance: np.ndarray, threshold: float) -> np.ndarray | None:
+    height, width = distance.shape
+    mask = (distance > threshold).astype(np.uint8)
+    radius = max(2, round(min(height, width) / 120))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    opening_radius = max(2, round(min(height, width) / 50))
+    opening_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (2 * opening_radius + 1, 2 * opening_radius + 1),
+    )
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, opening_kernel)
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
+    if count <= 1:
+        return None
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    center = np.asarray([width / 2.0, height / 2.0])
+    distance_from_center = np.linalg.norm(
+        (centroids[1:] - center) / np.asarray([width, height]), axis=1
+    )
+    selected_labels = 1 + np.flatnonzero(
+        (areas >= max(0.001 * height * width, 0.15 * areas.max()))
+        & (distance_from_center < 0.55)
+    )
+    selected = np.isin(labels, selected_labels).astype(np.uint8)
+    radius = max(2, round(min(height, width) / 70))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+    selected = cv2.morphologyEx(selected, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(selected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    contour_areas = np.asarray([cv2.contourArea(contour) for contour in contours])
+    contours = [
+        contour
+        for contour, area in zip(contours, contour_areas)
+        if area >= max(0.001 * height * width, 0.15 * contour_areas.max())
+    ]
+    result = np.zeros((height, width), dtype=np.uint8)
+    cv2.drawContours(result, contours, -1, 1, -1)
+    return result.astype(bool)
 
 
 def as_gray(image: np.ndarray) -> np.ndarray:
@@ -54,52 +100,34 @@ def automatic_brain_mask(image: np.ndarray) -> np.ndarray:
     background = np.median(border, axis=0)
     border_distance = np.sqrt(np.mean((border - background) ** 2, axis=1))
     distance = np.sqrt(np.mean((normalized - background) ** 2, axis=2))
-    threshold = max(3.0, float(np.percentile(border_distance, 75.0)) * 2.0 + 2.0)
-    _, otsu_mask = cv2.threshold(
+    border_threshold = float(np.percentile(border_distance, 75.0))
+    otsu_threshold, _ = cv2.threshold(
         np.clip(distance, 0.0, 255.0).astype(np.uint8),
         0,
         1,
         cv2.THRESH_BINARY + cv2.THRESH_OTSU,
     )
-    mask = (distance > threshold).astype(np.uint8)
-    if otsu_mask.mean() > 0.45 and (mask.mean() < 0.25 or mask.mean() > 0.90):
-        mask = otsu_mask
-    radius = max(2, round(min(height, width) / 120))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    opening_radius = max(2, round(min(height, width) / 50))
-    opening_kernel = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE,
-        (2 * opening_radius + 1, 2 * opening_radius + 1),
+    otsu_floor = 0.75 * float(otsu_threshold)
+    result = _brain_mask_from_distance(
+        distance,
+        max(3.0, border_threshold * 2.0 + 2.0, otsu_floor),
     )
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, opening_kernel)
-    count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
-    if count <= 1:
+    if result is None:
         raise ValueError("No brain foreground was detected")
-    areas = stats[1:, cv2.CC_STAT_AREA]
-    center = np.asarray([width / 2.0, height / 2.0])
-    distance_from_center = np.linalg.norm((centroids[1:] - center) / np.asarray([width, height]), axis=1)
-    selected_labels = 1 + np.flatnonzero(
-        (areas >= max(0.001 * height * width, 0.15 * areas.max())) & (distance_from_center < 0.55)
-    )
-    selected = np.isin(labels, selected_labels).astype(np.uint8)
-    radius = max(2, round(min(height, width) / 70))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
-    selected = cv2.morphologyEx(selected, cv2.MORPH_CLOSE, kernel, iterations=2)
-    contours, _ = cv2.findContours(selected.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        raise ValueError("No brain foreground was detected")
-    contour_areas = np.asarray([cv2.contourArea(contour) for contour in contours])
-    contours = [
-        contour
-        for contour, area in zip(contours, contour_areas)
-        if area >= max(0.001 * height * width, 0.15 * contour_areas.max())
-    ]
-    result = np.zeros((height, width), dtype=np.uint8)
-    cv2.drawContours(result, contours, -1, 1, -1)
+    if result.mean() < 0.05:
+        retry = _brain_mask_from_distance(
+            distance,
+            max(3.0, border_threshold * 1.25 + 2.0, otsu_floor),
+        )
+        if retry is not None and retry.mean() > result.mean():
+            result = retry
     if result.shape != (original_height, original_width):
-        result = cv2.resize(result, (original_width, original_height), interpolation=cv2.INTER_NEAREST)
-    return result.astype(bool)
+        result = cv2.resize(
+            result.astype(np.uint8),
+            (original_width, original_height),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+    return result
 
 
 def brain_orientation_affine(mask: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
@@ -159,6 +187,23 @@ def preprocess_atlas_pose_image(image: np.ndarray, mask: np.ndarray) -> np.ndarr
     canonical = np.clip((canonical - values.mean()) / max(float(values.std()), 1e-4) / 4.0 + 0.5, 0.0, 1.0)
     canonical[~canonical_mask] = 0.0
     return np.ascontiguousarray(np.repeat(canonical[None].astype(np.float32), 3, axis=0))
+
+
+ATLAS_POSE_PREPROCESSING_CONTRACT_FUNCTIONS = (
+    "as_gray",
+    "brain_orientation_affine",
+    "canonicalize_brain_orientation",
+    "preprocess_atlas_pose_image",
+)
+# Generated from normalized source text for the functions above. Runtime uses this immutable
+# value so the contract is identical across CPython versions and inside a PyInstaller bundle.
+ATLAS_POSE_PREPROCESSING_CONTRACT_SHA256 = (
+    "1d09f801a569f66107162bf49fc4272a874f23dd25e98bb71e72764afa3e7f07"
+)
+
+
+def atlas_pose_preprocessing_contract_sha256() -> str:
+    return ATLAS_POSE_PREPROCESSING_CONTRACT_SHA256
 
 
 def plane_normal_from_tilts(tilt_lr_deg: float, tilt_dv_deg: float) -> np.ndarray:
@@ -235,6 +280,147 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_json_sha256(payload: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _is_sha256(value) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _valid_hash_tree(value) -> bool:
+    return (
+        bool(value)
+        and (
+            _is_sha256(value)
+            or isinstance(value, dict)
+            and all(isinstance(key, str) and _valid_hash_tree(child) for key, child in value.items())
+        )
+    )
+
+
+def _metadata_training_data_sha256(metadata: dict) -> dict:
+    return {
+        "synthetic_manifests": metadata.get("manifest_sha256"),
+        "registered_data": metadata.get("registered_data", {}).get("sha256"),
+        "atlas_data": metadata.get("atlas_data_sha256"),
+    }
+
+
+def verify_atlas_pose_candidate_bundle(model_path: str | Path) -> tuple[str, str, dict]:
+    path = Path(model_path)
+    metadata_path = path.with_suffix(".json")
+    if not path.is_file() or not metadata_path.is_file():
+        raise RuntimeError(f"AtlasPose candidate model or metadata is unavailable: {path}")
+    model_sha256 = _file_sha256(path)
+    metadata_sha256 = _file_sha256(metadata_path)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("sha256") != model_sha256:
+        raise RuntimeError("AtlasPose candidate model checksum does not match its metadata")
+    if metadata.get("preprocessing_version") != ATLAS_POSE_PREPROCESSING_VERSION:
+        raise RuntimeError("AtlasPose candidate preprocessing version differs from the runtime")
+    if metadata.get("preprocessing_contract_sha256") != atlas_pose_preprocessing_contract_sha256():
+        raise RuntimeError("AtlasPose candidate preprocessing checksum differs from the runtime")
+    return model_sha256, metadata_sha256, metadata
+
+
+def verify_atlas_pose_model_bundle(model_path: str | Path) -> tuple[str, str, str, dict, dict]:
+    pins = (
+        APPROVED_ATLAS_POSE_MODEL_SHA256,
+        APPROVED_ATLAS_POSE_METADATA_SHA256,
+        APPROVED_ATLAS_POSE_EVIDENCE_SHA256,
+    )
+    if not all(_is_sha256(value) for value in pins):
+        raise RuntimeError(
+            "AtlasPose is not release-approved: model, metadata, and sealed-evidence hashes "
+            "must be pinned in application source"
+        )
+    path = Path(model_path)
+    metadata_path = path.with_suffix(".json")
+    evidence_path = path.with_name("RELEASE_REPORT.json")
+    sealed_metrics_path = path.with_name("SEALED_metrics.json")
+    missing = [
+        candidate
+        for candidate in (path, metadata_path, evidence_path, sealed_metrics_path)
+        if not candidate.is_file()
+    ]
+    if missing:
+        raise RuntimeError(f"AtlasPose approved release bundle is incomplete: {missing}")
+    model_sha256, metadata_sha256, metadata = verify_atlas_pose_candidate_bundle(path)
+    evidence_sha256 = _file_sha256(evidence_path)
+    if (
+        model_sha256 != APPROVED_ATLAS_POSE_MODEL_SHA256
+        or metadata_sha256 != APPROVED_ATLAS_POSE_METADATA_SHA256
+        or evidence_sha256 != APPROVED_ATLAS_POSE_EVIDENCE_SHA256
+    ):
+        raise RuntimeError("AtlasPose release bundle does not match the source-pinned hashes")
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    integrity = evidence.pop("release_integrity_sha256", None)
+    if integrity != _canonical_json_sha256(evidence):
+        raise RuntimeError("AtlasPose sealed release evidence integrity check failed")
+    training_data_sha256 = _metadata_training_data_sha256(metadata)
+    expected = {
+        "release_report_version": 2,
+        "sealed": True,
+        "benchmark_role": "final_release_gate",
+        "release_approved": True,
+        "promotion_ready": True,
+        "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "preprocessing_contract_sha256": atlas_pose_preprocessing_contract_sha256(),
+        "training_source_sha256": metadata.get("source_sha256"),
+        "training_data_sha256": training_data_sha256,
+        "sealed_metrics_sha256": _file_sha256(sealed_metrics_path),
+    }
+    mismatched = [key for key, value in expected.items() if evidence.get(key) != value]
+    component_passed = evidence.get("deepslice_component_passed", {})
+    hashes = (
+        training_data_sha256,
+        metadata.get("source_sha256"),
+        evidence.get("sealed_data_sha256"),
+        evidence.get("evaluator_sha256"),
+    )
+    if mismatched or not all(_valid_hash_tree(value) for value in hashes):
+        raise RuntimeError(
+            "AtlasPose sealed release evidence contract failed"
+            + (f": {', '.join(mismatched)}" if mismatched else "")
+        )
+    if set(component_passed) != {"ap_um", "lr_deg", "dv_deg"} or not all(component_passed.values()):
+        raise RuntimeError("AtlasPose did not pass every sealed DeepSlice component gate")
+    quality = evidence.get("quality_gate", {})
+    if (
+        not quality.get("all_gates_passed")
+        or not quality.get("passed")
+        or not all(quality["passed"].values())
+    ):
+        raise RuntimeError("AtlasPose did not pass every sealed absolute-quality gate")
+    sealed_metrics = json.loads(sealed_metrics_path.read_text(encoding="utf-8"))
+    sealed_data = {
+        key: sealed_metrics.get("source", {}).get(key)
+        for key in (
+            "sections_sha256",
+            "datasets_sha256",
+            "provenance_sha256",
+            "downloads_sha256",
+            "registered_image_quality_manifest_sha256",
+        )
+    }
+    if (
+        evidence.get("sealed_data_sha256") != sealed_data
+        or evidence.get("evaluator_sha256") != sealed_metrics.get("evaluator_sha256")
+    ):
+        raise RuntimeError("AtlasPose release evidence does not bind its sealed evaluation data")
+    if metadata.get("sha256") != model_sha256:
+        raise RuntimeError("AtlasPose metadata does not bind the approved model")
+    return model_sha256, metadata_sha256, evidence_sha256, metadata, evidence
+
+
 @lru_cache(maxsize=4)
 def _load_atlas_pose_session(model_path: str, modified_ns: int, force_cpu: bool):
     del modified_ns
@@ -278,11 +464,13 @@ def _load_atlas_pose_session(model_path: str, modified_ns: int, force_cpu: bool)
     return session, fallback_reason
 
 
-def run_atlas_pose_onnx(
+def _run_atlas_pose_onnx(
     images: list[np.ndarray],
     masks: list[np.ndarray],
     model_path: str | Path,
     cancel_event=None,
+    *,
+    require_release_approval: bool,
 ) -> tuple[np.ndarray, dict]:
     import onnxruntime as ort
 
@@ -293,20 +481,14 @@ def run_atlas_pose_onnx(
         )
     if len(images) != len(masks) or not images:
         raise ValueError("Own CNN inference needs one non-empty mask for every image")
-    metadata_path = path.with_suffix(".json")
-    if not metadata_path.is_file():
-        raise RuntimeError(f"Own CNN metadata is unavailable. Expected: {metadata_path}")
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    model_sha256 = _file_sha256(path)
-    if metadata.get("sha256") != model_sha256:
-        raise RuntimeError("Own CNN model checksum does not match atlas_pose.json")
-    if metadata.get("preprocessing_version") != ATLAS_POSE_PREPROCESSING_VERSION:
-        raise RuntimeError(
-            "Own CNN preprocessing contract does not match this application runtime"
+    if require_release_approval:
+        model_sha256, metadata_sha256, evidence_sha256, metadata, _ = (
+            verify_atlas_pose_model_bundle(path)
         )
-    preprocessing_source_sha256 = metadata.get("preprocessing_source_sha256")
-    if not isinstance(preprocessing_source_sha256, str) or len(preprocessing_source_sha256) != 64:
-        raise RuntimeError("Own CNN metadata is missing its preprocessing source checksum")
+    else:
+        model_sha256, metadata_sha256, metadata = verify_atlas_pose_candidate_bundle(path)
+        evidence_sha256 = None
+    preprocessing_contract_sha256 = metadata["preprocessing_contract_sha256"]
     inputs = []
     for image, mask in zip(images, masks):
         if cancel_event is not None and cancel_event.is_set():
@@ -365,10 +547,44 @@ def run_atlas_pose_onnx(
         "inference_seconds": float(time.perf_counter() - started),
         "model_path": str(path),
         "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "release_evidence_sha256": evidence_sha256,
         "architecture": metadata.get("architecture"),
         "orientation_inverted": (orientation_logit > 0.0).tolist(),
         "orientation_inverted_logit": orientation_logit.tolist(),
         "preprocessing_version": ATLAS_POSE_PREPROCESSING_VERSION,
-        "preprocessing_source_sha256": preprocessing_source_sha256,
+        "preprocessing_contract_sha256": preprocessing_contract_sha256,
         "metadata": metadata,
     }
+
+
+def run_atlas_pose_onnx(
+    images: list[np.ndarray],
+    masks: list[np.ndarray],
+    model_path: str | Path,
+    cancel_event=None,
+) -> tuple[np.ndarray, dict]:
+    """Run only a source-pinned AtlasPose release bundle."""
+    return _run_atlas_pose_onnx(
+        images,
+        masks,
+        model_path,
+        cancel_event,
+        require_release_approval=True,
+    )
+
+
+def run_atlas_pose_candidate_onnx(
+    images: list[np.ndarray],
+    masks: list[np.ndarray],
+    model_path: str | Path,
+    cancel_event=None,
+) -> tuple[np.ndarray, dict]:
+    """Run a checksum-bound candidate for the isolated sealed evaluator only."""
+    return _run_atlas_pose_onnx(
+        images,
+        masks,
+        model_path,
+        cancel_event,
+        require_release_approval=False,
+    )

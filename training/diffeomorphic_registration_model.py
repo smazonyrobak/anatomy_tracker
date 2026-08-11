@@ -13,8 +13,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from source.nonlinear_registration import (
+    MAXIMUM_ABS_LOG_JACOBIAN_P99,
+    MINIMUM_JACOBIAN,
+)
 
-PADDED_SIZE = (320, 464)
+MAX_DEFORMATION_PX = 6.0
+INTENSITY_QUANTILES = (0.005, 0.995)
 
 
 def pixel_identity_grid(
@@ -53,32 +58,115 @@ def sample_at_pixel_map(
     )
 
 
-def remove_global_affine(velocity: torch.Tensor) -> torch.Tensor:
-    """Orthogonally remove the best field ``a + b*x + c*y`` per batch/channel."""
+def _affine_basis(velocity: torch.Tensor) -> torch.Tensor:
     batch, _, height, width = velocity.shape
     grid = pixel_identity_grid(batch, height, width, device=velocity.device, dtype=velocity.dtype)
     x = grid[:, :1] * (2.0 / (width - 1)) - 1.0
     y = grid[:, 1:] * (2.0 / (height - 1)) - 1.0
-    basis = torch.cat((torch.ones_like(x), x, y), dim=1).flatten(2)
-    flat = velocity.flatten(2)
-    coefficients = torch.matmul(flat, basis.transpose(1, 2)) / basis.square().sum(dim=2).unsqueeze(1)
-    affine = torch.matmul(coefficients, basis).reshape_as(velocity)
-    return velocity - affine
+    return torch.cat((torch.ones_like(x), x, y), dim=1).flatten(2)
+
+
+def _inverse_3x3(matrix: torch.Tensor) -> torch.Tensor:
+    a, b, c = matrix[:, 0].unbind(1)
+    d, e, f = matrix[:, 1].unbind(1)
+    g, h, i = matrix[:, 2].unbind(1)
+    cofactors = torch.stack(
+        (
+            e * i - f * h, f * g - d * i, d * h - e * g,
+            c * h - b * i, a * i - c * g, b * g - a * h,
+            b * f - c * e, c * d - a * f, a * e - b * d,
+        ),
+        dim=1,
+    ).reshape(-1, 3, 3)
+    determinant = a * cofactors[:, 0, 0] + b * cofactors[:, 0, 1] + c * cofactors[:, 0, 2]
+    return cofactors.transpose(1, 2) / determinant.clamp_min(1e-6)[:, None, None]
+
+
+def remove_tissue_affine(
+    velocity: torch.Tensor,
+    support: torch.Tensor,
+    tissue_weight: torch.Tensor,
+) -> torch.Tensor:
+    """Return a compact field with zero tissue-weighted translation and linear part."""
+    with torch.autocast(velocity.device.type, enabled=False):
+        velocity = velocity.float()
+        support = support.float()
+        tissue_weight = (tissue_weight > 0.5).float()
+        basis = _affine_basis(velocity)
+        weights = (support * tissue_weight).flatten(2)
+        weighted_basis = basis * weights
+        gram = torch.matmul(weighted_basis, basis.transpose(1, 2))
+        scale = gram.diagonal(dim1=1, dim2=2).mean(1).clamp_min(1e-6)
+        gram = gram + torch.eye(3, device=velocity.device)[None] * scale[:, None, None] * 1e-8
+        moments = torch.matmul(velocity.flatten(2) * weights, basis.transpose(1, 2))
+        coefficients = torch.matmul(moments, _inverse_3x3(gram))
+        affine = torch.matmul(coefficients, basis).reshape_as(velocity)
+        return (velocity - affine) * support
+
+
+def remove_global_affine(velocity: torch.Tensor) -> torch.Tensor:
+    ones = torch.ones_like(velocity[:, :1])
+    return remove_tissue_affine(velocity, ones, ones)
+
+
+def tissue_affine_component(pixel_map: torch.Tensor, tissue_mask: torch.Tensor) -> torch.Tensor:
+    with torch.autocast(pixel_map.device.type, enabled=False):
+        pixel_map = pixel_map.float()
+        tissue_mask = (tissue_mask > 0.5).float()
+        identity = pixel_identity_grid(
+            pixel_map.shape[0], pixel_map.shape[-2], pixel_map.shape[-1],
+            device=pixel_map.device, dtype=pixel_map.dtype,
+        )
+        displacement = pixel_map - identity
+        basis = _affine_basis(displacement)
+        weights = tissue_mask.flatten(2)
+        weighted_basis = basis * weights
+        gram = torch.matmul(weighted_basis, basis.transpose(1, 2))
+        scale = gram.diagonal(dim1=1, dim2=2).mean(1).clamp_min(1e-6)
+        gram = gram + torch.eye(3, device=pixel_map.device)[None] * scale[:, None, None] * 1e-8
+        moments = torch.matmul(displacement.flatten(2) * weights, basis.transpose(1, 2))
+        coefficients = torch.matmul(moments, _inverse_3x3(gram))
+        return torch.matmul(coefficients, basis).reshape_as(displacement)
+
+
+def soft_tissue_support(fixed_mask: torch.Tensor, moving_mask: torch.Tensor, width: int = 21) -> torch.Tensor:
+    trusted = (fixed_mask > 0.5) | (moving_mask > 0.5)
+    return F.avg_pool2d(trusted.float(), width, stride=1, padding=width // 2) * trusted
+
+
+def hard_cell_mask(mask: torch.Tensor) -> torch.Tensor:
+    hard = mask > 0.5
+    return hard[:, :, :-1, :-1] | hard[:, :, :-1, 1:] | hard[:, :, 1:, :-1] | hard[:, :, 1:, 1:]
+
+
+def preprocess_registration_tensor(image: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """The exact masked percentile/zero-background preprocessing used at runtime."""
+    processed = []
+    for item in range(image.shape[0]):
+        hard_mask = mask[item, 0] > 0.5
+        values = image[item, 0][hard_mask]
+        low = torch.quantile(values.float(), INTENSITY_QUANTILES[0])
+        high = torch.quantile(values.float(), INTENSITY_QUANTILES[1])
+        normalized = ((image[item : item + 1].float() - low) / (high - low).clamp_min(1e-6)).clamp(0.0, 1.0)
+        processed.append(normalized * hard_mask[None, None])
+    return torch.cat(processed, dim=0)
 
 
 def integrate_stationary_velocity(velocity: torch.Tensor, steps: int = 7) -> torch.Tensor:
     """Return the absolute pixel map ``exp(velocity)`` by scaling and squaring."""
-    displacement = velocity / float(2**steps)
-    identity = pixel_identity_grid(
-        velocity.shape[0],
-        velocity.shape[-2],
-        velocity.shape[-1],
-        device=velocity.device,
-        dtype=velocity.dtype,
-    )
-    for _ in range(steps):
-        displacement = displacement + sample_at_pixel_map(displacement, identity + displacement)
-    return identity + displacement
+    with torch.autocast(velocity.device.type, enabled=False):
+        velocity = velocity.float()
+        displacement = velocity / float(2**steps)
+        identity = pixel_identity_grid(
+            velocity.shape[0],
+            velocity.shape[-2],
+            velocity.shape[-1],
+            device=velocity.device,
+            dtype=velocity.dtype,
+        )
+        for _ in range(steps):
+            displacement = displacement + sample_at_pixel_map(displacement, identity + displacement)
+        return identity + displacement
 
 
 def compose_pixel_maps(first: torch.Tensor, second: torch.Tensor) -> torch.Tensor:
@@ -132,7 +220,8 @@ def mind_loss(
 def inverse_consistency_loss(
     atlas_to_affine: torch.Tensor,
     affine_to_atlas: torch.Tensor,
-    mask: torch.Tensor | None = None,
+    atlas_mask: torch.Tensor | None = None,
+    affine_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     identity = pixel_identity_grid(
         atlas_to_affine.shape[0],
@@ -143,9 +232,23 @@ def inverse_consistency_loss(
     )
     atlas_cycle = compose_pixel_maps(atlas_to_affine, affine_to_atlas)
     affine_cycle = compose_pixel_maps(affine_to_atlas, atlas_to_affine)
+    atlas_valid = (
+        (atlas_to_affine[:, :1] >= 0.0)
+        & (atlas_to_affine[:, :1] <= atlas_to_affine.shape[-1] - 1.0)
+        & (atlas_to_affine[:, 1:] >= 0.0)
+        & (atlas_to_affine[:, 1:] <= atlas_to_affine.shape[-2] - 1.0)
+    )
+    affine_valid = (
+        (affine_to_atlas[:, :1] >= 0.0)
+        & (affine_to_atlas[:, :1] <= affine_to_atlas.shape[-1] - 1.0)
+        & (affine_to_atlas[:, 1:] >= 0.0)
+        & (affine_to_atlas[:, 1:] <= affine_to_atlas.shape[-2] - 1.0)
+    )
+    atlas_mask = atlas_valid if atlas_mask is None else atlas_mask * atlas_valid
+    affine_mask = affine_valid if affine_mask is None else affine_mask * affine_valid
     return 0.5 * (
-        _masked_mean((atlas_cycle - identity).square(), mask)
-        + _masked_mean((affine_cycle - identity).square(), mask)
+        _masked_mean((atlas_cycle - identity).square(), atlas_mask)
+        + _masked_mean((affine_cycle - identity).square(), affine_mask)
     )
 
 
@@ -194,7 +297,7 @@ class DiffeomorphicRegistrationUNet(nn.Module):
         self,
         structural_channels: int = 1,
         base_channels: int = 16,
-        max_velocity_px: float = 6.0,
+        max_velocity_px: float = MAX_DEFORMATION_PX,
         integration_steps: int = 7,
     ):
         super().__init__()
@@ -227,6 +330,8 @@ class DiffeomorphicRegistrationUNet(nn.Module):
         fixed_mask: torch.Tensor,
         moving_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        fixed_mask = (fixed_mask > 0.5).to(fixed.dtype)
+        moving_mask = (moving_mask > 0.5).to(moving.dtype)
         level_0 = self.encoder_0(torch.cat((fixed, moving, fixed_mask, moving_mask), dim=1))
         level_1 = self.encoder_1(self._down(level_0))
         level_2 = self.encoder_2(self._down(level_1))
@@ -235,9 +340,13 @@ class DiffeomorphicRegistrationUNet(nn.Module):
         decoded_1 = self.decoder_1(torch.cat((self._up(decoded_2, level_1), level_1), dim=1))
         decoded_0 = self.decoder_0(torch.cat((self._up(decoded_1, level_0), level_0), dim=1))
 
-        support = torch.maximum(fixed_mask, moving_mask)
-        velocity = torch.tanh(self.velocity_head(decoded_0)) * support * self.max_velocity_px
-        velocity = remove_global_affine(velocity)
+        support = soft_tissue_support(fixed_mask, moving_mask)
+        tissue_weight = 0.5 * (fixed_mask + moving_mask)
+        velocity = remove_tissue_affine(
+            torch.tanh(self.velocity_head(decoded_0)) * self.max_velocity_px,
+            support,
+            tissue_weight,
+        )
         peak = velocity.abs().flatten(1).amax(dim=1).reshape(-1, 1, 1, 1)
         velocity = velocity * torch.clamp(self.max_velocity_px / (peak + 1e-6), max=1.0)
         atlas_to_affine = integrate_stationary_velocity(velocity, self.integration_steps)

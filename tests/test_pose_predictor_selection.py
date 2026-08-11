@@ -145,7 +145,7 @@ def test_own_runtime_preprocesses_the_supplied_mask_and_missing_model_is_clear(t
             {
                 "sha256": runtime._file_sha256(model),
                 "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
-                "preprocessing_source_sha256": "0" * 64,
+                "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
             }
         ),
         encoding="utf-8",
@@ -173,17 +173,17 @@ def test_own_runtime_preprocesses_the_supplied_mask_and_missing_model_is_clear(t
 
     monkeypatch.setattr(runtime, "preprocess_atlas_pose_image", fake_preprocess)
     monkeypatch.setattr(runtime, "_load_atlas_pose_session", lambda *_args: (Session(), None))
-    prediction, _ = runtime.run_atlas_pose_onnx([image], [mask], model)
+    prediction, _ = runtime.run_atlas_pose_candidate_onnx([image], [mask], model)
 
     assert prediction[0] == pytest.approx([-1400.0, 3.0, -2.0])
     assert seen["image"] is image
     assert seen["mask"] is mask
     with pytest.raises(RuntimeError, match="Own CNN model is unavailable"):
-        runtime.run_atlas_pose_onnx([image], [mask], tmp_path / "missing.onnx")
+        runtime.run_atlas_pose_candidate_onnx([image], [mask], tmp_path / "missing.onnx")
     no_sidecar = tmp_path / "no_sidecar.onnx"
     no_sidecar.write_bytes(b"mock")
     with pytest.raises(RuntimeError, match="metadata is unavailable"):
-        runtime.run_atlas_pose_onnx([image], [mask], no_sidecar)
+        runtime.run_atlas_pose_candidate_onnx([image], [mask], no_sidecar)
 
 
 def test_own_runtime_batches_many_slices(tmp_path, monkeypatch):
@@ -195,7 +195,7 @@ def test_own_runtime_batches_many_slices(tmp_path, monkeypatch):
             {
                 "sha256": runtime._file_sha256(model),
                 "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
-                "preprocessing_source_sha256": "0" * 64,
+                "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
             }
         ),
         encoding="utf-8",
@@ -215,11 +215,96 @@ def test_own_runtime_batches_many_slices(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "_load_atlas_pose_session", lambda *_args: (Session(), None))
     images = [np.zeros((10, 10)) for _ in range(runtime.POSE_INFERENCE_BATCH_SIZE + 1)]
     masks = [np.ones((10, 10), bool) for _ in images]
-    prediction, info = runtime.run_atlas_pose_onnx(images, masks, model)
+    prediction, info = runtime.run_atlas_pose_candidate_onnx(images, masks, model)
 
     assert prediction.shape == (len(images), 3)
     assert batch_sizes == [runtime.POSE_INFERENCE_BATCH_SIZE, 1]
     assert info["orientation_inverted"] == [False] * len(images)
+
+
+def test_own_runtime_requires_and_verifies_source_pinned_release_evidence(tmp_path, monkeypatch):
+    runtime = sys.modules[TRACKER.run_atlas_pose_onnx.__module__]
+    model = tmp_path / "atlas_pose.onnx"
+    model.write_bytes(b"approved-model")
+    metadata = {
+        "sha256": runtime._file_sha256(model),
+        "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
+        "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
+        "source_sha256": {"trainer.py": "1" * 64},
+        "manifest_sha256": {"train": "2" * 64},
+        "registered_data": {"sha256": {"sections.jsonl": "3" * 64}},
+        "atlas_data_sha256": {"annotation_25.nrrd": "4" * 64},
+    }
+    metadata_path = model.with_suffix(".json")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    sealed_source = {
+        "sections_sha256": "5" * 64,
+        "datasets_sha256": "6" * 64,
+        "provenance_sha256": "7" * 64,
+        "downloads_sha256": "8" * 64,
+        "registered_image_quality_manifest_sha256": "9" * 64,
+    }
+    metrics_path = tmp_path / "SEALED_metrics.json"
+    metrics_path.write_text(
+        json.dumps({"source": sealed_source, "evaluator_sha256": "a" * 64}),
+        encoding="utf-8",
+    )
+    evidence = {
+        "release_report_version": 2,
+        "sealed": True,
+        "benchmark_role": "final_release_gate",
+        "release_approved": True,
+        "promotion_ready": True,
+        "model_sha256": runtime._file_sha256(model),
+        "metadata_sha256": runtime._file_sha256(metadata_path),
+        "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
+        "training_source_sha256": metadata["source_sha256"],
+        "training_data_sha256": {
+            "synthetic_manifests": metadata["manifest_sha256"],
+            "registered_data": metadata["registered_data"]["sha256"],
+            "atlas_data": metadata["atlas_data_sha256"],
+        },
+        "sealed_data_sha256": sealed_source,
+        "sealed_metrics_sha256": runtime._file_sha256(metrics_path),
+        "evaluator_sha256": "a" * 64,
+        "quality_gate": {"all_gates_passed": True, "passed": {"mean_ap_um": True}},
+        "deepslice_component_passed": {"ap_um": True, "lr_deg": True, "dv_deg": True},
+    }
+    evidence["release_integrity_sha256"] = runtime._canonical_json_sha256(evidence)
+    evidence_path = tmp_path / "RELEASE_REPORT.json"
+    evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    image = np.zeros((10, 10), dtype=np.float32)
+    mask = np.ones((10, 10), dtype=bool)
+    with pytest.raises(RuntimeError, match="not release-approved"):
+        runtime.run_atlas_pose_onnx([image], [mask], model)
+
+    monkeypatch.setattr(runtime, "APPROVED_ATLAS_POSE_MODEL_SHA256", runtime._file_sha256(model))
+    monkeypatch.setattr(
+        runtime, "APPROVED_ATLAS_POSE_METADATA_SHA256", runtime._file_sha256(metadata_path)
+    )
+    monkeypatch.setattr(
+        runtime, "APPROVED_ATLAS_POSE_EVIDENCE_SHA256", runtime._file_sha256(evidence_path)
+    )
+
+    class Session:
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+        def run(self, _outputs, _inputs):
+            return [np.zeros((1, 3), np.float32), np.zeros(1, np.float32)]
+
+    monkeypatch.setattr(
+        runtime, "preprocess_atlas_pose_image", lambda *_: np.zeros((3, 299, 299), np.float32)
+    )
+    monkeypatch.setattr(runtime, "_load_atlas_pose_session", lambda *_args: (Session(), None))
+    _, diagnostics = runtime.run_atlas_pose_onnx([image], [mask], model)
+    assert diagnostics["metadata_sha256"] == runtime._file_sha256(metadata_path)
+    assert diagnostics["release_evidence_sha256"] == runtime._file_sha256(evidence_path)
+
+    model.write_bytes(b"tampered")
+    with pytest.raises(RuntimeError, match="checksum|source-pinned hashes"):
+        runtime.run_atlas_pose_onnx([image], [mask], model)
 
 
 def test_brain_mask_affine_preserves_geometry_after_roll_and_inversion():
@@ -267,7 +352,31 @@ def test_own_runtime_rejects_a_sidecar_checksum_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "preprocess_atlas_pose_image", lambda *_: np.zeros((3, 299, 299), np.float32))
     monkeypatch.setattr(runtime, "_load_atlas_pose_session", lambda *_args: (Session(), None))
     with pytest.raises(RuntimeError, match="checksum"):
-        runtime.run_atlas_pose_onnx([np.zeros((10, 10))], [np.ones((10, 10), bool)], model)
+        runtime.run_atlas_pose_candidate_onnx(
+            [np.zeros((10, 10))], [np.ones((10, 10), bool)], model
+        )
+
+
+def test_own_runtime_rejects_a_preprocessing_contract_mismatch(tmp_path):
+    runtime = sys.modules[TRACKER.run_atlas_pose_onnx.__module__]
+    model = tmp_path / "atlas_pose.onnx"
+    model.write_bytes(b"mock")
+    model.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "sha256": runtime._file_sha256(model),
+                "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
+                "preprocessing_contract_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="preprocessing checksum"):
+        runtime.run_atlas_pose_candidate_onnx(
+            [np.zeros((10, 10))],
+            [np.ones((10, 10), bool)],
+            model,
+        )
 
 
 @pytest.mark.parametrize(("cancel_on_cpu_load", "expected_runs"), [(False, []), (True, ["CUDAExecutionProvider"])])
@@ -280,7 +389,7 @@ def test_own_runtime_cancels_after_session_construction(tmp_path, monkeypatch, c
             {
                 "sha256": runtime._file_sha256(model),
                 "preprocessing_version": runtime.ATLAS_POSE_PREPROCESSING_VERSION,
-                "preprocessing_source_sha256": "0" * 64,
+                "preprocessing_contract_sha256": runtime.atlas_pose_preprocessing_contract_sha256(),
             }
         ),
         encoding="utf-8",
@@ -309,7 +418,9 @@ def test_own_runtime_cancels_after_session_construction(tmp_path, monkeypatch, c
     monkeypatch.setattr(runtime, "preprocess_atlas_pose_image", lambda *_: np.zeros((3, 299, 299), np.float32))
     monkeypatch.setattr(runtime, "_load_atlas_pose_session", fake_load)
     with pytest.raises(InterruptedError):
-        runtime.run_atlas_pose_onnx([np.zeros((10, 10))], [np.ones((10, 10), bool)], model, cancel)
+        runtime.run_atlas_pose_candidate_onnx(
+            [np.zeros((10, 10))], [np.ones((10, 10), bool)], model, cancel
+        )
     assert runs == expected_runs
 
 

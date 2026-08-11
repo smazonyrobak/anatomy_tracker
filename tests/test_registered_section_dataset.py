@@ -1,4 +1,5 @@
 import json
+import hashlib
 import pickle
 from pathlib import Path
 
@@ -8,12 +9,15 @@ import pytest
 import torch
 from PIL import Image
 
-from source.atlas_pose_runtime import preprocess_atlas_pose_image
+from source.atlas_pose_runtime import automatic_brain_mask, preprocess_atlas_pose_image
+from source.registered_image_quality import build_registered_image_quality_manifest
 from training.registered_section_dataset import (
     COARSE_ANATOMY_CLASSES,
     RegisteredSectionDataset,
     _coarse_lookup,
     project_annotation,
+    registered_image_cache_key,
+    registered_static_cache_key,
 )
 
 
@@ -65,6 +69,7 @@ def fixture(tmp_path: Path):
         "ap_um": -250.0,
         "tilt_lr_deg": 2.5,
         "tilt_dv_deg": -1.5,
+        "in_training_ap_domain": True,
         "relative_path": "images/train/1/11.jpg",
     }
     sealed_section = {
@@ -82,6 +87,20 @@ def fixture(tmp_path: Path):
         path = tmp_path / record["relative_path"]
         path.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(image).save(path, format="JPEG", quality=100, subsampling=0)
+    write_jsonl(
+        tmp_path / "downloads.jsonl",
+        [
+            {
+                "section_image_id": record["section_image_id"],
+                "sha256": hashlib.sha256(
+                    (tmp_path / record["relative_path"]).read_bytes()
+                ).hexdigest(),
+            }
+            for record in (section, sealed_section)
+        ],
+    )
+    (tmp_path / "provenance.json").write_text("{}", encoding="utf-8")
+    build_registered_image_quality_manifest(tmp_path)
     return atlas, annotation, labels, dataset, section, image
 
 
@@ -106,8 +125,18 @@ def test_dataset_uses_production_preprocessing_and_returns_deterministic_indepen
         noise = rng.normal(0.0, 24.0, image.shape[:2])
         return np.clip(image.astype(np.float32) + noise, 0.0, 255.0).astype(np.uint8)
 
-    dataset = RegisteredSectionDataset(tmp_path, atlas, augmentation=style, seed=71, views=2)
+    observed_mask = lambda image: np.ones(image.shape[:2], dtype=bool)
+    dataset = RegisteredSectionDataset(
+        tmp_path,
+        atlas,
+        augmentation=style,
+        seed=71,
+        views=2,
+        brain_masker=observed_mask,
+    )
+    assert dataset.annotation is None
     item = dataset[0]
+    assert dataset.annotation is not None
     repeat = dataset[0]
     assert item["image"].shape == (2, 3, 299, 299)
     assert not torch.equal(item["image"][0], item["image"][1])
@@ -117,14 +146,145 @@ def test_dataset_uses_production_preprocessing_and_returns_deterministic_indepen
     assert set(torch.unique(item["anatomy"]).tolist()) <= set(range(9))
     assert torch.allclose(item["pose"], torch.tensor([-250.0, 2.5, -1.5]))
     assert (item["specimen_id"].item(), item["experiment_id"].item()) == (101, 1)
+    assert item["in_training_ap_domain"].item() is True
 
-    single = RegisteredSectionDataset(tmp_path, atlas, views=1)[0]
+    single = RegisteredSectionDataset(tmp_path, atlas, views=1, brain_masker=observed_mask)[0]
     keys, values = _coarse_lookup(annotation, labels)
     _, mask, _ = project_annotation(annotation, keys, values, dataset_record, section_record, (8, 8))
     with Image.open(tmp_path / section_record["relative_path"]) as source:
         source_image = np.asarray(source).copy()
     expected = torch.from_numpy(preprocess_atlas_pose_image(source_image, mask))
     assert torch.equal(single["image"], expected)
+
+    dataset.annotation.fill(0)
+    atlas_mask_counterfactual = dataset[0]
+    assert torch.equal(atlas_mask_counterfactual["image"], item["image"])
+    assert torch.count_nonzero(item["anatomy"]) > 0
+    assert torch.count_nonzero(atlas_mask_counterfactual["anatomy"]) == 0
+
+
+def test_registered_dataset_defaults_to_the_production_histology_masker(tmp_path):
+    atlas, *_ = fixture(tmp_path)
+    dataset = RegisteredSectionDataset(tmp_path, atlas)
+    assert dataset.brain_masker is automatic_brain_mask
+
+
+def test_registered_dataset_explicitly_filters_quality_rejections(tmp_path):
+    atlas, _, _, _, section, _ = fixture(tmp_path)
+    rejected = {
+        **section,
+        "section_image_id": 12,
+        "relative_path": "images/train/1/12.jpg",
+    }
+    records = [json.loads(line) for line in (tmp_path / "sections.jsonl").read_text().splitlines()]
+    write_jsonl(tmp_path / "sections.jsonl", [records[0], rejected, records[1]])
+    rejected_path = tmp_path / rejected["relative_path"]
+    rejected_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(np.zeros((8, 8), dtype=np.uint8)).save(
+        rejected_path, format="JPEG", quality=100, subsampling=0
+    )
+    downloads = [json.loads(line) for line in (tmp_path / "downloads.jsonl").read_text().splitlines()]
+    downloads.append(
+        {
+            "section_image_id": 12,
+            "sha256": hashlib.sha256(rejected_path.read_bytes()).hexdigest(),
+        }
+    )
+    write_jsonl(tmp_path / "downloads.jsonl", downloads)
+    build_registered_image_quality_manifest(tmp_path)
+
+    dataset = RegisteredSectionDataset(tmp_path, atlas)
+    assert len(dataset) == 1
+    assert int(dataset.records[0]["section_image_id"]) == 11
+    assert set(dataset.quality_rejections) == {12}
+
+
+def test_image_only_registered_cache_is_exact_persistent_and_never_loads_atlas(tmp_path):
+    atlas, *_ = fixture(tmp_path)
+    y, x = np.mgrid[:128, :160]
+    image = np.full((128, 160), 18, dtype=np.uint8)
+    image[((x - 80.0) / 58.0) ** 2 + ((y - 66.0) / 46.0) ** 2 < 1.0] = 170
+    image_path = tmp_path / "images/train/1/11.jpg"
+    Image.fromarray(image).save(image_path, format="JPEG", quality=100, subsampling=0)
+    uncached = RegisteredSectionDataset(tmp_path, atlas, include_anatomy=False)
+    cached = RegisteredSectionDataset(
+        tmp_path,
+        atlas,
+        include_anatomy=False,
+        cache_images=True,
+    )
+    expected = uncached[0]
+    actual = cached[0]
+    assert "anatomy" not in actual
+    assert uncached.annotation is None
+    assert cached.annotation is None
+    assert torch.equal(actual["image"], expected["image"])
+    assert torch.equal(actual["pose"], expected["pose"])
+    assert cached._cache_path(cached.records[0]).is_file()
+
+    image_path.unlink()
+    reloaded = RegisteredSectionDataset(
+        tmp_path,
+        atlas,
+        include_anatomy=False,
+        cache_images=True,
+    )[0]
+    assert torch.equal(reloaded["image"], expected["image"])
+
+    first_key = registered_image_cache_key(tmp_path)
+    write_jsonl(tmp_path / "downloads.jsonl", [{"section_image_id": 11, "sha256": "changed"}])
+    assert registered_image_cache_key(tmp_path) != first_key
+
+
+def test_training_static_cache_is_exact_persistent_and_never_reloads_atlas(tmp_path):
+    atlas, *_ = fixture(tmp_path)
+    y, x = np.mgrid[:128, :160]
+    image = np.full((128, 160), 18, dtype=np.uint8)
+    image[((x - 80.0) / 58.0) ** 2 + ((y - 66.0) / 46.0) ** 2 < 1.0] = 170
+    Image.fromarray(image).save(
+        tmp_path / "images/train/1/11.jpg",
+        format="JPEG",
+        quality=100,
+        subsampling=0,
+    )
+    def style(source, rng):
+        noise = rng.normal(0.0, 12.0, source.shape[:2])
+        return np.clip(source.astype(np.float32) + noise, 0.0, 255.0).astype(np.uint8)
+
+    first = RegisteredSectionDataset(
+        tmp_path,
+        atlas,
+        augmentation=style,
+        seed=71,
+        views=2,
+        cache_static=True,
+    )
+    expected = first[0]
+    assert first._static_cache_path(first.records[0]).is_file()
+    with np.load(first._static_cache_path(first.records[0]), allow_pickle=False) as cached:
+        assert set(cached.files) == {"image", "anatomy"}
+    assert first.annotation is not None
+
+    second = RegisteredSectionDataset(
+        tmp_path,
+        atlas,
+        augmentation=style,
+        seed=71,
+        views=2,
+        cache_static=True,
+    )
+    (tmp_path / "images/train/1/11.jpg").unlink()
+    actual = second[0]
+    assert second.annotation is None
+    assert torch.equal(actual["image"], expected["image"])
+    assert torch.equal(actual["anatomy"], expected["anatomy"])
+    assert torch.equal(actual["pose"], expected["pose"])
+
+    first_key = registered_static_cache_key(tmp_path, atlas, style, seed=71, views=2)
+    assert registered_static_cache_key(tmp_path, atlas, style, seed=72, views=2) != first_key
+    assert registered_static_cache_key(tmp_path, atlas, style, seed=71, views=1) != first_key
+    write_jsonl(tmp_path / "downloads.jsonl", [{"section_image_id": 11, "sha256": "changed"}])
+    assert registered_static_cache_key(tmp_path, atlas, style, seed=71, views=2) != first_key
 
 
 def test_sealed_sections_are_excluded_unless_explicitly_requested(tmp_path):
@@ -172,6 +332,7 @@ def test_geometry_changing_style_callback_is_rejected(tmp_path):
         atlas,
         augmentation=lambda image, rng: image[:-1],
         views=2,
+        brain_masker=lambda image: np.ones(image.shape[:2], dtype=bool),
     )
     with pytest.raises(ValueError, match="preserve image geometry"):
         dataset[0]

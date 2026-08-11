@@ -18,6 +18,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from source.registered_image_quality import (
+    REGISTERED_IMAGE_QUALITY_MANIFEST,
+    load_registered_image_quality_manifest,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ACQUISITION_ROOT = Path(
@@ -48,6 +53,17 @@ POSE_TOLERANCES = {
     "lr_deg": (1.0, 2.0, 5.0),
     "dv_deg": (1.0, 2.0, 5.0),
 }
+RELEASE_GATE_THRESHOLDS = {
+    "mean_ap_um": 60.0,
+    "mean_lr_deg": 0.90,
+    "mean_dv_deg": 1.75,
+    "absolute_ap_bias_um": 25.0,
+    "ap_p95_um": 150.0,
+    "worst_ap_band_mae_um": 90.0,
+    "worst_product_mae_um": 90.0,
+}
+RELEASE_REFERENCE = "deepslice_mens_ai_ci"
+RELEASE_CONFIDENCE = 0.95
 AP_BANDS = (
     ("above_+500_um", 500.0, np.inf),
     ("+500_to_0_um", 0.0, 500.0),
@@ -79,6 +95,7 @@ def validate_sealed_boundary(records: list[dict]) -> list[dict]:
         "section_number",
         "quicknii_ouv",
         "relative_path",
+        "in_training_ap_domain",
     }
     for record in records:
         missing = required - record.keys()
@@ -132,8 +149,14 @@ def ordered_experiment_groups(records: list[dict]) -> dict[int, list[dict]]:
     }
 
 
-def load_sealed_holdout(root: Path) -> tuple[list[dict], dict[int, dict], dict]:
+def load_sealed_holdout(root: Path) -> tuple[list[dict], dict[int, dict], dict, dict]:
     records = validate_sealed_boundary(read_jsonl(root / "sections.jsonl"))
+    source_section_ids = {int(record["section_image_id"]) for record in records}
+    source_experiment_ids = {int(record["experiment_id"]) for record in records}
+    if len(records) != EXPECTED_SECTIONS or len(source_experiment_ids) != EXPECTED_EXPERIMENTS:
+        raise RuntimeError(
+            "SEALED INFERENCE REFUSED: acquisition manifest does not contain the complete sealed set"
+        )
     datasets = read_jsonl(root / "datasets.jsonl")
     sealed_datasets = [record for record in datasets if record["split"] == SEALED_SPLIT]
     sealed_specimens = {int(record["specimen_id"]) for record in sealed_datasets}
@@ -151,7 +174,7 @@ def load_sealed_holdout(root: Path) -> tuple[list[dict], dict[int, dict], dict]:
         int(record["experiment_id"]): record
         for record in sealed_datasets
     }
-    if set(dataset_by_experiment) != {int(record["experiment_id"]) for record in records}:
+    if set(dataset_by_experiment) != source_experiment_ids:
         raise ValueError("Sealed dataset and section manifests disagree")
     if any(
         int(record["specimen_id"]) != int(dataset_by_experiment[int(record["experiment_id"])]["specimen_id"])
@@ -162,7 +185,23 @@ def load_sealed_holdout(root: Path) -> tuple[list[dict], dict[int, dict], dict]:
     expected_ids = set(map(int, provenance["sealed_deepslice_s2p_experiment_ids"]))
     if set(dataset_by_experiment) != expected_ids:
         raise ValueError("The sealed experiment set differs from acquisition provenance")
-    return records, dataset_by_experiment, provenance
+    quality, approved_section_ids, _ = load_registered_image_quality_manifest(root)
+    records = [
+        record
+        for record in records
+        if int(record["section_image_id"]) in approved_section_ids
+    ]
+    quality = {
+        **quality,
+        "sealed_source_record_count": len(source_section_ids),
+        "sealed_approved_record_count": len(records),
+        "sealed_rejected_records": [
+            record
+            for record in quality["rejected_records"]
+            if int(record["section_image_id"]) in source_section_ids
+        ],
+    }
+    return records, dataset_by_experiment, provenance, quality
 
 
 def require_complete_sealed_images(
@@ -355,6 +394,10 @@ def report_scopes(rows: pd.DataFrame) -> dict:
             band: summarize_predictions(group)
             for band, group in rows.groupby("ap_band", sort=False)
         },
+        "per_product": {
+            str(product): summarize_predictions(group)
+            for product, group in rows.groupby("product", sort=True)
+        },
     }
 
 
@@ -477,7 +520,7 @@ def run_atlas_pose(records: list[dict], paths: list[Path], model_path: Path) -> 
     source = str(ROOT / "source")
     if source not in sys.path:
         sys.path.insert(0, source)
-    from atlas_pose_runtime import automatic_brain_mask, run_atlas_pose_onnx
+    from atlas_pose_runtime import automatic_brain_mask, run_atlas_pose_candidate_onnx
 
     predictions = []
     runtimes = []
@@ -487,7 +530,7 @@ def run_atlas_pose(records: list[dict], paths: list[Path], model_path: Path) -> 
         if any(image is None for image in images):
             raise ValueError("AtlasPose could not read a sealed image")
         masks = [automatic_brain_mask(image) for image in images]
-        prediction, runtime = run_atlas_pose_onnx(images, masks, model_path)
+        prediction, runtime = run_atlas_pose_candidate_onnx(images, masks, model_path)
         predictions.append(prediction)
         runtimes.append(runtime)
     prediction = np.concatenate(predictions)
@@ -523,6 +566,9 @@ def prediction_rows(
     ground_truth_pose = quicknii_to_tracker_pose(ground_truth_ouv)
     output = []
     for index, record in enumerate(records):
+        in_training_domain = -4500.0 <= float(ground_truth_pose[index, 0]) <= 500.0
+        if bool(record["in_training_ap_domain"]) != in_training_domain:
+            raise ValueError("Recorded AP-domain label disagrees with exact QuickNII ground truth")
         row = {
             "sealed": True,
             "split": SEALED_SPLIT,
@@ -532,7 +578,9 @@ def prediction_rows(
             "section_image_id": int(record["section_image_id"]),
             "section_number": int(record["section_number"]),
             "relative_path": record["relative_path"],
+            "product": record["product"],
             "ap_band": ap_band(float(ground_truth_pose[index, 0])),
+            "in_training_ap_domain": in_training_domain,
         }
         for column, name in enumerate(POSE_AXES):
             row[f"gt_{name}"] = float(ground_truth_pose[index, column])
@@ -554,12 +602,155 @@ def prediction_rows(
     return output
 
 
+def evaluation_domains(table: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    in_domain = table[table["in_training_ap_domain"].astype(bool)]
+    if in_domain.empty:
+        raise ValueError("The sealed holdout contains no sections inside the trained AP domain")
+    return in_domain, table[~table["in_training_ap_domain"].astype(bool)]
+
+
+def _canonical_json_sha256(payload: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _ap_500um_band(ap_um: float) -> str:
+    index = 9 if ap_um == 500.0 else int(np.floor((ap_um + 4500.0) / 500.0))
+    low = -4500 + 500 * index
+    return f"{low}:{low + 500}"
+
+
+def release_quality_gate(rows: pd.DataFrame) -> dict:
+    frame = rows[rows["in_training_ap_domain"].astype(bool)].copy()
+    if frame.empty or set(frame["method"]) != {"atlas_pose"}:
+        raise ValueError("Release quality gate requires in-domain AtlasPose rows only")
+    frame["ap_500um_band"] = frame["gt_ap_um"].map(_ap_500um_band)
+
+    component_mae = {}
+    for axis in POSE_AXES:
+        frame[f"absolute_{axis}"] = (frame[f"pred_{axis}"] - frame[f"gt_{axis}"]).abs()
+        per_bin = frame.groupby(["specimen_id", "ap_500um_band"])[f"absolute_{axis}"].mean()
+        per_specimen = per_bin.groupby(level="specimen_id").mean()
+        component_mae[axis] = float(per_specimen.mean())
+
+    frame["signed_ap_error"] = frame["pred_ap_um"] - frame["gt_ap_um"]
+    per_bin_bias = frame.groupby(["specimen_id", "ap_500um_band"])["signed_ap_error"].mean()
+    absolute_ap_bias = float(abs(per_bin_bias.groupby(level="specimen_id").mean().mean()))
+    band_mae = (
+        frame.groupby(["ap_500um_band", "specimen_id"])["absolute_ap_um"]
+        .mean()
+        .groupby(level="ap_500um_band")
+        .mean()
+    )
+    product_mae = (
+        frame.groupby(["product", "specimen_id"])["absolute_ap_um"]
+        .mean()
+        .groupby(level="product")
+        .mean()
+    )
+    values = {
+        "mean_ap_um": component_mae["ap_um"],
+        "mean_lr_deg": component_mae["lr_deg"],
+        "mean_dv_deg": component_mae["dv_deg"],
+        "absolute_ap_bias_um": absolute_ap_bias,
+        "ap_p95_um": float(np.percentile(frame["absolute_ap_um"], 95.0)),
+        "worst_ap_band_mae_um": float(band_mae.max()),
+        "worst_product_mae_um": float(product_mae.max()),
+    }
+    passed = {
+        name: bool(values[name] <= threshold)
+        for name, threshold in RELEASE_GATE_THRESHOLDS.items()
+    }
+    return {
+        "values": values,
+        "thresholds": dict(RELEASE_GATE_THRESHOLDS),
+        "passed": passed,
+        "all_gates_passed": all(passed.values()),
+        "worst_ap_band": str(band_mae.idxmax()),
+        "worst_product": str(product_mae.idxmax()),
+    }
+
+
+def sealed_release_report(
+    primary_table: pd.DataFrame,
+    comparisons: list[dict],
+    model_sha256: str,
+    metadata_sha256: str,
+    preprocessing_contract_sha256: str,
+    training_source_sha256: dict,
+    training_data_sha256: dict,
+    sealed_data_sha256: dict,
+    sealed_metrics_sha256: str,
+    evaluator_sha256: str,
+    created_utc: str,
+) -> dict:
+    atlas_rows = primary_table[primary_table["method"] == "atlas_pose"]
+    quality = release_quality_gate(atlas_rows)
+    comparison_by_metric = {
+        comparison["metric"]: comparison
+        for comparison in comparisons
+        if comparison["candidate"] == "atlas_pose"
+        and comparison["reference"] == RELEASE_REFERENCE
+    }
+    required_metrics = tuple(f"absolute_error_{axis}" for axis in POSE_AXES)
+    if set(required_metrics) - comparison_by_metric.keys():
+        raise ValueError("Sealed release report is missing AtlasPose/DeepSlice paired comparisons")
+    component_passed = {
+        axis: bool(
+            comparison_by_metric[f"absolute_error_{axis}"]["delta_candidate_minus_reference"] < 0.0
+            and comparison_by_metric[f"absolute_error_{axis}"]["probability_candidate_lower_error"]
+            >= RELEASE_CONFIDENCE
+        )
+        for axis in POSE_AXES
+    }
+    release_approved = bool(quality["all_gates_passed"] and all(component_passed.values()))
+    payload = {
+        "release_report_version": 2,
+        "sealed": True,
+        "benchmark_role": "final_release_gate",
+        "created_utc": created_utc,
+        "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "preprocessing_contract_sha256": preprocessing_contract_sha256,
+        "training_source_sha256": training_source_sha256,
+        "training_data_sha256": training_data_sha256,
+        "sealed_data_sha256": sealed_data_sha256,
+        "sealed_metrics_sha256": sealed_metrics_sha256,
+        "evaluator_sha256": evaluator_sha256,
+        "quality_gate": quality,
+        "deepslice_reference": RELEASE_REFERENCE,
+        "deepslice_confidence_threshold": RELEASE_CONFIDENCE,
+        "deepslice_component_passed": component_passed,
+        "deepslice_comparisons": {
+            axis: comparison_by_metric[f"absolute_error_{axis}"] for axis in POSE_AXES
+        },
+        "release_approved": release_approved,
+        "promotion_ready": release_approved,
+    }
+    payload["release_integrity_sha256"] = _canonical_json_sha256(payload)
+    return payload
+
+
 def run_evaluation(
     acquisition_root: Path = ACQUISITION_ROOT,
     atlas_pose_model: Path | None = Path(ATLAS_POSE_MODEL) if ATLAS_POSE_MODEL else None,
 ) -> Path:
-    records, _, acquisition_provenance = load_sealed_holdout(acquisition_root)
-    paths = require_complete_sealed_images(acquisition_root, records)
+    records, datasets, acquisition_provenance, image_quality = load_sealed_holdout(acquisition_root)
+    records = [
+        {
+            **record,
+            "product": "+".join(
+                map(str, datasets[int(record["experiment_id"])].get("product_ids", []))
+            ) or "unknown",
+        }
+        for record in records
+    ]
+    paths = require_complete_sealed_images(
+        acquisition_root,
+        records,
+        expected_sections=image_quality["sealed_approved_record_count"],
+    )
 
     import nrrd
 
@@ -581,8 +772,18 @@ def run_evaluation(
             all_rows.extend(prediction_rows(experiment_records, "atlas_pose", pose, None, annotation))
 
     table = pd.DataFrame(all_rows)
+    primary_table, out_of_domain_table = evaluation_domains(table)
     methods = list(dict.fromkeys(table["method"]))
-    metrics = {method: report_scopes(table[table["method"] == method]) for method in methods}
+    metrics = {
+        "primary_in_training_ap_domain": {
+            method: report_scopes(primary_table[primary_table["method"] == method])
+            for method in methods
+        },
+        "out_of_domain": {
+            method: report_scopes(out_of_domain_table[out_of_domain_table["method"] == method])
+            for method in methods
+        } if not out_of_domain_table.empty else None,
+    }
     comparisons = []
     pairs = [
         ("deepslice_mens_ai", "deepslice_ai"),
@@ -592,12 +793,22 @@ def run_evaluation(
         pairs.append(("atlas_pose", "deepslice_mens_ai_ci"))
     for candidate, reference in pairs:
         for metric in ("absolute_error_ap_um", "absolute_error_lr_deg", "absolute_error_dv_deg"):
-            comparisons.append(paired_animal_bootstrap(table, candidate, reference, metric))
+            comparisons.append(paired_animal_bootstrap(primary_table, candidate, reference, metric))
         if candidate != "atlas_pose":
-            comparisons.append(paired_animal_bootstrap(table, candidate, reference, "plane_distance_um"))
+            comparisons.append(
+                paired_animal_bootstrap(primary_table, candidate, reference, "plane_distance_um")
+            )
 
     input_hash = sha256(acquisition_root / "sections.jsonl")
     model_hash = sha256(atlas_pose_model) if atlas_pose_model is not None else "deepslice-only"
+    atlas_pose_metadata = None
+    atlas_pose_metadata_hash = None
+    if atlas_pose_model is not None:
+        metadata_path = atlas_pose_model.with_suffix(".json")
+        atlas_pose_metadata_hash = sha256(metadata_path)
+        atlas_pose_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if atlas_pose_metadata.get("sha256") != model_hash:
+            raise RuntimeError("AtlasPose sealed candidate metadata does not bind its model")
     run_id = hashlib.sha256(f"{input_hash}:{model_hash}".encode()).hexdigest()[:12]
     output = acquisition_root / "SEALED_FINAL_EVALUATION" / run_id
     output.mkdir(parents=True, exist_ok=False)
@@ -615,6 +826,10 @@ def run_evaluation(
         ],
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "section_count": len(records),
+        "in_training_ap_domain_section_count": int(
+            primary_table["section_image_id"].nunique()
+        ),
+        "out_of_domain_section_count": int(out_of_domain_table["section_image_id"].nunique()),
         "experiment_count": len(ordered_experiment_groups(records)),
         "coordinate_ground_truth": "exact Allen section alignment2d/alignment3d converted to recorded QuickNII OUV",
         "plane_distance_definition": {
@@ -629,6 +844,10 @@ def run_evaluation(
             "datasets_sha256": sha256(acquisition_root / "datasets.jsonl"),
             "provenance_sha256": sha256(acquisition_root / "provenance.json"),
             "downloads_sha256": sha256(acquisition_root / "downloads.jsonl"),
+            "registered_image_quality_manifest_sha256": sha256(
+                acquisition_root / REGISTERED_IMAGE_QUALITY_MANIFEST
+            ),
+            "registered_image_quality": image_quality,
             "acquisition_provenance": acquisition_provenance,
         },
         "predictors": {
@@ -645,7 +864,41 @@ def run_evaluation(
         "selection_statement": "No ranking in this report is consumed by any trainer or model-selection code.",
         "evaluator_sha256": sha256(Path(__file__)),
     }
-    (output / "SEALED_metrics.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    metrics_path = output / "SEALED_metrics.json"
+    metrics_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if atlas_pose_model is not None:
+        training_data_sha256 = {
+            "synthetic_manifests": atlas_pose_metadata.get("manifest_sha256"),
+            "registered_data": atlas_pose_metadata.get("registered_data", {}).get("sha256"),
+            "atlas_data": atlas_pose_metadata.get("atlas_data_sha256"),
+        }
+        sealed_data_sha256 = {
+            key: report["source"][key]
+            for key in (
+                "sections_sha256",
+                "datasets_sha256",
+                "provenance_sha256",
+                "downloads_sha256",
+                "registered_image_quality_manifest_sha256",
+            )
+        }
+        release = sealed_release_report(
+            primary_table,
+            comparisons,
+            model_hash,
+            atlas_pose_metadata_hash,
+            atlas_pose_metadata.get("preprocessing_contract_sha256"),
+            atlas_pose_metadata.get("source_sha256"),
+            training_data_sha256,
+            sealed_data_sha256,
+            sha256(metrics_path),
+            sha256(Path(__file__)),
+            report["created_utc"],
+        )
+        (output / "RELEASE_REPORT.json").write_text(
+            json.dumps(release, indent=2),
+            encoding="utf-8",
+        )
     (output / "DO_NOT_USE_FOR_MODEL_SELECTION.txt").write_text(
         "SEALED FINAL TEST OUTPUT. Do not use these results for training, tuning, early stopping, or model selection.\n",
         encoding="utf-8",

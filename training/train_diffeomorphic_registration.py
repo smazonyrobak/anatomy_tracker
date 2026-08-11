@@ -7,6 +7,7 @@ under ``J:/AtlasPoseDiffeomorphic`` by default. Nothing is promoted to the GUI.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -19,19 +20,49 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from source.nonlinear_registration import (
+    COORDINATE_CONVENTION,
+    MAXIMUM_ABS_LOG_JACOBIAN,
+    MAXIMUM_ABS_LOG_JACOBIAN_P99,
+    MAXIMUM_DISPLACEMENT_P95_PX,
+    MAXIMUM_DISPLACEMENT_PX,
+    MAXIMUM_INVERSE_P95_PX,
+    MAXIMUM_INVERSE_PX,
+    MAXIMUM_OUTSIDE_TISSUE_DISPLACEMENT_PX,
+    MAXIMUM_RESIDUAL_AFFINE_PX,
+    MINIMUM_JACOBIAN,
+    MODEL_CONTRACT_VERSION,
+    MODEL_INPUT_NAMES,
+    MODEL_OUTPUT_NAMES,
+    MODEL_PIXEL_SPACING_UM,
+    MODEL_SHAPE,
+    MODEL_SPATIAL_CONTRACT,
+    RUNTIME_GATE_CONTRACT,
+)
 from training.diffeomorphic_registration_model import (
     DiffeomorphicRegistrationUNet,
+    MAX_DEFORMATION_PX,
     compose_pixel_maps,
+    hard_cell_mask,
     integrate_stationary_velocity,
     inverse_consistency_loss,
     jacobian_determinant,
     mind_loss,
     pixel_identity_grid,
-    remove_global_affine,
+    preprocess_registration_tensor,
+    remove_tissue_affine,
     sample_at_pixel_map,
     smoothness_loss,
     synthetic_flow_loss,
+    tissue_affine_component,
     topology_loss,
+    soft_tissue_support,
+)
+from training.real_histology_registration import (
+    REAL_HISTOLOGY_SELECTION_SEED,
+    RegisteredHistologySource,
+    evaluate_real_histology,
+    torch_model_sha256,
 )
 from training.synthetic_atlas import AP_MAX_UM, AP_MIN_UM, BREGMA_AP_INDEX, VOXEL_UM, SyntheticAtlas, make_manifest
 
@@ -39,9 +70,21 @@ from training.synthetic_atlas import AP_MAX_UM, AP_MIN_UM, BREGMA_AP_INDEX, VOXE
 ROOT = Path(__file__).resolve().parents[1]
 ATLAS = ROOT / "data" / "Allen Brain Atlas 25um"
 DEFAULT_WORKSPACE = Path("J:/AtlasPoseDiffeomorphic")
-PADDED_SIZE = (320, 464)
 CLASS_COUNT = 9
-VALIDATION_STRATA = ("identity_extreme", "smooth_deformation", "nuisance_damage", "wrong_ap")
+SELECTION_STRATA = (
+    "identity_extreme", "smooth_deformation", "nuisance_damage",
+    "wrong_ap_near", "wrong_ap_far", "wrong_tilt",
+)
+LOCKED_STRATA = tuple(f"{name}_label_free" for name in SELECTION_STRATA)
+SELECTION_SEED_BASE = 1_000_000_000
+LOCKED_SEED_BASE = 2_000_000_000
+# At the native 25 um grid these cap median/p95 dense landmark error at 25/50 um.
+MAX_LANDMARK_TRE_MEDIAN_PX = 1.0
+MAX_LANDMARK_TRE_P95_PX = 2.0
+MIN_TRE_IMPROVEMENT_PX = 0.50
+MIN_TRE_RELATIVE_IMPROVEMENT = 0.25
+MIN_LABEL_DICE = 0.85
+MIN_LABEL_DICE_IMPROVEMENT = 0.05
 
 
 def workspace_path() -> Path:
@@ -58,7 +101,7 @@ def _rand(shape: tuple[int, ...], generator: torch.Generator, device: torch.devi
     return torch.rand(shape, generator=generator, device=device)
 
 
-def _pad_to(tensor: torch.Tensor, shape: tuple[int, int] = PADDED_SIZE) -> torch.Tensor:
+def _pad_to(tensor: torch.Tensor, shape: tuple[int, int] = MODEL_SHAPE) -> torch.Tensor:
     height, width = tensor.shape[-2:]
     pad_y = shape[0] - height
     pad_x = shape[1] - width
@@ -76,19 +119,23 @@ def synthesize_modality(
     generator: torch.Generator,
     *,
     extreme: bool = False,
+    label_appearance: bool = True,
 ) -> torch.Tensor:
     """Generate a label-conditioned arbitrary contrast while preserving geometry."""
     batch, _, height, width = template.shape
     device = template.device
-    palette = 0.05 + 0.9 * _rand((batch, CLASS_COUNT, 1, 1), generator, device)
-    regional = palette.expand(-1, -1, height, width).gather(1, labels.long())
-    edge_x = F.pad((labels[:, :, :, 1:] != labels[:, :, :, :-1]).float(), (0, 1, 0, 0))
-    edge_y = F.pad((labels[:, :, 1:, :] != labels[:, :, :-1, :]).float(), (0, 0, 0, 1))
-    edges = F.max_pool2d(torch.maximum(edge_x, edge_y), 3, stride=1, padding=1)
-    mix_low, mix_high = ((0.02, 0.30) if extreme else (0.15, 0.82))
-    mix = mix_low + (mix_high - mix_low) * _rand((batch, 1, 1, 1), generator, device)
-    edge_weight = (_rand((batch, 1, 1, 1), generator, device) - 0.5) * (0.9 if extreme else 0.5)
-    image = mix * template + (1.0 - mix) * regional + edge_weight * edges
+    if label_appearance:
+        palette = 0.05 + 0.9 * _rand((batch, CLASS_COUNT, 1, 1), generator, device)
+        regional = palette.expand(-1, -1, height, width).gather(1, labels.long())
+        edge_x = F.pad((labels[:, :, :, 1:] != labels[:, :, :, :-1]).float(), (0, 1, 0, 0))
+        edge_y = F.pad((labels[:, :, 1:, :] != labels[:, :, :-1, :]).float(), (0, 0, 0, 1))
+        edges = F.max_pool2d(torch.maximum(edge_x, edge_y), 3, stride=1, padding=1)
+        mix_low, mix_high = ((0.02, 0.30) if extreme else (0.15, 0.82))
+        mix = mix_low + (mix_high - mix_low) * _rand((batch, 1, 1, 1), generator, device)
+        edge_weight = (_rand((batch, 1, 1, 1), generator, device) - 0.5) * (0.9 if extreme else 0.5)
+        image = mix * template + (1.0 - mix) * regional + edge_weight * edges
+    else:
+        image = template
 
     axis_y = torch.linspace(-1.0, 1.0, height, device=device)
     axis_x = torch.linspace(-1.0, 1.0, width, device=device)
@@ -117,28 +164,52 @@ def synthesize_modality(
 def sample_anatomical_velocity(
     mask: torch.Tensor,
     generator: torch.Generator,
-    max_velocity_px: float = 7.0,
+    max_velocity_px: float = MAX_DEFORMATION_PX,
+    *,
+    interior_only: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Sample an affine-free smooth SVF and shrink it until its discrete map has positive J."""
     batch, _, height, width = mask.shape
     device = mask.device
+    mask = (mask > 0.5).float()
+    cell_mask = hard_cell_mask(mask)[:, 0]
     low = torch.randn((batch, 2, 6, 8), generator=generator, device=device)
     velocity = F.interpolate(low, (height, width), mode="bicubic", align_corners=True)
     velocity = F.avg_pool2d(velocity, 11, stride=1, padding=5)
-    support = F.avg_pool2d(mask.float(), 31, stride=1, padding=15).clamp(0.0, 1.0)
-    velocity = remove_global_affine(velocity * support)
-    amplitude = 1.5 + (max_velocity_px - 1.5) * _rand((batch, 1, 1, 1), generator, device)
+    support = soft_tissue_support(mask.float(), mask.float())
+    if interior_only:
+        interior = 1.0 - F.max_pool2d(1.0 - mask, 11, stride=1, padding=5)
+        support = support * interior
+    velocity = remove_tissue_affine(velocity, support, mask.float())
+    minimum_amplitude = 3.0 if interior_only else 1.5
+    amplitude = minimum_amplitude + (max_velocity_px - minimum_amplitude) * _rand(
+        (batch, 1, 1, 1), generator, device
+    )
     peak = velocity.abs().flatten(1).amax(dim=1).reshape(-1, 1, 1, 1).clamp_min(1e-6)
     velocity = velocity * amplitude / peak
     for _ in range(8):
         forward = integrate_stationary_velocity(velocity, steps=7)
+        inverse = integrate_stationary_velocity(-velocity, steps=7)
+        forward_jacobian = jacobian_determinant(forward)
+        inverse_jacobian = jacobian_determinant(inverse)
+        trusted_log_jacobian = [
+            torch.cat((forward_jacobian[item][cell_mask[item]], inverse_jacobian[item][cell_mask[item]]))
+            .clamp_min(1e-8)
+            .log()
+            .abs()
+            for item in range(batch)
+        ]
+        log_tail = torch.stack([torch.quantile(values, 0.99) for values in trusted_log_jacobian])
+        log_max = torch.stack([values.max() for values in trusted_log_jacobian])
         shrink = torch.where(
-            jacobian_determinant(forward).amin(dim=(1, 2)) < 0.20,
+            (forward_jacobian.amin(dim=(1, 2)) < MINIMUM_JACOBIAN + 0.05)
+            | (inverse_jacobian.amin(dim=(1, 2)) < MINIMUM_JACOBIAN + 0.05)
+            | (log_tail > MAXIMUM_ABS_LOG_JACOBIAN_P99 - 0.20)
+            | (log_max > MAXIMUM_ABS_LOG_JACOBIAN - 0.10),
             torch.full((batch,), 0.65, device=device),
             torch.ones(batch, device=device),
         )
         velocity = velocity * shrink[:, None, None, None]
-    velocity = remove_global_affine(velocity)
     return (
         velocity,
         integrate_stationary_velocity(velocity, steps=7),
@@ -202,6 +273,34 @@ def add_nuisance_damage(
     return image.clamp(0.0, 1.0), visible.float()
 
 
+def surface_affine_calibrate(
+    template: torch.Tensor,
+    labels: torch.Tensor,
+    mask: torch.Tensor,
+    target_mask: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Match centroid and axis scales so negative pairs cannot be rejected by outline size."""
+    batch, _, height, width = template.shape
+    identity = pixel_identity_grid(batch, height, width, device=template.device, dtype=template.dtype)
+    maps = []
+    for item in range(batch):
+        source_y, source_x = torch.where(mask[item, 0] > 0.5)
+        target_y, target_x = torch.where(target_mask[item, 0] > 0.5)
+        source_center = torch.stack((source_x.float().mean(), source_y.float().mean()))
+        target_center = torch.stack((target_x.float().mean(), target_y.float().mean()))
+        source_scale = torch.stack((source_x.float().std(), source_y.float().std())).clamp_min(1.0)
+        target_scale = torch.stack((target_x.float().std(), target_y.float().std())).clamp_min(1.0)
+        maps.append(
+            source_center[:, None, None]
+            + (identity[item] - target_center[:, None, None]) * (source_scale / target_scale)[:, None, None]
+        )
+    target_to_source = torch.stack(maps)
+    calibrated_template = sample_at_pixel_map(template, target_to_source, padding_mode="zeros")
+    calibrated_mask = sample_at_pixel_map(mask.float(), target_to_source, padding_mode="zeros")
+    calibrated_labels = sample_at_pixel_map(one_hot_labels(labels), target_to_source, padding_mode="zeros")
+    return calibrated_template, calibrated_labels.argmax(1, keepdim=True), calibrated_mask
+
+
 def make_synthetic_pair(
     template: torch.Tensor,
     labels: torch.Tensor,
@@ -212,26 +311,37 @@ def make_synthetic_pair(
     wrong_template: torch.Tensor | None = None,
     wrong_labels: torch.Tensor | None = None,
     wrong_mask: torch.Tensor | None = None,
-    max_velocity_px: float = 7.0,
+    max_velocity_px: float = MAX_DEFORMATION_PX,
 ) -> dict[str, torch.Tensor]:
     """Construct an exact pair; only the known SVF contributes to its target flow."""
     device = template.device
     generator = _torch_generator(seed, device)
     batch, _, height, width = template.shape
+    mask = (mask > 0.5).float()
+    if wrong_mask is not None:
+        wrong_mask = (wrong_mask > 0.5).float()
     identity = pixel_identity_grid(batch, height, width, device=device, dtype=template.dtype)
-    is_wrong = stratum == "wrong_ap"
-    extreme = stratum == "identity_extreme"
+    label_appearance = not stratum.endswith("_label_free")
+    base_stratum = stratum.removesuffix("_label_free")
+    is_wrong = base_stratum.startswith("wrong_")
+    extreme = base_stratum == "identity_extreme"
     source_template = wrong_template if is_wrong else template
     source_labels = wrong_labels if is_wrong else labels
     source_mask = wrong_mask if is_wrong else mask
     if is_wrong and source_template is None:
         raise ValueError("wrong_ap pairs require a second, known-wrong plane")
 
-    fixed = synthesize_modality(template, labels, mask, generator, extreme=extreme)
-    moving_base = synthesize_modality(source_template, source_labels, source_mask, generator, extreme=extreme)
-    if stratum in {"smooth_deformation", "nuisance_damage"}:
+    fixed = synthesize_modality(
+        template, labels, mask, generator, extreme=extreme, label_appearance=label_appearance
+    )
+    moving_base = synthesize_modality(
+        source_template, source_labels, source_mask, generator,
+        extreme=extreme, label_appearance=label_appearance,
+    )
+    if base_stratum in {"smooth_deformation", "nuisance_damage", "real_histology_interior"}:
         target_velocity, atlas_to_affine, affine_to_atlas = sample_anatomical_velocity(
-            mask, generator, max_velocity_px
+            mask, generator, max_velocity_px,
+            interior_only=base_stratum == "real_histology_interior",
         )
     else:
         target_velocity = torch.zeros_like(identity)
@@ -239,22 +349,55 @@ def make_synthetic_pair(
         affine_to_atlas = identity
 
     moving = sample_at_pixel_map(moving_base, affine_to_atlas, padding_mode="zeros")
-    moving_mask = sample_at_pixel_map(source_mask.float(), affine_to_atlas, padding_mode="zeros")
+    moving_mask = (
+        source_mask.float()
+        if base_stratum == "real_histology_interior"
+        else (sample_at_pixel_map(source_mask.float(), affine_to_atlas, padding_mode="zeros") > 0.5).float()
+    )
     moving_labels = sample_at_pixel_map(one_hot_labels(source_labels), affine_to_atlas, padding_mode="zeros")
-    if stratum == "nuisance_damage":
+    if base_stratum == "nuisance_damage":
         moving, moving_mask = add_nuisance_damage(moving, moving_mask, generator)
+    atlas_supervision_mask = mask.float() * (
+        sample_at_pixel_map(moving_mask, atlas_to_affine, padding_mode="zeros") > 0.5
+    )
+    affine_supervision_mask = moving_mask * (
+        sample_at_pixel_map(mask.float(), affine_to_atlas, padding_mode="zeros") > 0.5
+    )
+    fixed = preprocess_registration_tensor(fixed, mask.float())
+    moving = preprocess_registration_tensor(moving, moving_mask)
     return {
         "fixed": fixed,
         "moving": moving,
         "fixed_mask": mask.float(),
-        "moving_mask": moving_mask.clamp(0.0, 1.0),
+        "moving_mask": moving_mask,
         "fixed_labels": one_hot_labels(labels),
         "moving_labels": moving_labels,
         "target_atlas_to_affine": atlas_to_affine,
         "target_affine_to_atlas": affine_to_atlas,
         "target_velocity": target_velocity,
+        "atlas_supervision_mask": atlas_supervision_mask.float(),
+        "affine_supervision_mask": affine_supervision_mask.float(),
+        "retained_overlap": atlas_supervision_mask.flatten(1).sum(1) / mask.flatten(1).sum(1).clamp_min(1.0),
         "wrong_pair": torch.full((batch,), is_wrong, device=device, dtype=torch.bool),
     }
+
+
+def real_histology_training_batch(
+    source: RegisteredHistologySource,
+    training_bank: dict,
+    seed: int,
+    count: int,
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    records = training_bank["entries"]
+    rng = np.random.default_rng(seed)
+    selected = rng.choice(len(records), count, replace=len(records) < count)
+    sections = [source.section(int(records[int(index)]["section_image_id"])) for index in selected]
+    images = torch.stack([torch.from_numpy(section["moving"]) for section in sections])[:, None].to(device)
+    masks = torch.stack([torch.from_numpy(section["moving_mask"]) for section in sections])[:, None].to(device).float()
+    labels = torch.zeros_like(images, dtype=torch.long)
+    stratum = "nuisance_damage_label_free" if seed % 2 else "smooth_deformation_label_free"
+    return make_synthetic_pair(images, labels, masks, seed=seed, stratum=stratum)
 
 
 class AllenObliquePairGenerator:
@@ -276,24 +419,34 @@ class AllenObliquePairGenerator:
         return _pad_to(template), _pad_to(mask.float()), _pad_to(labels.long())
 
     def batch(self, seed: int, count: int, stratum: str) -> dict[str, torch.Tensor]:
+        base_stratum = stratum.removesuffix("_label_free")
         manifest = self._neutral_manifest(count, seed)
         template, mask, labels = self._render(manifest)
         wrong_template = wrong_mask = wrong_labels = None
-        moving_pose = np.column_stack(
-            (manifest["ap_um"], manifest["tilt_lr_deg"], manifest["tilt_dv_deg"])
-        ).astype(np.float32)
-        if stratum == "wrong_ap":
+        if base_stratum.startswith("wrong_"):
             wrong_manifest = {name: np.array(value, copy=True) for name, value in manifest.items()}
             rng = np.random.default_rng(seed ^ 0x51CE)
-            displacement = rng.uniform(500.0, 1500.0, count).astype(np.float32)
-            direction = rng.choice(np.asarray([-1.0, 1.0], dtype=np.float32), count)
-            candidate = manifest["ap_um"] + displacement * direction
-            outside = (candidate < AP_MIN_UM) | (candidate > AP_MAX_UM)
-            candidate[outside] = manifest["ap_um"][outside] - displacement[outside] * direction[outside]
-            wrong_manifest["ap_um"] = candidate.clip(AP_MIN_UM, AP_MAX_UM)
-            wrong_manifest["ap_index"] = BREGMA_AP_INDEX - wrong_manifest["ap_um"] / VOXEL_UM
+            if base_stratum in {"wrong_ap_near", "wrong_ap_far"}:
+                bounds = (25.0, 500.0) if base_stratum == "wrong_ap_near" else (500.0, 1500.0)
+                displacement = rng.uniform(*bounds, count).astype(np.float32)
+                direction = rng.choice(np.asarray([-1.0, 1.0], dtype=np.float32), count)
+                candidate = manifest["ap_um"] + displacement * direction
+                outside = (candidate < AP_MIN_UM) | (candidate > AP_MAX_UM)
+                candidate[outside] = manifest["ap_um"][outside] - displacement[outside] * direction[outside]
+                wrong_manifest["ap_um"] = candidate.clip(AP_MIN_UM, AP_MAX_UM)
+                wrong_manifest["ap_index"] = BREGMA_AP_INDEX - wrong_manifest["ap_um"] / VOXEL_UM
+            else:
+                tilt_delta = rng.uniform(4.0, 15.0, (count, 2)).astype(np.float32)
+                tilt_delta *= rng.choice(np.asarray([-1.0, 1.0], dtype=np.float32), (count, 2))
+                wrong_tilt = np.column_stack((manifest["tilt_lr_deg"], manifest["tilt_dv_deg"])) + tilt_delta
+                outside = (wrong_tilt < -35.0) | (wrong_tilt > 35.0)
+                wrong_tilt[outside] -= 2.0 * tilt_delta[outside]
+                wrong_manifest["tilt_lr_deg"] = wrong_tilt[:, 0]
+                wrong_manifest["tilt_dv_deg"] = wrong_tilt[:, 1]
             wrong_template, wrong_mask, wrong_labels = self._render(wrong_manifest)
-            moving_pose[:, 0] = wrong_manifest["ap_um"]
+            wrong_template, wrong_labels, wrong_mask = surface_affine_calibrate(
+                wrong_template, wrong_labels, wrong_mask, mask
+            )
         pair = make_synthetic_pair(
             template,
             labels,
@@ -304,11 +457,6 @@ class AllenObliquePairGenerator:
             wrong_labels=wrong_labels,
             wrong_mask=wrong_mask,
         )
-        pair["fixed_pose"] = torch.from_numpy(
-            np.column_stack((manifest["ap_um"], manifest["tilt_lr_deg"], manifest["tilt_dv_deg"]))
-        ).to(self.device)
-        pair["moving_pose"] = torch.from_numpy(moving_pose).to(self.device)
-        pair["surface_affine"] = torch.eye(3, device=self.device)[:2].expand(count, -1, -1).clone()
         return pair
 
 
@@ -356,7 +504,8 @@ def hierarchical_label_dice_loss(
         denominator = ((fixed_level[:, 1:] + warped_level[:, 1:]) * mask_level).sum(dim=(-2, -1))
         present = denominator > 1.0
         dice = (2.0 * intersection + 1e-5) / (denominator + 1e-5)
-        losses.append((1.0 - dice)[present].mean())
+        present_loss = (1.0 - dice)[present]
+        losses.append(present_loss.mean() if present_loss.numel() else warped.sum() * 0.0)
     return torch.stack(losses).mean()
 
 
@@ -379,26 +528,34 @@ def registration_objective(
     wrong = batch["wrong_pair"]
     rejection = F.binary_cross_entropy_with_logits(rejection_logit, wrong.float())
     zero = rejection * 0.0
-    terms = {"mind": zero, "flow": zero, "dice": zero, "inverse": zero, "smooth": zero, "topology": zero}
+    terms = {
+        "mind": zero, "flow": zero, "dice": zero, "inverse": zero,
+        "smooth": zero, "topology": zero, "affine": zero,
+    }
     correct = ~wrong
     if bool(correct.any()):
-        predicted_mask = sample_at_pixel_map(batch["moving_mask"][correct], predicted[correct], padding_mode="zeros")
-        valid = batch["fixed_mask"][correct] * (predicted_mask > 0.5)
+        atlas_mask = batch["atlas_supervision_mask"][correct]
+        affine_mask = batch["affine_supervision_mask"][correct]
         terms["mind"] = mind_loss(
-            batch["fixed"][correct], batch["moving"][correct], predicted[correct], valid
+            batch["fixed"][correct], batch["moving"][correct], predicted[correct], atlas_mask
         )
         terms["flow"] = 0.5 * (
-            synthetic_flow_loss(predicted[correct], batch["target_atlas_to_affine"][correct], valid)
-            + synthetic_flow_loss(predicted_inverse[correct], batch["target_affine_to_atlas"][correct], valid)
+            synthetic_flow_loss(predicted[correct], batch["target_atlas_to_affine"][correct], atlas_mask)
+            + synthetic_flow_loss(predicted_inverse[correct], batch["target_affine_to_atlas"][correct], affine_mask)
         )
         terms["dice"] = hierarchical_label_dice_loss(
-            batch["fixed_labels"][correct], batch["moving_labels"][correct], predicted[correct], valid
+            batch["fixed_labels"][correct], batch["moving_labels"][correct], predicted[correct], atlas_mask
         )
-        terms["inverse"] = inverse_consistency_loss(predicted[correct], predicted_inverse[correct], valid)
-        terms["smooth"] = smoothness_loss(velocity[correct], batch["fixed_mask"][correct])
-        terms["topology"] = topology_loss(predicted[correct], 0.05) + topology_loss(
-            predicted_inverse[correct], 0.05
+        terms["inverse"] = inverse_consistency_loss(
+            predicted[correct], predicted_inverse[correct], atlas_mask, affine_mask
         )
+        terms["smooth"] = smoothness_loss(velocity[correct])
+        terms["topology"] = topology_loss(predicted[correct], MINIMUM_JACOBIAN) + topology_loss(
+            predicted_inverse[correct], MINIMUM_JACOBIAN
+        )
+        forward_affine = tissue_affine_component(predicted[correct], batch["fixed_mask"][correct])
+        inverse_affine = tissue_affine_component(predicted_inverse[correct], batch["moving_mask"][correct])
+        terms["affine"] = 0.5 * (forward_affine.square().mean() + inverse_affine.square().mean())
     wrong_identity = zero
     if bool(wrong.any()):
         identity = pixel_identity_grid(
@@ -408,7 +565,10 @@ def registration_objective(
             device=predicted.device,
             dtype=predicted.dtype,
         )
-        wrong_identity = synthetic_flow_loss(predicted[wrong], identity, batch["fixed_mask"][wrong])
+        wrong_identity = 0.5 * (
+            synthetic_flow_loss(predicted[wrong], identity, batch["fixed_mask"][wrong])
+            + synthetic_flow_loss(predicted_inverse[wrong], identity, batch["moving_mask"][wrong])
+        )
     total = (
         terms["mind"]
         + 2.0 * terms["flow"]
@@ -416,6 +576,7 @@ def registration_objective(
         + 0.2 * terms["inverse"]
         + 0.05 * terms["smooth"]
         + 5.0 * terms["topology"]
+        + 2.0 * terms["affine"]
         + 0.75 * rejection
         + 0.5 * wrong_identity
     )
@@ -445,71 +606,220 @@ def _masked_percentile(values: torch.Tensor, mask: torch.Tensor, quantile: float
     return float(torch.quantile(selected.float(), quantile)) if selected.numel() else float("nan")
 
 
+def _masked_max(values: torch.Tensor, mask: torch.Tensor) -> float:
+    selected = values[mask.expand_as(values) > 0.5]
+    return float(selected.abs().max()) if selected.numel() else float("nan")
+
+
 @torch.inference_mode()
 def validation_report(
     model: RegistrationWithRejector,
     generator: AllenObliquePairGenerator,
     batches_per_stratum: int,
     batch_size: int,
+    *,
+    strata_names: tuple[str, ...] = SELECTION_STRATA,
+    seed_base: int = SELECTION_SEED_BASE,
 ) -> dict:
     model.eval()
     strata = {}
-    for stratum_index, stratum in enumerate(VALIDATION_STRATA):
+    aggregation = {
+        "folded_voxels": np.sum,
+        "minimum_jacobian": np.min,
+        "maximum_abs_log_jacobian_p99": np.max,
+        "maximum_abs_log_jacobian": np.max,
+        "roundtrip_p95_px": np.max,
+        "roundtrip_max_px": np.max,
+        "inverse_finite_fraction": np.min,
+        "map_finite_fraction": np.min,
+        "residual_affine_max_px": np.max,
+        "outside_tissue_displacement_max_px": np.max,
+        "displacement_p95_px": np.max,
+        "displacement_max_px": np.max,
+        "landmark_tre_px": np.max,
+        "landmark_tre_p95_px": np.max,
+        "tre_improvement_px": np.min,
+        "tre_relative_improvement": np.min,
+        "tre_p95_improvement_px": np.min,
+        "tre_p95_relative_improvement": np.min,
+        "label_dice": np.min,
+        "label_dice_improvement": np.min,
+        "identity_tre_p95_px": np.max,
+        "wrong_displacement_p95_px": np.max,
+        "retained_overlap": np.min,
+    }
+    for stratum_index, stratum in enumerate(strata_names):
         rows = []
         for batch_index in range(batches_per_stratum):
-            batch = generator.batch(910_000 + stratum_index * 10_000 + batch_index, batch_size, stratum)
-            forward, inverse, velocity, reject_logit = model(
+            batch = generator.batch(seed_base + stratum_index * 10_000 + batch_index, batch_size, stratum)
+            forward, inverse, _, reject_logit = model(
                 batch["fixed"], batch["moving"], batch["fixed_mask"], batch["moving_mask"]
             )
             identity = pixel_identity_grid(
                 batch_size, forward.shape[-2], forward.shape[-1], device=forward.device, dtype=forward.dtype
             )
-            displacement = (forward - identity).square().sum(1, keepdim=True).sqrt()
-            cycle = (compose_pixel_maps(forward, inverse) - identity).square().sum(1, keepdim=True).sqrt()
+            forward_displacement = (forward - identity).square().sum(1, keepdim=True).sqrt()
+            inverse_displacement = (inverse - identity).square().sum(1, keepdim=True).sqrt()
+            forward_cycle = (compose_pixel_maps(forward, inverse) - identity).square().sum(1, keepdim=True).sqrt()
+            inverse_cycle = (compose_pixel_maps(inverse, forward) - identity).square().sum(1, keepdim=True).sqrt()
+            forward_in_bounds = (
+                (forward[:, :1] >= 0.0) & (forward[:, :1] <= forward.shape[-1] - 1.0)
+                & (forward[:, 1:] >= 0.0) & (forward[:, 1:] <= forward.shape[-2] - 1.0)
+            )
+            inverse_in_bounds = (
+                (inverse[:, :1] >= 0.0) & (inverse[:, :1] <= inverse.shape[-1] - 1.0)
+                & (inverse[:, 1:] >= 0.0) & (inverse[:, 1:] <= inverse.shape[-2] - 1.0)
+            )
             target_error = (forward - batch["target_atlas_to_affine"]).square().sum(1, keepdim=True).sqrt()
             affine_error = (identity - batch["target_atlas_to_affine"]).square().sum(1, keepdim=True).sqrt()
-            residual_affine = velocity - remove_global_affine(velocity)
-            predicted_visible = batch["fixed_mask"] * (
-                sample_at_pixel_map(batch["moving_mask"], forward, padding_mode="zeros") > 0.5
+            forward_affine = tissue_affine_component(forward, batch["fixed_mask"])
+            inverse_affine = tissue_affine_component(inverse, batch["moving_mask"])
+            forward_jacobian = jacobian_determinant(forward)
+            inverse_jacobian = jacobian_determinant(inverse)
+            fixed_hard = batch["fixed_mask"] > 0.5
+            moving_hard = batch["moving_mask"] > 0.5
+            jacobian = torch.cat((forward_jacobian.flatten(), inverse_jacobian.flatten()))
+            trusted_jacobian = torch.cat(
+                (
+                    forward_jacobian[hard_cell_mask(fixed_hard)[:, 0]],
+                    inverse_jacobian[hard_cell_mask(moving_hard)[:, 0]],
+                )
             )
-            affine_visible = batch["fixed_mask"] * (batch["moving_mask"] > 0.5)
-            folded = int((jacobian_determinant(forward) <= 0.0).sum() + (jacobian_determinant(inverse) <= 0.0).sum())
+            absolute_log_jacobian = trusted_jacobian.clamp_min(1e-8).log().abs()
+            common_mask = batch["atlas_supervision_mask"] > 0.5
+            union_mask = fixed_hard | moving_hard
+            outside = (~union_mask) * torch.maximum(
+                forward_displacement,
+                inverse_displacement,
+            )
+            accepted_displacement = torch.cat(
+                (forward_displacement[fixed_hard], inverse_displacement[moving_hard])
+            )
+            landmark_tre = _masked_percentile(
+                target_error[:, :, ::8, ::8], common_mask[:, :, ::8, ::8], 0.50
+            )
+            affine_landmark_tre = _masked_percentile(
+                affine_error[:, :, ::8, ::8], common_mask[:, :, ::8, ::8], 0.50
+            )
+            landmark_tre_p95 = _masked_percentile(target_error, common_mask, 0.95)
+            affine_landmark_tre_p95 = _masked_percentile(affine_error, common_mask, 0.95)
+            dice = float(label_dice_score(batch["fixed_labels"], batch["moving_labels"], forward, common_mask))
+            affine_dice = float(
+                label_dice_score(batch["fixed_labels"], batch["moving_labels"], identity, common_mask)
+            )
             row = {
-                "folded_voxels": folded,
-                "roundtrip_p95_px": _masked_percentile(cycle, batch["fixed_mask"], 0.95),
-                "residual_affine_max_px": float(residual_affine.abs().max()),
-                "landmark_tre_px": _masked_percentile(target_error[:, :, ::8, ::8], batch["fixed_mask"][:, :, ::8, ::8], 0.50),
-                "affine_landmark_tre_px": _masked_percentile(affine_error[:, :, ::8, ::8], batch["fixed_mask"][:, :, ::8, ::8], 0.50),
-                "label_dice": float(label_dice_score(batch["fixed_labels"], batch["moving_labels"], forward, predicted_visible)),
-                "affine_label_dice": float(label_dice_score(batch["fixed_labels"], batch["moving_labels"], identity, affine_visible)),
+                "folded_voxels": int((jacobian <= 0.0).sum()),
+                "minimum_jacobian": float(jacobian.min()),
+                "maximum_abs_log_jacobian_p99": float(torch.quantile(absolute_log_jacobian, 0.99)),
+                "maximum_abs_log_jacobian": float(absolute_log_jacobian.max()),
+                "roundtrip_p95_px": max(
+                    _masked_percentile(forward_cycle, fixed_hard * forward_in_bounds, 0.95),
+                    _masked_percentile(inverse_cycle, moving_hard * inverse_in_bounds, 0.95),
+                ),
+                "roundtrip_max_px": max(
+                    _masked_max(forward_cycle, fixed_hard * forward_in_bounds),
+                    _masked_max(inverse_cycle, moving_hard * inverse_in_bounds),
+                ),
+                "inverse_finite_fraction": float(
+                    (
+                        (fixed_hard * forward_in_bounds).sum()
+                        + (moving_hard * inverse_in_bounds).sum()
+                    ) / (fixed_hard.sum() + moving_hard.sum()).clamp_min(1.0)
+                ),
+                "map_finite_fraction": float(
+                    torch.cat((torch.isfinite(forward).flatten(), torch.isfinite(inverse).flatten())).float().mean()
+                ),
+                "residual_affine_max_px": max(
+                    _masked_max(forward_affine, fixed_hard),
+                    _masked_max(inverse_affine, moving_hard),
+                ),
+                "outside_tissue_displacement_max_px": float(outside.max()),
+                "displacement_p95_px": float(torch.quantile(accepted_displacement.float(), 0.95)),
+                "displacement_max_px": float(accepted_displacement.max()),
+                "landmark_tre_px": landmark_tre,
+                "affine_landmark_tre_px": affine_landmark_tre,
+                "landmark_tre_p95_px": landmark_tre_p95,
+                "affine_landmark_tre_p95_px": affine_landmark_tre_p95,
+                "tre_improvement_px": affine_landmark_tre - landmark_tre,
+                "tre_relative_improvement": 1.0 - landmark_tre / max(affine_landmark_tre, 1e-6),
+                "tre_p95_improvement_px": affine_landmark_tre_p95 - landmark_tre_p95,
+                "tre_p95_relative_improvement": 1.0 - landmark_tre_p95 / max(affine_landmark_tre_p95, 1e-6),
+                "label_dice": dice,
+                "affine_label_dice": affine_dice,
+                "label_dice_improvement": dice - affine_dice,
                 "identity_tre_p95_px": _masked_percentile(target_error, batch["fixed_mask"], 0.95),
                 "wrong_reject_rate": float((torch.sigmoid(reject_logit) >= 0.5).float().mean()),
-                "wrong_displacement_p95_px": _masked_percentile(displacement, batch["fixed_mask"], 0.95),
+                "wrong_displacement_p95_px": max(
+                    _masked_percentile(forward_displacement, fixed_hard, 0.95),
+                    _masked_percentile(inverse_displacement, moving_hard, 0.95),
+                ),
                 "valid_reject_rate": float((torch.sigmoid(reject_logit) >= 0.5).float().mean()),
+                "retained_overlap": float(batch["retained_overlap"].min()),
             }
             rows.append(row)
-        strata[stratum] = {key: float(np.mean([row[key] for row in rows])) for key in rows[0]}
+        strata[stratum] = {
+            key: float(aggregation.get(key, np.mean)([row[key] for row in rows]))
+            for key in rows[0]
+        }
 
-    correct_deformation = ("smooth_deformation", "nuisance_damage")
+    valid_names = tuple(name for name in strata_names if not name.removesuffix("_label_free").startswith("wrong_"))
+    correct_deformation = tuple(
+        name for name in valid_names
+        if name.removesuffix("_label_free") in {"smooth_deformation", "nuisance_damage"}
+    )
+    wrong_names = tuple(name for name in strata_names if name.removesuffix("_label_free").startswith("wrong_"))
+    identity_name = next(name for name in valid_names if name.removesuffix("_label_free") == "identity_extreme")
     gates = {
-        "folded_voxels": sum(strata[name]["folded_voxels"] for name in VALIDATION_STRATA[:-1]),
-        "roundtrip_p95_px": max(strata[name]["roundtrip_p95_px"] for name in VALIDATION_STRATA[:-1]),
-        "residual_affine_max_px": max(strata[name]["residual_affine_max_px"] for name in VALIDATION_STRATA),
-        "landmark_tre_px": float(np.mean([strata[name]["landmark_tre_px"] for name in correct_deformation])),
-        "affine_landmark_tre_px": float(np.mean([strata[name]["affine_landmark_tre_px"] for name in correct_deformation])),
-        "label_dice": float(np.mean([strata[name]["label_dice"] for name in correct_deformation])),
-        "affine_label_dice": float(np.mean([strata[name]["affine_label_dice"] for name in correct_deformation])),
-        "identity_tre_p95_px": strata["identity_extreme"]["identity_tre_p95_px"],
-        "wrong_reject_rate": strata["wrong_ap"]["wrong_reject_rate"],
-        "wrong_displacement_p95_px": strata["wrong_ap"]["wrong_displacement_p95_px"],
-        "valid_reject_rate": float(np.mean([strata[name]["valid_reject_rate"] for name in VALIDATION_STRATA[:-1]])),
+        "folded_voxels": sum(strata[name]["folded_voxels"] for name in strata_names),
+        "minimum_jacobian": min(strata[name]["minimum_jacobian"] for name in strata_names),
+        "maximum_abs_log_jacobian_p99": max(strata[name]["maximum_abs_log_jacobian_p99"] for name in strata_names),
+        "maximum_abs_log_jacobian": max(strata[name]["maximum_abs_log_jacobian"] for name in strata_names),
+        "roundtrip_p95_px": max(strata[name]["roundtrip_p95_px"] for name in strata_names),
+        "roundtrip_max_px": max(strata[name]["roundtrip_max_px"] for name in strata_names),
+        "inverse_finite_fraction": min(strata[name]["inverse_finite_fraction"] for name in strata_names),
+        "map_finite_fraction": min(strata[name]["map_finite_fraction"] for name in strata_names),
+        "residual_affine_max_px": max(strata[name]["residual_affine_max_px"] for name in strata_names),
+        "outside_tissue_displacement_max_px": max(
+            strata[name]["outside_tissue_displacement_max_px"] for name in strata_names
+        ),
+        "displacement_p95_px": max(strata[name]["displacement_p95_px"] for name in valid_names),
+        "displacement_max_px": max(strata[name]["displacement_max_px"] for name in valid_names),
+        "landmark_tre_px": max(strata[name]["landmark_tre_px"] for name in correct_deformation),
+        "landmark_tre_p95_px": max(strata[name]["landmark_tre_p95_px"] for name in correct_deformation),
+        "affine_landmark_tre_px": max(
+            strata[name]["affine_landmark_tre_px"] for name in correct_deformation
+        ),
+        "affine_landmark_tre_p95_px": max(
+            strata[name]["affine_landmark_tre_p95_px"] for name in correct_deformation
+        ),
+        "tre_improvement_px": min(strata[name]["tre_improvement_px"] for name in correct_deformation),
+        "tre_relative_improvement": min(
+            strata[name]["tre_relative_improvement"] for name in correct_deformation
+        ),
+        "tre_p95_improvement_px": min(
+            strata[name]["tre_p95_improvement_px"] for name in correct_deformation
+        ),
+        "tre_p95_relative_improvement": min(
+            strata[name]["tre_p95_relative_improvement"] for name in correct_deformation
+        ),
+        "label_dice": min(strata[name]["label_dice"] for name in correct_deformation),
+        "affine_label_dice": min(strata[name]["affine_label_dice"] for name in correct_deformation),
+        "label_dice_improvement": min(
+            strata[name]["label_dice_improvement"] for name in correct_deformation
+        ),
+        "identity_tre_p95_px": strata[identity_name]["identity_tre_p95_px"],
+        "wrong_reject_rate": min(strata[name]["wrong_reject_rate"] for name in wrong_names),
+        "wrong_reject_rate_by_stratum": {name: strata[name]["wrong_reject_rate"] for name in wrong_names},
+        "wrong_displacement_p95_px": max(strata[name]["wrong_displacement_p95_px"] for name in wrong_names),
+        "valid_reject_rate": float(np.mean([strata[name]["valid_reject_rate"] for name in valid_names])),
+        "retained_overlap": min(strata[name]["retained_overlap"] for name in valid_names),
     }
     return {"strata": strata, "gates": gates}
 
 
 @torch.inference_mode()
 def benchmark_runtime(model: nn.Module, device: torch.device, trials: int = 20) -> float:
-    inputs = tuple(torch.zeros(1, 1, *PADDED_SIZE, device=device) for _ in range(4))
+    inputs = tuple(torch.zeros(1, 1, *MODEL_SHAPE, device=device) for _ in range(4))
     model.eval()
     for _ in range(3):
         model(*inputs)
@@ -530,14 +840,63 @@ def export_gate_failures(metrics: dict) -> list[str]:
     failures = []
     checks = (
         (gates["folded_voxels"] == 0, "predicted map contains a fold"),
-        (gates["roundtrip_p95_px"] <= 1.0, "round-trip p95 exceeds 1 px"),
-        (gates["residual_affine_max_px"] <= 0.05, "residual global affine exceeds 0.05 px"),
-        (gates["landmark_tre_px"] < gates["affine_landmark_tre_px"], "landmark TRE did not improve over affine"),
-        (gates["label_dice"] > gates["affine_label_dice"], "label Dice did not improve over affine"),
+        (gates["minimum_jacobian"] >= MINIMUM_JACOBIAN, "minimum Jacobian is below 0.20"),
+        (
+            gates["maximum_abs_log_jacobian_p99"] <= MAXIMUM_ABS_LOG_JACOBIAN_P99,
+            "absolute log-Jacobian p99 exceeds its limit",
+        ),
+        (
+            gates["maximum_abs_log_jacobian"] <= MAXIMUM_ABS_LOG_JACOBIAN,
+            "absolute log-Jacobian maximum exceeds its limit",
+        ),
+        (gates["inverse_finite_fraction"] == 1.0, "a forward/inverse cycle leaves the finite canvas"),
+        (gates["map_finite_fraction"] == 1.0, "a predicted map contains non-finite coordinates"),
+        (gates["roundtrip_p95_px"] <= MAXIMUM_INVERSE_P95_PX, "round-trip p95 exceeds 1 px"),
+        (gates["roundtrip_max_px"] <= MAXIMUM_INVERSE_PX, "round-trip maximum exceeds 2 px"),
+        (
+            gates["residual_affine_max_px"] <= MAXIMUM_RESIDUAL_AFFINE_PX,
+            "residual global affine exceeds 0.05 px",
+        ),
+        (
+            gates["outside_tissue_displacement_max_px"] <= MAXIMUM_OUTSIDE_TISSUE_DISPLACEMENT_PX,
+            "outside-tissue map is not identity",
+        ),
+        (
+            gates["displacement_p95_px"] <= MAXIMUM_DISPLACEMENT_P95_PX,
+            "accepted-pair displacement p95 exceeds 8 px",
+        ),
+        (
+            gates["displacement_max_px"] <= MAXIMUM_DISPLACEMENT_PX,
+            "accepted-pair displacement maximum exceeds 12 px",
+        ),
+        (gates["landmark_tre_px"] <= MAX_LANDMARK_TRE_MEDIAN_PX, "landmark median TRE exceeds 1 px"),
+        (gates["landmark_tre_p95_px"] <= MAX_LANDMARK_TRE_P95_PX, "landmark TRE p95 exceeds 2 px"),
+        (
+            gates["tre_improvement_px"] >= MIN_TRE_IMPROVEMENT_PX,
+            "landmark median TRE improvement is below 0.5 px",
+        ),
+        (
+            gates["tre_relative_improvement"] >= MIN_TRE_RELATIVE_IMPROVEMENT,
+            "landmark median TRE relative improvement is below 25%",
+        ),
+        (
+            gates["tre_p95_improvement_px"] >= MIN_TRE_IMPROVEMENT_PX,
+            "landmark TRE p95 improvement is below 0.5 px",
+        ),
+        (
+            gates["tre_p95_relative_improvement"] >= MIN_TRE_RELATIVE_IMPROVEMENT,
+            "landmark TRE p95 relative improvement is below 25%",
+        ),
+        (gates["label_dice"] >= MIN_LABEL_DICE, "hierarchical anatomical Dice is below 0.85"),
+        (
+            gates["label_dice_improvement"] >= MIN_LABEL_DICE_IMPROVEMENT,
+            "hierarchical anatomical Dice improvement is below 0.05",
+        ),
         (gates["identity_tre_p95_px"] <= 1.0, "identity/extreme-modality case moved by more than 1 px"),
         (gates["wrong_reject_rate"] >= 0.95, "wrong-AP rejection is below 95%"),
         (gates["wrong_displacement_p95_px"] <= 1.0, "wrong-AP cases were warped instead of rejected"),
         (gates["valid_reject_rate"] <= 0.05, "valid-pair false rejection exceeds 5%"),
+        (gates["retained_overlap"] >= 0.40, "retained trusted overlap is below 40%"),
         (gates["runtime_ms"] <= gates["runtime_limit_ms"], "runtime benchmark exceeds its gate"),
     )
     for passed, message in checks:
@@ -546,26 +905,93 @@ def export_gate_failures(metrics: dict) -> list[str]:
     return failures
 
 
-def export_validated_model(model: nn.Module, metrics: dict, destination: Path) -> tuple[bool, list[str]]:
+def export_candidate_model(model: nn.Module, metrics: dict, destination: Path) -> tuple[bool, list[str]]:
     failures = export_gate_failures(metrics)
     if failures:
         return False, failures
     destination.parent.mkdir(parents=True, exist_ok=True)
-    inputs = tuple(torch.zeros(1, 1, *PADDED_SIZE, device=next(model.parameters()).device) for _ in range(4))
+    inputs = tuple(torch.zeros(1, 1, *MODEL_SHAPE, device=next(model.parameters()).device) for _ in range(4))
     torch.onnx.export(
         model.eval(),
         inputs,
         destination,
-        input_names=("fixed", "moving", "fixed_mask", "moving_mask"),
-        output_names=("atlas_to_affine", "affine_to_atlas", "velocity", "rejection_logit"),
-        dynamic_axes={name: {0: "batch"} for name in (
-            "fixed", "moving", "fixed_mask", "moving_mask",
-            "atlas_to_affine", "affine_to_atlas", "velocity", "rejection_logit",
-        )},
+        input_names=MODEL_INPUT_NAMES,
+        output_names=MODEL_OUTPUT_NAMES,
+        dynamic_axes={name: {0: "batch"} for name in (*MODEL_INPUT_NAMES, *MODEL_OUTPUT_NAMES)},
         opset_version=17,
         dynamo=False,
     )
     return True, []
+
+
+def write_model_manifest(model_path: Path, report: dict) -> tuple[Path, str]:
+    model_sha256 = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    real_gate = report["real_histology_ground_truth_gate"]
+    payload = {
+        "format_version": MODEL_CONTRACT_VERSION,
+        "model_sha256": model_sha256,
+        "model_shape": list(MODEL_SHAPE),
+        "pixel_spacing_um": MODEL_PIXEL_SPACING_UM,
+        "spatial_contract": MODEL_SPATIAL_CONTRACT,
+        "coordinate_convention": COORDINATE_CONVENTION,
+        "input_names": list(MODEL_INPUT_NAMES),
+        "output_names": list(MODEL_OUTPUT_NAMES),
+        "runtime_gates": RUNTIME_GATE_CONTRACT,
+        "synthetic_gate_passed": bool(report["synthetic_gate"]["passed"]),
+        "onnx_gate_passed": bool(report["onnx_gate"]["passed"]),
+        "real_histology_gate_passed": bool(real_gate["passed"]),
+        "real_histology_gate_report_sha256": real_gate.get("report_sha256"),
+        "real_histology_evaluation_manifest_sha256": real_gate.get("evaluation_manifest_sha256"),
+        "real_histology_source": real_gate.get("source"),
+        "real_histology_benchmark_role": real_gate.get("benchmark_role"),
+        "promotion_ready": bool(report["promotion_ready"]),
+    }
+    manifest_path = model_path.with_suffix(".manifest.json")
+    manifest_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    manifest_path.write_bytes(manifest_bytes)
+    return manifest_path, hashlib.sha256(manifest_bytes).hexdigest()
+
+
+class OnnxRegistrationModel:
+    def __init__(self, path: Path):
+        import onnxruntime as ort
+
+        available = ort.get_available_providers()
+        providers = [name for name in ("CUDAExecutionProvider", "DmlExecutionProvider") if name in available]
+        providers.append("CPUExecutionProvider")
+        self.session = ort.InferenceSession(str(path), providers=providers)
+        self.provider = self.session.get_providers()[0]
+
+    def eval(self) -> "OnnxRegistrationModel":
+        return self
+
+    def __call__(self, *inputs: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        feeds = {
+            name: value.detach().float().cpu().numpy()
+            for name, value in zip(MODEL_INPUT_NAMES, inputs)
+        }
+        outputs = self.session.run(None, feeds)
+        return tuple(torch.from_numpy(value).to(inputs[0].device) for value in outputs)
+
+
+@torch.inference_mode()
+def onnx_parity_report(
+    pytorch_model: nn.Module,
+    onnx_model: OnnxRegistrationModel,
+    batch: dict[str, torch.Tensor],
+) -> dict[str, float | str | bool]:
+    inputs = tuple(batch[name] for name in MODEL_INPUT_NAMES)
+    expected = pytorch_model.eval()(*inputs)
+    observed = onnx_model(*inputs)
+    errors = [float((left - right).abs().max()) for left, right in zip(expected, observed)]
+    return {
+        "provider": onnx_model.provider,
+        "atlas_to_affine_max_abs": errors[0],
+        "affine_to_atlas_max_abs": errors[1],
+        "velocity_max_abs": errors[2],
+        "rejection_logit_max_abs": errors[3],
+        "passed": max(errors[:3]) <= 1e-3 and errors[3] <= 1e-4,
+    }
 
 
 def train() -> dict:
@@ -579,25 +1005,46 @@ def train() -> dict:
     validation_interval = int(os.environ.get("DIFFEO_VALIDATION_INTERVAL", "1000"))
     patience = int(os.environ.get("DIFFEO_EARLY_STOPPING_PATIENCE", "10"))
     validation_batches = int(os.environ.get("DIFFEO_VALIDATION_BATCHES", "8"))
-    torch.manual_seed(int(os.environ.get("DIFFEO_SEED", "73051")))
+    seed = int(os.environ.get("DIFFEO_SEED", "73051"))
+    torch.manual_seed(seed)
 
     generator = AllenObliquePairGenerator(ATLAS, device)
+    registered_root = os.environ.get("DIFFEO_REGISTERED_ROOT")
+    real_source = RegisteredHistologySource(registered_root, ATLAS) if registered_root else None
+    real_train_fraction = float(os.environ.get("DIFFEO_REAL_HISTOLOGY_TRAIN_FRACTION", "0.35"))
+    real_training_bank = real_source.training_bank_manifest() if real_source else None
+    real_selection_manifest = (
+        real_source.evaluation_manifest("validation", REAL_HISTOLOGY_SELECTION_SEED)
+        if real_source else None
+    )
     model = RegistrationWithRejector().to(device)
     ema = EMA(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, total_steps, eta_min=1e-6)
     scaler = torch.amp.GradScaler(device.type, enabled=device.type == "cuda")
-    rng = np.random.default_rng(73051)
-    strata = np.asarray(VALIDATION_STRATA)
-    probabilities = np.asarray([0.10, 0.45, 0.30, 0.15])
+    rng = np.random.default_rng(seed)
+    strata = np.asarray(SELECTION_STRATA)
+    probabilities = np.asarray([0.10, 0.25, 0.25, 0.15, 0.15, 0.10])
     history = []
     best_score = float("inf")
     best_state = None
+    best_selection = None
+    best_real_selection = None
+    best_step = None
     stale = 0
 
     for step in range(1, total_steps + 1):
         stratum = str(rng.choice(strata, p=probabilities))
-        batch = generator.batch(step * 1009 + 17, batch_size, stratum)
+        if rng.random() < 0.35:
+            stratum += "_label_free"
+        training_seed = (seed + step * 1009 + 17) % 900_000_000
+        batch = (
+            real_histology_training_batch(
+                real_source, real_training_bank, training_seed, batch_size, device
+            )
+            if real_source and rng.random() < real_train_fraction
+            else generator.batch(training_seed, batch_size, stratum)
+        )
         model.train()
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device.type, dtype=torch.float16, enabled=device.type == "cuda"):
@@ -611,24 +1058,67 @@ def train() -> dict:
         ema.update(model)
 
         if step % validation_interval == 0 or step == total_steps:
-            report = validation_report(ema.model, generator, validation_batches, batch_size)
+            report = validation_report(
+                ema.model,
+                generator,
+                validation_batches,
+                batch_size,
+                strata_names=SELECTION_STRATA,
+                seed_base=SELECTION_SEED_BASE,
+            )
+            real_selection = (
+                evaluate_real_histology(
+                    ema.model,
+                    real_source,
+                    real_selection_manifest,
+                    make_synthetic_pair,
+                    device,
+                    torch_model_sha256(ema.model),
+                    batch_size=min(batch_size, 4),
+                )
+                if real_source else None
+            )
             gates = report["gates"]
             score = (
                 gates["landmark_tre_px"]
                 + 5.0 * (1.0 - gates["label_dice"])
                 + 5.0 * (1.0 - gates["wrong_reject_rate"])
             )
+            if real_selection:
+                real_gates = real_selection["gates"]
+                score += (
+                    real_gates["dense_epe_median_px"]
+                    + 0.5 * real_gates["dense_epe_p95_px"]
+                    + 10.0 * max(real_gates["native_mind_delta"], 0.0)
+                    + 5.0 * (1.0 - real_gates["native_accept_rate"])
+                )
+            if not np.isfinite(score):
+                raise RuntimeError("Selection metrics became non-finite")
             history.append({
                 "step": step,
                 "loss": float(loss.detach()),
                 "terms": {name: float(value.detach()) for name, value in terms.items()},
                 "validation": report,
+                "real_histology_validation": real_selection,
             })
             if score < best_score:
                 best_score = score
                 best_state = deepcopy(ema.model.state_dict())
+                best_selection = report
+                best_real_selection = real_selection
+                best_step = step
                 stale = 0
-                torch.save({"model": best_state, "step": step, "history": history}, workspace / "best.pt")
+                torch.save(
+                    {
+                        "model": best_state,
+                        "step": step,
+                        "selection": best_selection,
+                        "real_histology_selection": best_real_selection,
+                        "real_histology_training_bank": real_training_bank,
+                        "history": history,
+                    },
+                    workspace / "best.pt",
+                )
             else:
                 stale += 1
             (workspace / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
@@ -636,16 +1126,89 @@ def train() -> dict:
                 break
 
     ema.model.load_state_dict(best_state)
-    final = validation_report(ema.model, generator, validation_batches * 2, batch_size)
-    final["gates"]["runtime_ms"] = benchmark_runtime(ema.model, device)
-    final["gates"]["runtime_limit_ms"] = float(
+    locked = validation_report(
+        ema.model,
+        generator,
+        validation_batches * 2,
+        batch_size,
+        strata_names=LOCKED_STRATA,
+        seed_base=LOCKED_SEED_BASE,
+    )
+    locked["gates"]["runtime_ms"] = benchmark_runtime(ema.model, device)
+    locked["gates"]["runtime_limit_ms"] = float(
         os.environ.get("DIFFEO_RUNTIME_LIMIT_MS", "250" if device.type == "cuda" else "2500")
     )
-    final["device"] = str(device)
-    final["training_steps"] = history[-1]["step"]
-    exported, failures = export_validated_model(ema.model, final, workspace / "validated" / "diffeomorphic.onnx")
-    final["exported"] = exported
-    final["export_gate_failures"] = failures
+    synthetic_failures = export_gate_failures(locked)
+    candidate_path = workspace / f"candidate-seed-{seed}-step-{best_step}" / "diffeomorphic.onnx"
+    candidate_exported, export_failures = export_candidate_model(ema.model, locked, candidate_path)
+    parity = None
+    onnx_locked = None
+    onnx_failures = (
+        [] if candidate_exported
+        else ["ONNX candidate was not exported because the PyTorch locked gates failed"]
+    )
+    if candidate_exported:
+        onnx_model = OnnxRegistrationModel(candidate_path)
+        parity_batch = generator.batch(
+            LOCKED_SEED_BASE + 99_000_000,
+            min(batch_size, 2),
+            "nuisance_damage_label_free",
+        )
+        parity = onnx_parity_report(ema.model, onnx_model, parity_batch)
+        if parity["passed"]:
+            onnx_locked = validation_report(
+                onnx_model,
+                generator,
+                validation_batches * 2,
+                batch_size,
+                strata_names=LOCKED_STRATA,
+                seed_base=LOCKED_SEED_BASE,
+            )
+            onnx_locked["gates"]["runtime_ms"] = benchmark_runtime(onnx_model, device)
+            onnx_locked["gates"]["runtime_limit_ms"] = locked["gates"]["runtime_limit_ms"]
+            onnx_failures = export_gate_failures(onnx_locked)
+        else:
+            onnx_failures = ["ONNX outputs do not match PyTorch within the parity tolerances"]
+
+    real_histology_gate = {
+        "status": "blocked",
+        "passed": False,
+        "reason": (
+            "The locked animal-disjoint test gate is deliberately separate from training and checkpoint selection. "
+            "Run training.evaluate_locked_nonlinear_histology once for the frozen ONNX candidate."
+        ),
+    }
+    final = {
+        "device": str(device),
+        "training_steps": history[-1]["step"],
+        "selected_step": best_step,
+        "split_seeds": {
+            "training_range": [0, 899_999_999],
+            "selection_base": SELECTION_SEED_BASE,
+            "locked_base": LOCKED_SEED_BASE,
+            "real_histology_selection": REAL_HISTOLOGY_SELECTION_SEED,
+            "sealed_used_for_tuning": False,
+        },
+        "selection": best_selection,
+        "real_histology_selection": best_real_selection,
+        "real_histology_training_bank": real_training_bank,
+        "locked_pytorch": locked,
+        "synthetic_gate": {"passed": not synthetic_failures, "failures": synthetic_failures},
+        "candidate_exported": candidate_exported,
+        "candidate_path": str(candidate_path) if candidate_exported else None,
+        "candidate_export_failures": export_failures,
+        "onnx_parity": parity,
+        "locked_onnx": onnx_locked,
+        "onnx_gate": {"passed": bool(parity and parity["passed"] and not onnx_failures), "failures": onnx_failures},
+        "real_histology_ground_truth_gate": real_histology_gate,
+        "real_histology_gate_artifact": None,
+        "promotion_ready": False,
+        "promoted": False,
+    }
+    if candidate_exported:
+        manifest_path, manifest_sha256 = write_model_manifest(candidate_path, final)
+        final["candidate_manifest_path"] = str(manifest_path)
+        final["candidate_manifest_sha256"] = manifest_sha256
     (workspace / "final_report.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
     return final
 

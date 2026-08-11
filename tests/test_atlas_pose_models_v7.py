@@ -12,6 +12,10 @@ from training.atlas_pose_models_v7 import (
     AP_MIN_UM,
     AP_STEP_UM,
     BACKBONES,
+    BINNED_AUXILIARY_LOSS_WEIGHT,
+    FINAL_PHYSICAL_TILT_LOSS_WEIGHT,
+    OUV_AUXILIARY_LOSS_WEIGHT,
+    QUICKNII_OUV_CENTER,
     TILT_BIN_COUNT,
     TILT_MAX_DEG,
     TILT_MIN_DEG,
@@ -27,8 +31,10 @@ from training.atlas_pose_models_v7 import (
     atlas_pose_v7_loss,
     binned_pose_loss,
     decode_binned_prediction,
-    direct_pose_loss,
     encode_binned_target,
+    physical_pose_loss,
+    soft_physical_tilt,
+    ouv_pose_loss,
     pose_to_quicknii_ouv,
     quicknii_ouv_to_pose,
     tilt_bin_centers,
@@ -87,6 +93,7 @@ def test_binned_heads_losses_and_auxiliary_head_have_gradients():
     assert outputs["pooled_features"].shape == (2, 512)
     assert outputs["anatomy_logits"].shape == (2, 9, 64, 64)
     assert outputs["orientation_inverted_logit"].shape == (2,)
+    assert "anatomy_logits" not in model.training_outputs(image, include_anatomy=False)
 
     loss = atlas_pose_v7_loss(outputs, target, orientation_target) + outputs["anatomy_logits"].square().mean()
     loss.backward()
@@ -108,7 +115,7 @@ def test_spatial_pyramid_distinguishes_layouts_with_identical_global_means():
 
 def test_all_controlled_backbones_retain_a_spatial_feature_map():
     assert BACKBONES == {
-        "convnextv2_tiny": "convnextv2_tiny.fcmae_ft_in22k_in1k",
+        "convnext_tiny": "convnext_tiny.fb_in22k_ft_in1k",
         "maxvit_tiny": "maxvit_tiny_rw_224.sw_in1k",
         "xception": "legacy_xception.tf_in1k",
     }
@@ -117,6 +124,13 @@ def test_all_controlled_backbones_retain_a_spatial_feature_map():
         feature_map = model.encoder(torch.zeros(1, 3, 299, 299))
         assert feature_map.ndim == 4
         assert min(feature_map.shape[-2:]) >= 7
+
+
+def test_unknown_backbone_and_pose_head_are_rejected_explicitly():
+    with pytest.raises(ValueError, match="Unknown AtlasPose backbone"):
+        AtlasPoseV7(architecture="typo", pretrained=False)
+    with pytest.raises(ValueError, match="Unknown AtlasPose pose representation"):
+        AtlasPoseV7(pose_representation="typo", pretrained=False)
 
 
 def test_ouv_pose_round_trip_matches_existing_tracker_convention():
@@ -146,10 +160,102 @@ def test_direct_regression_baseline_decodes_physical_pose_and_trains():
     outputs = head.components(features)
     target = torch.tensor([[-4500.0, -35.0, 35.0], [-2000.0, 0.0, 0.0], [500.0, 35.0, -35.0]])
     assert outputs["pose"].shape == (3, 3)
-    loss = direct_pose_loss(outputs["normalized_pose"], target)
+    loss = physical_pose_loss(outputs["pose"], target)
     loss.backward()
     assert head.normalized_pose.weight.grad is not None
     assert features.grad is not None
+
+
+def test_every_head_uses_the_same_tolerance_normalized_physical_pose_objective():
+    target = torch.tensor([[-1200.0, 4.0, -3.0]])
+    prediction = target + torch.tensor([[60.0, 2.0, 2.0]])
+    orientation = torch.zeros(1)
+    common = physical_pose_loss(prediction, target)
+    assert common == pytest.approx(0.5)
+
+    direct = {
+        "image_frame_pose": prediction,
+        "orientation_inverted_logit": torch.zeros(1),
+    }
+    _, direct_components = atlas_pose_v7_loss(
+        direct, target, orientation, return_components=True
+    )
+
+    binned = {
+        **direct,
+        "ap_logits": torch.zeros(1, AP_BIN_COUNT),
+        "ap_residuals": torch.zeros(1, AP_BIN_COUNT),
+        "lr_logits": torch.zeros(1, TILT_BIN_COUNT),
+        "lr_residuals": torch.zeros(1, TILT_BIN_COUNT),
+        "dv_logits": torch.zeros(1, TILT_BIN_COUNT),
+        "dv_residuals": torch.zeros(1, TILT_BIN_COUNT),
+    }
+    _, binned_components = atlas_pose_v7_loss(
+        binned, target, orientation, return_components=True
+    )
+
+    ouv = {**direct, "ouv": pose_to_quicknii_ouv(prediction)}
+    _, ouv_components = atlas_pose_v7_loss(ouv, target, orientation, return_components=True)
+    assert direct_components["image_frame_pose"] == pytest.approx(common)
+    assert binned_components["image_frame_pose"] == pytest.approx(common)
+    assert ouv_components["image_frame_pose"] == pytest.approx(common)
+    assert direct_components["weighted_representation_auxiliary"] == 0.0
+    assert binned_components["weighted_representation_auxiliary"] > 0.0
+    assert ouv_components["weighted_representation_auxiliary"] > 0.0
+
+
+def test_orientation_errors_incur_tilt_scaled_final_physical_loss():
+    target = torch.tensor([[-1200.0, 30.0, -20.0]])
+    frame_prediction = torch.tensor([[-1200.0, -30.0, 20.0]])
+    orientation_target = torch.ones(1)
+    correct = {
+        "image_frame_pose": frame_prediction,
+        "orientation_inverted_logit": torch.tensor([8.0]),
+    }
+    wrong = {
+        "image_frame_pose": frame_prediction,
+        "orientation_inverted_logit": torch.tensor([-8.0]),
+    }
+    _, correct_components = atlas_pose_v7_loss(
+        correct, target, orientation_target, return_components=True
+    )
+    _, wrong_components = atlas_pose_v7_loss(
+        wrong, target, orientation_target, return_components=True
+    )
+    assert correct_components["image_frame_pose"] == 0.0
+    assert wrong_components["image_frame_pose"] == 0.0
+    assert wrong_components["soft_physical_tilt"] > correct_components["soft_physical_tilt"] + 20.0
+    assert wrong_components["weighted_soft_physical_tilt"] == pytest.approx(
+        FINAL_PHYSICAL_TILT_LOSS_WEIGHT * wrong_components["soft_physical_tilt"]
+    )
+    assert torch.allclose(
+        soft_physical_tilt(frame_prediction, torch.tensor([20.0])),
+        target[:, 1:],
+        atol=1e-6,
+    )
+
+
+def test_representation_auxiliaries_have_comparable_prespecified_scales():
+    pose = torch.column_stack(
+        (
+            torch.linspace(AP_MIN_UM, AP_MAX_UM, 64),
+            torch.linspace(TILT_MIN_DEG, TILT_MAX_DEG, 64),
+            torch.linspace(TILT_MAX_DEG, TILT_MIN_DEG, 64),
+        )
+    )
+    binned = {
+        "ap_logits": torch.zeros(64, AP_BIN_COUNT),
+        "ap_residuals": torch.zeros(64, AP_BIN_COUNT),
+        "lr_logits": torch.zeros(64, TILT_BIN_COUNT),
+        "lr_residuals": torch.zeros(64, TILT_BIN_COUNT),
+        "dv_logits": torch.zeros(64, TILT_BIN_COUNT),
+        "dv_residuals": torch.zeros(64, TILT_BIN_COUNT),
+    }
+    binned_baseline = BINNED_AUXILIARY_LOSS_WEIGHT * binned_pose_loss(binned, pose)
+    center_ouv = torch.tensor(QUICKNII_OUV_CENTER).expand(64, -1)
+    ouv_baseline = OUV_AUXILIARY_LOSS_WEIGHT * ouv_pose_loss(center_ouv, pose)
+    ratio = float(binned_baseline / ouv_baseline)
+    assert 0.5 < ratio < 2.0
 
 
 def test_orientation_output_converts_image_frame_tilts_to_physical_tilts():

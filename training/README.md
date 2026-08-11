@@ -1,75 +1,60 @@
-# Atlas-pose CNN development
+# AtlasPose development and release protocol
 
-This pipeline compares three ImageNet-initialized CNN regressors on the same one-pass stream of synthetic Allen CCFv3 coronal sections. The primary output is:
+AtlasPose predicts `[AP from bregma (um, anterior positive), L-R tilt (degrees), D-V tilt (degrees)]` from a coronal mouse-brain section. The auxiliary orientation logit resolves the 180-degree ambiguity left after smart-mask roll canonicalization; it is not another anatomical coordinate.
 
-`[AP from bregma (µm, anterior positive), L–R tilt (degrees), D–V tilt (degrees)]`
+## Deployed v6: historical evidence only
 
-The exported model also produces an auxiliary orientation logit. It resolves the 180° ambiguity left after mask-PCA roll canonicalization and is used only to construct the correct slice-to-atlas affine; it is not a fourth anatomical coordinate.
+The historical local ConvNeXt-Tiny v6 model was selected on synthetic Allen CCFv3 sections and trained on 100,000 unique synthetic views. Its sealed synthetic-test MAE was 58.72 um AP, 0.934 degrees L-R, and 1.052 degrees D-V.
 
-## Architectures
+The 148-section published DeepSlice set was subsequently used as development feedback. It is therefore **not** an untouched holdout and cannot support a production-release claim. On that set, v6 reached 245.20 um, 1.639 degrees, and 3.996 degrees MAE, versus 174.26 um, 1.463 degrees, and 1.268 degrees for the published DeepSlice outputs. The optional 20% AtlasPose / 80% DeepSlice vote reached 140.61 um, 1.20 degrees, and 1.63 degrees. These results explain the current GUI default—DeepSlice—but must not be reused as final evidence for v7.
 
-1. **Xception** is the task-specific control. DeepSlice uses an ImageNet-pretrained Xception backbone, two 256-unit ReLU layers, and nine linear QuickNII-coordinate outputs. This implementation uses the same backbone/head pattern with three standardized pose outputs. DeepSlice was trained on 131k slide-mounted sections, 443k serial two-photon sections, and about 0.9M synthetic sections, so a synthetic-only model must pass an untouched real-histology benchmark before it can be described as a replacement. Sources: [DeepSlice paper](https://www.nature.com/articles/s41467-023-41645-4), [DeepSlice source](https://github.com/PolarBean/DeepSlice/blob/main/DeepSlice/neural_network/neural_network.py), [Xception paper](https://arxiv.org/abs/1610.02357).
-2. **EfficientNetV2-S** tests a similarly sized backbone designed for fast accelerator training with fused MBConv blocks. Source: [EfficientNetV2 paper and official implementation](https://arxiv.org/abs/2104.00298).
-3. **ConvNeXt-Tiny** tests a modern conventional-convolution backbone with strong classification, detection, and segmentation transfer results. Sources: [ConvNeXt paper](https://arxiv.org/abs/2201.03545), [official implementation](https://github.com/facebookresearch/ConvNeXt).
+The v6 model is an experimental predictor, not a demonstrated DeepSlice replacement. It is not source-approved for a new release.
 
-U-Net was considered because it is strongly supported for biomedical segmentation, but pixel segmentation is not the requested global pose target. The GUI smart-brush mask already supplies the relevant foreground support and scale information directly. Source: [U-Net paper](https://arxiv.org/abs/1505.04597).
+## v7 candidates
 
-## Synthetic data
+The pending v7 experiment compares the same task-specific pose heads and registered/synthetic data across three ImageNet-initialized backbones:
 
-`synthetic_atlas.py` renders oblique planes directly from `average_template_25.nrrd` and uses `annotation_25.nrrd` as the exact training outline. Rendering and geometric transforms run on CUDA. The raw section is independently rotated and scaled by 0.5–1.5×; its known outline then supplies the same roll and scale canonicalization available from the GUI smart brush, preventing pixel size or canvas orientation from leaking the target.
+1. `legacy_xception.tf_in1k` — the closest backbone control to DeepSlice. [DeepSlice](https://www.nature.com/articles/s41467-023-41645-4), [Xception](https://arxiv.org/abs/1610.02357)
+2. `convnext_tiny.fb_in22k_ft_in1k` — a modern convolutional backbone with Apache-2.0 pretrained weights. [ConvNeXt](https://arxiv.org/abs/2201.03545)
+3. `maxvit_tiny_rw_224.sw_in1k` — a convolution/attention hybrid with Apache-2.0 pretrained weights. [MaxViT](https://arxiv.org/abs/2204.01697)
 
-Per-image probabilities match the requested design:
+The non-commercial ConvNeXtV2 FCMAE checkpoint is deliberately excluded. Export provenance records the exact timm identifier, upstream URL or Hugging Face identifier, declared license, and a SHA-256 of the initialized backbone state.
 
-- 90% receive one to three distinct optical defects: contrast/tone changes, selective intensity-band exposure, and/or repeating square-tile vignettes. When contrast modification is selected, half of those cases also invert polarity.
-- 60% receive smooth nonlinear deformation. The deformation audit found positive Jacobian determinants across 2,000 checked samples, so the augmentation distorts without folding the coordinate field over itself.
-- 100% receive a random full-circle in-plane rotation and independent 0.5–1.5× scaling.
-- 40% receive occlusion: 4% of all images use an edge-to-edge blackout and 36% use a random polygon, usually cortex-anchored and capped at 50% of brain area.
+Three pose representations are compared: direct physical regression, physical AP/tilt bins with residuals, and QuickNII OUV regression. All receive the same tolerance-normalized physical-pose objective. The coarse-anatomy decoder is auxiliary training supervision only.
 
-The 5k/10k/15k/20k/30k sets are nested prefixes of one persisted 100k training manifest, so a model sees each generated training image only once within a run. AP uses uniform Latin-hypercube-like coverage across +500 to −4500 µm in every split. Training, validation, and sealed test data use separate seeded manifests. Validation drives architecture and checkpoint selection; the sealed test split is evaluated only after model selection.
+## Data and augmentation
 
-## Controlled model comparison
+`synthetic_atlas.py` renders exact oblique planes from `average_template_25.nrrd`; `annotation_25.nrrd` provides the known brain support. Training covers AP +500 to -4500 um and L-R/D-V tilt -35 to +35 degrees. Smart-mask preprocessing removes input canvas scale and in-plane roll as nuisance variables.
 
-At the 30k stage, validation MAE was:
+Synthetic views include the requested range of nonlinear warps, arbitrary rotation, 0.5-1.5x scale, missing tissue and edge-to-edge occlusion, contrast/gamma/offset and polarity changes, non-black backgrounds, local exposure, repeating tile/vignette artifacts, blur/noise, bright specks and blowouts, and artificial tears. Clean and mild views remain present. Fixed seeded manifests make every comparison reproducible and prevent validation/test images from entering training.
 
-| Architecture | AP MAE (µm) | L–R MAE (°) | D–V MAE (°) | Normalized score |
-|---|---:|---:|---:|---:|
-| Xception | 126.1 | 2.01 | 3.36 | 1.4825 |
-| EfficientNetV2-S | 106.5 | 1.75 | 2.73 | 1.2303 |
-| ConvNeXt-Tiny | **94.4** | 1.92 | **2.09** | **1.0560** |
+Registered Allen serial two-photon sections supply real-image training and validation. Dataset manifests, downloaded images, quality exclusions, atlas files, code, dependencies, and pretrained initialization are hashed in the run/export provenance. The published DeepSlice development set is excluded from selection. The final registered holdout is sealed and may be opened once, only after the candidate is frozen.
 
-ConvNeXt-Tiny beat EfficientNetV2-S by 0.174 normalized-score units in a paired 10,000-resample bootstrap; the 95% interval was −0.195 to −0.154, and every resample favored ConvNeXt. It was therefore selected for the 100k run.
+## Prespecified experiment
 
-## Final v6 evidence
+- Screen direct, binned, and OUV heads at 20,000 unique views with three training seeds.
+- Continue the two best heads to 100,000 views. The winning ConvNeXt-Tiny/head runs are reused rather than trained a second time during the backbone comparison.
+- Compare Xception, ConvNeXt-Tiny, and MaxViT-Tiny at 100,000 views with the selected head and the same three seeds.
+- Run 20,000-view renderer, consistency, and anatomy ablations against an explicit selected-model control.
+- Train the selected configuration on up to 1,000,000 unique views with validation-based early stopping.
+- Evaluate the registered test split after selection, then run the one-shot sealed DeepSlice comparison.
 
-The selected ConvNeXt-Tiny was trained on the complete 100k unique-image manifest with validation-based checkpoint selection and early-stopping monitoring. Validation continued improving through the scheduled run, so early stopping did not terminate before 100k. The sealed synthetic test result was:
+Model-family decisions use registered-validation animal-level hierarchical bootstraps with a prespecified tie order. The release gate requires AP MAE <=60 um, L-R MAE <=0.90 degrees, D-V MAE <=1.75 degrees, absolute AP bias <=25 um, AP 95th percentile <=150 um, worst 500-um AP-band MAE <=90 um, and worst product MAE <=90 um. It must also beat the published DeepSlice ensemble independently on AP, L-R, and D-V in the sealed paired animal-level comparison. No v7 performance is claimed until that gate passes.
 
-| Metric | AP (µm) | L–R (°) | D–V (°) |
-|---|---:|---:|---:|
-| MAE | 58.72 | 0.934 | 1.052 |
-| 95th-percentile absolute error | 149.77 | 2.557 | 2.849 |
+Passing metrics alone does not deploy a model. The runtime accepts AtlasPose only when the ONNX model, metadata, and sealed release evidence exactly match hashes pinned in application source. Promotion emits proposed hashes for human review and never edits those source pins.
 
-Auxiliary 180° orientation accuracy on the sealed synthetic test was 98.8%. CPU and DirectML ONNX export checks agreed within 0.0025 µm for AP and within 0.00003° for either tilt; orientation logits agreed within 0.000005.
+## Running v7
 
-The untouched real-histology benchmark contains 148 published DeepSlice sections inside the requested +500 to −4500 µm AP domain:
-
-| Predictor | AP MAE (µm) | L–R MAE (°) | D–V MAE (°) |
-|---|---:|---:|---:|
-| Published DeepSlice outputs | 174.26 | 1.463 | **1.268** |
-| AtlasPose v6 | 245.20 | 1.639 | 3.996 |
-| 80% DeepSlice + 20% AtlasPose | **140.61** | **1.20** | 1.63 |
-
-AtlasPose's corresponding 95th-percentile errors were 515.32 µm, 4.554°, and 9.858°. It is therefore an independent experimental predictor, not a demonstrated DeepSlice replacement. DeepSlice remains the GUI default. Weighted voting is opt-in and defaults to 20% AtlasPose because that weight minimized the benchmark aggregate; although the vote improved AP and L–R MAE in this set, its D–V MAE remained worse than DeepSlice alone. Every result still requires overlay review.
-
-## Running
-
-Use the existing CUDA environment:
+Use the CUDA environment and explicit workspace/data roots:
 
 ```powershell
-$env:PYTHONPATH = "$PWD\training"
-$env:ATLAS_POSE_WORKSPACE = "G:\AtlasPoseTraining"
-C:\Users\slic\miniconda3\envs\npixel_analysis\python.exe training\train_atlas_pose.py
+$env:PYTHONPATH = "$PWD"
+$env:ATLAS_POSE_V7_WORKSPACE = "J:\AtlasPoseTraining_v7"
+$env:ATLAS_POSE_REGISTERED = "J:\AtlasPoseTraining_v7\allen_registered_full_20260811"
+$env:ATLAS_POSE_ATLAS = "$PWD\data\Allen Brain Atlas 25um"
+C:\Users\slic\miniconda3\envs\npixel_analysis\python.exe training\train_atlas_pose_v7.py
 ```
 
-Generated manifests, checkpoints, predictions, and diagnostic plots stay in `G:\AtlasPoseTraining`. The selected deployable model is FP32 ONNX. Its approximately 112 MB binary is deliberately ignored by Git because it exceeds GitHub's normal 100 MB single-file limit. `models/AtlasPose/atlas_pose.json` records its SHA-256, output contract, and validation metadata. A local production build requires both files; `TrajectoryTracker.spec` bundles them into `models/AtlasPose` beside the executable.
+The selected FP32 ONNX binary is intentionally ignored by Git because it exceeds GitHub's normal 100 MB single-file limit. CPU and every available application accelerator provider must agree with PyTorch within the export tolerances before promotion.
 
-The bundled DeepSlice models have contradictory repository/PyPI license metadata; obtain maintainer clarification before closed-source redistribution. AtlasPose was trained from Allen atlas-derived synthetic sections. This project does not itself grant redistribution or commercial-use clearance for the Allen source data or derived weights, so review the applicable Allen Institute terms before shipping either.
+DeepSlice's repository and PyPI metadata disagree about redistribution terms; obtain maintainer clarification before closed-source redistribution. AtlasPose uses Allen-derived data and pretrained timm weights; this project does not itself grant redistribution rights for Allen data or derived weights.

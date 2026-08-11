@@ -7,6 +7,7 @@ import nrrd
 import pytest
 import torch
 
+from source.atlas_pose_runtime import atlas_pose_preprocessing_contract_sha256
 from training.synthetic_atlas import (
     AP_MAX_UM,
     AP_MIN_UM,
@@ -164,10 +165,7 @@ def test_local_model_binary_matches_metadata_and_onnx_contract():
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     with model.open("rb") as stream:
         assert hashlib.file_digest(stream, "sha256").hexdigest() == metadata["sha256"]
-    with (ROOT / "source" / "atlas_pose_runtime.py").open("rb") as stream:
-        assert hashlib.file_digest(stream, "sha256").hexdigest() == metadata[
-            "preprocessing_source_sha256"
-        ]
+    assert metadata["preprocessing_contract_sha256"] == atlas_pose_preprocessing_contract_sha256()
     session = ort.InferenceSession(str(model), providers=["CPUExecutionProvider"])
     assert session.get_inputs()[0].name == "images"
     assert session.get_inputs()[0].shape[1:] == [3, 299, 299]
@@ -184,5 +182,5 @@ def test_local_model_binary_matches_metadata_and_onnx_contract():
 
 def test_pyinstaller_bundles_model_and_metadata():
     spec = (ROOT / "TrajectoryTracker.spec").read_text(encoding="utf-8")
-    assert 'ATLAS_POSE_MODELS / "atlas_pose.onnx"' in spec
-    assert 'ATLAS_POSE_MODELS / "atlas_pose.json"' in spec
+    assert '"atlas_pose.onnx", "atlas_pose.json", "RELEASE_REPORT.json", "SEALED_metrics.json"' in spec
+    assert "verify_atlas_pose_model_bundle" in spec

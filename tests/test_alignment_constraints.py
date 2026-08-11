@@ -321,7 +321,14 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
                 "surface_rms_after_atlas_px": 0.0,
             }
             prepared.append(
-                (index, atlas_index, *shared_tilt, np.eye(3), np.eye(3), record, diagnostics)
+                (
+                    index,
+                    atlas_index,
+                    *shared_tilt,
+                    TRACKER.SliceAtlasTransform2D(np.eye(3), image.shape, image.shape),
+                    record,
+                    diagnostics,
+                )
             )
         window._apply_auto_alignment_results(
             prepared,
@@ -348,7 +355,7 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
         assert all(session.auto_alignment_global for session in window.sessions)
         assert all(session.auto_alignment_scope == "global" for session in window.sessions)
         assert all(session.auto_alignment_run_id == "global-test" for session in window.sessions)
-        peer_transform = window.sessions[1].slice_to_atlas_x
+        peer_transform = window.sessions[1].slice_atlas_transform
         raw_ouv = window.sessions[0].deepslice_raw_ensemble_ouv.copy()
         window._section_changed(4)
         assert window.sessions[0].auto_alignment_scope == "manual-refined"
@@ -358,11 +365,11 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
         assert window.sessions[0].auto_alignment_diagnostics["shared_tilt_lr_dv_deg"] is None
         assert window.sessions[0].deepslice_raw_ensemble_ouv == raw_ouv
         assert window.sessions[1].auto_alignment_scope == "global"
-        assert window.sessions[1].slice_to_atlas_x is peer_transform
+        assert window.sessions[1].slice_atlas_transform is peer_transform
 
         window._invalidate_auto_alignment_after_surface_edit(window.sessions[0])
-        assert window.sessions[0].slice_to_atlas_x is None
-        assert window.sessions[1].slice_to_atlas_x is peer_transform
+        assert window.sessions[0].slice_atlas_transform is None
+        assert window.sessions[1].slice_atlas_transform is peer_transform
         assert window.sessions[1].auto_alignment_diagnostics["alignment_run_stale"]
     finally:
         window.close()
@@ -421,7 +428,17 @@ def test_auto_alignment_runs_without_blocking_slice_browsing(tmp_path, monkeypat
                 "surface_scale": 1.0,
                 "surface_rms_after_atlas_px": 0.0,
             }
-            prepared = [(0, 3, 1.0, -1.0, np.eye(3), np.eye(3), prediction, diagnostics)]
+            prepared = [
+                (
+                    0,
+                    3,
+                    1.0,
+                    -1.0,
+                    TRACKER.SliceAtlasTransform2D(np.eye(3), image.shape, image.shape),
+                    prediction,
+                    diagnostics,
+                )
+            ]
             disagreement = {"slice_0000.png": {"ap_um": 0.0, "lr_deg": 0.0, "dv_deg": 0.0}}
             provenance = {
                 TRACKER.POSE_ENGINE_DEEPSLICE: {"version": "1.2.8", "model_sha256": {}}
@@ -523,12 +540,11 @@ def test_surface_edits_preserve_authoritative_crop_and_alignment_state(tmp_path,
         assert captured["image_jobs"][0][5] is None
         assert not window.auto_alignment_busy
 
-        transform = object()
+        transform = TRACKER.SliceAtlasTransform2D(np.eye(3), image.shape, image.shape)
         session.brain_brush_strokes = [(False, [(20.0, 16.0)])]
         session.brain_outline_points = outline.copy()
         session.brain_brush_selection_mask = mask
-        session.slice_to_atlas_x = transform
-        session.atlas_to_slice_x = transform
+        session.slice_atlas_transform = transform
         session.auto_alignment_engine = "DeepSlice"
 
         def fail_segmentation(*_args):
@@ -541,7 +557,7 @@ def test_surface_edits_preserve_authoritative_crop_and_alignment_state(tmp_path,
         assert session.brain_brush_strokes == [(False, [(20.0, 16.0)])]
         assert session.brain_outline_points == outline
         assert session.brain_brush_selection_mask is mask
-        assert session.slice_to_atlas_x is transform
+        assert session.slice_atlas_transform is transform
         assert session.auto_alignment_engine == "DeepSlice"
     finally:
         window.close()

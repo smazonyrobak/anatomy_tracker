@@ -42,6 +42,12 @@ from atlas_pose_runtime import (
     run_atlas_pose_onnx,
     tilts_from_plane_normal,
 )
+from diffeomorphic_registration_runtime import (
+    DiffeomorphicRegistrationRejected,
+    run_diffeomorphic_registration,
+    verify_diffeomorphic_model_bundle,
+)
+from nonlinear_registration import NonlinearWarpAttestation, SliceAtlasTransform2D
 
 
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
@@ -77,6 +83,9 @@ POSE_ENGINE_WEIGHTED = "Weighted vote"
 POSE_ENGINES = (POSE_ENGINE_DEEPSLICE, POSE_ENGINE_OWN_CNN, POSE_ENGINE_WEIGHTED)
 DEFAULT_OWN_CNN_WEIGHT = 0.20
 OWN_CNN_MODEL_PATH = RESOURCE_DIR / "models" / "AtlasPose" / "atlas_pose.onnx"
+NONLINEAR_MODEL_PATH = (
+    RESOURCE_DIR / "models" / "DiffeomorphicRegistration" / "diffeomorphic.onnx"
+)
 MIND_CANONICAL_SIZE = (171, 120)
 MIND_AP_PRIOR_WEIGHT = 0.001
 MIND_TILT_PRIOR_WEIGHT = 0.0005
@@ -564,7 +573,7 @@ def prepare_and_run_pose_predictions(
                     "onnxruntime_version",
                     "gpu_fallback_reason",
                     "preprocessing_version",
-                    "preprocessing_source_sha256",
+                    "preprocessing_contract_sha256",
                 )
             }
         if cancel_event.is_set():
@@ -771,6 +780,106 @@ def write_anatomy_sidecars(data_folder: Path, channels: pd.DataFrame, units: pd.
     ]
     write_csv_atomic(channels[channel_columns], anatomy_dir / "channel_brain_regions.csv")
     write_csv_atomic(units[unit_columns], anatomy_dir / "unit_brain_region_assignments.csv")
+
+
+def verify_staged_mapping_outputs(
+    staging_root: Path,
+    channel_rows: int,
+    unit_rows: int,
+    probe_name: str,
+) -> dict[Path, str]:
+    channels = pd.read_csv(staging_root / "channels.csv")
+    units = pd.read_csv(staging_root / "units.csv")
+    channel_sidecar = pd.read_csv(staging_root / "anatomy" / "channel_brain_regions.csv")
+    unit_sidecar = pd.read_csv(staging_root / "anatomy" / "unit_brain_region_assignments.csv")
+    if len(channels) != channel_rows or len(channel_sidecar) != channel_rows:
+        raise RuntimeError("Staged channel mapping row count changed")
+    if len(units) != unit_rows or len(unit_sidecar) != unit_rows:
+        raise RuntimeError("Staged unit mapping row count changed")
+    try:
+        pd.testing.assert_frame_equal(
+            channel_sidecar.reset_index(drop=True),
+            channels[channel_sidecar.columns].reset_index(drop=True),
+            check_dtype=False,
+        )
+        pd.testing.assert_frame_equal(
+            unit_sidecar.reset_index(drop=True),
+            units[unit_sidecar.columns].reset_index(drop=True),
+            check_dtype=False,
+        )
+    except AssertionError as exc:
+        raise RuntimeError("Staged anatomy sidecars do not match their primary CSVs") from exc
+    for table, label in ((channels, "channels"), (units, "units")):
+        missing = [name for name in ANATOMY_MAPPING_COLUMNS if name not in table.columns]
+        if missing:
+            raise RuntimeError(f"Staged {label} mapping is missing columns: {', '.join(missing)}")
+        canonical_channel_keys(table, units=label == "units")
+
+    manifest_path = staging_root / "anatomy" / f"proprietary_trajectory_manifest_{probe_name}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("probe_name") != probe_name or not isinstance(manifest.get("slices"), list):
+        raise RuntimeError("Staged trajectory manifest does not describe this mapping")
+    anatomy_root = (staging_root / "anatomy").resolve()
+    for slice_record in manifest["slices"]:
+        transform_record = slice_record.get("slice_atlas_transform")
+        if not transform_record or not transform_record.get("nonlinear"):
+            continue
+        sidecar = transform_record.get("sidecar")
+        if not sidecar:
+            raise RuntimeError("Staged nonlinear transform has no sidecar reference")
+        sidecar_path = (anatomy_root / sidecar["relative_path"]).resolve()
+        sidecar_path.relative_to(anatomy_root)
+        if file_sha256(sidecar_path) != sidecar["sha256"]:
+            raise RuntimeError("Staged nonlinear transform sidecar checksum failed")
+        restored = SliceAtlasTransform2D.load_npz(sidecar_path)
+        restored.check_invariants()
+
+    files = sorted(path for path in staging_root.rglob("*") if path.is_file())
+    return {path.relative_to(staging_root): file_sha256(path) for path in files}
+
+
+def promote_staged_mapping_outputs(
+    staging_root: Path,
+    data_folder: Path,
+    backup_dir: Path,
+    staged_hashes: dict[Path, str],
+    replace_file=os.replace,
+) -> None:
+    originals: dict[Path, Path | None] = {}
+    for relative_path in staged_hashes:
+        destination = data_folder / relative_path
+        if destination.exists():
+            backup = backup_dir / "replaced" / relative_path
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(destination, backup)
+            if file_sha256(backup) != file_sha256(destination):
+                raise RuntimeError(f"Could not verify rollback backup for {relative_path}")
+            originals[relative_path] = backup
+        else:
+            originals[relative_path] = None
+
+    promoted: list[Path] = []
+    try:
+        for relative_path, expected_sha256 in staged_hashes.items():
+            source = staging_root / relative_path
+            destination = data_folder / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            promoted.append(relative_path)
+            replace_file(source, destination)
+            if file_sha256(destination) != expected_sha256:
+                raise RuntimeError(f"Promoted mapping checksum failed for {relative_path}")
+    except Exception:
+        for relative_path in reversed(promoted):
+            destination = data_folder / relative_path
+            backup = originals[relative_path]
+            if backup is None:
+                if destination.exists():
+                    destination.unlink()
+            else:
+                shutil.copy2(backup, destination)
+                if file_sha256(destination) != file_sha256(backup):
+                    raise RuntimeError(f"Rollback checksum failed for {relative_path}")
+        raise
 
 
 def as_gray(image: np.ndarray) -> np.ndarray:
@@ -1610,7 +1719,13 @@ def solve_pose_alignment(
             outline_snapshot[session_index],
             atlas_mask,
         )
-        inverse = np.linalg.inv(matrix)
+        filename = Path(str(records_by_session[session_index]["Filenames"])).name
+        affine_transform = SliceAtlasTransform2D(
+            matrix,
+            prepared_inputs[filename]["image"].shape,
+            atlas_mask.shape,
+        )
+        affine_transform.check_invariants()
         diagnostics = {
             "raw_model_ap_index": float(raw_atlas_index),
             "raw_model_pose_ap_um_lr_deg_dv_deg": list(
@@ -1652,8 +1767,7 @@ def solve_pose_alignment(
                 atlas_index,
                 float(tilt_ml),
                 float(tilt_dv),
-                matrix,
-                inverse,
+                affine_transform,
                 records_by_session[session_index],
                 diagnostics,
             )
@@ -1674,6 +1788,9 @@ def prepare_run_and_solve_alignment(
     global_alignment: bool,
     engine: str,
     own_cnn_weight: float,
+    nonlinear_refinement: bool,
+    nonlinear_skip_reason: str | None,
+    nonlinear_model_path: str,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
 ) -> tuple[str, dict, dict[str, dict[str, float]], dict, list[tuple], tuple[float, float] | None]:
@@ -1707,9 +1824,120 @@ def prepare_run_and_solve_alignment(
         progress_messages=progress_messages,
     )
     runtime_info["alignment_solver_seconds"] = float(time.perf_counter() - solver_started)
+    nonlinear_started = time.perf_counter()
+    completed = []
+    for sequence, (
+        session_index,
+        atlas_index,
+        tilt_ml,
+        tilt_dv,
+        affine_transform,
+        prediction,
+        diagnostics,
+    ) in enumerate(prepared, start=1):
+        if cancel_event.is_set():
+            raise InterruptedError
+        transform = affine_transform
+        nonlinear_diagnostics = {
+            "requested": bool(nonlinear_refinement),
+            "status": "not-run",
+            "reason": nonlinear_skip_reason,
+        }
+        if nonlinear_refinement:
+            progress_messages.put(
+                (
+                    90 + round(9 * (sequence - 1) / max(len(prepared), 1)),
+                    f"Refining internal anatomy {sequence} / {len(prepared)}...",
+                )
+            )
+            filename = Path(str(prediction["Filenames"])).name
+            display_image = prepared_inputs[filename]["image"]
+            display_mask = prepared_inputs[filename]["brain_mask"].astype(np.uint8)
+            fixed_atlas = coronal_oblique_slice(
+                atlas_volume,
+                atlas_index,
+                tilt_ml,
+                tilt_dv,
+                order=1,
+            )
+            fixed_mask = coronal_oblique_slice(
+                annotation_volume,
+                atlas_index,
+                tilt_ml,
+                tilt_dv,
+                order=0,
+            ) > 0
+            moving_affine = affine_transform.render_display_image_in_atlas(display_image)
+            moving_mask = (
+                affine_transform.render_display_image_in_atlas(
+                    display_mask,
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                > 0
+            )
+            try:
+                warp, accepted_diagnostics = run_diffeomorphic_registration(
+                    fixed_atlas,
+                    moving_affine,
+                    fixed_mask,
+                    moving_mask,
+                    nonlinear_model_path,
+                    pixel_spacing_um=VOXEL_UM,
+                )
+            except DiffeomorphicRegistrationRejected as exc:
+                nonlinear_diagnostics = {
+                    "requested": True,
+                    "status": "rejected",
+                    "reason": "; ".join(exc.failures),
+                    "runtime": exc.diagnostics,
+                }
+            else:
+                attestation = NonlinearWarpAttestation(
+                    fixed_mask,
+                    moving_mask,
+                    accepted_diagnostics["model_sha256"],
+                    accepted_diagnostics["manifest_sha256"],
+                    VOXEL_UM,
+                )
+                transform = SliceAtlasTransform2D(
+                    affine_transform.display_to_affine_atlas_h,
+                    affine_transform.display_shape,
+                    affine_transform.atlas_shape,
+                    warp,
+                    attestation,
+                )
+                transform.check_invariants()
+                nonlinear_diagnostics = {
+                    "requested": True,
+                    "status": "accepted",
+                    "reason": None,
+                    "runtime": accepted_diagnostics,
+                }
+        diagnostics["nonlinear_refinement"] = nonlinear_diagnostics
+        completed.append(
+            (
+                session_index,
+                atlas_index,
+                tilt_ml,
+                tilt_dv,
+                transform,
+                prediction,
+                diagnostics,
+            )
+        )
+        if nonlinear_refinement:
+            progress_messages.put(
+                (
+                    90 + round(9 * sequence / max(len(prepared), 1)),
+                    f"Validated anatomical refinement {sequence} / {len(prepared)}",
+                )
+            )
+    prepared = completed
+    runtime_info["nonlinear_refinement_seconds"] = float(time.perf_counter() - nonlinear_started)
     runtime_info["total_alignment_seconds"] = float(time.perf_counter() - alignment_started)
     for *_, diagnostics in prepared:
         diagnostics["alignment_solver_seconds"] = runtime_info["alignment_solver_seconds"]
+        diagnostics["nonlinear_refinement_seconds"] = runtime_info["nonlinear_refinement_seconds"]
         diagnostics["total_alignment_seconds"] = runtime_info["total_alignment_seconds"]
     if cancel_event.is_set():
         raise InterruptedError
@@ -1889,15 +2117,6 @@ def plane_label_paths(corners: np.ndarray, text: str) -> list[np.ndarray]:
 
 
 @dataclass
-class AffineCoordinate:
-    matrix: np.ndarray
-    row: int
-
-    def __call__(self, x: np.ndarray | float, y: np.ndarray | float) -> np.ndarray | float:
-        return self.matrix[self.row, 0] * x + self.matrix[self.row, 1] * y + self.matrix[self.row, 2]
-
-
-@dataclass
 class ProbeTrace:
     atlas_points: list[tuple[float, float]] = field(default_factory=list)
     slice_points: list[tuple[float, float]] = field(default_factory=list)
@@ -1934,7 +2153,6 @@ class SliceSession:
     probe_traces: dict[str, ProbeTrace] = field(default_factory=dict)
     point_history: list[str] = field(default_factory=list)
     auto_alignment_score: float | None = None
-    auto_alignment_affine: list[list[float]] | None = None
     auto_alignment_global: bool = False
     auto_alignment_extent: str | None = None
     auto_alignment_method: str | None = None
@@ -1948,10 +2166,61 @@ class SliceSession:
     deepslice_model_hashes: dict[str, str] | None = None
     deepslice_ensemble_disagreement: dict[str, float] | None = None
     transformed_overlay: np.ndarray | None = None
-    slice_to_atlas_x: Rbf | AffineCoordinate | None = None
-    slice_to_atlas_y: Rbf | AffineCoordinate | None = None
-    atlas_to_slice_x: Rbf | AffineCoordinate | None = None
-    atlas_to_slice_y: Rbf | AffineCoordinate | None = None
+    slice_atlas_transform: SliceAtlasTransform2D | None = None
+    slice_to_atlas_x: Rbf | None = None
+    slice_to_atlas_y: Rbf | None = None
+    atlas_to_slice_x: Rbf | None = None
+    atlas_to_slice_y: Rbf | None = None
+
+
+def map_session_display_to_atlas(session: SliceSession, points_xy: np.ndarray) -> np.ndarray:
+    points = np.asarray(points_xy, dtype=np.float64).reshape(-1, 2)
+    if session.slice_atlas_transform is not None:
+        return session.slice_atlas_transform.map_display_to_atlas(points)
+    if session.slice_to_atlas_x is None or session.slice_to_atlas_y is None:
+        raise ValueError("Slice-to-atlas transform is unavailable")
+    return np.column_stack(
+        (
+            session.slice_to_atlas_x(points[:, 0], points[:, 1]),
+            session.slice_to_atlas_y(points[:, 0], points[:, 1]),
+        )
+    )
+
+
+def map_session_atlas_to_display(session: SliceSession, points_xy: np.ndarray) -> np.ndarray:
+    points = np.asarray(points_xy, dtype=np.float64).reshape(-1, 2)
+    if session.slice_atlas_transform is not None:
+        return session.slice_atlas_transform.map_atlas_to_display(points)
+    if session.atlas_to_slice_x is None or session.atlas_to_slice_y is None:
+        raise ValueError("Atlas-to-slice transform is unavailable")
+    return np.column_stack(
+        (
+            session.atlas_to_slice_x(points[:, 0], points[:, 1]),
+            session.atlas_to_slice_y(points[:, 0], points[:, 1]),
+        )
+    )
+
+
+def render_session_slice_in_atlas(
+    session: SliceSession,
+    display_image: np.ndarray,
+    atlas_shape: tuple[int, int],
+) -> np.ndarray:
+    if session.slice_atlas_transform is not None:
+        if session.slice_atlas_transform.atlas_shape != tuple(atlas_shape):
+            raise ValueError("Stored slice transform does not match the active atlas canvas")
+        return session.slice_atlas_transform.render_display_image_in_atlas(display_image)
+    if session.atlas_to_slice_x is None or session.atlas_to_slice_y is None:
+        raise ValueError("Atlas-to-slice transform is unavailable")
+    yy, xx = np.mgrid[: atlas_shape[0], : atlas_shape[1]].astype(np.float32)
+    return cv2.remap(
+        display_image,
+        session.atlas_to_slice_x(xx, yy).astype(np.float32),
+        session.atlas_to_slice_y(xx, yy).astype(np.float32),
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
 
 
 class ImagePanel(QtWidgets.QWidget):
@@ -2771,6 +3040,29 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.auto_align_all_btn.setEnabled(False)
         automatic_layout.addWidget(self.auto_align_btn, 5, 0, 1, 2)
         automatic_layout.addWidget(self.auto_align_all_btn, 5, 2, 1, 2)
+        try:
+            verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
+            self._nonlinear_bundle_error = None
+        except Exception as exc:
+            self._nonlinear_bundle_error = str(exc)
+        self.nonlinear_refinement = QtWidgets.QCheckBox("Refine internal anatomy nonlinearly")
+        self.nonlinear_refinement.setChecked(self._nonlinear_bundle_error is None)
+        self.nonlinear_refinement.setEnabled(self._nonlinear_bundle_error is None)
+        self.nonlinear_refinement.setToolTip(
+            "After pose and affine scale are frozen, deform only local anatomy with the promoted validated model. "
+            "A rejected result keeps the affine alignment unchanged."
+        )
+        self.nonlinear_model_status = QtWidgets.QLabel(
+            "Promoted nonlinear model verified"
+            if self._nonlinear_bundle_error is None
+            else "No source-approved nonlinear release is available; automatic alignment remains affine-only."
+        )
+        self.nonlinear_model_status.setStyleSheet("color:#9fb4c8;")
+        self.nonlinear_model_status.setWordWrap(True)
+        if self._nonlinear_bundle_error is not None:
+            self.nonlinear_model_status.setToolTip(self._nonlinear_bundle_error)
+        automatic_layout.addWidget(self.nonlinear_refinement, 6, 0, 1, 2)
+        automatic_layout.addWidget(self.nonlinear_model_status, 6, 2, 1, 2)
         self.limit_auto_align_ap = QtWidgets.QCheckBox("Limit AP search")
         self.limit_auto_align_ap.setToolTip(
             "Evaluate atlas candidates only inside this stereotaxic AP interval. This is a genuine bounded "
@@ -2786,23 +3078,23 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             control.setEnabled(False)
         self.auto_align_ap_min.setPrefix("From ")
         self.auto_align_ap_max.setPrefix("To ")
-        automatic_layout.addWidget(self.limit_auto_align_ap, 6, 0)
-        automatic_layout.addWidget(self.auto_align_ap_min, 6, 1)
-        automatic_layout.addWidget(self.auto_align_ap_max, 6, 2)
+        automatic_layout.addWidget(self.limit_auto_align_ap, 7, 0)
+        automatic_layout.addWidget(self.auto_align_ap_min, 7, 1)
+        automatic_layout.addWidget(self.auto_align_ap_max, 7, 2)
         order_label = QtWidgets.QLabel(
             "Optional AP-order constraint: drag slices into known anterior → posterior order and check only those "
             "whose relative order is known. Leave all unchecked to apply no order constraint."
         )
         order_label.setWordWrap(True)
         order_label.setStyleSheet("color:#9fb4c8;")
-        automatic_layout.addWidget(order_label, 7, 0, 1, 4)
+        automatic_layout.addWidget(order_label, 8, 0, 1, 4)
         self.auto_slice_order = QtWidgets.QListWidget()
         self.auto_slice_order.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.auto_slice_order.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
         self.auto_slice_order.setDefaultDropAction(QtCore.Qt.DropAction.MoveAction)
         self.auto_slice_order.setMinimumHeight(76)
         self.auto_slice_order.setMaximumHeight(112)
-        automatic_layout.addWidget(self.auto_slice_order, 8, 0, 1, 3)
+        automatic_layout.addWidget(self.auto_slice_order, 9, 0, 1, 3)
         order_buttons = QtWidgets.QWidget()
         order_buttons_layout = QtWidgets.QVBoxLayout(order_buttons)
         order_buttons_layout.setContentsMargins(0, 0, 0, 0)
@@ -2810,16 +3102,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.auto_order_down_btn = QtWidgets.QPushButton("Move later")
         order_buttons_layout.addWidget(self.auto_order_up_btn)
         order_buttons_layout.addWidget(self.auto_order_down_btn)
-        automatic_layout.addWidget(order_buttons, 8, 3)
+        automatic_layout.addWidget(order_buttons, 9, 3)
         self.alignment_summary = QtWidgets.QLabel("Auto-align: not run")
         self.alignment_summary.setToolTip(
             "Selected-model pose, component disagreement and atlas-refinement diagnostics; REVIEW is a guardrail"
         )
         self.alignment_summary.setWordWrap(True)
-        automatic_layout.addWidget(self.alignment_summary, 9, 0, 1, 4)
+        automatic_layout.addWidget(self.alignment_summary, 10, 0, 1, 4)
         for column in range(4):
             automatic_layout.setColumnStretch(column, 1)
-        automatic_layout.setRowStretch(10, 1)
+        automatic_layout.setRowStretch(11, 1)
         self.alignment_tabs.addTab(automatic_tab, "Automatic alignment")
 
         self.probe_type = QtWidgets.QComboBox()
@@ -3127,7 +3419,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         affected_sessions = [
             session
             for session in self.sessions
-            if session.slice_to_atlas_x is not None
+            if session.slice_atlas_transform is not None
+            or session.slice_to_atlas_x is not None
             or any(trace.volume_points for trace in session.probe_traces.values())
         ]
         if atlas_changed and affected_sessions:
@@ -3281,7 +3574,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_atlas()
         self._refresh_3d()
         if session is not None and manually_overridden:
-            self.status.setText("Atlas tilt adjusted manually; the refinement was recorded with its model provenance.")
+            self.status.setText(
+                "Atlas tilt adjusted manually; any nonlinear map was invalidated and the affine alignment was retained."
+            )
 
     def _index_to_um(self, index: int) -> int:
         axis = plane_axis(self.plane_box.currentText())
@@ -3368,7 +3663,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_atlas()
         self._refresh_3d()
         if session is not None and manually_overridden:
-            self.status.setText("Atlas position adjusted manually; the refinement was recorded with its model provenance.")
+            self.status.setText(
+                "Atlas position adjusted manually; any nonlinear map was invalidated and the affine alignment was retained."
+            )
 
     def _axis_um_changed(self, value_um: int) -> None:
         self._section_changed(self._um_to_index(value_um))
@@ -3548,7 +3845,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.flip_vertical,
         )
         self.slice_panel.set_base(session.rotated)
-        if session.atlas_to_slice_x is not None:
+        if session.slice_atlas_transform is not None or session.atlas_to_slice_x is not None:
             self._refresh_transformed_overlay(session)
             self._refresh_atlas()
         self.status.setText("Brightness curve updated; alignment coordinates unchanged.")
@@ -3572,7 +3869,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             and session.flip_vertical == bool(flip_vertical)
         ):
             return
-        had_transform = session.slice_to_atlas_x is not None and session.atlas_to_slice_x is not None and session.transformed_overlay is not None
+        had_transform = (
+            session.slice_atlas_transform is not None
+            or (session.slice_to_atlas_x is not None and session.atlas_to_slice_x is not None)
+        )
         if session.auto_alignment_engine is not None:
             self._mark_alignment_run_stale(session, "contributor slice geometry changed")
         if session.brain_brush_selection_mask is not None and session.raw_display is not None:
@@ -3633,7 +3933,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 self._probe_point_signal(session, point) for point in trace.slice_points
             ]
         self.slice_panel.set_base(session.rotated)
-        if not clear_transform and session.atlas_to_slice_x is not None:
+        if not clear_transform and (
+            session.slice_atlas_transform is not None or session.atlas_to_slice_x is not None
+        ):
             self._refresh_transformed_overlay(session)
         self._refresh_atlas()
         self._refresh_points()
@@ -3645,7 +3947,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _clear_auto_alignment_metadata(self, session: SliceSession) -> None:
         session.auto_alignment_score = None
-        session.auto_alignment_affine = None
         session.auto_alignment_global = False
         session.auto_alignment_extent = None
         session.auto_alignment_method = None
@@ -3661,6 +3962,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _clear_slice_transform(self, session: SliceSession) -> None:
         session.transformed_overlay = None
+        session.slice_atlas_transform = None
         session.slice_to_atlas_x = None
         session.slice_to_atlas_y = None
         session.atlas_to_slice_x = None
@@ -3692,6 +3994,24 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "tilt_lr_deg": float(session.atlas_tilt_ml_deg),
             "tilt_dv_deg": float(session.atlas_tilt_dv_deg),
         }
+        if (
+            session.slice_atlas_transform is not None
+            and session.slice_atlas_transform.nonlinear is not None
+        ):
+            transform = session.slice_atlas_transform
+            session.slice_atlas_transform = SliceAtlasTransform2D(
+                transform.display_to_affine_atlas_h,
+                transform.display_shape,
+                transform.atlas_shape,
+            )
+            diagnostics["nonlinear_refinement"] = {
+                "requested": True,
+                "status": "invalidated",
+                "reason": "Atlas pose was edited after nonlinear refinement; affine alignment retained",
+            }
+            session.transformed_overlay = None
+            self._recompute_probe_points_from_slice_points(session)
+            self._refresh_transformed_overlay(session)
         session.auto_alignment_diagnostics = diagnostics
 
     def _mark_alignment_run_stale(self, session: SliceSession, reason: str) -> None:
@@ -3756,7 +4076,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_points()
 
     def _invalidate_transform_after_landmark_edit(self, session: SliceSession) -> None:
-        if session.slice_to_atlas_x is None and session.atlas_to_slice_x is None and session.transformed_overlay is None:
+        if (
+            session.slice_atlas_transform is None
+            and session.slice_to_atlas_x is None
+            and session.atlas_to_slice_x is None
+            and session.transformed_overlay is None
+        ):
             return
         self._mark_alignment_run_stale(session, "contributor transform landmarks changed")
         self._clear_slice_transform(session)
@@ -3792,17 +4117,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 "Select the probe whose trajectory point you are adding.",
             )
             return
-        if session.slice_to_atlas_x is None or session.atlas_to_slice_x is None:
+        if session.slice_atlas_transform is None and (
+            session.slice_to_atlas_x is None or session.atlas_to_slice_x is None
+        ):
             QtWidgets.QMessageBox.warning(self, "Transform missing", "Transform the current slice before adding probe points.")
             return
         slice_display_point: tuple[float, float] | None = None
         if atlas_point is None and slice_raw_point is not None:
             slice_display_point = self._slice_raw_to_display_points(session, [slice_raw_point])[0]
-            sx, sy = slice_display_point
-            atlas_point = (float(session.slice_to_atlas_x(sx, sy)), float(session.slice_to_atlas_y(sx, sy)))
+            atlas_point = tuple(
+                map_session_display_to_atlas(session, np.asarray([slice_display_point]))[0]
+            )
         if slice_raw_point is None and atlas_point is not None:
-            ax, ay = atlas_point
-            slice_display_point = (float(session.atlas_to_slice_x(ax, ay)), float(session.atlas_to_slice_y(ax, ay)))
+            slice_display_point = tuple(
+                map_session_atlas_to_display(session, np.asarray([atlas_point]))[0]
+            )
             slice_raw_point = self._slice_display_to_raw_point(session, slice_display_point)
         if atlas_point is None or slice_raw_point is None:
             return
@@ -4339,10 +4668,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             constraint_text = f" | AP search shift {search_shift:.0f} um" if search_shift >= 0.5 else ""
             scale_text = f" | surface scale {float(diagnostics.get('surface_scale', 1.0)):.3f}x"
             reasons = alignment_review_reasons(disagreement, diagnostics)
+            nonlinear = diagnostics.get("nonlinear_refinement", {})
+            nonlinear_status = nonlinear.get("status", "not-run")
+            nonlinear_text = {
+                "accepted": " | nonlinear accepted",
+                "rejected": " | nonlinear rejected; affine retained",
+                "invalidated": " | nonlinear invalidated; affine retained",
+                "not-run": " | affine-only",
+            }.get(nonlinear_status, f" | nonlinear {nonlinear_status}")
+            if nonlinear_status == "rejected" and nonlinear.get("reason"):
+                reasons.append(str(nonlinear["reason"]))
             review_text = f" — REVIEW: {', '.join(reasons)}" if reasons else ""
             self.alignment_summary.setText(
                 f"{session.auto_alignment_engine} {scope}: AP {ap_um:+d} um | L-R {session.atlas_tilt_ml_deg:+.1f}° | "
-                f"D-V {session.atlas_tilt_dv_deg:+.1f}°{scale_text}{constraint_text}{disagreement_text}{review_text}"
+                f"D-V {session.atlas_tilt_dv_deg:+.1f}°{scale_text}{constraint_text}{disagreement_text}"
+                f"{nonlinear_text}{review_text}"
             )
         else:
             self.alignment_summary.setText("Auto-align: not run")
@@ -4545,6 +4885,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _set_auto_constraint_controls_enabled(self, enabled: bool) -> None:
         self.pose_engine.setEnabled(enabled)
         self.own_cnn_weight.setEnabled(enabled and self.pose_engine.currentText() == POSE_ENGINE_WEIGHTED)
+        self.nonlinear_refinement.setEnabled(enabled and self._nonlinear_bundle_error is None)
         self.limit_auto_align_ap.setEnabled(enabled)
         self.auto_align_ap_min.setEnabled(enabled and self.limit_auto_align_ap.isChecked())
         self.auto_align_ap_max.setEnabled(enabled and self.limit_auto_align_ap.isChecked())
@@ -4609,6 +4950,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             order_snapshot = []
         engine = self.pose_engine.currentText()
         own_cnn_weight = self.own_cnn_weight.value() / 100.0
+        nonlinear_refinement = self.nonlinear_refinement.isChecked()
+        if nonlinear_refinement:
+            verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
+        nonlinear_skip_reason = None
+        if not nonlinear_refinement:
+            nonlinear_skip_reason = (
+                "No source-approved nonlinear release is available; affine alignment remains active"
+                if self._nonlinear_bundle_error is not None
+                else "Nonlinear refinement was disabled by the user"
+            )
         if engine in (POSE_ENGINE_OWN_CNN, POSE_ENGINE_WEIGHTED) and (
             not OWN_CNN_MODEL_PATH.is_file() or not OWN_CNN_MODEL_PATH.with_suffix(".json").is_file()
         ):
@@ -4657,6 +5008,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 tuple(session.atlas_landmarks),
                 tuple(session.slice_landmarks),
                 selection_digest,
+                id(session.slice_atlas_transform),
                 id(session.slice_to_atlas_x),
                 id(session.atlas_to_slice_x),
             )
@@ -4725,7 +5077,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._set_auto_constraint_controls_enabled(False)
         self._refresh_point_counts()
         scope = f"{len(session_indices)} outlined slices" if global_alignment else self.sessions[session_indices[0]].name
-        self.status.setText(f"{engine} and atlas refinement are aligning {scope}; the interface remains available.")
+        refinement_text = " with nonlinear anatomical refinement" if nonlinear_refinement else " (affine-only)"
+        self.status.setText(
+            f"{engine} and atlas refinement are aligning {scope}{refinement_text}; the interface remains available."
+        )
         future = self.alignment_executor.submit(
             prepare_run_and_solve_alignment,
             image_jobs,
@@ -4740,6 +5095,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             global_alignment,
             engine,
             own_cnn_weight,
+            nonlinear_refinement,
+            nonlinear_skip_reason,
+            str(NONLINEAR_MODEL_PATH),
             messages,
             cancel_event,
         )
@@ -4840,12 +5198,27 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     ) -> None:
         if self.atlas_volume is None or self.annotation_volume is None:
             raise RuntimeError("Atlas was unloaded while automatic alignment was running")
+        if not prepared:
+            raise RuntimeError("Automatic alignment returned no slices")
         batch_names = [
             self.sessions[index].name
-            for index in prepared[0][7]["alignment_batch_session_indices"]
+            for index in prepared[0][6]["alignment_batch_session_indices"]
         ]
         order_names = [self.sessions[index].name for index in order_snapshot]
-        for _, _, _, _, _, _, _, diagnostics in prepared:
+        staged = []
+        for (
+            session_index,
+            atlas_index,
+            tilt_ml,
+            tilt_dv,
+            transform,
+            prediction,
+            original_diagnostics,
+        ) in prepared:
+            session = self.sessions[session_index]
+            diagnostics = dict(original_diagnostics)
+            if transform.atlas_shape != tuple(self.atlas_volume.shape[1:]):
+                raise RuntimeError(f"{session.name} transform does not match the loaded atlas canvas")
             diagnostics["raw_model_ap_um"] = float(diagnostics["raw_model_pose_ap_um_lr_deg_dv_deg"][0])
             diagnostics["refined_ap_um"] = float(
                 (diagnostics["refined_ap_index"] - float(self.bregma_voxel[0]))
@@ -4862,48 +5235,117 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             diagnostics["shared_tilt_lr_dv_deg"] = (
                 None if shared_tilt is None else [float(shared_tilt[0]), float(shared_tilt[1])]
             )
+            nonlinear_result = diagnostics.setdefault(
+                "nonlinear_refinement",
+                {
+                    "requested": False,
+                    "status": "not-run",
+                    "reason": "Nonlinear refinement was not requested",
+                },
+            )
+            diagnostics["component_provenance"] = component_provenance
+            diagnostics["model_disagreement"] = dict(
+                disagreement[Path(str(prediction["Filenames"])).name]
+            )
+            probe_updates = {}
+            for probe_name, trace in session.probe_traces.items():
+                display_points = self._slice_raw_to_display_points(session, trace.slice_points)
+                atlas_array = (
+                    transform.map_display_to_atlas(np.asarray(display_points, dtype=np.float64))
+                    if display_points
+                    else np.empty((0, 2), dtype=np.float64)
+                )
+                if not np.isfinite(atlas_array).all():
+                    raise RuntimeError(f"{session.name} produced non-finite probe coordinates")
+                atlas_points = [tuple(map(float, point)) for point in atlas_array]
+                volume_points = [
+                    point_to_volume(
+                        point,
+                        "coronal",
+                        atlas_index,
+                        self.atlas_volume.shape,
+                        tilt_ml,
+                        tilt_dv,
+                    ).tolist()
+                    for point in atlas_points
+                ]
+                probe_updates[probe_name] = (atlas_points, volume_points)
+            deepslice_component = prediction["component_predictions"].get(POSE_ENGINE_DEEPSLICE)
+            deepslice_provenance = component_provenance.get(POSE_ENGINE_DEEPSLICE)
+            staged.append(
+                (
+                    session,
+                    int(atlas_index),
+                    float(tilt_ml),
+                    float(tilt_dv),
+                    transform,
+                    diagnostics,
+                    probe_updates,
+                    float(diagnostics["surface_rms_after_atlas_px"]),
+                    nonlinear_result["status"] == "accepted",
+                    None
+                    if deepslice_component is None
+                    else list(deepslice_component["raw_ensemble_ouv_quicknii_ml_ap_dv"]),
+                    None if deepslice_provenance is None else deepslice_provenance.get("version"),
+                    None
+                    if deepslice_provenance is None
+                    else dict(deepslice_provenance.get("model_sha256", {})),
+                    None
+                    if deepslice_component is None
+                    else dict(deepslice_component["ensemble_disagreement"]),
+                )
+            )
 
-        for session_index, atlas_index, tilt_ml, tilt_dv, matrix, inverse, prediction, diagnostics in prepared:
-            session = self.sessions[session_index]
+        for (
+            session,
+            atlas_index,
+            tilt_ml,
+            tilt_dv,
+            transform,
+            diagnostics,
+            probe_updates,
+            alignment_score,
+            nonlinear_accepted,
+            deepslice_raw,
+            deepslice_version,
+            deepslice_hashes,
+            deepslice_disagreement,
+        ) in staged:
             session.atlas_plane = "coronal"
             session.atlas_index = atlas_index
             session.atlas_tilt_ml_deg = tilt_ml
             session.atlas_tilt_dv_deg = tilt_dv
-            session.slice_to_atlas_x = AffineCoordinate(matrix, 0)
-            session.slice_to_atlas_y = AffineCoordinate(matrix, 1)
-            session.atlas_to_slice_x = AffineCoordinate(inverse, 0)
-            session.atlas_to_slice_y = AffineCoordinate(inverse, 1)
-            session.auto_alignment_score = float(diagnostics["surface_rms_after_atlas_px"])
-            session.auto_alignment_affine = matrix.tolist()
+            session.slice_atlas_transform = transform
+            session.slice_to_atlas_x = None
+            session.slice_to_atlas_y = None
+            session.atlas_to_slice_x = None
+            session.atlas_to_slice_y = None
+            session.auto_alignment_score = alignment_score
             session.auto_alignment_global = global_alignment
             session.auto_alignment_extent = "internal_anatomy_and_trusted_surface"
             session.auto_alignment_method = (
                 f"{engine} initialization + bounded MIND atlas search + trusted-surface calibration"
                 + (" with exact shared-tilt integration" if global_alignment else "")
+                + (
+                    " + validated nonlinear anatomical refinement"
+                    if nonlinear_accepted
+                    else ""
+                )
             )
             session.auto_alignment_engine = engine
             session.auto_alignment_scope = "global" if global_alignment else "single"
             session.auto_alignment_run_id = diagnostics["alignment_run_id"]
             session.manual_refined_from_run_id = None
-            diagnostics["component_provenance"] = component_provenance
-            diagnostics["model_disagreement"] = dict(disagreement[Path(str(prediction["Filenames"])).name])
             session.auto_alignment_diagnostics = diagnostics
-            deepslice_component = prediction["component_predictions"].get(POSE_ENGINE_DEEPSLICE)
-            deepslice_provenance = component_provenance.get(POSE_ENGINE_DEEPSLICE)
-            session.deepslice_raw_ensemble_ouv = (
-                None
-                if deepslice_component is None
-                else list(deepslice_component["raw_ensemble_ouv_quicknii_ml_ap_dv"])
-            )
-            session.deepslice_version = None if deepslice_provenance is None else deepslice_provenance.get("version")
-            session.deepslice_model_hashes = (
-                None if deepslice_provenance is None else dict(deepslice_provenance["model_sha256"])
-            )
-            session.deepslice_ensemble_disagreement = (
-                None if deepslice_component is None else dict(deepslice_component["ensemble_disagreement"])
-            )
+            session.deepslice_raw_ensemble_ouv = deepslice_raw
+            session.deepslice_version = deepslice_version
+            session.deepslice_model_hashes = deepslice_hashes
+            session.deepslice_ensemble_disagreement = deepslice_disagreement
             session.transformed_overlay = None
-            self._recompute_probe_points_from_slice_points(session)
+            for probe_name, (atlas_points, volume_points) in probe_updates.items():
+                trace = session.probe_traces[probe_name]
+                trace.atlas_points = atlas_points
+                trace.volume_points = volume_points
 
         self._switch_slice(self.current_session_index)
         self._refresh_3d()
@@ -4915,6 +5357,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 self.sessions[session_index].auto_alignment_diagnostics,
             )
         ]
+        nonlinear_results = [
+            session.auto_alignment_diagnostics["nonlinear_refinement"]
+            for session, *_ in staged
+        ]
+        accepted_count = sum(result["status"] == "accepted" for result in nonlinear_results)
+        rejected = [result for result in nonlinear_results if result["status"] == "rejected"]
+        if accepted_count == len(nonlinear_results):
+            nonlinear_text = " Nonlinear anatomical refinement accepted."
+        elif rejected:
+            nonlinear_text = (
+                f" Nonlinear refinement rejected for {len(rejected)} slice(s); affine results were retained for review: "
+                f"{rejected[0]['reason']}."
+            )
+        else:
+            nonlinear_text = f" Nonlinear refinement not run: {nonlinear_results[0]['reason']}."
         if global_alignment:
             order_text = " + AP order" if len(order_snapshot) >= 2 else ""
             bounds_text = " + AP range" if ap_bounds is not None else ""
@@ -4927,7 +5384,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.status.setText(
                 f"{engine} + atlas search aligned {len(prepared)} outlined slices{bounds_text}{order_text}; exact shared L-R "
                 f"{shared_tilt[0]:+.1f}°, D-V {shared_tilt[1]:+.1f}° (independent spread before integration "
-                f"{pre_spread[0]:.1f}° / {pre_spread[1]:.1f}°; {runtime_info.get('device', 'unknown')}).{review_text}"
+                f"{pre_spread[0]:.1f}° / {pre_spread[1]:.1f}°; {runtime_info.get('device', 'unknown')})."
+                f"{review_text}{nonlinear_text}"
             )
         else:
             session = self.sessions[prepared[0][0]]
@@ -4941,7 +5399,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 f"{engine} + atlas search aligned {session.name}: AP {self._ap_index_to_um(session.atlas_index):+d} um, "
                 f"L-R {session.atlas_tilt_ml_deg:+.1f}°, D-V {session.atlas_tilt_dv_deg:+.1f}°, "
                 f"surface scale {diagnostics['surface_scale']:.3f}x{shift_text}; "
-                f"{runtime_info.get('device', 'unknown')}.{review_text}"
+                f"{runtime_info.get('device', 'unknown')}.{review_text}{nonlinear_text}"
             )
 
     def _rebuild_slice_transform(self, session: SliceSession) -> int | None:
@@ -4957,47 +5415,31 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.slice_to_atlas_y = Rbf(slice_points[:, 0], slice_points[:, 1], atlas_points[:, 1], function="thin_plate", smooth=0.0)
         session.atlas_to_slice_x = Rbf(atlas_points[:, 0], atlas_points[:, 1], slice_points[:, 0], function="thin_plate", smooth=0.0)
         session.atlas_to_slice_y = Rbf(atlas_points[:, 0], atlas_points[:, 1], slice_points[:, 1], function="thin_plate", smooth=0.0)
+        session.slice_atlas_transform = None
         self._clear_auto_alignment_metadata(session)
         self._refresh_transformed_overlay(session)
         return n
 
     def _refresh_transformed_overlay(self, session: SliceSession) -> None:
-        if session.rotated is None or self.current_atlas_image is None or session.atlas_to_slice_x is None:
+        if session.rotated is None or self.current_atlas_image is None:
             return
-        h, w = self.current_atlas_image.shape
-        if session.auto_alignment_affine is not None:
-            session.transformed_overlay = cv2.warpAffine(
-                session.rotated,
-                np.asarray(session.auto_alignment_affine, dtype=np.float64)[:2],
-                (w, h),
-                flags=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            )
+        if session.slice_atlas_transform is None and session.atlas_to_slice_x is None:
             return
-        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-        map_x = session.atlas_to_slice_x(xx, yy).astype(np.float32)
-        map_y = session.atlas_to_slice_y(xx, yy).astype(np.float32)
-        session.transformed_overlay = cv2.remap(
+        session.transformed_overlay = render_session_slice_in_atlas(
+            session,
             session.rotated,
-            map_x,
-            map_y,
-            interpolation=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
+            self.current_atlas_image.shape,
         )
 
     def _recompute_probe_points_from_slice_points(self, session: SliceSession) -> None:
-        if session.slice_to_atlas_x is None or session.slice_to_atlas_y is None:
+        if session.slice_atlas_transform is None and session.slice_to_atlas_x is None:
             return
         for trace in session.probe_traces.values():
+            display_points = self._slice_raw_to_display_points(session, trace.slice_points)
             trace.atlas_points = [
-                (
-                    float(session.slice_to_atlas_x(sx, sy)),
-                    float(session.slice_to_atlas_y(sx, sy)),
-                )
-                for sx, sy in self._slice_raw_to_display_points(session, trace.slice_points)
-            ]
+                tuple(point)
+                for point in map_session_display_to_atlas(session, np.asarray(display_points))
+            ] if display_points else []
         self._recompute_session_volume_points(session)
 
     def _recompute_session_volume_points(self, session: SliceSession) -> None:
@@ -5089,10 +5531,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 (index, session)
                 for index, session in enumerate(self.sessions)
                 if session.brain_outline_points
-                and session.slice_to_atlas_x is not None
-                and session.slice_to_atlas_y is not None
-                and session.atlas_to_slice_x is not None
-                and session.atlas_to_slice_y is not None
+                and (
+                    session.slice_atlas_transform is not None
+                    or (
+                        session.slice_to_atlas_x is not None
+                        and session.slice_to_atlas_y is not None
+                        and session.atlas_to_slice_x is not None
+                        and session.atlas_to_slice_y is not None
+                    )
+                )
             ]
             if self.show_all_slice_planes.isChecked():
                 visible_sessions = aligned_sessions
@@ -5369,22 +5816,37 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             )
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = data_folder / "anatomy" / "backups" / f"{timestamp}_{selected_probe}"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(channels_path, backup_dir / "channels.csv")
-        shutil.copy2(units_path, backup_dir / "units.csv")
-        write_csv_atomic(channels, channels_path)
-        write_csv_atomic(units, units_path)
-        write_anatomy_sidecars(data_folder, channels, units)
-        self._write_manifest(
-            data_folder,
-            selected_probe,
-            str(endpoint_reference),
-            marked_endpoint,
-            y0_contact,
-            surface_direction,
-        )
+        staging_root = Path(tempfile.mkdtemp(prefix=".trajectory_mapping_", dir=data_folder))
+        try:
+            write_csv_atomic(channels, staging_root / "channels.csv")
+            write_csv_atomic(units, staging_root / "units.csv")
+            write_anatomy_sidecars(staging_root, channels, units)
+            self._write_manifest(
+                staging_root,
+                selected_probe,
+                str(endpoint_reference),
+                marked_endpoint,
+                y0_contact,
+                surface_direction,
+            )
+            staged_hashes = verify_staged_mapping_outputs(
+                staging_root,
+                len(channels),
+                len(units),
+                selected_probe,
+            )
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            backup_dir = data_folder / "anatomy" / "backups" / f"{timestamp}_{selected_probe}"
+            promote_staged_mapping_outputs(
+                staging_root,
+                data_folder,
+                backup_dir,
+                staged_hashes,
+            )
+        finally:
+            if staging_root.parent.resolve() != data_folder.resolve():
+                raise RuntimeError("Refusing to remove a mapping stage outside the data folder")
+            shutil.rmtree(staging_root, ignore_errors=True)
         mapped_channels = channels.loc[selected, "structure_acronym"].fillna("").astype(str).str.len().gt(0).sum()
         mapped_units = units.loc[selected_units, "structure_acronym"].fillna("").astype(str).str.len().gt(0).sum()
         self.status.setText(
@@ -5417,6 +5879,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             anatomy_dir / "channel_brain_regions.csv",
             anatomy_dir / "unit_brain_region_assignments.csv",
             *sorted(anatomy_dir.glob("proprietary_trajectory_manifest_*.json")),
+            *sorted((anatomy_dir / "slice_atlas_transforms").glob("*.npz")),
         ]
         sidecars = [path for path in sidecars if path.exists()]
         summary = "\n".join(f"{path.name}: {', '.join(cols)}" for path, _, cols in tables)
@@ -5465,6 +5928,43 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
         def output_trace(session: SliceSession) -> ProbeTrace:
             return self._probe_trace(session, probe_name) or ProbeTrace()
+
+        nonlinear_sidecars = {}
+        for session_index, session in enumerate(self.sessions):
+            transform = session.slice_atlas_transform
+            if transform is None or transform.nonlinear is None:
+                continue
+            sidecar_dir = anatomy_dir / "slice_atlas_transforms"
+            sidecar_dir.mkdir(exist_ok=True)
+            identity = hashlib.sha256(
+                f"{session_index}|{session.path}|{session.auto_alignment_run_id}".encode("utf-8")
+            ).hexdigest()[:16]
+            sidecar_path = sidecar_dir / f"slice_atlas_transform_{identity}.npz"
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{sidecar_path.stem}_",
+                suffix=".npz",
+                dir=sidecar_dir,
+            )
+            os.close(descriptor)
+            temporary_path = Path(temporary_name)
+            try:
+                transform.save_npz(temporary_path)
+                restored = SliceAtlasTransform2D.load_npz(temporary_path)
+                restored.check_invariants()
+                os.replace(temporary_path, sidecar_path)
+            finally:
+                if temporary_path.exists():
+                    temporary_path.unlink()
+            attestation = transform.nonlinear_attestation
+            assert attestation is not None
+            nonlinear_sidecars[id(session)] = {
+                "relative_path": sidecar_path.relative_to(anatomy_dir).as_posix(),
+                "sha256": file_sha256(sidecar_path),
+                "coordinate_convention": transform.coordinate_convention,
+                "model_sha256": attestation.model_sha256,
+                "manifest_sha256": attestation.manifest_sha256,
+                "pixel_spacing_um": attestation.pixel_spacing_um,
+            }
 
         alignment_runs = {}
         for session in self.sessions:
@@ -5557,7 +6057,23 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     "brain_brush_strokes_raw": session.brain_brush_strokes,
                     "auto_alignment_method": session.auto_alignment_method,
                     "auto_alignment_score": session.auto_alignment_score,
-                    "auto_alignment_affine": session.auto_alignment_affine,
+                    "auto_alignment_affine": (
+                        None
+                        if session.slice_atlas_transform is None
+                        else session.slice_atlas_transform.display_to_affine_atlas_h.tolist()
+                    ),
+                    "slice_atlas_transform": {
+                        "coordinate_convention": session.slice_atlas_transform.coordinate_convention,
+                        "nonlinear": session.slice_atlas_transform.nonlinear is not None,
+                        "nonlinear_status": (
+                            (session.auto_alignment_diagnostics or {})
+                            .get("nonlinear_refinement", {})
+                            .get("status", "not-run")
+                        ),
+                        "sidecar": nonlinear_sidecars.get(id(session)),
+                    }
+                    if session.slice_atlas_transform is not None
+                    else None,
                     "auto_alignment_global": session.auto_alignment_global,
                     "auto_alignment_extent": session.auto_alignment_extent,
                     "auto_alignment_engine": session.auto_alignment_engine,

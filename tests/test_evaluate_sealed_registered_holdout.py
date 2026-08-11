@@ -5,13 +5,18 @@ import pandas as pd
 import pytest
 
 from training.evaluate_sealed_registered_holdout import (
+    RELEASE_GATE_THRESHOLDS,
     SEALED_SPLIT,
     brain_masked_plane_distance,
+    evaluation_domains,
     ordered_experiment_groups,
     paired_animal_bootstrap,
     require_complete_sealed_images,
+    release_quality_gate,
+    sealed_release_report,
     validate_sealed_boundary,
 )
+from training.train_atlas_pose_v7 import FINAL_GATE_THRESHOLDS as TRAINING_FINAL_GATE_THRESHOLDS
 
 
 def record(section_id, experiment_id, specimen_id, section_number, split=SEALED_SPLIT):
@@ -23,6 +28,7 @@ def record(section_id, experiment_id, specimen_id, section_number, split=SEALED_
         "split": split,
         "quicknii_ouv": [0.0, 312.0, 320.0, 456.0, 0.0, 0.0, 0.0, 0.0, -320.0],
         "relative_path": f"images/{split}/{experiment_id}/{section_id}.jpg",
+        "in_training_ap_domain": True,
     }
 
 
@@ -89,6 +95,87 @@ def test_animal_bootstrap_weights_animals_not_their_section_counts():
     assert result["animal_count"] == 2
     assert result["paired_section_count"] == 4
     assert result["delta_candidate_minus_reference"] == pytest.approx(4.0)
+
+
+def test_primary_sealed_metrics_exclude_out_of_training_domain_sections():
+    table = pd.DataFrame(
+        {
+            "section_image_id": [1, 2, 3],
+            "in_training_ap_domain": [True, False, True],
+        }
+    )
+    primary, excluded = evaluation_domains(table)
+    assert primary["section_image_id"].tolist() == [1, 3]
+    assert excluded["section_image_id"].tolist() == [2]
+
+
+def test_sealed_release_report_requires_quality_and_deepslice_superiority():
+    assert RELEASE_GATE_THRESHOLDS == TRAINING_FINAL_GATE_THRESHOLDS
+    rows = pd.DataFrame(
+        [
+            {
+                "method": "atlas_pose",
+                "specimen_id": specimen,
+                "section_image_id": specimen,
+                "product": str(5 + 3 * (specimen - 1)),
+                "in_training_ap_domain": True,
+                "gt_ap_um": -1000.0 - 500.0 * specimen,
+                "pred_ap_um": -980.0 - 500.0 * specimen,
+                "gt_lr_deg": 1.0,
+                "pred_lr_deg": 1.2,
+                "gt_dv_deg": -2.0,
+                "pred_dv_deg": -1.7,
+            }
+            for specimen in (1, 2)
+        ]
+    )
+    quality = release_quality_gate(rows)
+    assert quality["all_gates_passed"] is True
+    assert quality["thresholds"] == RELEASE_GATE_THRESHOLDS
+    comparisons = [
+        {
+            "candidate": "atlas_pose",
+            "reference": "deepslice_mens_ai_ci",
+            "metric": f"absolute_error_{axis}",
+            "delta_candidate_minus_reference": -1.0,
+            "probability_candidate_lower_error": 0.99,
+        }
+        for axis in ("ap_um", "lr_deg", "dv_deg")
+    ]
+    release = sealed_release_report(
+        rows,
+        comparisons,
+        "a" * 64,
+        "b" * 64,
+        "c" * 64,
+        {"trainer.py": "d" * 64},
+        {"atlas": {"annotation": "e" * 64}},
+        {"sections_sha256": "f" * 64},
+        "1" * 64,
+        "2" * 64,
+        "now",
+    )
+    assert release["release_approved"] is True
+    assert release["promotion_ready"] is True
+    assert release["release_report_version"] == 2
+    assert len(release["release_integrity_sha256"]) == 64
+
+    comparisons[0]["probability_candidate_lower_error"] = 0.80
+    rejected = sealed_release_report(
+        rows,
+        comparisons,
+        "a" * 64,
+        "b" * 64,
+        "c" * 64,
+        {"trainer.py": "d" * 64},
+        {"atlas": {"annotation": "e" * 64}},
+        {"sections_sha256": "f" * 64},
+        "1" * 64,
+        "2" * 64,
+        "now",
+    )
+    assert rejected["release_approved"] is False
+    assert rejected["promotion_ready"] is False
 
 
 def test_sealed_evaluator_is_not_imported_by_training_or_model_selection_code():

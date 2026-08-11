@@ -3,19 +3,38 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from functools import lru_cache
 from pathlib import Path
 
-import cv2
 import numpy as np
 
-from nonlinear_registration import NonlinearWarp2D
+from nonlinear_registration import (
+    COORDINATE_CONVENTION,
+    MODEL_CONTRACT_VERSION,
+    MODEL_INPUT_NAMES,
+    MODEL_OUTPUT_NAMES,
+    MODEL_PIXEL_SPACING_UM,
+    MODEL_SHAPE,
+    MODEL_SPATIAL_CONTRACT,
+    NonlinearWarp2D,
+    REJECTION_PROBABILITY_THRESHOLD,
+    RUNTIME_GATE_CONTRACT,
+    nonlinear_acceptance_failures,
+)
 
 
-MODEL_SHAPE = (320, 464)
-INPUT_NAMES = ("fixed", "moving", "fixed_mask", "moving_mask")
-OUTPUT_NAMES = ("atlas_to_affine", "affine_to_atlas", "velocity", "rejection_logit")
+INPUT_NAMES = MODEL_INPUT_NAMES
+OUTPUT_NAMES = MODEL_OUTPUT_NAMES
+# Deliberately unset until one locked real-histology candidate passes release review.
+APPROVED_NONLINEAR_RELEASE: dict[str, str] | None = None
+APPROVED_RELEASE_KEYS = (
+    "model_sha256",
+    "manifest_sha256",
+    "real_histology_gate_report_sha256",
+    "real_histology_evaluation_manifest_sha256",
+)
 
 
 class DiffeomorphicRegistrationRejected(RuntimeError):
@@ -35,6 +54,72 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _verified_model_manifest(model_path: Path) -> tuple[str, str, dict]:
+    manifest_path = model_path.with_suffix(".manifest.json")
+    if not manifest_path.is_file():
+        raise RuntimeError(f"Validated nonlinear model manifest is unavailable: {manifest_path}")
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    model_sha256 = _file_sha256(model_path)
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    expected = {
+        "format_version": MODEL_CONTRACT_VERSION,
+        "model_sha256": model_sha256,
+        "model_shape": list(MODEL_SHAPE),
+        "pixel_spacing_um": MODEL_PIXEL_SPACING_UM,
+        "spatial_contract": MODEL_SPATIAL_CONTRACT,
+        "coordinate_convention": COORDINATE_CONVENTION,
+        "input_names": list(INPUT_NAMES),
+        "output_names": list(OUTPUT_NAMES),
+        "runtime_gates": RUNTIME_GATE_CONTRACT,
+        "onnx_gate_passed": True,
+        "real_histology_gate_passed": True,
+        "real_histology_benchmark_role": "locked_promotion_gate",
+        "promotion_ready": True,
+    }
+    mismatched = [key for key, value in expected.items() if manifest.get(key) != value]
+    if mismatched:
+        raise RuntimeError("Nonlinear model manifest contract failed: " + ", ".join(mismatched))
+    for key in (
+        "real_histology_gate_report_sha256",
+        "real_histology_evaluation_manifest_sha256",
+    ):
+        value = manifest.get(key)
+        if not isinstance(value, str) or len(value) != 64 or any(
+            character not in "0123456789abcdef" for character in value.lower()
+        ):
+            raise RuntimeError(f"Nonlinear model manifest has no valid {key}")
+    if APPROVED_NONLINEAR_RELEASE is None:
+        raise RuntimeError("No nonlinear model release is source-approved yet")
+    actual_release = {
+        "model_sha256": model_sha256,
+        "manifest_sha256": manifest_sha256,
+        "real_histology_gate_report_sha256": manifest["real_histology_gate_report_sha256"].lower(),
+        "real_histology_evaluation_manifest_sha256": manifest[
+            "real_histology_evaluation_manifest_sha256"
+        ].lower(),
+    }
+    release_mismatches = [
+        key
+        for key in APPROVED_RELEASE_KEYS
+        if APPROVED_NONLINEAR_RELEASE.get(key) != actual_release[key]
+    ]
+    if release_mismatches:
+        raise RuntimeError(
+            "Nonlinear model does not match the source-approved release: "
+            + ", ".join(release_mismatches)
+        )
+    return model_sha256, manifest_sha256, manifest
+
+
+def verify_diffeomorphic_model_bundle(model_path: str | Path) -> tuple[str, str, dict]:
+    """Verify that a promoted model and manifest satisfy the runtime contract."""
+    path = Path(model_path)
+    if not path.is_file():
+        raise RuntimeError(f"Diffeomorphic ONNX model is unavailable: {path}")
+    return _verified_model_manifest(path)
+
+
 def _gray_unit(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
     gray = np.squeeze(np.asarray(image))
     if gray.ndim == 3:
@@ -45,7 +130,7 @@ def _gray_unit(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
     if not np.isfinite(gray).all():
         raise ValueError("Registration image contains non-finite values")
     values = gray[mask]
-    low, high = np.percentile(values, (0.5, 99.5))
+    low, high = np.quantile(values, (0.005, 0.995))
     normalized = np.zeros_like(gray, dtype=np.float32)
     if high > low:
         normalized = np.clip((gray - low) / (high - low), 0.0, 1.0).astype(np.float32)
@@ -87,46 +172,6 @@ def _native_map(
     mapped[..., 1] += source_top - model_top
     result[source_top : source_top + height, source_left : source_left + width] = mapped
     return result
-
-
-def _global_affine_max(velocity: np.ndarray) -> float:
-    height, width = velocity.shape[-2:]
-    y, x = np.meshgrid(
-        np.linspace(-1.0, 1.0, height),
-        np.linspace(-1.0, 1.0, width),
-        indexing="ij",
-    )
-    basis = np.stack((np.ones_like(x), x, y)).reshape(3, -1)
-    flat = velocity[0].reshape(2, -1).astype(np.float64)
-    coefficients = flat @ basis.T / np.square(basis).sum(axis=1)[None]
-    return float(np.abs((coefficients @ basis).reshape(2, height, width)).max())
-
-
-def _cycle_error(first_map: np.ndarray, second_map: np.ndarray) -> np.ndarray:
-    height, width = first_map.shape[:2]
-    valid = (
-        (first_map[..., 0] >= 0.0)
-        & (first_map[..., 0] <= width - 1.0)
-        & (first_map[..., 1] >= 0.0)
-        & (first_map[..., 1] <= height - 1.0)
-    )
-    composed = np.stack(
-        [
-            cv2.remap(
-                second_map[..., axis],
-                first_map[..., 0],
-                first_map[..., 1],
-                cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_REPLICATE,
-            )
-            for axis in range(2)
-        ],
-        axis=-1,
-    )
-    yy, xx = np.mgrid[:height, :width].astype(np.float32)
-    error = np.linalg.norm(composed - np.stack((xx, yy), axis=-1), axis=2)
-    error[~valid] = np.nan
-    return error
 
 
 def _validate_session_contract(session) -> None:
@@ -176,17 +221,14 @@ def run_diffeomorphic_registration(
     moving_mask: np.ndarray,
     model_path: str | Path | None = None,
     *,
+    pixel_spacing_um: float | None = None,
     session=None,
-    rejection_threshold: float = 0.5,
-    minimum_jacobian: float = 0.0,
-    maximum_inverse_p95_px: float = 1.0,
-    maximum_residual_affine_px: float = 0.05,
-    maximum_displacement_p95_px: float = 8.0,
-    maximum_displacement_px: float = 12.0,
 ) -> tuple[NonlinearWarp2D, dict]:
-    """Infer and gate one residual warp without mutating pose or affine state."""
-    fixed_mask = np.asarray(fixed_mask, dtype=bool)
-    moving_mask = np.asarray(moving_mask, dtype=bool)
+    """Infer a residual warp at 25 um/pixel without resizing the native canvas."""
+    if pixel_spacing_um is None or not np.isclose(float(pixel_spacing_um), MODEL_PIXEL_SPACING_UM):
+        raise ValueError("Diffeomorphic registration requires explicit 25 um one-to-one atlas pixels")
+    fixed_mask = np.asarray(fixed_mask) > 0.5
+    moving_mask = np.asarray(moving_mask) > 0.5
     if fixed_mask.ndim != 2 or fixed_mask.shape != moving_mask.shape or min(fixed_mask.shape) < 2:
         raise ValueError("Registration masks must share one H x W canvas")
     if not fixed_mask.any() or not moving_mask.any():
@@ -203,12 +245,12 @@ def run_diffeomorphic_registration(
         "moving_mask": _center_input(moving_mask.astype(np.float32), geometry)[None, None],
     }
 
-    model_sha256 = None
+    model_sha256 = manifest_sha256 = None
     if session is None:
         path = Path(model_path) if model_path is not None else None
         if path is None or not path.is_file():
             raise RuntimeError(f"Diffeomorphic ONNX model is unavailable: {path}")
-        model_sha256 = _file_sha256(path)
+        model_sha256, manifest_sha256, _ = _verified_model_manifest(path)
         session = _load_session(str(path.resolve()), path.stat().st_mtime_ns, False)
     else:
         _validate_session_contract(session)
@@ -238,26 +280,8 @@ def run_diffeomorphic_registration(
     atlas_to_affine = _native_map(atlas_to_affine_output, native_shape, geometry)
     affine_to_atlas = _native_map(affine_to_atlas_output, native_shape, geometry)
     warp = NonlinearWarp2D(atlas_to_affine, affine_to_atlas)
-    reverse_warp = NonlinearWarp2D(affine_to_atlas, atlas_to_affine)
-    forward_jacobian = warp.jacobian_determinant()
-    inverse_jacobian = reverse_warp.jacobian_determinant()
-    forward_cycle = _cycle_error(atlas_to_affine, affine_to_atlas)
-    inverse_cycle = _cycle_error(affine_to_atlas, atlas_to_affine)
-    cycle_values = np.concatenate((forward_cycle[fixed_mask], inverse_cycle[moving_mask]))
-    finite_cycle = cycle_values[np.isfinite(cycle_values)]
-    identity_y, identity_x = np.mgrid[: native_shape[0], : native_shape[1]].astype(np.float32)
-    identity = np.stack((identity_x, identity_y), axis=-1)
-    displacement_values = np.concatenate(
-        (
-            np.linalg.norm(atlas_to_affine - identity, axis=2)[fixed_mask],
-            np.linalg.norm(affine_to_atlas - identity, axis=2)[moving_mask],
-        )
-    )
+    warp_diagnostics = warp.diagnostics(fixed_mask, moving_mask)
     rejection_probability = float(1.0 / (1.0 + np.exp(-np.clip(rejection_values[0], -80.0, 80.0))))
-    inverse_p95 = float(np.percentile(finite_cycle, 95)) if len(finite_cycle) else float("inf")
-    displacement_p95 = float(np.percentile(displacement_values, 95))
-    displacement_max = float(displacement_values.max())
-    residual_affine_max = _global_affine_max(velocity)
     trusted_pixels = fixed_mask | moving_mask
     modeled = np.zeros(native_shape, dtype=bool)
     modeled[source_top : source_top + copied_height, source_left : source_left + copied_width] = True
@@ -266,39 +290,28 @@ def run_diffeomorphic_registration(
         "provider": session.get_providers()[0],
         "inference_seconds": inference_seconds,
         "model_sha256": model_sha256,
+        "manifest_sha256": manifest_sha256,
         "native_shape": native_shape,
         "model_shape": MODEL_SHAPE,
+        "pixel_spacing_um": MODEL_PIXEL_SPACING_UM,
+        "spatial_contract": MODEL_SPATIAL_CONTRACT,
         "source_offset_yx": (source_top, source_left),
         "model_offset_yx": (model_top, model_left),
         "copied_shape": (copied_height, copied_width),
         "modeled_trusted_fraction": modeled_trusted_fraction,
         "rejection_logit": float(rejection_values[0]),
         "rejection_probability": rejection_probability,
-        "minimum_forward_jacobian": float(forward_jacobian.min()),
-        "minimum_inverse_jacobian": float(inverse_jacobian.min()),
-        "fold_count": int((forward_jacobian <= minimum_jacobian).sum() + (inverse_jacobian <= minimum_jacobian).sum()),
-        "inverse_finite_fraction": float(np.isfinite(cycle_values).mean()),
-        "inverse_p95_px": inverse_p95,
-        "residual_affine_max_px": residual_affine_max,
-        "displacement_p95_px": displacement_p95,
-        "displacement_max_px": displacement_max,
+        **warp_diagnostics,
     }
     failures = []
     if modeled_trusted_fraction < 1.0:
         failures.append("trusted tissue lies outside the model field of view")
-    if rejection_probability >= rejection_threshold:
-        failures.append(f"model rejection probability {rejection_probability:.3f} exceeds {rejection_threshold:.3f}")
-    if diagnostics["fold_count"]:
-        failures.append(f"nonlinear maps contain {diagnostics['fold_count']} Jacobian failures")
-    if diagnostics["inverse_finite_fraction"] < 1.0 or inverse_p95 > maximum_inverse_p95_px:
-        failures.append(f"inverse-consistency p95 {inverse_p95:.3f} px exceeds {maximum_inverse_p95_px:.3f} px")
-    if residual_affine_max > maximum_residual_affine_px:
-        failures.append(f"residual global affine {residual_affine_max:.3f} px exceeds {maximum_residual_affine_px:.3f} px")
-    if displacement_p95 > maximum_displacement_p95_px or displacement_max > maximum_displacement_px:
+    if rejection_probability >= REJECTION_PROBABILITY_THRESHOLD:
         failures.append(
-            f"displacement p95/max {displacement_p95:.3f}/{displacement_max:.3f} px exceeds "
-            f"{maximum_displacement_p95_px:.3f}/{maximum_displacement_px:.3f} px"
+            f"model rejection probability {rejection_probability:.3f} exceeds "
+            f"{REJECTION_PROBABILITY_THRESHOLD:.3f}"
         )
+    failures.extend(nonlinear_acceptance_failures(warp_diagnostics))
     if failures:
         raise DiffeomorphicRegistrationRejected(failures, diagnostics)
     return warp, diagnostics

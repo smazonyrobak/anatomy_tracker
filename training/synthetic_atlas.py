@@ -242,6 +242,7 @@ def load_manifest(path: Path) -> dict[str, np.ndarray]:
 
 class SyntheticAtlas:
     def __init__(self, atlas_folder: Path, device: str = "cuda"):
+        self.atlas_folder = Path(atlas_folder).resolve()
         average = nrrd.read(str(atlas_folder / "average_template_25.nrrd"))[0]
         annotation = nrrd.read(str(atlas_folder / "annotation_25.nrrd"))[0]
         coarse_anatomy = _coarse_anatomy_volume(annotation, atlas_folder / "query.csv")

@@ -2,7 +2,7 @@
   "architecture": "convnext",
   "precision": "float32",
   "preprocessing_version": "smart-mask-scale-invariant-v1",
-  "preprocessing_source_sha256": "aa83d8351d039ffc5330ec651a0b21b3f51bbcc7ea392414a0b2ee5ab3bba6f9",
+  "preprocessing_contract_sha256": "1d09f801a569f66107162bf49fc4272a874f23dd25e98bb71e72764afa3e7f07",
   "input": [
     null,
     3,
@@ -16,8 +16,9 @@
   ],
   "auxiliary_output": "orientation_inverted_logit",
   "sha256": "5d3a3b3dbdfd4ac7b97a615a6a7d0b3ded54e82795970059ce83be67ac3a51f7",
+  "real_benchmark_role": "development_feedback_not_held_out",
   "real_benchmark_informed_final_iteration": true,
-  "real_benchmark_note": "The first v5 real-histology run was untouched. Its domain-gap result informed the v6 full-range AP stratification, realistic tilt mixture, and contrast-polarity augmentation.",
+  "real_benchmark_note": "The published DeepSlice set informed v6 augmentation and weighting decisions, so it is development evidence rather than an untouched release holdout.",
   "onnx_conversion_validation": {
     "CPUExecutionProvider": {
       "pose_mean_abs_difference": [

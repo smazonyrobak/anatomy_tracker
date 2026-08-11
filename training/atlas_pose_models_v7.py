@@ -9,7 +9,7 @@ from torch import nn
 
 
 BACKBONES = {
-    "convnextv2_tiny": "convnextv2_tiny.fcmae_ft_in22k_in1k",
+    "convnext_tiny": "convnext_tiny.fb_in22k_ft_in1k",
     "maxvit_tiny": "maxvit_tiny_rw_224.sw_in1k",
     "xception": "legacy_xception.tf_in1k",
 }
@@ -23,6 +23,10 @@ TILT_MAX_DEG = 35.0
 TILT_STEP_DEG = 1.0
 TILT_BIN_COUNT = 71
 ORIENTATION_LOSS_WEIGHT = 0.35
+FINAL_PHYSICAL_TILT_LOSS_WEIGHT = 0.15
+BINNED_AUXILIARY_LOSS_WEIGHT = 0.10
+OUV_AUXILIARY_LOSS_WEIGHT = 1.00
+PHYSICAL_POSE_LOSS_SCALE = (60.0, 2.0, 2.0)
 
 VOXEL_UM = 25.0
 BREGMA_AP_INDEX = 216.0
@@ -32,7 +36,6 @@ QUICKNII_OUV_CENTER = (0.0, 312.0, 320.0, 456.0, 0.0, 0.0, 0.0, 0.0, -320.0)
 QUICKNII_OUV_SCALE = (456.0, 256.0, 320.0, 456.0, 320.0, 320.0, 456.0, 224.0, 320.0)
 DIRECT_POSE_CENTER = (-2000.0, 0.0, 0.0)
 DIRECT_POSE_SCALE = (2500.0, 20.0, 20.0)
-DIRECT_POSE_LOSS_WEIGHTS = (1.0, 2.0, 2.0)
 
 
 def ap_bin_centers(dtype: torch.dtype = torch.float32) -> torch.Tensor:
@@ -90,11 +93,9 @@ def binned_axis_loss(
 ) -> torch.Tensor:
     target_index, target_residual = encode_binned_target(target, centers, step)
     selected_residual = torch.tanh(residual_logits.gather(1, target_index[:, None]).squeeze(1))
-    expected = decode_binned_prediction(logits, residual_logits, centers, step)
     return (
-        F.cross_entropy(logits, target_index)
+        F.cross_entropy(logits, target_index) / math.log(logits.shape[-1])
         + F.smooth_l1_loss(selected_residual, target_residual, beta=0.25)
-        + 0.25 * F.smooth_l1_loss((expected - target) / step, torch.zeros_like(target), beta=1.0)
     )
 
 
@@ -151,8 +152,10 @@ def quicknii_ouv_to_pose(ouv: torch.Tensor) -> torch.Tensor:
 
 
 class SpatialEncoder(nn.Module):
-    def __init__(self, architecture: str = "convnextv2_tiny", pretrained: bool = False):
+    def __init__(self, architecture: str = "convnext_tiny", pretrained: bool = False):
         super().__init__()
+        if architecture not in BACKBONES:
+            raise ValueError(f"Unknown AtlasPose backbone: {architecture}")
         self.backbone = timm.create_model(
             BACKBONES[architecture],
             pretrained=pretrained,
@@ -305,7 +308,7 @@ class CoarseAnatomyHead(nn.Module):
 class AtlasPoseV7(nn.Module):
     def __init__(
         self,
-        architecture: str = "convnextv2_tiny",
+        architecture: str = "convnext_tiny",
         pretrained: bool = False,
         pose_representation: str = "binned",
         anatomy_class_count: int = 9,
@@ -317,8 +320,10 @@ class AtlasPoseV7(nn.Module):
             self.pose_head = BinnedPoseHead(512)
         elif pose_representation == "direct":
             self.pose_head = DirectPoseHead(512)
-        else:
+        elif pose_representation == "ouv":
             self.pose_head = OUVPoseHead(512)
+        else:
+            raise ValueError(f"Unknown AtlasPose pose representation: {pose_representation}")
         self.orientation_head = nn.Linear(512, 1)
         self.anatomy_head = CoarseAnatomyHead(self.encoder.num_features, anatomy_class_count)
         self.register_buffer("input_mean", torch.tensor((0.485, 0.456, 0.406))[None, :, None, None])
@@ -356,7 +361,11 @@ class AtlasPoseV7(nn.Module):
         pose, _ = self.forward_with_orientation(image)
         return pose
 
-    def training_outputs(self, image: torch.Tensor) -> dict[str, torch.Tensor]:
+    def training_outputs(
+        self,
+        image: torch.Tensor,
+        include_anatomy: bool = True,
+    ) -> dict[str, torch.Tensor]:
         feature_map, pooled_features = self.encode(image)
         outputs = self.pose_head.components(pooled_features)
         image_frame_pose = outputs["pose"]
@@ -365,7 +374,8 @@ class AtlasPoseV7(nn.Module):
         outputs["pose"] = self.physical_pose(image_frame_pose, orientation_inverted_logit)
         outputs["orientation_inverted_logit"] = orientation_inverted_logit
         outputs["pooled_features"] = pooled_features
-        outputs["anatomy_logits"] = self.anatomy_head(feature_map, image.shape[-2:])
+        if include_anatomy:
+            outputs["anatomy_logits"] = self.anatomy_head(feature_map, image.shape[-2:])
         return outputs
 
 
@@ -380,11 +390,31 @@ class AtlasPoseV7Export(nn.Module):
 
 def binned_pose_loss(outputs: dict[str, torch.Tensor], target_pose: torch.Tensor) -> torch.Tensor:
     ap, lr, dv = target_pose.unbind(dim=-1)
-    return (
-        binned_axis_loss(outputs["ap_logits"], outputs["ap_residuals"], ap, ap_bin_centers(ap.dtype).to(ap.device), AP_STEP_UM)
-        + binned_axis_loss(outputs["lr_logits"], outputs["lr_residuals"], lr, tilt_bin_centers(lr.dtype).to(lr.device), TILT_STEP_DEG)
-        + binned_axis_loss(outputs["dv_logits"], outputs["dv_residuals"], dv, tilt_bin_centers(dv.dtype).to(dv.device), TILT_STEP_DEG)
-    )
+    return torch.stack(
+        (
+            binned_axis_loss(
+                outputs["ap_logits"],
+                outputs["ap_residuals"],
+                ap,
+                ap_bin_centers(ap.dtype).to(ap.device),
+                AP_STEP_UM,
+            ),
+            binned_axis_loss(
+                outputs["lr_logits"],
+                outputs["lr_residuals"],
+                lr,
+                tilt_bin_centers(lr.dtype).to(lr.device),
+                TILT_STEP_DEG,
+            ),
+            binned_axis_loss(
+                outputs["dv_logits"],
+                outputs["dv_residuals"],
+                dv,
+                tilt_bin_centers(dv.dtype).to(dv.device),
+                TILT_STEP_DEG,
+            ),
+        )
+    ).mean()
 
 
 def image_frame_pose_target(
@@ -405,37 +435,70 @@ def image_frame_pose_target(
     )
 
 
-def direct_pose_loss(normalized_prediction: torch.Tensor, physical_target: torch.Tensor) -> torch.Tensor:
-    center = physical_target.new_tensor(DIRECT_POSE_CENTER)
-    scale = physical_target.new_tensor(DIRECT_POSE_SCALE)
-    weights = physical_target.new_tensor(DIRECT_POSE_LOSS_WEIGHTS)
-    normalized_target = (physical_target - center) / scale
-    components = F.smooth_l1_loss(
-        normalized_prediction,
-        normalized_target,
-        beta=0.10,
-        reduction="none",
-    ).mean(dim=0)
-    return (components * weights).mean()
+def physical_pose_loss(image_frame_prediction: torch.Tensor, image_frame_target: torch.Tensor) -> torch.Tensor:
+    error = (image_frame_prediction - image_frame_target) / image_frame_target.new_tensor(
+        PHYSICAL_POSE_LOSS_SCALE
+    )
+    return F.smooth_l1_loss(error, torch.zeros_like(error), beta=1.0)
+
+
+def soft_physical_tilt(
+    image_frame_pose: torch.Tensor,
+    orientation_inverted_logit: torch.Tensor,
+) -> torch.Tensor:
+    """Differentiable expected physical tilt used only during training."""
+    orientation_sign = 1.0 - 2.0 * torch.sigmoid(orientation_inverted_logit)
+    return image_frame_pose[:, 1:] * orientation_sign[:, None]
+
+
+def physical_tilt_loss(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    error = (prediction - target) / target.new_tensor(PHYSICAL_POSE_LOSS_SCALE[1:])
+    return F.smooth_l1_loss(error, torch.zeros_like(error), beta=1.0)
 
 
 def atlas_pose_v7_loss(
     outputs: dict[str, torch.Tensor],
     physical_pose_target: torch.Tensor,
     orientation_inverted_target: torch.Tensor,
-) -> torch.Tensor:
+    return_components: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     frame_target = image_frame_pose_target(physical_pose_target, orientation_inverted_target)
+    frame_pose = physical_pose_loss(outputs["image_frame_pose"], frame_target)
+    final_tilt = physical_tilt_loss(
+        soft_physical_tilt(
+            outputs["image_frame_pose"],
+            outputs["orientation_inverted_logit"],
+        ),
+        physical_pose_target[:, 1:],
+    )
     if "ap_logits" in outputs:
-        pose_loss = binned_pose_loss(outputs, frame_target)
-    elif "normalized_pose" in outputs:
-        pose_loss = direct_pose_loss(outputs["normalized_pose"], frame_target)
+        auxiliary = binned_pose_loss(outputs, frame_target)
+        auxiliary_weight = BINNED_AUXILIARY_LOSS_WEIGHT
+    elif "ouv" in outputs:
+        auxiliary = ouv_pose_loss(outputs["ouv"], frame_target)
+        auxiliary_weight = OUV_AUXILIARY_LOSS_WEIGHT
     else:
-        pose_loss = ouv_pose_loss(outputs["ouv"], frame_target)
+        auxiliary = frame_pose.new_zeros(())
+        auxiliary_weight = 0.0
     orientation_loss = F.binary_cross_entropy_with_logits(
         outputs["orientation_inverted_logit"],
         orientation_inverted_target,
     )
-    return pose_loss + ORIENTATION_LOSS_WEIGHT * orientation_loss
+    weighted_auxiliary = auxiliary_weight * auxiliary
+    weighted_orientation = ORIENTATION_LOSS_WEIGHT * orientation_loss
+    weighted_final_tilt = FINAL_PHYSICAL_TILT_LOSS_WEIGHT * final_tilt
+    total = frame_pose + weighted_final_tilt + weighted_auxiliary + weighted_orientation
+    if return_components:
+        return total, {
+            "image_frame_pose": frame_pose,
+            "soft_physical_tilt": final_tilt,
+            "weighted_soft_physical_tilt": weighted_final_tilt,
+            "representation_auxiliary": auxiliary,
+            "weighted_representation_auxiliary": weighted_auxiliary,
+            "orientation": orientation_loss,
+            "weighted_orientation": weighted_orientation,
+        }
+    return total
 
 
 def ouv_pose_loss(ouv_prediction: torch.Tensor, target_pose: torch.Tensor) -> torch.Tensor:

@@ -7,7 +7,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "source"))
 
-from nonlinear_registration import NonlinearWarp2D, SliceAtlasTransform2D
+from nonlinear_registration import (
+    MAXIMUM_ABS_LOG_JACOBIAN,
+    NonlinearWarp2D,
+    NonlinearWarpAttestation,
+    SliceAtlasTransform2D,
+)
 
 
 def smooth_inverse_warp(shape=(80, 96), amplitude=2.0):
@@ -18,16 +23,23 @@ def smooth_inverse_warp(shape=(80, 96), amplitude=2.0):
     return NonlinearWarp2D(forward, inverse)
 
 
+def attestation(shape):
+    mask = np.ones(shape, bool)
+    return NonlinearWarpAttestation(mask, mask, "a" * 64, "b" * 64)
+
+
 def test_identity_preserves_display_image_points_and_diagnostics():
     shape = (32, 48)
-    transform = SliceAtlasTransform2D(np.eye(3), shape, shape, NonlinearWarp2D.identity(shape))
+    transform = SliceAtlasTransform2D(
+        np.eye(3), shape, shape, NonlinearWarp2D.identity(shape), attestation(shape)
+    )
     image = np.arange(np.prod(shape), dtype=np.uint16).reshape(shape)
     points = np.asarray([[0.0, 0.0], [8.25, 11.5], [47.0, 31.0]])
 
     assert np.array_equal(transform.render_display_image_in_atlas(image, cv2.INTER_NEAREST), image)
     assert np.allclose(transform.map_display_to_atlas(points), points)
     assert np.allclose(transform.map_atlas_to_display(points), points)
-    diagnostics = transform.check_invariants(maximum_inverse_p95_px=1e-6)
+    diagnostics = transform.check_invariants()
     assert diagnostics["coordinate_convention"].startswith("display_xy")
     assert diagnostics["minimum_jacobian"] == pytest.approx(1.0)
     assert diagnostics["fold_count"] == 0
@@ -76,8 +88,53 @@ def test_fold_is_reported_and_fails_invariants():
         np.eye(3), shape, shape, NonlinearWarp2D(folded, identity.affine_to_atlas_xy)
     )
 
-    assert transform.diagnostics()["fold_count"] == (shape[0] * shape[1])
+    assert transform.diagnostics()["fold_count"] == ((shape[0] - 1) * (shape[1] - 1))
     with pytest.raises(ValueError, match="Jacobian"):
+        transform.check_invariants()
+
+
+def test_small_inverse_only_fold_fails_even_when_it_is_below_the_cycle_p95_tail():
+    shape = (64, 80)
+    identity = NonlinearWarp2D.identity(shape)
+    inverse = identity.affine_to_atlas_xy.copy()
+    inverse[30:33, 39, 0] -= 4.0
+    transform = SliceAtlasTransform2D(
+        np.eye(3), shape, shape, NonlinearWarp2D(identity.atlas_to_affine_xy, inverse)
+    )
+    diagnostics = transform.diagnostics()
+
+    assert diagnostics["minimum_forward_jacobian"] == pytest.approx(1.0)
+    assert diagnostics["minimum_inverse_jacobian"] < 0.2
+    assert diagnostics["fold_count"] > 0
+    with pytest.raises(ValueError, match="Jacobian"):
+        transform.check_invariants()
+
+
+def test_one_cell_fold_is_not_smoothed_away_by_centered_differences():
+    shape = (64, 80)
+    identity = NonlinearWarp2D.identity(shape)
+    folded = identity.atlas_to_affine_xy.copy()
+    folded[30, 40, 0] = folded[30, 39, 0] - 0.5
+    transform = SliceAtlasTransform2D(
+        np.eye(3), shape, shape, NonlinearWarp2D(folded, identity.affine_to_atlas_xy)
+    )
+
+    assert transform.diagnostics()["minimum_forward_jacobian"] == pytest.approx(-0.5)
+    with pytest.raises(ValueError, match="Jacobian"):
+        transform.check_invariants()
+
+
+def test_local_inverse_failure_is_gated_by_maximum_not_only_p95():
+    shape = (64, 80)
+    identity = NonlinearWarp2D.identity(shape)
+    inverse = identity.affine_to_atlas_xy.copy()
+    inverse[30, 40, 0] += 3.0
+    transform = SliceAtlasTransform2D(
+        np.eye(3), shape, shape, NonlinearWarp2D(identity.atlas_to_affine_xy, inverse)
+    )
+
+    assert transform.diagnostics()["inverse_p95_px"] == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="maximum"):
         transform.check_invariants()
 
 
@@ -85,8 +142,11 @@ def test_fold_is_reported_and_fails_invariants():
 def test_npz_round_trip_is_exact_and_byte_deterministic(tmp_path, with_nonlinear):
     shape = (40, 56)
     homography = np.asarray([[1.02, -0.03, 5.0], [0.01, 0.98, 2.0], [0.0, 0.0, 1.0]]) * 7.0
-    nonlinear = smooth_inverse_warp(shape, 0.7) if with_nonlinear else None
-    transform = SliceAtlasTransform2D(homography, (44, 60), shape, nonlinear)
+    nonlinear = NonlinearWarp2D.identity(shape) if with_nonlinear else None
+    transform = SliceAtlasTransform2D(
+        homography, (44, 60), shape, nonlinear,
+        attestation(shape) if with_nonlinear else None,
+    )
     first = tmp_path / "first.npz"
     second = tmp_path / "second.npz"
     transform.save_npz(first)
@@ -100,3 +160,40 @@ def test_npz_round_trip_is_exact_and_byte_deterministic(tmp_path, with_nonlinear
     assert restored.atlas_shape == transform.atlas_shape
     assert np.allclose(restored.map_display_to_atlas(points), transform.map_display_to_atlas(points))
     assert (restored.nonlinear is None) == (transform.nonlinear is None)
+    if with_nonlinear:
+        assert restored.nonlinear_attestation.model_sha256 == "a" * 64
+
+
+def test_ungated_nonlinear_map_cannot_be_persisted(tmp_path):
+    shape = (32, 48)
+    transform = SliceAtlasTransform2D(np.eye(3), shape, shape, NonlinearWarp2D.identity(shape))
+    with pytest.raises(ValueError, match="attestation"):
+        transform.save_npz(tmp_path / "ungated.npz")
+
+
+def test_corrupted_persisted_map_is_rejected_on_load(tmp_path):
+    shape = (32, 48)
+    transform = SliceAtlasTransform2D(
+        np.eye(3), shape, shape, NonlinearWarp2D.identity(shape), attestation(shape)
+    )
+    original = tmp_path / "accepted.npz"
+    corrupted = tmp_path / "corrupted.npz"
+    transform.save_npz(original)
+    with np.load(original, allow_pickle=False) as archive:
+        values = {name: archive[name] for name in archive.files}
+    values["atlas_to_affine_xy"] = values["atlas_to_affine_xy"].copy()
+    values["atlas_to_affine_xy"][10, 12, 0] += 3.0
+    np.savez_compressed(corrupted, **values)
+    with pytest.raises(ValueError, match="attestation is corrupt"):
+        SliceAtlasTransform2D.load_npz(corrupted)
+
+
+def test_trusted_tissue_reports_a_hard_log_jacobian_maximum():
+    shape = (40, 80)
+    identity = NonlinearWarp2D.identity(shape)
+    expanded = identity.atlas_to_affine_xy.copy()
+    expanded[:, 40:, 0] += 5.0
+    diagnostics = NonlinearWarp2D(expanded, identity.affine_to_atlas_xy).diagnostics(
+        np.ones(shape, bool), np.ones(shape, bool)
+    )
+    assert diagnostics["maximum_abs_log_jacobian"] > MAXIMUM_ABS_LOG_JACOBIAN

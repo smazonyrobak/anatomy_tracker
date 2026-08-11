@@ -11,9 +11,13 @@ from training.diffeomorphic_registration_model import (
     jacobian_determinant,
     mind_loss,
     pixel_identity_grid,
+    preprocess_registration_tensor,
     remove_global_affine,
+    remove_tissue_affine,
+    soft_tissue_support,
     smoothness_loss,
     synthetic_flow_loss,
+    tissue_affine_component,
     topology_loss,
 )
 
@@ -32,11 +36,67 @@ def test_zero_initialized_model_is_exact_identity_with_expected_shapes():
     assert torch.equal(affine_to_atlas, identity)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA mixed precision is unavailable")
+def test_geometric_projection_stays_finite_in_cuda_mixed_precision():
+    model = DiffeomorphicRegistrationUNet(base_channels=4).cuda().eval()
+    image = torch.rand(1, 1, 320, 464, device="cuda")
+    mask = torch.ones_like(image)
+    with torch.autocast("cuda", dtype=torch.float16):
+        forward, inverse, velocity = model(image, image, mask, mask)
+
+    assert forward.dtype == inverse.dtype == velocity.dtype == torch.float32
+    assert torch.isfinite(forward).all()
+    assert torch.isfinite(inverse).all()
+    assert torch.isfinite(velocity).all()
+
+
 def test_affine_projection_removes_translation_scale_rotation_and_shear():
     identity = pixel_identity_grid(2, 40, 52)
     x, y = identity[:, 0], identity[:, 1]
     affine = torch.stack((3.0 + 0.1 * x - 0.2 * y, -4.0 + 0.3 * x + 0.07 * y), dim=1)
     assert remove_global_affine(affine).abs().max() < 2e-5
+
+
+def test_tissue_projection_catches_affine_hidden_by_the_padded_canvas_and_is_identity_outside():
+    identity = pixel_identity_grid(1, 80, 120)
+    x, y = identity[:, 0], identity[:, 1]
+    tissue = (((x - 60.0) / 24.0).square() + ((y - 40.0) / 18.0).square() < 1.0)[:, None].float()
+    raw = torch.stack((2.5 + 0.04 * x, -1.75 + 0.03 * y), dim=1) * tissue
+    support = soft_tissue_support(tissue, tissue)
+    projected = remove_tissue_affine(raw, support, tissue)
+    final_map = identity + projected
+
+    assert tissue_affine_component(final_map, tissue).abs().max() < 2e-4
+    assert torch.equal(projected * (1.0 - tissue), torch.zeros_like(projected))
+
+
+def test_training_preprocessing_is_masked_percentile_normalization():
+    image = torch.linspace(-2.0, 5.0, 80).reshape(1, 1, 8, 10)
+    mask = torch.zeros_like(image)
+    mask[:, :, 1:7, 2:9] = 1.0
+    processed = preprocess_registration_tensor(image, mask)
+    values = image[mask > 0.5]
+    low, high = torch.quantile(values, torch.tensor([0.005, 0.995]))
+    expected = ((image - low) / (high - low)).clamp(0.0, 1.0) * mask
+
+    assert torch.allclose(processed, expected)
+
+
+def test_fractional_trusted_masks_are_hard_thresholded_everywhere():
+    model = DiffeomorphicRegistrationUNet(base_channels=4).eval()
+    image = torch.rand(1, 1, 32, 48)
+    fractional = torch.zeros_like(image)
+    fractional[:, :, 4:-4, 6:-6] = 0.51
+    fractional[:, :, 0, 0] = 0.49
+    hard = (fractional > 0.5).float()
+    with torch.no_grad():
+        fractional_outputs = model(image, image, fractional, fractional)
+        hard_outputs = model(image, image, hard, hard)
+    assert all(torch.equal(left, right) for left, right in zip(fractional_outputs, hard_outputs))
+    assert torch.equal(
+        preprocess_registration_tensor(image, fractional),
+        preprocess_registration_tensor(image, hard),
+    )
 
 
 def test_smooth_analytic_exponential_has_positive_jacobian_and_accurate_inverse():

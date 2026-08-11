@@ -13,6 +13,8 @@ import numpy as np
 import requests
 from PIL import Image
 
+from source.registered_image_quality import build_registered_image_quality_manifest
+
 
 API_ROOT = "https://api.brain-map.org"
 PRODUCT_IDS = (5, 8)
@@ -543,7 +545,15 @@ def acquire(
     }
     _immutable_write(output / "provenance.json", json.dumps(provenance, indent=2, sort_keys=True).encode())
     downloads = [] if metadata_only else download_sections(section_records, output, get, workers)
-    return {**provenance, "downloaded_section_count": len(downloads), "output": str(output)}
+    quality = None if metadata_only else build_registered_image_quality_manifest(output)
+    return {
+        **provenance,
+        "downloaded_section_count": len(downloads),
+        "registered_image_quality_manifest_sha256": (
+            None if quality is None else quality["manifest_sha256"]
+        ),
+        "output": str(output),
+    }
 
 
 def main() -> None:
