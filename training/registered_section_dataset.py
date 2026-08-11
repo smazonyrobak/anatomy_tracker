@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import hashlib
 import json
 import os
@@ -270,6 +271,7 @@ class RegisteredSectionDataset(Dataset):
         include_anatomy: bool = True,
         cache_images: bool = False,
         cache_static: bool = False,
+        allowed_product_ids: Iterable[int] | None = None,
     ):
         self.root = Path(manifest_root)
         self.atlas_folder = Path(atlas_folder)
@@ -280,6 +282,11 @@ class RegisteredSectionDataset(Dataset):
         self.include_anatomy = bool(include_anatomy)
         self.cache_images = bool(cache_images)
         self.cache_static = bool(cache_static)
+        self.allowed_product_ids = (
+            None
+            if allowed_product_ids is None
+            else frozenset(int(product_id) for product_id in allowed_product_ids)
+        )
         self._worker_rngs = {}
         if split == SEALED_SPLIT:
             raise RuntimeError(
@@ -319,16 +326,39 @@ class RegisteredSectionDataset(Dataset):
         )
         assessed_splits = set(quality_manifest["assessed_splits"])
         sections = _read_jsonl(self.root / "sections.jsonl")
-        requested_records = [
+        candidate_records = [
             record
             for record in sections
             if (split is None or record["split"] == split)
             and record["split"] != SEALED_SPLIT
         ]
-        for record in requested_records:
+        for record in candidate_records:
             dataset = self.datasets[int(record["experiment_id"])]
             if dataset["split"] != record["split"] or int(dataset["specimen_id"]) != int(record["specimen_id"]):
                 raise ValueError("Section and experiment manifests disagree on specimen split")
+        if self.allowed_product_ids is not None:
+            unknown_experiments = sorted(
+                {
+                    int(record["experiment_id"])
+                    for record in candidate_records
+                    if not self.datasets[int(record["experiment_id"])].get("product_ids")
+                }
+            )
+            if unknown_experiments:
+                raise ValueError(
+                    "Explicit product filtering requires non-empty product_ids for candidate "
+                    f"experiments: {unknown_experiments}"
+                )
+            requested_records = [
+                record
+                for record in candidate_records
+                if set(
+                    int(product_id)
+                    for product_id in self.datasets[int(record["experiment_id"])]["product_ids"]
+                ).issubset(self.allowed_product_ids)
+            ]
+        else:
+            requested_records = candidate_records
         self.records = [
             record
             for record in requested_records

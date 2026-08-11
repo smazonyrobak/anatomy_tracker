@@ -18,6 +18,7 @@ from training.train_atlas_pose_v7 import (
     atlas_data_hashes,
     bootstrap_seed_group_comparison,
     checkpoint_selection_improved,
+    checkpoint_validation_key,
     cosine_learning_rate,
     evaluated_rows_sha256,
     ema_state,
@@ -34,6 +35,7 @@ from training.train_atlas_pose_v7 import (
     registered_data_hashes,
     registered_sampling_weights,
     registered_report,
+    registered_rows_for_products,
     registered_domain_reports,
     representative_onnx_batch,
     rotation_180_counterfactual_diagnostics,
@@ -466,6 +468,31 @@ def test_checkpoint_key_prioritizes_full_performance_then_worst_ratio_then_compo
     )
 
 
+def test_checkpoint_key_uses_the_worst_trusted_or_synthetic_gate():
+    summary = {"composite_score": 0.4}
+    registered = {"worst_gate_ratio": 0.8}
+    synthetic = {"worst_gate_ratio": 1.7}
+    assert checkpoint_validation_key(summary, registered, synthetic) == (1.7, 0.8, 0.4)
+
+
+def test_product_8_rows_are_available_for_diagnostics_but_not_trusted_selection():
+    rows = gate_eligible_validation_rows()
+    rows.append({**rows[0], "section_image_id": -1, "product": "5+8"})
+    trusted = registered_rows_for_products(rows, ("5",))
+    assert trusted
+    assert {row["product"] for row in trusted} == {"5"}
+    with pytest.raises(RuntimeError, match="products"):
+        registered_rows_for_products(trusted, ("8",))
+
+    all_product_5 = [{**row, "product": "5"} for row in rows]
+    assert final_acceptance_summary(
+        all_product_5,
+        "validation",
+        ("5",),
+    )["all_gates_passed"] is True
+    assert final_acceptance_summary(all_product_5, "validation")["all_gates_passed"] is False
+
+
 def test_release_gate_requires_preregistered_real_data_coverage_and_animal_tails():
     smoke = final_acceptance_summary(validation_rows(), "validation")
     assert smoke["coverage"]["eligible"] is False
@@ -586,13 +613,14 @@ def test_nonselection_tilt_pooling_and_rotation_counterfactual_diagnostics():
 
 
 def test_model_family_selection_uses_paired_seed_and_animal_uncertainty(tmp_path):
-    def results(name, ap_errors):
+    def results(name, ap_errors, synthetic_passed=True, synthetic_worst=0.5):
         output = []
         for seed, ap_error in zip(COMPARISON_SEEDS, ap_errors):
             folder = tmp_path / f"{name}_{seed}"
             folder.mkdir()
             rows = validation_rows()
             for row in rows:
+                row["product"] = "5"
                 row["prediction_ap"] = row["target_ap"] + ap_error
                 row["prediction_lr"] = row["target_lr"]
                 row["prediction_dv"] = row["target_dv"]
@@ -605,6 +633,10 @@ def test_model_family_selection_uses_paired_seed_and_animal_uncertainty(tmp_path
                     "selection_split": "validation",
                     "best_checkpoint": str(folder / "best.pt"),
                     "config": {"training_seed": seed},
+                    "synthetic_validation_gate": {
+                        "all_gates_passed": synthetic_passed,
+                        "worst_gate_ratio": synthetic_worst,
+                    },
                 }
             )
         return output
@@ -637,6 +669,17 @@ def test_model_family_selection_uses_paired_seed_and_animal_uncertainty(tmp_path
     )
     assert decision["decision"] == "prespecified_tie_priority"
     assert decision["winner"] == "preferred"
+
+    synthetic_failure = results("synthetic_failure", (0.0, 0.0, 0.0), False, 2.0)
+    robust = results("robust", (20.0, 20.0, 20.0), True, 0.8)
+    decision = select_model_family(
+        {"synthetic_failure": synthetic_failure, "robust": robust},
+        "synthetic gate",
+        ("synthetic_failure", "robust"),
+        tmp_path / "synthetic_gate",
+    )
+    assert decision["point_estimate_best"] == "robust"
+    assert decision["winner"] == "robust"
 
 
 def test_registered_style_is_deterministic_local_and_geometry_preserving():

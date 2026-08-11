@@ -58,6 +58,7 @@ def fixture(tmp_path: Path):
         "experiment_id": 1,
         "specimen_id": 101,
         "split": "train",
+        "product_ids": [5],
         "section_thickness_um": 25.0,
         "alignment3d_tvr": alignment3d,
     }
@@ -232,6 +233,71 @@ def test_registered_dataset_explicitly_filters_quality_rejections(tmp_path):
     assert len(dataset) == 1
     assert int(dataset.records[0]["section_image_id"]) == 11
     assert set(dataset.quality_rejections) == {12}
+
+
+@pytest.mark.parametrize("excluded_product_ids", ([8], [5, 8]))
+def test_registered_dataset_filters_candidate_records_by_product_without_mutation(
+    tmp_path, excluded_product_ids
+):
+    atlas, _, _, dataset_record, section, _ = fixture(tmp_path)
+    product_eight_dataset = {
+        **dataset_record,
+        "experiment_id": 3,
+        "specimen_id": 303,
+        "product_ids": excluded_product_ids,
+    }
+    product_eight_section = {
+        **section,
+        "section_image_id": 33,
+        "experiment_id": 3,
+        "specimen_id": 303,
+        "relative_path": "images/train/3/33.jpg",
+    }
+    datasets = [json.loads(line) for line in (tmp_path / "datasets.jsonl").read_text().splitlines()]
+    sections = [json.loads(line) for line in (tmp_path / "sections.jsonl").read_text().splitlines()]
+    write_jsonl(tmp_path / "datasets.jsonl", [datasets[0], product_eight_dataset, datasets[1]])
+    write_jsonl(tmp_path / "sections.jsonl", [sections[0], product_eight_section, sections[1]])
+    product_eight_path = tmp_path / product_eight_section["relative_path"]
+    product_eight_path.parent.mkdir(parents=True)
+    product_eight_path.write_bytes((tmp_path / section["relative_path"]).read_bytes())
+    downloads = [json.loads(line) for line in (tmp_path / "downloads.jsonl").read_text().splitlines()]
+    downloads.append(
+        {
+            "section_image_id": 33,
+            "sha256": hashlib.sha256(product_eight_path.read_bytes()).hexdigest(),
+        }
+    )
+    write_jsonl(tmp_path / "downloads.jsonl", downloads)
+    build_registered_image_quality_manifest(tmp_path)
+    datasets_before = (tmp_path / "datasets.jsonl").read_bytes()
+    sections_before = (tmp_path / "sections.jsonl").read_bytes()
+
+    product_five = RegisteredSectionDataset(tmp_path, atlas, allowed_product_ids={5})
+    all_products = RegisteredSectionDataset(tmp_path, atlas)
+
+    assert product_five.allowed_product_ids == frozenset({5})
+    assert [int(record["section_image_id"]) for record in product_five.records] == [11]
+    assert [int(record["section_image_id"]) for record in all_products.records] == [11, 33]
+    assert (tmp_path / "datasets.jsonl").read_bytes() == datasets_before
+    assert (tmp_path / "sections.jsonl").read_bytes() == sections_before
+
+
+@pytest.mark.parametrize("unknown_products", [None, []])
+def test_explicit_product_filter_rejects_candidate_experiments_without_products(
+    tmp_path, unknown_products
+):
+    atlas, *_ = fixture(tmp_path)
+    datasets = [json.loads(line) for line in (tmp_path / "datasets.jsonl").read_text().splitlines()]
+    if unknown_products is None:
+        datasets[0].pop("product_ids")
+    else:
+        datasets[0]["product_ids"] = unknown_products
+    write_jsonl(tmp_path / "datasets.jsonl", datasets)
+
+    with pytest.raises(ValueError, match=r"requires non-empty product_ids.*\[1\]"):
+        RegisteredSectionDataset(tmp_path, atlas, allowed_product_ids={5})
+
+    assert len(RegisteredSectionDataset(tmp_path, atlas)) == 1
 
 
 def test_image_only_registered_cache_is_exact_persistent_and_never_loads_atlas(tmp_path):

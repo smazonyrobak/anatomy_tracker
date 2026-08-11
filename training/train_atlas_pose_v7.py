@@ -81,6 +81,14 @@ COVERAGE_REQUIREMENTS = {
     "animals_per_dv_bin": 10,
 }
 REQUIRED_PRODUCTS = ("5", "8")
+TRUSTED_REGISTERED_PRODUCTS = ("5",)
+DIAGNOSTIC_ONLY_REGISTERED_PRODUCTS = ("8",)
+REGISTERED_LABEL_POLICY = {
+    "supervised_and_selected_products": list(TRUSTED_REGISTERED_PRODUCTS),
+    "diagnostic_only_products": list(DIAGNOSTIC_ONLY_REGISTERED_PRODUCTS),
+    "product_5_role": "Allen ConnProj serial two-photon block-face registration",
+    "product_8_role": "Allen ConnTG slide-mounted affine; diagnostic only",
+}
 SYNTHETIC_GATE_THRESHOLDS = {
     "mean_ap_um": 60.0,
     "mean_lr_deg": 0.90,
@@ -428,6 +436,18 @@ def _registered_product(datasets: dict[int, dict], experiment_id: int) -> str:
     return "+".join(map(str, datasets[experiment_id].get("product_ids", []))) or "unknown"
 
 
+def registered_rows_for_products(rows: list[dict], products: tuple[str, ...]) -> list[dict]:
+    products = set(map(str, products))
+    selected = [
+        row
+        for row in rows
+        if set(str(row["product"]).split("+")).issubset(products)
+    ]
+    if not selected:
+        raise RuntimeError(f"Registered evaluation contains no rows for products {sorted(products)}")
+    return selected
+
+
 def registered_sampling_weights(dataset: RegisteredSectionDataset) -> torch.Tensor:
     groups = []
     section_counts = {}
@@ -456,6 +476,7 @@ def build_registered_loaders(
     workers: int,
     seed: int,
     anatomy_enabled: bool,
+    supervised_product_ids: tuple[int, ...],
 ) -> tuple[DataLoader, DataLoader]:
     train = RegisteredSectionDataset(
         manifest_root,
@@ -466,6 +487,7 @@ def build_registered_loaders(
         views=2 if paired else 1,
         include_anatomy=anatomy_enabled,
         cache_static=anatomy_enabled,
+        allowed_product_ids=supervised_product_ids,
     )
     validation = RegisteredSectionDataset(
         manifest_root,
@@ -477,6 +499,13 @@ def build_registered_loaders(
     )
     if any(record["split"] != "train" for record in train.records):
         raise RuntimeError("Registered training loader contains a non-training specimen")
+    if any(
+        not set(train.datasets[int(record["experiment_id"])]["product_ids"]).issubset(
+            supervised_product_ids
+        )
+        for record in train.records
+    ):
+        raise RuntimeError("Registered training loader contains a diagnostic-only product")
     if any(record["split"] != "validation" for record in validation.records):
         raise RuntimeError("Registered validation loader contains a non-validation specimen")
     sampler = WeightedRandomSampler(
@@ -849,7 +878,10 @@ def evaluated_rows_sha256(rows: list[dict]) -> str:
     ).hexdigest()
 
 
-def registered_coverage_summary(rows: list[dict]) -> dict:
+def registered_coverage_summary(
+    rows: list[dict],
+    required_products: tuple[str, ...] = REQUIRED_PRODUCTS,
+) -> dict:
     specimens = {int(row["specimen_id"]) for row in rows}
     product_animals = {
         product: {
@@ -857,7 +889,7 @@ def registered_coverage_summary(rows: list[dict]) -> dict:
             for row in rows
             if product in str(row["product"]).split("+")
         }
-        for product in REQUIRED_PRODUCTS
+        for product in required_products
     }
     ap_band_animals = {
         band: {
@@ -905,7 +937,7 @@ def registered_coverage_summary(rows: list[dict]) -> dict:
     }
     return {
         "requirements": dict(COVERAGE_REQUIREMENTS),
-        "required_products": list(REQUIRED_PRODUCTS),
+        "required_products": list(required_products),
         "counts": counts,
         "passed": passed,
         "eligible": all(passed.values()),
@@ -979,7 +1011,11 @@ def registered_rows_for_release_gate(rows: list[dict]) -> pd.DataFrame:
     )
 
 
-def final_acceptance_summary(rows: list[dict], required_split: str) -> dict:
+def final_acceptance_summary(
+    rows: list[dict],
+    required_split: str,
+    required_products: tuple[str, ...] = REQUIRED_PRODUCTS,
+) -> dict:
     quality_rows = registered_rows_for_release_gate(rows)
     in_domain = [
         row
@@ -993,7 +1029,7 @@ def final_acceptance_summary(rows: list[dict], required_split: str) -> dict:
         [quality["values"][name] for name in ("mean_ap_um", "mean_lr_deg", "mean_dv_deg")]
     )
     selection = _selection_summary_from_component_mae(component_mae)
-    coverage = registered_coverage_summary(in_domain)
+    coverage = registered_coverage_summary(in_domain, required_products)
     return {
         "split": required_split,
         "in_training_ap_domain_count": len(in_domain),
@@ -1023,6 +1059,18 @@ def validation_selection_key(
     return (
         0.0 if final_gate["all_performance_gates_passed"] else 1.0,
         final_gate["worst_gate_ratio"],
+        summary["composite_score"],
+    )
+
+
+def checkpoint_validation_key(
+    summary: dict,
+    registered_gate: dict,
+    synthetic_gate: dict,
+) -> tuple[float, float, float]:
+    return (
+        max(registered_gate["worst_gate_ratio"], synthetic_gate["worst_gate_ratio"]),
+        registered_gate["worst_gate_ratio"],
         summary["composite_score"],
     )
 
@@ -1281,6 +1329,9 @@ def train_experiment(
     stale = 0
     history = []
     best_checkpoint = run_folder / "best.pt"
+    last_checkpoint = run_folder / "last.pt"
+    interval_component_sums = {source: {} for source in ("registered", "synthetic")}
+    interval_batch_counts = {source: 0 for source in interval_component_sums}
 
     while synthetic_start < len(train_manifest["ap_um"]):
         use_registered = bool(rng.random() < config["registered_fraction"])
@@ -1325,6 +1376,12 @@ def train_experiment(
         scaler.update()
         step += 1
         update_ema(ema, model, config["ema_decay"], step)
+        source = "registered" if use_registered else "synthetic"
+        interval_batch_counts[source] += 1
+        for name, value in components.items():
+            interval_component_sums[source][name] = (
+                interval_component_sums[source].get(name, 0.0) + value
+            )
 
         if synthetic_start >= next_validation or synthetic_start == len(train_manifest["ap_um"]):
             current = _swap_to_ema(model, ema)
@@ -1334,30 +1391,64 @@ def train_experiment(
             registered_metrics, registered_rows = evaluate_registered(
                 model, registered_validation, device, "validation", counterfactual_180=True
             )
-            selection = validation_selection_summary(registered_rows)
-            final_gate = final_acceptance_summary(registered_rows, "validation")
+            trusted_rows = registered_rows_for_products(
+                registered_rows, TRUSTED_REGISTERED_PRODUCTS
+            )
+            trusted_metrics = registered_report(trusted_rows)
+            selection = validation_selection_summary(trusted_rows)
+            final_gate = final_acceptance_summary(
+                trusted_rows,
+                "validation",
+                TRUSTED_REGISTERED_PRODUCTS,
+            )
+            raw_all_products_gate = final_acceptance_summary(
+                registered_rows,
+                "validation",
+            )
+            raw_all_products_gate["role"] = "diagnostic_only_not_used_for_selection"
             synthetic_gate = synthetic_acceptance_summary(synthetic_metrics)
             checkpoint_eligible = bool(
                 final_gate["all_gates_passed"] and synthetic_gate["all_gates_passed"]
             )
             score = selection["composite_score"]
-            selection_key = validation_selection_key(selection, final_gate)
+            selection_key = checkpoint_validation_key(selection, final_gate, synthetic_gate)
             model.load_state_dict(current)
+            training_summary = {
+                source: {
+                    "batch_count": interval_batch_counts[source],
+                    **{
+                        name: total / max(interval_batch_counts[source], 1)
+                        for name, total in interval_component_sums[source].items()
+                    },
+                }
+                for source in interval_component_sums
+            }
             record = {
                 "step": step,
                 "unique_synthetic_views": synthetic_start,
                 "learning_rate": learning_rate,
-                "training": components,
+                "training": training_summary,
                 "validation_selection_score": score,
                 "validation_selection": selection,
                 "validation_final_gate": final_gate,
+                "validation_raw_all_products_diagnostic_gate": raw_all_products_gate,
                 "synthetic_validation_gate": synthetic_gate,
                 "checkpoint_eligible": checkpoint_eligible,
                 "synthetic": synthetic_metrics,
                 "registered": registered_metrics,
+                "registered_trusted": trusted_metrics,
             }
             history.append(record)
+            interval_component_sums = {source: {} for source in interval_component_sums}
+            interval_batch_counts = {source: 0 for source in interval_batch_counts}
             (run_folder / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+            checkpoint_payload = {
+                "model": {key: value.cpu() for key, value in ema.items()},
+                "config": config,
+                "record": record,
+            }
+            torch.save(checkpoint_payload, last_checkpoint)
+            _write_csv(run_folder / "validation_registered_last.csv", registered_rows)
             if checkpoint_selection_improved(
                 checkpoint_eligible,
                 best_checkpoint_eligible,
@@ -1369,9 +1460,9 @@ def train_experiment(
                 best_selection_key = selection_key
                 best_checkpoint_eligible = checkpoint_eligible
                 stale = 0
-                torch.save({"model": {key: value.cpu() for key, value in ema.items()}, "config": config, "record": record}, best_checkpoint)
+                torch.save(checkpoint_payload, best_checkpoint)
                 _write_csv(run_folder / "validation_registered.csv", registered_rows)
-                write_diagnostic_plot(registered_metrics, run_folder / "validation_registered.png")
+                write_diagnostic_plot(trusted_metrics, run_folder / "validation_registered.png")
             else:
                 stale += 1
             next_validation += config["validation_interval"]
@@ -1385,9 +1476,13 @@ def train_experiment(
         "best_selection": checkpoint["record"]["validation_selection"],
         "validation_final_gate": checkpoint["record"]["validation_final_gate"],
         "synthetic_validation_gate": checkpoint["record"]["synthetic_validation_gate"],
+        "validation_raw_all_products_diagnostic_gate": checkpoint["record"][
+            "validation_raw_all_products_diagnostic_gate"
+        ],
         "validation_checkpoint_eligible": checkpoint["record"]["checkpoint_eligible"],
         "selection_split": "validation",
         "best_checkpoint": str(best_checkpoint),
+        "last_checkpoint": str(last_checkpoint),
         "steps": step,
         "unique_synthetic_views": synthetic_start,
         "stopped_early": synthetic_start < len(train_manifest["ap_um"]),
@@ -1644,6 +1739,7 @@ def run_experiment(config: dict, export: bool = False) -> dict:
         workers=config["data_workers"],
         seed=config["training_seed"],
         anatomy_enabled=config["anatomy"] > 0.0,
+        supervised_product_ids=tuple(map(int, TRUSTED_REGISTERED_PRODUCTS)),
     )
     torch.manual_seed(config["training_seed"])
     model = AtlasPoseV7(config["architecture"], pretrained=True, pose_representation=config["head"])
@@ -1671,6 +1767,7 @@ def run_experiment(config: dict, export: bool = False) -> dict:
             "sha256": registered_hashes,
             "training_split": "train",
             "selection_split": "validation",
+            "label_policy": REGISTERED_LABEL_POLICY,
             "excluded_from_selection": ["test", ATLAS_POSE_SEALED_SPLIT],
         },
         "atlas_data_sha256": atlas_hashes,
@@ -1723,6 +1820,7 @@ def _seed_group_validation_data(
         path = Path(result["best_checkpoint"]).parent / "validation_registered.csv"
         with path.open(newline="", encoding="utf-8") as stream:
             rows = list(csv.DictReader(stream))
+        rows = registered_rows_for_products(rows, TRUSTED_REGISTERED_PRODUCTS)
         sections = {
             int(row["section_image_id"]): (
                 int(row["specimen_id"]),
@@ -1757,12 +1855,30 @@ def seed_animal_component_errors(
 def seed_group_selection_summary(results: list[dict]) -> dict:
     _, _, errors, run_rows = _seed_group_validation_data(results)
     selection = _selection_summary_from_component_mae(errors.mean((0, 1)))
+    registered_gate = final_acceptance_summary(
+        [row for rows in run_rows for row in rows],
+        "validation",
+        TRUSTED_REGISTERED_PRODUCTS,
+    )
+    synthetic_by_seed = {
+        str(result["config"]["training_seed"]): result["synthetic_validation_gate"]
+        for result in results
+    }
+    synthetic_passed = all(gate["all_gates_passed"] for gate in synthetic_by_seed.values())
+    synthetic_worst = max(
+        gate["worst_gate_ratio"] for gate in synthetic_by_seed.values()
+    )
     return {
         **selection,
-        "validation_final_gate": final_acceptance_summary(
-            [row for rows in run_rows for row in rows],
-            "validation",
-        ),
+        "validation_final_gate": registered_gate,
+        "synthetic_validation_by_seed": synthetic_by_seed,
+        "model_family_gate": {
+            "all_performance_gates_passed": bool(
+                registered_gate["all_performance_gates_passed"] and synthetic_passed
+            ),
+            "all_gates_passed": bool(registered_gate["all_gates_passed"] and synthetic_passed),
+            "worst_gate_ratio": max(registered_gate["worst_gate_ratio"], synthetic_worst),
+        },
     }
 
 
@@ -1826,7 +1942,7 @@ def select_model_family(
         groups,
         key=lambda candidate: (
             validation_selection_key(
-                summaries[candidate], summaries[candidate]["validation_final_gate"]
+                summaries[candidate], summaries[candidate]["model_family_gate"]
             ),
             tie_priority.index(candidate),
         ),
@@ -1835,7 +1951,7 @@ def select_model_family(
     comparisons = {}
     tied = [point_best]
     pairwise_confidence = 1.0 - (1.0 - FAMILY_CONFIDENCE) / (len(groups) - 1)
-    point_gate = summaries[point_best]["validation_final_gate"]
+    point_gate = summaries[point_best]["model_family_gate"]
     for opponent in point_order[1:]:
         comparison = bootstrap_seed_group_comparison(
             groups[point_best],
@@ -1843,7 +1959,7 @@ def select_model_family(
             output_prefix.with_name(f"{output_prefix.name}_{point_best}_vs_{opponent}.json"),
         )
         comparisons[opponent] = comparison
-        opponent_gate = summaries[opponent]["validation_final_gate"]
+        opponent_gate = summaries[opponent]["model_family_gate"]
         same_gate_tier = (
             point_gate["all_performance_gates_passed"]
             == opponent_gate["all_performance_gates_passed"]
@@ -1900,13 +2016,22 @@ def held_out_reports(result: dict) -> dict:
         num_workers=config["data_workers"],
     )
     _, rows = evaluate_registered(model, loader, device, split)
+    trusted_rows = registered_rows_for_products(rows, TRUSTED_REGISTERED_PRODUCTS)
+    raw_all_products_gate = final_acceptance_summary(rows, split)
+    raw_all_products_gate["role"] = "diagnostic_only_not_used_for_release"
     reports[split] = {
         **registered_domain_reports(rows),
-        "final_gate": final_acceptance_summary(rows, split),
+        "trusted_registered": registered_domain_reports(trusted_rows),
+        "final_gate": final_acceptance_summary(
+            trusted_rows,
+            split,
+            TRUSTED_REGISTERED_PRODUCTS,
+        ),
+        "raw_all_products_diagnostic_gate": raw_all_products_gate,
     }
     _write_csv(run_folder / f"{split}_registered.csv", rows)
     write_diagnostic_plot(
-        reports[split]["primary_in_training_ap_domain"],
+        reports[split]["trusted_registered"]["primary_in_training_ap_domain"],
         run_folder / f"{split}_registered.png",
     )
     test_manifest, _ = ensure_fixed_manifest(WORKSPACE, "test", 8_192, SEEDS["test"])
