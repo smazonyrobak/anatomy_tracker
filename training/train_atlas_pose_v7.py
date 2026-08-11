@@ -305,7 +305,13 @@ def ema_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
 
 
 @torch.no_grad()
-def update_ema(ema: dict[str, torch.Tensor], model: torch.nn.Module, decay: float) -> None:
+def update_ema(
+    ema: dict[str, torch.Tensor],
+    model: torch.nn.Module,
+    decay: float,
+    updates: int,
+) -> None:
+    decay = min(decay, (1.0 + updates) / (10.0 + updates))
     for name, value in model.state_dict().items():
         if value.is_floating_point():
             ema[name].mul_(decay).add_(value, alpha=1.0 - decay)
@@ -635,8 +641,8 @@ def train_experiment(
         torch.nn.utils.clip_grad_norm_(model.parameters(), config["gradient_clip"])
         scaler.step(optimizer)
         scaler.update()
-        update_ema(ema, model, config["ema_decay"])
         step += 1
+        update_ema(ema, model, config["ema_decay"], step)
 
         if synthetic_start >= next_validation or synthetic_start == len(train_manifest["ap_um"]):
             current = _swap_to_ema(model, ema)

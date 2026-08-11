@@ -187,8 +187,15 @@ def test_ema_and_warmup_cosine_are_deterministic():
     with torch.no_grad():
         model.weight.add_(2.0)
     old = ema["weight"].clone()
-    update_ema(ema, model, 0.75)
+    update_ema(ema, model, 0.75, 100)
     assert torch.allclose(ema["weight"], old + 0.5)
+    ema = ema_state(nn.Linear(2, 1))
+    source = nn.Linear(2, 1)
+    source.load_state_dict({name: value.clone() for name, value in ema.items()})
+    with torch.no_grad():
+        source.weight.add_(2.0)
+    update_ema(ema, source, 0.999, 1)
+    assert torch.allclose(ema["weight"], source.weight - 2.0 * (2.0 / 11.0))
     rates = [cosine_learning_rate(step, 10, 2, 1e-3) for step in range(10)]
     assert rates[:2] == pytest.approx([5e-4, 1e-3])
     assert rates[-1] == pytest.approx(0.0, abs=1e-12)
