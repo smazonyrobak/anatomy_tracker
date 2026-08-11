@@ -4,12 +4,17 @@ from pathlib import Path
 
 
 ROOT = Path(SPECPATH)
+DEEPSLICE_MODELS = ROOT / "models" / "DeepSlice"
 
 a = Analysis(
     [str(ROOT / "source" / "proprietary_trajectory_tool.py")],
     pathex=[str(ROOT / "source")],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(DEEPSLICE_MODELS / "deepslice_mouse_primary_opset18.onnx"), "models/DeepSlice"),
+        (str(DEEPSLICE_MODELS / "deepslice_mouse_secondary_opset18.onnx"), "models/DeepSlice"),
+        (str(ROOT / "licenses" / "DeepSlice-LICENSE.txt"), "licenses"),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -26,14 +31,19 @@ a = Analysis(
         "torch",
         "torchvision",
         "torchaudio",
+        "DeepSlice",
         "tensorflow",
+        "keras",
+        "h5py",
+        "sklearn",
+        "skimage",
         "pyarrow",
+        "polars",
+        "_polars_runtime_32",
         "numba",
         "llvmlite",
         "tables",
-        "h5py",
         "zmq",
-        "rich",
     ],
     noarchive=False,
     optimize=0,
@@ -49,7 +59,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -64,7 +74,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="TrajectoryTracker",
 )
