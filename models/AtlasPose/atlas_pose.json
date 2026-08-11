@@ -946,35 +946,91 @@
     "model_sha256": "5d3a3b3dbdfd4ac7b97a615a6a7d0b3ded54e82795970059ce83be67ac3a51f7",
     "scope": "AP +500 to -4500 um",
     "raw_in_domain": {
-      "count": 148,
-      "ap_mae_um": 245.19554040811866,
-      "ap_p95_um": 515.3243783205744,
-      "lr_mae_deg": 1.6392484655594894,
-      "lr_p95_deg": 4.553907961834402,
-      "dv_mae_deg": 3.99646576640326,
-      "dv_p95_deg": 9.85770475072775,
-      "mean_normalized_mae": 1.26621309253795
+      "count": 100,
+      "ap_mae_um": 249.9747839462933,
+      "ap_p95_um": 571.4454625851441,
+      "lr_mae_deg": 1.5758783753446013,
+      "lr_p95_deg": 3.888301681504983,
+      "dv_mae_deg": 3.5264838287095834,
+      "dv_p95_deg": 7.842150130682428,
+      "mean_normalized_mae": 1.1836934126040886
     },
     "published_deepslice_raw_in_domain": {
-      "count": 148,
-      "ap_mae_um": 174.26453130436576,
-      "ap_p95_um": 384.30050360578457,
-      "lr_mae_deg": 1.4625499043420194,
-      "lr_p95_deg": 3.216595094632592,
-      "dv_mae_deg": 1.267810316703249,
-      "dv_p95_deg": 2.697982283673945,
-      "mean_normalized_mae": 0.6874127452466992
+      "count": 100,
+      "ap_mae_um": 102.54605629894097,
+      "ap_p95_um": 240.02541206065388,
+      "lr_mae_deg": 0.5974744504786434,
+      "lr_p95_deg": 1.1549476673442718,
+      "dv_mae_deg": 1.4205295392508583,
+      "dv_p95_deg": 2.729126391965082,
+      "mean_normalized_mae": 0.4730620733535049
     },
     "selected_weighted_vote": {
-      "own_weight_percent": 20,
-      "count": 148,
-      "ap_mae_um": 140.60637615369902,
-      "ap_p95_um": 338.8934465649087,
-      "lr_mae_deg": 1.1975437222624854,
-      "lr_p95_deg": 2.69310888795589,
-      "dv_mae_deg": 1.63100608479886,
-      "dv_p95_deg": 3.6517343586496755,
-      "mean_normalized_mae": 0.6589001360484895
+      "own_weight_percent": 10,
+      "count": 100,
+      "ap_mae_um": 104.83246787748078,
+      "ap_p95_um": 243.86925822372876,
+      "lr_mae_deg": 0.5253878921661357,
+      "lr_p95_deg": 1.1234166568766062,
+      "dv_mae_deg": 1.5077321839929494,
+      "dv_p95_deg": 3.085051080607903,
+      "mean_normalized_mae": 0.47862996986315515
+    },
+    "development": {
+      "own_model": {
+        "count": 45,
+        "ap_mae_um": 248.07102523454793,
+        "ap_p95_um": 497.03204455530795,
+        "lr_mae_deg": 1.857251034809187,
+        "lr_p95_deg": 4.664466701105706,
+        "dv_mae_deg": 4.905179885948159,
+        "dv_p95_deg": 11.28393334013506,
+        "mean_normalized_mae": 1.4578331871056216
+      },
+      "published_deepslice_mens_ai": {
+        "count": 45,
+        "ap_mae_um": 252.55504537457213,
+        "ap_p95_um": 635.2038159753646,
+        "lr_mae_deg": 1.5550319854817922,
+        "lr_p95_deg": 2.989151649544677,
+        "dv_mae_deg": 1.6413051799216583,
+        "dv_p95_deg": 3.9436142546117106,
+        "mean_normalized_mae": 0.8694629214000046
+      }
+    },
+    "retrospective_published_test": {
+      "note": "Previously inspected by this project; not an untouched test set.",
+      "own_model": {
+        "count": 100,
+        "ap_mae_um": 249.9747839462933,
+        "ap_p95_um": 571.4454625851441,
+        "lr_mae_deg": 1.5758783753446013,
+        "lr_p95_deg": 3.888301681504983,
+        "dv_mae_deg": 3.5264838287095834,
+        "dv_p95_deg": 7.842150130682428,
+        "mean_normalized_mae": 1.1836934126040886
+      },
+      "published_deepslice_mens_ai_ci": {
+        "count": 100,
+        "ap_mae_um": 123.13126848651832,
+        "ap_p95_um": 431.1937579997106,
+        "lr_mae_deg": 0.5974744504786434,
+        "lr_p95_deg": 1.1549476673442718,
+        "dv_mae_deg": 1.4205295392508583,
+        "dv_p95_deg": 2.729126391965082,
+        "mean_normalized_mae": 0.5005090229369414
+      }
+    },
+    "development_selected_weighted_vote": {
+      "own_weight_percent": 10,
+      "count": 45,
+      "ap_mae_um": 226.94861900038683,
+      "ap_p95_um": 531.1049684290733,
+      "lr_mae_deg": 1.4492191995490893,
+      "lr_p95_deg": 3.0753892404034455,
+      "dv_mae_deg": 1.9143699293433776,
+      "dv_p95_deg": 3.9794213350916308,
+      "mean_normalized_mae": 0.8631963468159268
     }
   }
 }

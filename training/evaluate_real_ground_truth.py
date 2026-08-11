@@ -40,6 +40,22 @@ DATASETS = {
     "PCP2": "PcP2",
     "PITX3": "Pitx3",
 }
+BENCHMARK_ROLE = {
+    **dict.fromkeys(("CamKII", "GLT1a", "PcP2"), "development"),
+    **dict.fromkeys(("Myelin", "Pitx3", "Calb1", "bAmyloid"), "test"),
+}
+DEVELOPMENT_EXCLUSIONS = {
+    ("GLT1a", "641_2002_2568_nm01_s109_10x_a.png"),
+    ("GLT1a", "641_2002_2568_nm01_s114_10x_a.png"),
+    ("GLT1a", "641_2002_2568_nm01_s119_10x_a.png"),
+    ("PcP2", "1261_pcp2_tta_lacz_xgal_nr_s173.png"),
+    ("PcP2", "1261_pcp2_tta_lacz_xgal_nr_s176.png"),
+}
+DEEPSLICE_VARIANTS = {
+    "ai": "AI",
+    "mens_ai": "MENS-AI",
+    "mens_ai_ci": "MENS-AI-CI",
+}
 AXES = ("ap_um", "lr_deg", "dv_deg")
 TOLERANCE = np.asarray((250.0, 2.0, 2.0))
 
@@ -81,7 +97,7 @@ def quicknii_to_tracker_pose(values: np.ndarray) -> np.ndarray:
 def load_ground_truth() -> pd.DataFrame:
     human_root = GROUND_TRUTH_ROOT / "extracted/human/Operator_Alignments"
     image_root = GROUND_TRUTH_ROOT / "extracted/datasets"
-    deepslice_root = GROUND_TRUTH_ROOT / "extracted/deepslice/DeepSlice_Alignments/AI"
+    deepslice_root = GROUND_TRUTH_ROOT / "extracted/deepslice/DeepSlice_Alignments"
     records = []
     for csv_name, dataset in DATASETS.items():
         operator_tables = []
@@ -111,29 +127,44 @@ def load_ground_truth() -> pd.DataFrame:
         if set(image_paths) != set(names):
             raise ValueError(f"Image/annotation filename mismatch in {dataset}")
 
-        deepslice = pd.read_csv(deepslice_root / f"{dataset}.csv", usecols=["Filenames", *OUV])
-        deepslice["key"] = deepslice["Filenames"].map(filename_key)
-        deepslice = deepslice.set_index("key")
-        if set(deepslice.index) != set(names) or deepslice.index.duplicated().any():
-            raise ValueError(f"DeepSlice AI filename mismatch in {dataset}")
-        deepslice_pose = quicknii_to_tracker_pose(deepslice.loc[names, OUV].to_numpy(np.float64))
+        deepslice = {}
+        for variant, folder in DEEPSLICE_VARIANTS.items():
+            table = pd.read_csv(deepslice_root / folder / f"{dataset}.csv", usecols=["Filenames", *OUV])
+            table["key"] = table["Filenames"].map(filename_key)
+            table = table.set_index("key")
+            if set(table.index) != set(names) or table.index.duplicated().any():
+                raise ValueError(f"DeepSlice {folder} filename mismatch in {dataset}")
+            ouv = table.loc[names, OUV].to_numpy(np.float64)
+            deepslice[variant] = (ouv, quicknii_to_tracker_pose(ouv))
 
         for index, name in enumerate(names):
             record = {
                 "dataset": dataset,
                 "filename": image_paths[name].name,
                 "image_path": str(image_paths[name]),
+                "benchmark_role": BENCHMARK_ROLE[dataset],
+                "official_usable": (dataset, name) not in DEVELOPMENT_EXCLUSIONS,
                 **{f"consensus_{field}": consensus_ouv[index, column] for column, field in enumerate(OUV)},
             }
             for column, axis in enumerate(AXES):
                 record[f"gt_{axis}"] = consensus_pose[index, column]
                 record[f"human_operator_sd_{axis}"] = operator_sd[index, column]
-                record[f"deepslice_ai_{axis}"] = deepslice_pose[index, column]
+                for variant, (_, pose) in deepslice.items():
+                    record[f"deepslice_{variant}_{axis}"] = pose[index, column]
+            for variant, (ouv, _) in deepslice.items():
+                record.update(
+                    {f"deepslice_{variant}_{field}": ouv[index, column] for column, field in enumerate(OUV)}
+                )
             records.append(record)
 
     result = pd.DataFrame(records).sort_values(["dataset", "filename"]).reset_index(drop=True)
     if len(result) != 315 or result[[f"gt_{axis}" for axis in AXES]].isna().any().any():
         raise ValueError(f"Expected 315 complete ground-truth rows, found {len(result)}")
+    if set(result["benchmark_role"]) != {"development", "test"}:
+        raise ValueError("Published DeepSlice brain-level split is incomplete")
+    usable_counts = result[result["official_usable"]].groupby("benchmark_role").size().to_dict()
+    if usable_counts != {"development": 119, "test": 191}:
+        raise ValueError(f"Published DeepSlice usable split must be 119 development / 191 test, found {usable_counts}")
     result["in_training_ap_domain"] = result["gt_ap_um"].between(-4500.0, 500.0)
     return result
 
@@ -221,24 +252,37 @@ def summarize(table: pd.DataFrame, prediction_prefix: str) -> dict:
 
 def report_scopes(table: pd.DataFrame, prediction_prefix: str) -> dict:
     in_domain = table[table["in_training_ap_domain"]]
+    usable = table[table["official_usable"]]
+    development = usable[usable["benchmark_role"] == "development"]
+    test = usable[usable["benchmark_role"] == "test"]
     by_dataset = {}
     for dataset, rows in table.groupby("dataset", sort=True):
-        by_dataset[dataset] = {"all_ood_inclusive": summarize(rows, prediction_prefix)}
-        if rows["in_training_ap_domain"].any():
-            by_dataset[dataset]["in_training_ap_domain"] = summarize(
-                rows[rows["in_training_ap_domain"]], prediction_prefix
+        published_rows = rows[rows["official_usable"]]
+        by_dataset[dataset] = {"all_public": summarize(rows, prediction_prefix)}
+        if len(published_rows):
+            by_dataset[dataset]["published_usable"] = summarize(published_rows, prediction_prefix)
+        if published_rows["in_training_ap_domain"].any():
+            by_dataset[dataset]["published_usable_in_training_ap_domain"] = summarize(
+                published_rows[published_rows["in_training_ap_domain"]], prediction_prefix
             )
     return {
         "all_ood_inclusive": summarize(table, prediction_prefix),
         "in_training_ap_domain": summarize(in_domain, prediction_prefix),
+        "published_usable": summarize(usable, prediction_prefix),
+        "development": summarize(development, prediction_prefix),
+        "development_in_training_ap_domain": summarize(
+            development[development["in_training_ap_domain"]], prediction_prefix
+        ),
+        "test": summarize(test, prediction_prefix),
+        "test_in_training_ap_domain": summarize(test[test["in_training_ap_domain"]], prediction_prefix),
         "by_dataset": by_dataset,
     }
 
 
-def paired_comparison(table: pd.DataFrame) -> dict:
+def paired_comparison(table: pd.DataFrame, deepslice_prefix: str) -> dict:
     target = table[[f"gt_{axis}" for axis in AXES]].to_numpy()
     own = np.abs(table[[f"prediction_{axis}" for axis in AXES]].to_numpy() - target)
-    deepslice = np.abs(table[[f"deepslice_ai_{axis}" for axis in AXES]].to_numpy() - target)
+    deepslice = np.abs(table[[f"{deepslice_prefix}_{axis}" for axis in AXES]].to_numpy() - target)
     return {
         "count": len(table),
         "mae_delta_own_minus_deepslice": {
@@ -273,7 +317,7 @@ def main() -> None:
         table[f"error_{axis}"] = prediction[:, column] - table[f"gt_{axis}"]
         table[f"absolute_error_{axis}"] = table[f"error_{axis}"].abs()
     own_pose = table[[f"prediction_{axis}" for axis in AXES]].to_numpy()
-    deepslice_pose = table[[f"deepslice_ai_{axis}" for axis in AXES]].to_numpy()
+    deepslice_pose = table[[f"deepslice_mens_ai_{axis}" for axis in AXES]].to_numpy()
     weighted_prefixes = {}
     for own_weight_percent in range(10, 100, 10):
         own_weight = own_weight_percent / 100.0
@@ -299,6 +343,8 @@ def main() -> None:
         "dataset",
         "filename",
         "image_path",
+        "benchmark_role",
+        "official_usable",
         "in_training_ap_domain",
         *[f"consensus_{field}" for field in OUV],
         *[f"gt_{axis}" for axis in AXES],
@@ -310,14 +356,19 @@ def main() -> None:
 
     input_metadata = session.get_inputs()[0]
     output_metadata = session.get_outputs()[0]
-    in_domain = table[table["in_training_ap_domain"]]
+    development = table[
+        table["official_usable"] & (table["benchmark_role"] == "development")
+    ]
+    test = table[table["official_usable"] & (table["benchmark_role"] == "test")]
     weighted_vote_sweep = {
         str(own_weight_percent): report_scopes(table, prefix)
         for own_weight_percent, prefix in weighted_prefixes.items()
     }
     best_own_weight_percent = min(
         weighted_prefixes,
-        key=lambda value: weighted_vote_sweep[str(value)]["in_training_ap_domain"]["mean_normalized_mae"],
+        key=lambda value: weighted_vote_sweep[str(value)]["development_in_training_ap_domain"][
+            "mean_normalized_mae"
+        ],
     )
     metrics = {
         "source": {
@@ -360,15 +411,21 @@ def main() -> None:
             for axis in AXES
         },
         "own_model": report_scopes(table, "prediction"),
-        "published_deepslice_single_image_ai": report_scopes(table, "deepslice_ai"),
+        "published_deepslice": {
+            variant: report_scopes(table, f"deepslice_{variant}") for variant in DEEPSLICE_VARIANTS
+        },
         "weighted_vote_sweep": weighted_vote_sweep,
         "weighted_vote_selection": {
-            "criterion": "lowest mean normalized MAE on the 148-image in-domain real benchmark",
+            "deepslice_component": "MENS-AI (ensemble with shared tilt; no cutting-index order)",
+            "criterion": "lowest mean normalized MAE on official development brains within AP +500 to -4500 um",
             "selected_own_weight_percent": best_own_weight_percent,
         },
         "paired_own_vs_deepslice": {
-            "all_ood_inclusive": paired_comparison(table),
-            "in_training_ap_domain": paired_comparison(in_domain),
+            variant: {
+                "development": paired_comparison(development, f"deepslice_{variant}"),
+                "test": paired_comparison(test, f"deepslice_{variant}"),
+            }
+            for variant in DEEPSLICE_VARIANTS
         },
         "mask_diagnostics": {
             dataset: {
@@ -382,24 +439,56 @@ def main() -> None:
         },
     }
     (output / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    own_in_domain = metrics["own_model"]["in_training_ap_domain"]
-    deepslice_in_domain = metrics["published_deepslice_single_image_ai"]["in_training_ap_domain"]
-    weighted_in_domain = metrics["weighted_vote_sweep"][str(best_own_weight_percent)][
-        "in_training_ap_domain"
+    own_development = metrics["own_model"]["development_in_training_ap_domain"]
+    own_test = metrics["own_model"]["test_in_training_ap_domain"]
+    deepslice_development = metrics["published_deepslice"]["mens_ai"][
+        "development_in_training_ap_domain"
+    ]
+    deepslice_test = metrics["published_deepslice"]["mens_ai_ci"]["test_in_training_ap_domain"]
+    weighted_development = metrics["weighted_vote_sweep"][str(best_own_weight_percent)][
+        "development_in_training_ap_domain"
+    ]
+    weighted_test = metrics["weighted_vote_sweep"][str(best_own_weight_percent)][
+        "test_in_training_ap_domain"
     ]
     model_metadata["real_histology_benchmark"] = {
         "source": "DeepSlice published seven-operator consensus ground truth",
         "model_sha256": model_digest,
         "scope": "AP +500 to -4500 um",
-        "raw_in_domain": compact_pose_metrics(own_in_domain),
-        "published_deepslice_raw_in_domain": compact_pose_metrics(deepslice_in_domain),
+        "raw_in_domain": compact_pose_metrics(own_test),
+        "published_deepslice_raw_in_domain": compact_pose_metrics(
+            metrics["published_deepslice"]["mens_ai"]["test_in_training_ap_domain"]
+        ),
         "selected_weighted_vote": {
             "own_weight_percent": best_own_weight_percent,
-            **compact_pose_metrics(weighted_in_domain),
+            **compact_pose_metrics(weighted_test),
+        },
+        "development": {
+            "own_model": compact_pose_metrics(own_development),
+            "published_deepslice_mens_ai": compact_pose_metrics(deepslice_development),
+        },
+        "retrospective_published_test": {
+            "note": "Previously inspected by this project; not an untouched test set.",
+            "own_model": compact_pose_metrics(own_test),
+            "published_deepslice_mens_ai_ci": compact_pose_metrics(deepslice_test),
+        },
+        "development_selected_weighted_vote": {
+            "own_weight_percent": best_own_weight_percent,
+            **compact_pose_metrics(weighted_development),
         },
     }
     MODEL_PATH.with_suffix(".json").write_text(json.dumps(model_metadata, indent=2), encoding="utf-8")
-    print(json.dumps({"output": str(output), "provider": provider, "in_domain_images": len(in_domain)}, indent=2))
+    print(
+        json.dumps(
+            {
+                "output": str(output),
+                "provider": provider,
+                "development_images": len(development),
+                "published_test_images": len(test),
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
