@@ -1127,6 +1127,7 @@ def solve_probe_constrained_lattice(
 
     baseline, _ = solve_ordered_lattice(lattices, anterior_to_posterior)
     point_cache: dict[tuple[str, int, int], np.ndarray] = {}
+    fit_cache: dict[tuple[int | None, tuple[tuple[int, int], ...]], dict] = {}
 
     def atlas_points(probe_name: str, session_index: int, ap: int) -> np.ndarray:
         key = probe_name, session_index, int(ap)
@@ -1144,6 +1145,9 @@ def solve_probe_constrained_lattice(
         return point_cache[key]
 
     def fit_assignment(assignments: dict[int, int], max_starts: int | None = None):
+        cache_key = max_starts, tuple(sorted(assignments.items()))
+        if cache_key in fit_cache:
+            return fit_cache[cache_key]
         fits = {}
         for probe_name, specification in enabled.items():
             observations = {}
@@ -1167,6 +1171,7 @@ def solve_probe_constrained_lattice(
                 surface_dv,
                 max_starts=max_starts,
             )
+        fit_cache[cache_key] = fits
         return fits
 
     def geometry_score(
@@ -6457,6 +6462,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             if np.any(inside):
                 entry_parameter = max(entry_parameter, float(parameters[inside].max()))
         entry = center + surface_direction * entry_parameter
+        physical_length_voxels = PROBE_PHYSICAL_LENGTH_UM[self.probe_type.currentText()] / VOXEL_UM
+        depth_from_entry = float((entry - deep_endpoint) @ surface_direction)
+        if depth_from_entry > physical_length_voxels:
+            raise InfeasibleProbeConstraint(
+                f"Observed trajectory exceeds the selected probe's "
+                f"{PROBE_PHYSICAL_LENGTH_UM[self.probe_type.currentText()] / 1000.0:g} mm physical shank"
+            )
         return entry, deep_endpoint, surface_direction
 
     def probe_line_geometry(self, probe_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[None, None, None]:
@@ -6608,6 +6620,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             selected = constraint_probe == selected_probe
             constraint = self._effective_probe_constraint(constraint)
             rgb = np.asarray(probe_color(constraint_probe), dtype=np.float32) / 255.0
+            warning = " | target area partly outside dorsal cortex"
+            if selected and warning in self.probe_fit_summary.text():
+                self.probe_fit_summary.setText(self.probe_fit_summary.text().replace(warning, ""))
+                self.probe_fit_summary.setToolTip("")
             angles = np.linspace(0.0, 2.0 * np.pi, 97)
             ring_stereotaxic = np.column_stack(
                 [
@@ -6620,42 +6636,64 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 self._surface_dv_um(ap_um, ml_um)
                 for ap_um, ml_um in ring_stereotaxic[:, (0, 2)]
             ]
-            ring_volume = probe_stereotaxic_to_volume(
-                ring_stereotaxic, self.bregma_voxel, VOXEL_UM
-            )
-            ring_item = gl.GLLinePlotItem(
-                pos=volume_to_gl(ring_volume),
-                color=(*rgb, 0.9 if selected else 0.5),
-                width=2 if selected else 1,
-                antialias=True,
-            )
-            self.view3d.addItem(ring_item)
-            self.dynamic_gl_items.append(ring_item)
+            valid_ring = np.isfinite(ring_stereotaxic[:, 1])
+            for valid_indices in np.split(
+                np.flatnonzero(valid_ring),
+                np.flatnonzero(np.diff(np.flatnonzero(valid_ring)) > 1) + 1,
+            ) if np.any(valid_ring) else ():
+                if len(valid_indices) < 2:
+                    continue
+                ring_volume = probe_stereotaxic_to_volume(
+                    ring_stereotaxic[valid_indices], self.bregma_voxel, VOXEL_UM
+                )
+                ring_item = gl.GLLinePlotItem(
+                    pos=volume_to_gl(ring_volume),
+                    color=(*rgb, 0.9 if selected else 0.5),
+                    width=2 if selected else 1,
+                    antialias=True,
+                )
+                self.view3d.addItem(ring_item)
+                self.dynamic_gl_items.append(ring_item)
+            if selected and not np.all(valid_ring):
+                if warning not in self.probe_fit_summary.text():
+                    self.probe_fit_summary.setText(self.probe_fit_summary.text() + warning)
+                self.probe_fit_summary.setToolTip(
+                    "Part of the insertion-radius boundary lies outside the dorsal Isocortex surface; "
+                    "the 3D view shows only anatomically valid boundary arcs."
+                )
 
             angle_low = max(0.0, constraint.angle_deg - constraint.angle_tolerance_deg)
             angle_high = min(90.0, constraint.angle_deg + constraint.angle_tolerance_deg)
             depth_um = min(float(constraint.maximum_insertion_depth_um), 4000.0)
             cone_paths = []
-            for angle_deg, alpha in ((angle_low, 0.45), (angle_high, 0.75)):
-                horizontal = depth_um * np.cos(np.deg2rad(angle_deg))
-                ventral = depth_um * np.sin(np.deg2rad(angle_deg))
-                for azimuth in np.linspace(0.0, 2.0 * np.pi, 9)[:-1]:
-                    entry_dv_um = self._surface_dv_um(constraint.ap_um, constraint.ml_um)
-                    endpoint = np.array(
-                        [
-                            constraint.ap_um + horizontal * np.cos(azimuth),
-                            entry_dv_um - ventral,
-                            constraint.ml_um + horizontal * np.sin(azimuth),
-                        ]
-                    )
-                    path = np.vstack(
-                        [
-                            [constraint.ap_um, entry_dv_um, constraint.ml_um],
-                            endpoint,
-                        ]
-                    )
-                    volume = probe_stereotaxic_to_volume(path, self.bregma_voxel, VOXEL_UM)
-                    cone_paths.append((volume, alpha))
+            entry_dv_um = self._surface_dv_um(constraint.ap_um, constraint.ml_um)
+            if np.isfinite(entry_dv_um):
+                for angle_deg, alpha in ((angle_low, 0.45), (angle_high, 0.75)):
+                    horizontal = depth_um * np.cos(np.deg2rad(angle_deg))
+                    ventral = depth_um * np.sin(np.deg2rad(angle_deg))
+                    for azimuth in np.linspace(0.0, 2.0 * np.pi, 9)[:-1]:
+                        endpoint = np.array(
+                            [
+                                constraint.ap_um + horizontal * np.cos(azimuth),
+                                entry_dv_um - ventral,
+                                constraint.ml_um + horizontal * np.sin(azimuth),
+                            ]
+                        )
+                        path = np.vstack(
+                            [
+                                [constraint.ap_um, entry_dv_um, constraint.ml_um],
+                                endpoint,
+                            ]
+                        )
+                        volume = probe_stereotaxic_to_volume(path, self.bregma_voxel, VOXEL_UM)
+                        cone_paths.append((volume, alpha))
+            elif selected:
+                if warning not in self.probe_fit_summary.text():
+                    self.probe_fit_summary.setText(self.probe_fit_summary.text() + warning)
+                self.probe_fit_summary.setToolTip(
+                    "The planned insertion center is outside the dorsal Isocortex surface; "
+                    "valid parts of the uncertainty boundary remain visible."
+                )
             for volume, alpha in cone_paths:
                 cone_item = gl.GLLinePlotItem(
                     pos=volume_to_gl(volume),

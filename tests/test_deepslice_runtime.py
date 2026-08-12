@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from source import deepslice_runtime as DEEPSLICE_RUNTIME
+from source.probe_constraints import direction_from_attack_angle
 
 
 ROOT = Path(__file__).parents[1]
@@ -128,6 +129,69 @@ def test_validated_deepslice_runtime_recovers_known_atlas_planes():
     assert runtime["backend"] in {"ONNX Runtime DirectML", "ONNX Runtime CPU"}
     assert np.max(np.abs(alignments[:, 0] - expected_indices)) < 5.0
     assert np.max(np.abs(alignments[:, 1:])) < TRACKER.DEEPSLICE_REVIEW_TILT_DEG
+
+
+def test_real_deepslice_predictions_flow_into_physical_constraint_solver():
+    expected_indices = np.asarray([120, 216, 320])
+    image_paths = [
+        str(ROOT / "tests" / "data" / f"allen_average_coronal_{index}.png")
+        for index in expected_indices
+    ]
+    records, _, _, _, _ = TRACKER.run_deepslice_inference(
+        image_paths, queue.SimpleQueue(), threading.Event()
+    )
+    predicted = {
+        Path(record["Filenames"]).name: TRACKER.quicknii_to_tracker_alignment(
+            record, TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML
+        )[0]
+        for record in records
+    }
+    model_indices = [
+        predicted[f"allen_average_coronal_{index}.png"] for index in expected_indices
+    ]
+    lattices = {
+        session: {
+            int(expected): (0.02, {}),
+            int(round(model)): (0.0, {}),
+        }
+        for session, (expected, model) in enumerate(zip(expected_indices, model_indices))
+    }
+    bregma = np.asarray([216.0, 160.0, 228.0])
+    entry = np.asarray([2400.0, 0.0, 0.0])
+    direction = direction_from_attack_angle(20.0, 180.0)
+    volume_entry = TRACKER.probe_stereotaxic_to_volume(entry, bregma, TRACKER.VOXEL_UM)
+    volume_direction = direction / (
+        TRACKER.VOXEL_UM * TRACKER.STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+    )
+    points = {}
+    for session, atlas_index in enumerate(expected_indices):
+        intersection = volume_entry + (
+            (float(atlas_index) - volume_entry[0]) / volume_direction[0]
+        ) * volume_direction
+        points[session] = np.asarray([[intersection[2], intersection[1]]])
+
+    assignment, _, diagnostics = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1, 2],
+        {
+            "imec0": {
+                "constraint": TRACKER.ProbeInsertionConstraint(
+                    True, entry[0], entry[2], 25.0, 20.0, 1.0, 8000.0
+                )
+            }
+        },
+        lambda _probe, session, _ap, _lr, _dv: points[session],
+        lambda _ap, _lr, _dv: np.ones((320, 456), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        bregma,
+        TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML,
+        0.0,
+        0.0,
+    )
+
+    errors = np.abs(np.asarray([assignment[index] for index in range(3)]) - expected_indices)
+    assert errors.tolist() == [0, 0, 2]
+    assert diagnostics["probes"]["imec0"]["angle_deg"] == pytest.approx(20.0, abs=1.0)
 
 
 def test_smart_selection_crop_and_surface_fit_recover_known_oblique_plane():

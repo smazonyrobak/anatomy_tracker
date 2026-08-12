@@ -344,6 +344,44 @@ def test_probe_constraint_beam_recovers_noncoherent_ap_corrections():
     assert assignment == true_assignment
 
 
+def test_probe_constraint_solver_memoizes_duplicate_assignment_fits(monkeypatch):
+    bregma = np.asarray([100.0, 20.0, 80.0])
+    lattices = {
+        0: {100: (0.0, {}), 104: (0.02, {})},
+        1: {116: (0.0, {}), 120: (0.02, {})},
+    }
+    depths = {0: 200.0, 1: 1000.0}
+    original = TRACKER.fit_probe_ray
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(kwargs.get("max_starts"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(TRACKER, "fit_probe_ray", counted)
+    TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1],
+        {
+            "imec0": {
+                "constraint": TRACKER.ProbeInsertionConstraint(
+                    True, 0.0, 0.0, 25.0, 60.0, 0.5, 1500.0
+                )
+            }
+        },
+        _synthetic_probe_candidate_callback(bregma, depths),
+        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        bregma,
+        (220, 120, 160),
+        0.0,
+        0.0,
+    )
+
+    assert calls.count(6) == 4
+    assert calls.count(None) == 4
+
+
 def test_real_mind_probe_constraint_resolves_periodic_ap_decoy():
     shape = (64, 80, 112)
     bregma = np.asarray([12.0, 40.0, 56.0])

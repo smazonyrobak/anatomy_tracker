@@ -360,6 +360,40 @@ def test_disabled_constraint_preserves_original_probe_line_exactly(window):
         assert actual == pytest.approx(expected, abs=0.0)
 
 
+def test_unconstrained_probe_geometry_rejects_physical_shank_overrun(window):
+    session = TRACKER.SliceSession("slice")
+    session.probe_traces = {
+        "imec0": TRACKER.ProbeTrace(volume_points=[[100, 520, 90], [100, -80, 90]])
+    }
+    window.sessions = [session]
+    window.annotation_volume = np.zeros((220, 620, 180), dtype=np.uint8)
+    window.annotation_volume[:, 100:500, :] = 1
+    with pytest.raises(TRACKER.InfeasibleProbeConstraint, match="10 mm physical shank"):
+        window.probe_brain_geometry("imec0")
+
+
+def test_partial_cortical_target_ring_draws_only_finite_arcs_and_warns(window):
+    window.bregma_voxel = np.asarray([2.0, 2.0, 2.0])
+    window.annotation_volume = np.zeros((5, 5, 5), dtype=np.uint8)
+    window.annotation_volume[1:4, 1:4, 1:4] = 1
+    window.cortical_region_ids = {1}
+    window.probe_name.addItem("imec0")
+    window.probe_name.setCurrentText("imec0")
+    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
+        True, 50.0, 0.0, 50.0, 60.0, 5.0
+    )
+
+    window._refresh_3d()
+
+    lines = [
+        item for item in window.dynamic_gl_items
+        if isinstance(item, TRACKER.gl.GLLinePlotItem)
+    ]
+    assert lines
+    assert all(np.isfinite(item.pos).all() for item in lines)
+    assert "partly outside dorsal cortex" in window.probe_fit_summary.text()
+
+
 def test_constraint_fit_cache_tracks_points_constraint_surface_and_blocked_sessions(window, monkeypatch):
     window.bregma_voxel = np.zeros(3)
     window.annotation_volume = np.ones((6, 6, 6), dtype=np.uint16)
