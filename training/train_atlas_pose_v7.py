@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import cv2
@@ -1332,6 +1333,10 @@ def train_experiment(
     last_checkpoint = run_folder / "last.pt"
     interval_component_sums = {source: {} for source in ("registered", "synthetic")}
     interval_batch_counts = {source: 0 for source in interval_component_sums}
+    progress_path = run_folder / "progress.json"
+    progress_started = time.monotonic()
+    progress_loss = None
+    progress_update = progress_started
 
     while synthetic_start < len(train_manifest["ap_um"]):
         use_registered = bool(rng.random() < config["registered_fraction"])
@@ -1382,6 +1387,26 @@ def train_experiment(
             interval_component_sums[source][name] = (
                 interval_component_sums[source].get(name, 0.0) + value
             )
+        progress_loss = float(loss.detach()) if progress_loss is None else 0.95 * progress_loss + 0.05 * float(loss.detach())
+        now = time.monotonic()
+        if now - progress_update >= 2.0:
+            elapsed = max(now - progress_started, 1e-6)
+            views_per_second = synthetic_start / elapsed
+            progress = {
+                "step": step,
+                "unique_synthetic_views": synthetic_start,
+                "target_synthetic_views": len(train_manifest["ap_um"]),
+                "percent": 100.0 * synthetic_start / len(train_manifest["ap_um"]),
+                "smoothed_total_loss": progress_loss,
+                "learning_rate": learning_rate,
+                "views_per_second": views_per_second,
+                "eta_seconds": (len(train_manifest["ap_um"]) - synthetic_start) / max(views_per_second, 1e-6),
+                "source": source,
+            }
+            temporary = progress_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(progress), encoding="utf-8")
+            os.replace(temporary, progress_path)
+            progress_update = now
 
         if synthetic_start >= next_validation or synthetic_start == len(train_manifest["ap_um"]):
             current = _swap_to_ema(model, ema)
