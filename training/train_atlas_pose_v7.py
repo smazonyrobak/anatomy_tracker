@@ -1760,14 +1760,23 @@ def promote_export(
     destination.mkdir(parents=True, exist_ok=True)
     for name in ("atlas_pose.onnx", "atlas_pose.json", "provenance.json"):
         shutil.copy2(export_folder / name, destination / name)
-    for name in (
+    release_files = [
         "RELEASE_REPORT.json",
         "SEALED_metrics.json",
         "SEALED_predictions.csv",
         "PRESEALED_COMMITMENT.json",
         "SEALED_CLAIM.json",
         "SEALED_CONSUMPTION_RECEIPT.json",
-    ):
+    ]
+    if report.get("release_report_version") == 4:
+        release_files.extend(
+            (
+                "SEALED_RECOVERY_COMMITMENT.json",
+                "FAILED_ATTEMPT_CLAIM.json",
+                "FAILED_ATTEMPT_RECEIPT.json",
+            )
+        )
+    for name in release_files:
         shutil.copy2(release_report.with_name(name), destination / name)
     return {
         "APPROVED_ATLAS_POSE_MODEL_SHA256": model_sha256,

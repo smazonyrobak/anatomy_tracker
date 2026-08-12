@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import json
 import sys
 
 
@@ -26,18 +27,26 @@ if all(path.is_file() for path in NONLINEAR_FILES):
     NONLINEAR_DATAS = [
         (str(path), "models/DiffeomorphicRegistration") for path in NONLINEAR_FILES
     ]
+ATLAS_POSE_NAMES = [
+    "atlas_pose.onnx",
+    "atlas_pose.json",
+    "RELEASE_REPORT.json",
+    "SEALED_metrics.json",
+    "SEALED_predictions.csv",
+    "PRESEALED_COMMITMENT.json",
+    "SEALED_CLAIM.json",
+    "SEALED_CONSUMPTION_RECEIPT.json",
+]
+atlas_pose_release = ATLAS_POSE_MODELS / "RELEASE_REPORT.json"
+if atlas_pose_release.is_file() and json.loads(atlas_pose_release.read_text(encoding="utf-8")).get(
+    "release_report_version"
+) == 4:
+    ATLAS_POSE_NAMES.extend(
+        ("SEALED_RECOVERY_COMMITMENT.json", "FAILED_ATTEMPT_CLAIM.json", "FAILED_ATTEMPT_RECEIPT.json")
+    )
 ATLAS_POSE_FILES = [
     ATLAS_POSE_MODELS / name
-    for name in (
-        "atlas_pose.onnx",
-        "atlas_pose.json",
-        "RELEASE_REPORT.json",
-        "SEALED_metrics.json",
-        "SEALED_predictions.csv",
-        "PRESEALED_COMMITMENT.json",
-        "SEALED_CLAIM.json",
-        "SEALED_CONSUMPTION_RECEIPT.json",
-    )
+    for name in ATLAS_POSE_NAMES
 ]
 ATLAS_POSE_DATAS = []
 if all(path.is_file() for path in ATLAS_POSE_FILES):

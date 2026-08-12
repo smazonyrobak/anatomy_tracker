@@ -72,6 +72,10 @@ SEALED_EVALUATION_STATE_ROOT = (
 )
 SEALED_CLAIM_NAME = f"{SEALED_BENCHMARK_ID}.claim.json"
 SEALED_RECEIPT_NAME = f"{SEALED_BENCHMARK_ID}.receipt.json"
+SEALED_RECOVERY_MODE = "diagnostic-empty-annotation-mask-v1"
+SEALED_RECOVERABLE_FAILURE = (
+    "ValueError: The plane-distance metric needs a non-empty 2-D brain mask"
+)
 ATLAS_POSE_IMAGE_BATCH = 16
 VOXEL_UM = 25.0
 QUICKNII_SHAPE_ML_AP_DV = np.asarray((456.0, 528.0, 320.0))
@@ -304,6 +308,131 @@ def claim_sealed_benchmark(frozen: dict) -> tuple[dict, Path, Path]:
         },
     )
     return claim, claim_path, receipt_path
+
+
+def load_frozen_candidate_for_recovery(model_path: Path) -> dict:
+    model_sha256, metadata_sha256, metadata = verify_atlas_pose_candidate_bundle(model_path)
+    snapshot = SEALED_EVALUATION_STATE_ROOT / "candidate" / model_sha256
+    frozen_model = snapshot / "atlas_pose.onnx"
+    frozen_metadata = snapshot / "atlas_pose.json"
+    presealed_path = snapshot / "PRESEALED_COMMITMENT.json"
+    if (
+        not frozen_model.is_file()
+        or not frozen_metadata.is_file()
+        or not presealed_path.is_file()
+        or sha256(frozen_model) != model_sha256
+        or sha256(frozen_metadata) != metadata_sha256
+    ):
+        raise RuntimeError("SEALED RECOVERY REFUSED: the original frozen candidate is unavailable")
+    presealed = json.loads(presealed_path.read_text(encoding="utf-8"))
+    registered = metadata.get("registered_data", {}).get("sha256")
+    expected = {
+        "contract_version": 1,
+        "benchmark_id": SEALED_BENCHMARK_ID,
+        "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "training_source_sha256": metadata.get("source_sha256"),
+        "training_data_sha256": {
+            "synthetic_manifests": metadata.get("manifest_sha256"),
+            "registered_data": registered,
+            "atlas_data": metadata.get("atlas_data_sha256"),
+        },
+        "sealed_source_sha256": {
+            name: (registered or {}).get(name) for name in SEALED_SOURCE_FILES
+        },
+    }
+    if any(presealed.get(key) != value for key, value in expected.items()):
+        raise RuntimeError("SEALED RECOVERY REFUSED: the original commitment does not bind this candidate")
+    return {
+        "model_path": frozen_model,
+        "metadata_path": frozen_metadata,
+        "presealed_path": presealed_path,
+        "model_sha256": model_sha256,
+        "metadata_sha256": metadata_sha256,
+        "metadata": metadata,
+        "presealed": presealed,
+        "presealed_sha256": sha256(presealed_path),
+    }
+
+
+def recover_failed_sealed_benchmark(
+    frozen: dict,
+    acquisition_root: Path,
+) -> tuple[dict, Path, Path, dict]:
+    claim_path = SEALED_EVALUATION_STATE_ROOT / SEALED_CLAIM_NAME
+    receipt_path = SEALED_EVALUATION_STATE_ROOT / SEALED_RECEIPT_NAME
+    if not claim_path.is_file() or not receipt_path.is_file():
+        raise RuntimeError("SEALED RECOVERY REFUSED: the failed claim and receipt are required")
+    claim = json.loads(claim_path.read_text(encoding="utf-8"))
+    failed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if (
+        claim.get("model_sha256") != frozen["model_sha256"]
+        or claim.get("metadata_sha256") != frozen["metadata_sha256"]
+        or claim.get("presealed_commitment_sha256") != frozen["presealed_sha256"]
+        or failed_receipt.get("status") != "failed"
+        or failed_receipt.get("failure") != SEALED_RECOVERABLE_FAILURE
+        or failed_receipt.get("claim_sha256") != sha256(claim_path)
+        or failed_receipt.get("model_sha256") != frozen["model_sha256"]
+        or failed_receipt.get("presealed_commitment_sha256") != frozen["presealed_sha256"]
+    ):
+        raise RuntimeError("SEALED RECOVERY REFUSED: the failure is not the audited diagnostic failure")
+    output_root = Path(acquisition_root) / "SEALED_FINAL_EVALUATION"
+    if output_root.exists() and any(output_root.rglob("*")):
+        raise RuntimeError("SEALED RECOVERY REFUSED: sealed result artifacts already exist")
+
+    recovery_root = SEALED_EVALUATION_STATE_ROOT / "recovery" / frozen["model_sha256"]
+    failed_claim_path = recovery_root / "FAILED_ATTEMPT_CLAIM.json"
+    failed_receipt_path = recovery_root / "FAILED_ATTEMPT_RECEIPT.json"
+    _immutable_copy(claim_path, failed_claim_path, sha256(claim_path))
+    _immutable_copy(receipt_path, failed_receipt_path, sha256(receipt_path))
+    current_environment = evaluator_environment_commitment()
+    commitment = {
+        "contract_version": 1,
+        "benchmark_id": SEALED_BENCHMARK_ID,
+        "recovery_mode": SEALED_RECOVERY_MODE,
+        "model_sha256": frozen["model_sha256"],
+        "metadata_sha256": frozen["metadata_sha256"],
+        "presealed_commitment_sha256": frozen["presealed_sha256"],
+        "original_claim_sha256": sha256(failed_claim_path),
+        "failed_attempt_receipt_sha256": sha256(failed_receipt_path),
+        "failed_attempt_error": SEALED_RECOVERABLE_FAILURE,
+        "original_evaluator_environment_sha256": frozen["presealed"][
+            "evaluator_environment"
+        ]["commitment_sha256"],
+        "recovery_evaluator_environment": current_environment,
+        "repair_scope": (
+            "An empty annotation mask now makes only the optional QuickNII plane-distance "
+            "diagnostic unavailable; AP/L-R/D-V predictions and release metrics are unchanged."
+        ),
+        "sealed_result_artifacts_existed_before_recovery": False,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    commitment_path = recovery_root / "SEALED_RECOVERY_COMMITMENT.json"
+    if commitment_path.exists():
+        raise RuntimeError("SEALED RECOVERY REFUSED: this audited recovery was already consumed")
+    _atomic_json(commitment_path, commitment)
+    recovery = {
+        "commitment": commitment,
+        "commitment_path": commitment_path,
+        "commitment_sha256": sha256(commitment_path),
+        "failed_claim_path": failed_claim_path,
+        "failed_receipt_path": failed_receipt_path,
+        "failed_receipt_sha256": sha256(failed_receipt_path),
+    }
+    _atomic_json(
+        receipt_path,
+        {
+            "contract_version": 1,
+            "benchmark_id": SEALED_BENCHMARK_ID,
+            "claim_sha256": sha256(claim_path),
+            "model_sha256": frozen["model_sha256"],
+            "presealed_commitment_sha256": frozen["presealed_sha256"],
+            "sealed_recovery_commitment_sha256": recovery["commitment_sha256"],
+            "failed_attempt_receipt_sha256": recovery["failed_receipt_sha256"],
+            "status": "claimed_recovery",
+        },
+    )
+    return claim, claim_path, receipt_path, recovery
 
 
 def verify_source_commitment(root: Path, annotation_path: Path, frozen: dict) -> dict:
@@ -828,9 +957,15 @@ def prediction_rows(
             row["plane_distance_um"] = None
         else:
             mask = annotation_brain_mask(ground_truth_ouv[index], annotation)
-            distance = brain_masked_plane_distance(ground_truth_ouv[index], predicted_ouv[index], mask)
-            row["plane_distance_voxels"] = distance
-            row["plane_distance_um"] = distance * VOXEL_UM
+            if mask.any():
+                distance = brain_masked_plane_distance(
+                    ground_truth_ouv[index], predicted_ouv[index], mask
+                )
+                row["plane_distance_voxels"] = distance
+                row["plane_distance_um"] = distance * VOXEL_UM
+            else:
+                row["plane_distance_voxels"] = None
+                row["plane_distance_um"] = None
         output.append(row)
     return output
 
@@ -859,6 +994,7 @@ def sealed_release_report(
     sealed_claim_sha256: str,
     consumption_receipt_sha256: str,
     created_utc: str,
+    recovery: dict | None = None,
 ) -> dict:
     atlas_rows = primary_table[primary_table["method"] == "atlas_pose"]
     quality = release_quality_gate(atlas_rows)
@@ -890,7 +1026,7 @@ def sealed_release_report(
         and simultaneous_passed
     )
     payload = {
-        "release_report_version": 3,
+        "release_report_version": 4 if recovery else 3,
         "sealed": True,
         "benchmark_role": "final_release_gate",
         "created_utc": created_utc,
@@ -918,6 +1054,13 @@ def sealed_release_report(
         "release_approved": release_approved,
         "promotion_ready": release_approved,
     }
+    if recovery:
+        payload.update(
+            {
+                "sealed_recovery_commitment_sha256": recovery["commitment_sha256"],
+                "failed_attempt_receipt_sha256": recovery["failed_receipt_sha256"],
+            }
+        )
     payload["release_integrity_sha256"] = _canonical_json_sha256(payload)
     return payload
 
@@ -929,9 +1072,24 @@ def run_evaluation(
     if atlas_pose_model is None:
         raise ValueError("SEALED EVALUATION REFUSED: a frozen AtlasPose candidate is mandatory")
     acquisition_root = Path(acquisition_root)
-    frozen = freeze_candidate(Path(atlas_pose_model))
-    _, claim_path, receipt_path = claim_sealed_benchmark(frozen)
+    recovery_mode = os.environ.get("ATLAS_POSE_SEALED_RECOVERY")
+    if recovery_mode:
+        if recovery_mode != SEALED_RECOVERY_MODE:
+            raise ValueError(f"SEALED RECOVERY REFUSED: unknown recovery mode {recovery_mode!r}")
+        frozen = load_frozen_candidate_for_recovery(Path(atlas_pose_model))
+        _, claim_path, receipt_path, recovery = recover_failed_sealed_benchmark(
+            frozen, acquisition_root
+        )
+    else:
+        frozen = freeze_candidate(Path(atlas_pose_model))
+        _, claim_path, receipt_path = claim_sealed_benchmark(frozen)
+        recovery = None
     claim_sha256 = sha256(claim_path)
+    active_environment = (
+        recovery["commitment"]["recovery_evaluator_environment"]
+        if recovery
+        else frozen["presealed"]["evaluator_environment"]
+    )
     try:
         source_hashes = verify_source_commitment(acquisition_root, ANNOTATION_PATH, frozen)
         image_tree_sha256 = verify_complete_sealed_image_hashes(acquisition_root)
@@ -1012,9 +1170,10 @@ def run_evaluation(
                     paired_animal_bootstrap(primary_table, candidate, reference, metric)
                 )
             if candidate != "atlas_pose":
+                plane_rows = primary_table[primary_table["plane_distance_um"].notna()]
                 comparisons.append(
                     paired_animal_bootstrap(
-                        primary_table, candidate, reference, "plane_distance_um"
+                        plane_rows, candidate, reference, "plane_distance_um"
                     )
                 )
         joint_superiority = paired_animal_joint_superiority(
@@ -1029,7 +1188,7 @@ def run_evaluation(
             or sha256(frozen["metadata_path"]) != frozen["metadata_sha256"]
             or verify_source_commitment(acquisition_root, ANNOTATION_PATH, frozen) != source_hashes
             or verify_complete_sealed_image_hashes(acquisition_root) != image_tree_sha256
-            or evaluator_environment_commitment() != frozen["presealed"]["evaluator_environment"]
+            or evaluator_environment_commitment() != active_environment
         ):
             raise RuntimeError("SEALED EVALUATION REFUSED: candidate or evaluation source changed")
 
@@ -1091,9 +1250,7 @@ def run_evaluation(
             "presealed_commitment_sha256": frozen["presealed_sha256"],
             "sealed_claim_sha256": claim_sha256,
             "evaluator_sha256": sha256(Path(__file__)),
-            "evaluator_environment_sha256": frozen["presealed"]["evaluator_environment"][
-                "commitment_sha256"
-            ],
+            "evaluator_environment_sha256": active_environment["commitment_sha256"],
         }
         metrics_path = output / "SEALED_metrics.json"
         metrics_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -1108,12 +1265,27 @@ def run_evaluation(
             "status": "completed",
             "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         }
+        if recovery:
+            receipt.update(
+                {
+                    "sealed_recovery_commitment_sha256": recovery["commitment_sha256"],
+                    "failed_attempt_receipt_sha256": recovery["failed_receipt_sha256"],
+                }
+            )
         _atomic_json(receipt_path, receipt)
         artifact_paths = {
             "PRESEALED_COMMITMENT.json": frozen["presealed_path"],
             "SEALED_CLAIM.json": claim_path,
             "SEALED_CONSUMPTION_RECEIPT.json": receipt_path,
         }
+        if recovery:
+            artifact_paths.update(
+                {
+                    "SEALED_RECOVERY_COMMITMENT.json": recovery["commitment_path"],
+                    "FAILED_ATTEMPT_CLAIM.json": recovery["failed_claim_path"],
+                    "FAILED_ATTEMPT_RECEIPT.json": recovery["failed_receipt_path"],
+                }
+            )
         for name, source_path in artifact_paths.items():
             _immutable_copy(source_path, output / name, sha256(source_path))
 
@@ -1135,11 +1307,12 @@ def run_evaluation(
             sha256(metrics_path),
             sha256(predictions_path),
             sha256(Path(__file__)),
-            frozen["presealed"]["evaluator_environment"]["commitment_sha256"],
+            active_environment["commitment_sha256"],
             frozen["presealed_sha256"],
             claim_sha256,
             sha256(receipt_path),
             created_utc,
+            recovery,
         )
         (output / "DO_NOT_USE_FOR_MODEL_SELECTION.txt").write_text(
             "SEALED FINAL TEST OUTPUT. Do not use these results for training, tuning, early stopping, or model selection.\n",
@@ -1150,9 +1323,7 @@ def run_evaluation(
         )
         return output
     except BaseException as error:
-        _atomic_json(
-            receipt_path,
-            {
+        failed = {
                 "contract_version": 1,
                 "benchmark_id": SEALED_BENCHMARK_ID,
                 "claim_sha256": claim_sha256,
@@ -1161,8 +1332,15 @@ def run_evaluation(
                 "status": "failed",
                 "failed_at_utc": datetime.now(timezone.utc).isoformat(),
                 "failure": f"{type(error).__name__}: {error}",
-            },
-        )
+            }
+        if recovery:
+            failed.update(
+                {
+                    "sealed_recovery_commitment_sha256": recovery["commitment_sha256"],
+                    "failed_attempt_receipt_sha256": recovery["failed_receipt_sha256"],
+                }
+            )
+        _atomic_json(receipt_path, failed)
         raise
 
 

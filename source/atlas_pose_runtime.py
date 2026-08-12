@@ -603,9 +603,19 @@ def verify_atlas_pose_release_bundle(
     integrity = evidence.pop("release_integrity_sha256", None)
     if integrity != _canonical_json_sha256(evidence):
         raise RuntimeError("AtlasPose sealed release evidence integrity check failed")
+    release_version = evidence.get("release_report_version")
+    if release_version not in (3, 4):
+        raise RuntimeError("AtlasPose sealed release evidence version is unsupported")
+    recovery_paths = {
+        "commitment": evidence_path.with_name("SEALED_RECOVERY_COMMITMENT.json"),
+        "failed_claim": evidence_path.with_name("FAILED_ATTEMPT_CLAIM.json"),
+        "failed_receipt": evidence_path.with_name("FAILED_ATTEMPT_RECEIPT.json"),
+    }
+    if release_version == 4 and any(not path.is_file() for path in recovery_paths.values()):
+        raise RuntimeError("AtlasPose audited recovery evidence is incomplete")
     training_data_sha256 = _metadata_training_data_sha256(metadata)
     expected = {
-        "release_report_version": 3,
+        "release_report_version": release_version,
         "sealed": True,
         "benchmark_role": "final_release_gate",
         "release_approved": True,
@@ -681,6 +691,52 @@ def verify_atlas_pose_release_bundle(
     presealed = json.loads(presealed_path.read_text(encoding="utf-8"))
     claim = json.loads(sealed_claim_path.read_text(encoding="utf-8"))
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    recovery = None
+    failed_claim = None
+    failed_receipt = None
+    if release_version == 4:
+        recovery = json.loads(recovery_paths["commitment"].read_text(encoding="utf-8"))
+        failed_claim = json.loads(recovery_paths["failed_claim"].read_text(encoding="utf-8"))
+        failed_receipt = json.loads(recovery_paths["failed_receipt"].read_text(encoding="utf-8"))
+        recovery_valid = (
+            evidence.get("sealed_recovery_commitment_sha256")
+            == _file_sha256(recovery_paths["commitment"])
+            == receipt.get("sealed_recovery_commitment_sha256")
+            and evidence.get("failed_attempt_receipt_sha256")
+            == _file_sha256(recovery_paths["failed_receipt"])
+            == receipt.get("failed_attempt_receipt_sha256")
+            and _file_sha256(recovery_paths["failed_claim"]) == _file_sha256(sealed_claim_path)
+            and recovery.get("contract_version") == 1
+            and recovery.get("benchmark_id") == ATLAS_POSE_SEALED_BENCHMARK_ID
+            and recovery.get("recovery_mode") == "diagnostic-empty-annotation-mask-v1"
+            and recovery.get("model_sha256") == model_sha256
+            and recovery.get("metadata_sha256") == metadata_sha256
+            and recovery.get("presealed_commitment_sha256") == _file_sha256(presealed_path)
+            and recovery.get("original_claim_sha256") == _file_sha256(sealed_claim_path)
+            and recovery.get("failed_attempt_receipt_sha256")
+            == _file_sha256(recovery_paths["failed_receipt"])
+            and recovery.get("original_evaluator_environment_sha256")
+            == presealed.get("evaluator_environment", {}).get("commitment_sha256")
+            and recovery.get("recovery_evaluator_environment", {}).get("commitment_sha256")
+            == evidence.get("evaluator_environment_sha256")
+            and atlas_pose_evaluator_environment_valid(
+                recovery.get("recovery_evaluator_environment")
+            )
+            and recovery.get("sealed_result_artifacts_existed_before_recovery") is False
+            and failed_claim == claim
+            and failed_receipt.get("status") == "failed"
+            and failed_receipt.get("failure")
+            == "ValueError: The plane-distance metric needs a non-empty 2-D brain mask"
+            and failed_receipt.get("claim_sha256") == _file_sha256(sealed_claim_path)
+            and failed_receipt.get("model_sha256") == model_sha256
+            and failed_receipt.get("presealed_commitment_sha256")
+            == _file_sha256(presealed_path)
+        )
+    else:
+        recovery_valid = (
+            presealed.get("evaluator_environment", {}).get("commitment_sha256")
+            == evidence.get("evaluator_environment_sha256")
+        )
     if (
         sealed_metrics.get("benchmark_id") != ATLAS_POSE_SEALED_BENCHMARK_ID
         or sealed_metrics.get("benchmark_role") != "final_test_only"
@@ -704,8 +760,7 @@ def verify_atlas_pose_release_bundle(
         or presealed.get("training_data_sha256") != training_data_sha256
         or presealed.get("sealed_source_sha256")
         != _metadata_sealed_source_sha256(metadata)
-        or presealed.get("evaluator_environment", {}).get("commitment_sha256")
-        != evidence.get("evaluator_environment_sha256")
+        or not recovery_valid
         or not atlas_pose_evaluator_environment_valid(presealed.get("evaluator_environment"))
         or claim.get("contract_version") != 1
         or claim.get("benchmark_id") != ATLAS_POSE_SEALED_BENCHMARK_ID

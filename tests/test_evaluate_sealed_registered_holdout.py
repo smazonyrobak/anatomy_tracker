@@ -14,6 +14,7 @@ from training.evaluate_sealed_registered_holdout import (
     ordered_experiment_groups,
     paired_animal_bootstrap,
     paired_animal_joint_superiority,
+    prediction_rows,
     require_complete_sealed_images,
     release_quality_gate,
     sealed_release_report,
@@ -78,6 +79,18 @@ def test_annotation_mask_maps_quicknii_r_directly_to_asymmetric_ccf_ml():
     ouv = np.asarray([-126.0, 526.0, 318.0, 708.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     mask = evaluator.annotation_brain_mask(ouv, annotation, shape=(1, 2))
     assert np.array_equal(mask, np.asarray([[True, False]]))
+
+
+def test_empty_annotation_mask_only_omits_optional_plane_distance():
+    row = {**record(1, 1, 1, 1), "product": "5"}
+    ground_truth = np.asarray(row["quicknii_ouv"], dtype=np.float64)
+    pose = evaluator.quicknii_to_tracker_pose(ground_truth)[None, :]
+    result = prediction_rows(
+        [row], "deepslice_ai", pose, ground_truth[None, :], np.zeros((1, 1, 1))
+    )
+    assert result[0]["plane_distance_voxels"] is None
+    assert result[0]["plane_distance_um"] is None
+    assert result[0]["absolute_error_ap_um"] == 0.0
 
 
 def test_sealed_specimen_or_experiment_cannot_cross_the_training_boundary():
@@ -298,6 +311,41 @@ def test_global_claim_precedes_any_sealed_access_and_failure_consumes(tmp_path, 
     assert receipt["status"] == "failed"
     with pytest.raises(RuntimeError, match="already consumed"):
         evaluator.run_evaluation(tmp_path / "sealed", model)
+
+
+def test_audited_recovery_preserves_failed_receipt_and_frozen_candidate(tmp_path, monkeypatch):
+    model = _candidate_bundle(tmp_path)
+    state = tmp_path / "state"
+    original_environment = {"contract_version": 1, "commitment_sha256": "8" * 64}
+    recovery_environment = {"contract_version": 1, "commitment_sha256": "9" * 64}
+    monkeypatch.setattr(evaluator, "SEALED_EVALUATION_STATE_ROOT", state)
+    monkeypatch.setattr(evaluator, "evaluator_environment_commitment", lambda: original_environment)
+    frozen = evaluator.freeze_candidate(model)
+    _, claim_path, receipt_path = evaluator.claim_sealed_benchmark(frozen)
+    failed = {
+        "contract_version": 1,
+        "benchmark_id": evaluator.SEALED_BENCHMARK_ID,
+        "claim_sha256": evaluator.sha256(claim_path),
+        "model_sha256": frozen["model_sha256"],
+        "presealed_commitment_sha256": frozen["presealed_sha256"],
+        "status": "failed",
+        "failed_at_utc": "now",
+        "failure": evaluator.SEALED_RECOVERABLE_FAILURE,
+    }
+    evaluator._atomic_json(receipt_path, failed)
+    failed_sha256 = evaluator.sha256(receipt_path)
+    monkeypatch.setattr(evaluator, "evaluator_environment_commitment", lambda: recovery_environment)
+
+    recovered = evaluator.load_frozen_candidate_for_recovery(model)
+    _, _, _, recovery = evaluator.recover_failed_sealed_benchmark(
+        recovered, tmp_path / "sealed"
+    )
+
+    assert evaluator.sha256(recovered["model_path"]) == frozen["model_sha256"]
+    assert recovery["failed_receipt_sha256"] == failed_sha256
+    assert json.loads(recovery["failed_receipt_path"].read_text()) == failed
+    assert recovery["commitment"]["recovery_evaluator_environment"] == recovery_environment
+    assert json.loads(receipt_path.read_text())["status"] == "claimed_recovery"
 
 
 def test_candidate_is_mandatory_before_sealed_access(tmp_path, monkeypatch):
