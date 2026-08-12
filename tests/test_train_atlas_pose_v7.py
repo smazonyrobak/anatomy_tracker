@@ -50,6 +50,7 @@ from training.train_atlas_pose_v7 import (
     update_ema,
     validation_selection_summary,
     validation_selection_key,
+    write_training_progress,
 )
 from training.synthetic_atlas import APPEARANCE_MANIFEST_KEYS
 from source.atlas_pose_runtime import _canonical_json_sha256
@@ -88,6 +89,14 @@ class ToyPoseModel(nn.Module):
     def forward_with_orientation(self, image):
         output = self.training_outputs(image)
         return output["pose"], output["orientation_inverted_logit"]
+
+
+def test_training_progress_write_failure_is_nonfatal(tmp_path, monkeypatch):
+    path = tmp_path / "progress.json"
+    monkeypatch.setattr(os, "replace", lambda *_: (_ for _ in ()).throw(PermissionError()))
+    write_training_progress(path, {"step": 4})
+    assert not path.exists()
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_training_source_commitment_includes_release_contract():

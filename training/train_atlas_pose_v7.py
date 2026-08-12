@@ -1109,6 +1109,15 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def write_training_progress(path: Path, progress: dict) -> None:
+    temporary = path.with_name(f"{path.stem}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(progress), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+
+
 def write_diagnostic_plot(report: dict, path: Path) -> None:
     import matplotlib
 
@@ -1312,6 +1321,15 @@ def train_experiment(
 ) -> dict:
     run_folder.mkdir(parents=True, exist_ok=True)
     model.to(device)
+    resume_checkpoint = None
+    if config.get("resume_checkpoint"):
+        resume_checkpoint = torch.load(
+            Path(config["resume_checkpoint"]), map_location=device, weights_only=True
+        )
+        for key in ("architecture", "head", "renderer", "batch_size", "registered_fraction", "consistency", "anatomy"):
+            if resume_checkpoint["config"].get(key) != config.get(key):
+                raise RuntimeError(f"Resume checkpoint disagrees on {key}")
+        model.load_state_dict(resume_checkpoint.get("training_model", resume_checkpoint["model"]))
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
@@ -1333,8 +1351,41 @@ def train_experiment(
     last_checkpoint = run_folder / "last.pt"
     interval_component_sums = {source: {} for source in ("registered", "synthetic")}
     interval_batch_counts = {source: 0 for source in interval_component_sums}
+    if resume_checkpoint is not None:
+        record = resume_checkpoint["record"]
+        synthetic_start = int(record["unique_synthetic_views"])
+        step = int(record["step"])
+        next_validation = min(
+            (synthetic_start // config["validation_interval"] + 1) * config["validation_interval"],
+            len(train_manifest["ap_um"]),
+        )
+        history_path = run_folder / "history.json"
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+        if not history or int(history[-1]["step"]) != step:
+            raise RuntimeError("Resume checkpoint does not match training history")
+        ema = {name: value.to(device) for name, value in resume_checkpoint["model"].items()}
+        if "optimizer" in resume_checkpoint:
+            optimizer.load_state_dict(resume_checkpoint["optimizer"])
+        if "scaler" in resume_checkpoint:
+            scaler.load_state_dict(resume_checkpoint["scaler"])
+        if "rng_state" in resume_checkpoint:
+            rng.bit_generator.state = resume_checkpoint["rng_state"]
+        else:
+            rng.random(step)
+        best_payload = torch.load(best_checkpoint, map_location="cpu", weights_only=True)
+        best_record = best_payload["record"]
+        best_score = float(best_record["validation_selection_score"])
+        best_selection_key = checkpoint_validation_key(
+            best_record["validation_selection"],
+            best_record["validation_final_gate"],
+            best_record["synthetic_validation_gate"],
+        )
+        best_checkpoint_eligible = bool(best_record["checkpoint_eligible"])
+        best_step = int(best_record["step"])
+        stale = sum(int(item["step"]) > best_step for item in history)
     progress_path = run_folder / "progress.json"
     progress_started = time.monotonic()
+    progress_start_views = synthetic_start
     progress_loss = None
     progress_update = progress_started
 
@@ -1391,7 +1442,7 @@ def train_experiment(
         now = time.monotonic()
         if now - progress_update >= 2.0:
             elapsed = max(now - progress_started, 1e-6)
-            views_per_second = synthetic_start / elapsed
+            views_per_second = (synthetic_start - progress_start_views) / elapsed
             progress = {
                 "step": step,
                 "unique_synthetic_views": synthetic_start,
@@ -1402,10 +1453,9 @@ def train_experiment(
                 "views_per_second": views_per_second,
                 "eta_seconds": (len(train_manifest["ap_um"]) - synthetic_start) / max(views_per_second, 1e-6),
                 "source": source,
+                "resumed_from_views": progress_start_views,
             }
-            temporary = progress_path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(progress), encoding="utf-8")
-            os.replace(temporary, progress_path)
+            write_training_progress(progress_path, progress)
             progress_update = now
 
         if synthetic_start >= next_validation or synthetic_start == len(train_manifest["ap_um"]):
@@ -1469,6 +1519,10 @@ def train_experiment(
             (run_folder / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
             checkpoint_payload = {
                 "model": {key: value.cpu() for key, value in ema.items()},
+                "training_model": {key: value.cpu() for key, value in current.items()},
+                "optimizer": optimizer.state_dict(),
+                "scaler": scaler.state_dict(),
+                "rng_state": rng.bit_generator.state,
                 "config": config,
                 "record": record,
             }
@@ -1734,6 +1788,11 @@ def experiment_config(
 
 
 def run_experiment(config: dict, export: bool = False) -> dict:
+    config = dict(config)
+    if config.get("resume_checkpoint"):
+        resume_checkpoint = Path(config["resume_checkpoint"]).resolve()
+        config["resume_checkpoint"] = str(resume_checkpoint)
+        config["resume_checkpoint_sha256"] = file_sha256(resume_checkpoint)
     run_folder = WORKSPACE / "runs" / config["name"]
     source_hashes = training_source_hashes()
     git_provenance = git_source_provenance()
