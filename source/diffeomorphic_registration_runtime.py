@@ -10,6 +10,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import SimpleITK as sitk
 
 from nonlinear_registration import (
     COORDINATE_CONVENTION,
@@ -30,6 +31,25 @@ from nonlinear_registration import (
 
 INPUT_NAMES = MODEL_INPUT_NAMES
 OUTPUT_NAMES = MODEL_OUTPUT_NAMES
+CLASSICAL_BACKEND = "bounded_bspline_mattes_mi_v1"
+CLASSICAL_BACKEND_CONTRACT = {
+    "backend": CLASSICAL_BACKEND,
+    "implementation": "SimpleITK BSplineTransform + Mattes mutual information",
+    "mesh_size": [4, 3],
+    "scale_factors": [1, 2],
+    "shrink_factors": [2, 1],
+    "smoothing_sigmas": [1, 0],
+    "maximum_velocity_px": 8.0,
+    "runtime_gates": RUNTIME_GATE_CONTRACT,
+}
+CLASSICAL_MODEL_SHA256 = hashlib.sha256(
+    CLASSICAL_BACKEND.encode("ascii")
+).hexdigest()
+CLASSICAL_MANIFEST_SHA256 = hashlib.sha256(
+    json.dumps(
+        CLASSICAL_BACKEND_CONTRACT, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+).hexdigest()
 # Deliberately unset until native-secondary and independent internal-landmark evidence pass review.
 APPROVED_NONLINEAR_RELEASE: dict[str, str] | None = None
 APPROVED_RELEASE_KEYS = (
@@ -255,6 +275,181 @@ def _correspondence_diagnostics(
         "surface_dice_delta": surface_after - surface_before,
         "retained_coverage": retained,
     }
+
+
+def verify_classical_registration_backend() -> tuple[str, str, dict]:
+    if sitk.Version_MajorVersion() < 2:
+        raise RuntimeError("Anatomical fitting requires SimpleITK 2 or newer")
+    return CLASSICAL_MODEL_SHA256, CLASSICAL_MANIFEST_SHA256, dict(
+        CLASSICAL_BACKEND_CONTRACT
+    )
+
+
+def _identity_map(shape: tuple[int, int]) -> np.ndarray:
+    yy, xx = np.mgrid[: shape[0], : shape[1]].astype(np.float32)
+    return np.stack((xx, yy), axis=-1)
+
+
+def _remove_tissue_affine(
+    displacement_xy: np.ndarray,
+    tissue_mask: np.ndarray,
+) -> np.ndarray:
+    height, width = tissue_mask.shape
+    identity = _identity_map((height, width))
+    x = identity[..., 0] * (2.0 / max(width - 1, 1)) - 1.0
+    y = identity[..., 1] * (2.0 / max(height - 1, 1)) - 1.0
+    basis = np.stack((np.ones_like(x), x, y), axis=-1)[tissue_mask]
+    coefficients = np.linalg.lstsq(
+        basis.astype(np.float64),
+        displacement_xy[tissue_mask].astype(np.float64),
+        rcond=None,
+    )[0]
+    return displacement_xy - np.einsum(
+        "...k,kc->...c", np.stack((np.ones_like(x), x, y), axis=-1), coefficients
+    ).astype(np.float32)
+
+
+def _integrate_stationary_velocity(
+    velocity_xy: np.ndarray,
+    steps: int = 7,
+) -> np.ndarray:
+    identity = _identity_map(velocity_xy.shape[:2])
+    displacement = np.asarray(velocity_xy, dtype=np.float32) / float(2**steps)
+    for _ in range(steps):
+        sample_map = identity + displacement
+        sampled = np.stack(
+            [
+                cv2.remap(
+                    displacement[..., axis],
+                    sample_map[..., 0],
+                    sample_map[..., 1],
+                    cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                )
+                for axis in range(2)
+            ],
+            axis=-1,
+        )
+        displacement += sampled
+    return identity + displacement
+
+
+def run_classical_diffeomorphic_registration(
+    fixed_atlas: np.ndarray,
+    moving_affine_slice: np.ndarray,
+    fixed_mask: np.ndarray,
+    moving_mask: np.ndarray,
+    *,
+    pixel_spacing_um: float,
+    source_image_sha256: str,
+    progress_messages=None,
+    cancel_event=None,
+) -> tuple[NonlinearWarp2D, dict]:
+    """Fit a bounded residual B-spline, then exponentiate it into inverse maps."""
+    if not np.isclose(float(pixel_spacing_um), MODEL_PIXEL_SPACING_UM):
+        raise ValueError("Anatomical fitting requires explicit 25 um one-to-one atlas pixels")
+    fixed_mask = np.asarray(fixed_mask) > 0.5
+    moving_mask = np.asarray(moving_mask) > 0.5
+    if fixed_mask.shape != moving_mask.shape or not fixed_mask.any() or not moving_mask.any():
+        raise ValueError("Anatomical fitting needs non-empty masks on one shared canvas")
+    fixed = _gray_unit(fixed_atlas, fixed_mask)
+    moving = _gray_unit(moving_affine_slice, moving_mask)
+    fixed_image = sitk.GetImageFromArray(fixed)
+    moving_image = sitk.GetImageFromArray(moving)
+    fixed_mask_image = sitk.GetImageFromArray(fixed_mask.astype(np.uint8))
+    moving_mask_image = sitk.GetImageFromArray(moving_mask.astype(np.uint8))
+    transform = sitk.BSplineTransformInitializer(
+        fixed_image, CLASSICAL_BACKEND_CONTRACT["mesh_size"], order=3
+    )
+    registration = sitk.ImageRegistrationMethod()
+    registration.SetMetricAsMattesMutualInformation(32)
+    registration.SetMetricFixedMask(fixed_mask_image)
+    registration.SetMetricMovingMask(moving_mask_image)
+    registration.SetMetricSamplingStrategy(registration.RANDOM)
+    registration.SetMetricSamplingPercentage(0.15, 73051)
+    registration.SetInterpolator(sitk.sitkLinear)
+    registration.SetOptimizerAsGradientDescent(
+        learningRate=0.5,
+        numberOfIterations=45,
+        convergenceMinimumValue=1e-5,
+        convergenceWindowSize=6,
+    )
+    registration.SetOptimizerScalesFromPhysicalShift()
+    registration.SetInitialTransformAsBSpline(
+        transform,
+        inPlace=True,
+        scaleFactors=CLASSICAL_BACKEND_CONTRACT["scale_factors"],
+    )
+    registration.SetShrinkFactorsPerLevel(CLASSICAL_BACKEND_CONTRACT["shrink_factors"])
+    registration.SetSmoothingSigmasPerLevel(CLASSICAL_BACKEND_CONTRACT["smoothing_sigmas"])
+    registration.SmoothingSigmasAreSpecifiedInPhysicalUnitsOff()
+
+    def progress() -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            registration.StopRegistration()
+            return
+        if progress_messages is not None:
+            iteration = int(registration.GetOptimizerIteration())
+            progress_messages.put(
+                (min(85, 40 + iteration // 2), "Fitting local anatomy with bounded B-splines...")
+            )
+
+    registration.AddCommand(sitk.sitkIterationEvent, progress)
+    started = time.perf_counter()
+    fitted = registration.Execute(fixed_image, moving_image)
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError
+    displacement_filter = sitk.TransformToDisplacementFieldFilter()
+    displacement_filter.SetReferenceImage(fixed_image)
+    displacement = np.asarray(
+        sitk.GetArrayFromImage(displacement_filter.Execute(fitted)), dtype=np.float32
+    )
+    trusted = fixed_mask | moving_mask
+    distance = cv2.distanceTransform(trusted.astype(np.uint8), cv2.DIST_L2, 5)
+    support = np.clip(distance / 6.0, 0.0, 1.0).astype(np.float32)
+    velocity = _remove_tissue_affine(displacement, trusted) * support[..., None]
+    velocity[~trusted] = 0.0
+    magnitude = np.linalg.norm(velocity, axis=2)
+    maximum_velocity = float(CLASSICAL_BACKEND_CONTRACT["maximum_velocity_px"])
+    velocity *= np.minimum(1.0, maximum_velocity / np.maximum(magnitude, 1e-6))[..., None]
+
+    best_diagnostics = None
+    best_issues = None
+    best_warp = None
+    for scale in (1.0, 0.75, 0.50, 0.25, 0.125):
+        scaled = velocity * scale
+        warp = NonlinearWarp2D(
+            _integrate_stationary_velocity(scaled),
+            _integrate_stationary_velocity(-scaled),
+        )
+        diagnostics = {
+            "backend": CLASSICAL_BACKEND,
+            "provider": f"SimpleITK {sitk.Version_VersionString()} CPU",
+            "inference_seconds": float(time.perf_counter() - started),
+            "optimizer_stop_condition": registration.GetOptimizerStopConditionDescription(),
+            "model_sha256": CLASSICAL_MODEL_SHA256,
+            "manifest_sha256": CLASSICAL_MANIFEST_SHA256,
+            "source_image_sha256": source_image_sha256,
+            "atlas_image_sha256": array_sha256(np.asarray(fixed_atlas)),
+            "moving_affine_sha256": array_sha256(np.asarray(moving_affine_slice)),
+            "runtime_gate_version": RUNTIME_GATE_VERSION,
+            "native_shape": fixed_mask.shape,
+            "model_shape": fixed_mask.shape,
+            "pixel_spacing_um": MODEL_PIXEL_SPACING_UM,
+            "spatial_contract": "native_atlas_canvas_no_resize",
+            "modeled_trusted_fraction": 1.0,
+            "rejection_probability": 0.0,
+            **_correspondence_diagnostics(
+                fixed, moving, fixed_mask, moving_mask, warp.atlas_to_affine_xy
+            ),
+            **warp.diagnostics(fixed_mask, moving_mask),
+        }
+        issues = nonlinear_runtime_acceptance_issues(diagnostics)
+        if best_diagnostics is None or diagnostics["mind_improvement"] > best_diagnostics["mind_improvement"]:
+            best_diagnostics, best_issues, best_warp = diagnostics, issues, warp
+        if not issues:
+            return warp, diagnostics
+    raise DiffeomorphicRegistrationRejected(best_issues, best_diagnostics)
 
 
 def verify_diffeomorphic_attestation_inputs(

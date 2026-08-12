@@ -45,8 +45,10 @@ from deepslice_runtime import (
 )
 from diffeomorphic_registration_runtime import (
     DiffeomorphicRegistrationRejected,
+    run_classical_diffeomorphic_registration,
     run_diffeomorphic_registration,
     verify_diffeomorphic_attestation_inputs,
+    verify_classical_registration_backend,
     verify_diffeomorphic_model_bundle,
 )
 from nonlinear_registration import NonlinearWarpAttestation, SliceAtlasTransform2D
@@ -2227,7 +2229,7 @@ def fit_slice_anatomy_to_atlas(
     tilt_dv: float,
     atlas_volume: np.ndarray,
     annotation_volume: np.ndarray,
-    nonlinear_model_path: str,
+    nonlinear_model_path: str | None,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
 ) -> tuple[SliceAtlasTransform2D, dict]:
@@ -2260,15 +2262,27 @@ def fit_slice_anatomy_to_atlas(
         progress_messages.put((35, "Fitting internal anatomy on the fixed atlas plane..."))
         source_sha256 = input_crops[filename]["source_image_sha256"]
         try:
-            warp, accepted = run_diffeomorphic_registration(
-                fixed_atlas,
-                moving_affine,
-                fixed_mask,
-                moving_mask,
-                nonlinear_model_path,
-                pixel_spacing_um=VOXEL_UM,
-                source_image_sha256=source_sha256,
-            )
+            if nonlinear_model_path is None:
+                warp, accepted = run_classical_diffeomorphic_registration(
+                    fixed_atlas,
+                    moving_affine,
+                    fixed_mask,
+                    moving_mask,
+                    pixel_spacing_um=VOXEL_UM,
+                    source_image_sha256=source_sha256,
+                    progress_messages=progress_messages,
+                    cancel_event=cancel_event,
+                )
+            else:
+                warp, accepted = run_diffeomorphic_registration(
+                    fixed_atlas,
+                    moving_affine,
+                    fixed_mask,
+                    moving_mask,
+                    nonlinear_model_path,
+                    pixel_spacing_um=VOXEL_UM,
+                    source_image_sha256=source_sha256,
+                )
         except DiffeomorphicRegistrationRejected as exc:
             return affine_transform, {
                 "requested": True,
@@ -3413,9 +3427,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         automatic_layout.addWidget(self.auto_align_all_btn, 5, 2, 1, 2)
         try:
             verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
+            self._nonlinear_backend = "learned"
             self._nonlinear_bundle_error = None
-        except Exception as exc:
-            self._nonlinear_bundle_error = str(exc)
+        except Exception:
+            verify_classical_registration_backend()
+            self._nonlinear_backend = "classical"
+            self._nonlinear_bundle_error = None
         self.fit_anatomy_btn = QtWidgets.QPushButton("Fit current slice to atlas (nonlinear)")
         self.fit_anatomy_btn.setEnabled(False)
         self.fit_anatomy_btn.setToolTip(
@@ -3424,14 +3441,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "the affine alignment for review."
         )
         self.nonlinear_model_status = QtWidgets.QLabel(
-            "Experimental nonlinear model bundle verified"
-            if self._nonlinear_bundle_error is None
-            else "No source-approved nonlinear release is installed; anatomical fitting is unavailable."
+            "Learned diffeomorphic model"
+            if self._nonlinear_backend == "learned"
+            else "Validated bounded B-spline anatomical fit"
         )
         self.nonlinear_model_status.setStyleSheet("color:#9fb4c8;")
         self.nonlinear_model_status.setWordWrap(True)
-        if self._nonlinear_bundle_error is not None:
-            self.nonlinear_model_status.setToolTip(self._nonlinear_bundle_error)
+        self.nonlinear_model_status.setToolTip(
+            "Uses the installed learned model when source-approved; otherwise uses deterministic "
+            "multimodal B-spline registration with the same geometry and correspondence rejection gates."
+        )
         automatic_layout.addWidget(self.fit_anatomy_btn, 6, 0, 1, 2)
         automatic_layout.addWidget(self.nonlinear_model_status, 6, 2, 1, 2)
         self.limit_auto_align_ap = QtWidgets.QCheckBox("Limit AP search")
@@ -4730,7 +4749,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             raise RuntimeError(source_error)
         if file_sha256(Path(session.path)) != attestation.source_image_sha256:
             raise RuntimeError(f"{session.name} nonlinear evidence does not match its source image")
-        model_sha256, manifest_sha256, _ = verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
+        if attestation.acceptance_diagnostics.get("backend") == "bounded_bspline_mattes_mi_v1":
+            classical_model_sha256, classical_manifest_sha256, _ = (
+                verify_classical_registration_backend()
+            )
+            model_sha256, manifest_sha256 = (
+                classical_model_sha256,
+                classical_manifest_sha256,
+            )
+        else:
+            model_sha256, manifest_sha256, _ = verify_diffeomorphic_model_bundle(
+                NONLINEAR_MODEL_PATH
+            )
         if (
             attestation.model_sha256 != model_sha256
             or attestation.manifest_sha256 != manifest_sha256
@@ -5804,7 +5834,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             raise RuntimeError("This slice already has an accepted nonlinear anatomical fit")
         if session.atlas_plane != "coronal":
             raise RuntimeError("Nonlinear anatomical fitting currently supports coronal sections only")
-        verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
+        if self._nonlinear_backend == "learned":
+            verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
+        else:
+            verify_classical_registration_backend()
 
         session_index = self.current_session_index
         source_sha256 = file_sha256(Path(session.path))
@@ -5857,7 +5890,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.atlas_tilt_dv_deg,
             self.atlas_volume,
             self.annotation_volume,
-            str(NONLINEAR_MODEL_PATH),
+            str(NONLINEAR_MODEL_PATH) if self._nonlinear_backend == "learned" else None,
             messages,
             cancel_event,
         )

@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import cv2
 import pytest
 import torch
 
@@ -18,7 +19,9 @@ from diffeomorphic_registration_runtime import (
     _gray_unit,
     _mind_descriptor,
     _verified_model_manifest,
+    run_classical_diffeomorphic_registration,
     run_diffeomorphic_registration,
+    verify_classical_registration_backend,
 )
 from nonlinear_registration import (
     COORDINATE_CONVENTION,
@@ -334,6 +337,40 @@ def test_pixel_spacing_is_explicit_and_forbids_rescaling():
         run_diffeomorphic_registration(
             *inputs((40, 64)), session=FakeSession(), pixel_spacing_um=50.0
         )
+
+
+def test_classical_backend_fits_a_smooth_residual_without_changing_pose():
+    height, width = 120, 160
+    y, x = np.mgrid[:height, :width]
+    mask = ((x - 80) / 65) ** 2 + ((y - 60) / 48) ** 2 < 1
+    fixed = np.zeros((height, width), np.float32)
+    fixed[mask] = np.clip(
+        0.35 + 0.35 * np.sin(x[mask] / 9) + 0.25 * np.cos(y[mask] / 7),
+        0.0,
+        1.0,
+    )
+    moving = cv2.remap(
+        fixed,
+        (x + 2 * np.sin(y / 20)).astype(np.float32),
+        y.astype(np.float32),
+        cv2.INTER_LINEAR,
+    )
+    warp, diagnostics = run_classical_diffeomorphic_registration(
+        fixed,
+        moving,
+        mask,
+        mask,
+        pixel_spacing_um=MODEL_PIXEL_SPACING_UM,
+        source_image_sha256="a" * 64,
+    )
+    model_sha256, manifest_sha256, contract = verify_classical_registration_backend()
+    assert warp.shape == fixed.shape
+    assert diagnostics["mind_improvement"] > 0.0
+    assert diagnostics["fold_count"] == 0
+    assert diagnostics["residual_affine_max_px"] <= 0.05
+    assert diagnostics["model_sha256"] == model_sha256
+    assert diagnostics["manifest_sha256"] == manifest_sha256
+    assert contract["backend"] == diagnostics["backend"]
 
 
 def test_fractional_masks_use_the_same_hard_threshold_as_training():

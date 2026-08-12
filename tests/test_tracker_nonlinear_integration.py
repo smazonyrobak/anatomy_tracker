@@ -566,14 +566,15 @@ def test_nonidentity_warp_has_one_overlay_probe_volume_and_export_convention(tmp
         app.processEvents()
 
 
-def test_no_promoted_bundle_disables_dedicated_anatomical_fit(tmp_path):
+def test_no_promoted_learned_bundle_uses_classical_anatomical_fit(tmp_path):
     if TRACKER.NONLINEAR_MODEL_PATH.is_file():
         pytest.skip("A promoted nonlinear bundle is installed")
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
     window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
     try:
         assert not window.fit_anatomy_btn.isEnabled()
-        assert "unavailable" in window.nonlinear_model_status.text()
+        assert window._nonlinear_backend == "classical"
+        assert "B-spline" in window.nonlinear_model_status.text()
         window._set_auto_constraint_controls_enabled(False)
         window._set_auto_constraint_controls_enabled(True)
         assert not window.fit_anatomy_btn.isEnabled()
@@ -594,9 +595,8 @@ def test_no_promoted_bundle_disables_dedicated_anatomical_fit(tmp_path):
             )
         ]
         window.current_session_index = 0
-        with pytest.raises(RuntimeError, match="Diffeomorphic ONNX model is unavailable"):
-            window._fit_current_slice_anatomy()
-        assert not window.auto_alignment_busy
+        window._update_nonlinear_fit_button()
+        assert window.fit_anatomy_btn.isEnabled()
     finally:
         window.close()
         app.processEvents()
