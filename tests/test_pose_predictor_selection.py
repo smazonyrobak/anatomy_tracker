@@ -495,7 +495,7 @@ def test_own_runtime_requires_and_verifies_source_pinned_release_evidence(tmp_pa
         runtime.run_atlas_pose_onnx([image], [mask], model)
 
 
-def test_brain_mask_affine_preserves_geometry_after_roll_and_inversion():
+def test_brain_mask_affine_corrects_roll_without_reflecting_user_orientation():
     runtime = sys.modules[TRACKER.run_atlas_pose_onnx.__module__]
     target = np.zeros((120, 180), np.uint8)
     cv2.ellipse(target, (90, 66), (66, 38), 0, 0, 360, 1, -1)
@@ -516,12 +516,17 @@ def test_brain_mask_affine_preserves_geometry_after_roll_and_inversion():
     rolled = cv2.warpAffine(target, rotation, size, flags=cv2.INTER_NEAREST)
     inverted = np.rot90(target, 2).copy()
 
-    for source, orientation_inverted in ((rolled, False), (inverted, True)):
-        matrix = runtime.brain_mask_affine(source, target, orientation_inverted)
-        mapped = cv2.warpPerspective(source, matrix, (target.shape[1], target.shape[0]), flags=cv2.INTER_NEAREST)
-        intersection = np.count_nonzero((mapped > 0) & (target > 0))
-        union = np.count_nonzero((mapped > 0) | (target > 0))
-        assert intersection / union > 0.97
+    rolled_matrix = runtime.brain_mask_affine(rolled, target)
+    mapped = cv2.warpPerspective(
+        rolled, rolled_matrix, (target.shape[1], target.shape[0]), flags=cv2.INTER_NEAREST
+    )
+    intersection = np.count_nonzero((mapped > 0) & (target > 0))
+    union = np.count_nonzero((mapped > 0) | (target > 0))
+    assert intersection / union > 0.97
+
+    inverted_matrix = runtime.brain_mask_affine(inverted, target)
+    assert np.linalg.det(rolled_matrix[:2, :2]) > 0.0
+    assert np.linalg.det(inverted_matrix[:2, :2]) > 0.0
 
 
 def test_own_runtime_rejects_a_sidecar_checksum_mismatch(tmp_path, monkeypatch):

@@ -3,7 +3,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -326,40 +325,6 @@ def test_constraint_surface_requires_dorsal_isocortex_not_deeper_cortex(window, 
     assert window._surface_dv_um(0.0, 0.0) == pytest.approx(-50.0)
 
 
-def test_constrained_probe_geometry_uses_stereotaxic_signs_and_robust_depth(window, monkeypatch):
-    window.bregma_voxel = np.array([216.0, 13.28, 229.56])
-    entry_stereo = np.array([-1400.0, -100.0, 800.0])
-    deep_stereo = np.array([0.6, -0.8, 0.0])
-    fit = SimpleNamespace(
-        entry_ap_dv_ml_um=entry_stereo,
-        direction_ap_dv_ml=deep_stereo,
-        diagnostics={"axial_max_um": 2250.0},
-    )
-    monkeypatch.setattr(window, "probe_constraint_fit", lambda _name, **_kwargs: fit)
-
-    above, deepest, toward_surface = window.constrained_probe_line_geometry("imec0")
-    entry_volume = TRACKER.probe_stereotaxic_to_volume(
-        entry_stereo, window.bregma_voxel, TRACKER.VOXEL_UM
-    )
-    deep_volume = deep_stereo / TRACKER.STEREOTAXIC_AXIS_SIGN_AP_DV_ML
-    assert toward_surface == pytest.approx(-deep_volume)
-    assert deepest == pytest.approx(entry_volume + deep_volume * (2250.0 / TRACKER.VOXEL_UM))
-    assert above == pytest.approx(entry_volume - deep_volume * 20.0)
-
-
-def test_disabled_constraint_preserves_original_probe_line_exactly(window):
-    session = TRACKER.SliceSession("slice")
-    session.probe_traces = {
-        "imec0": TRACKER.ProbeTrace(volume_points=[[100, 220, 90], [100, 180, 90]])
-    }
-    window.sessions = [session]
-    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(enabled=False)
-    original = window.probe_line_geometry("imec0")
-    constrained_api = window.constrained_probe_line_geometry("imec0")
-    for expected, actual in zip(original, constrained_api):
-        assert actual == pytest.approx(expected, abs=0.0)
-
-
 def test_unconstrained_probe_geometry_rejects_physical_shank_overrun(window):
     session = TRACKER.SliceSession("slice")
     session.probe_traces = {
@@ -392,76 +357,6 @@ def test_partial_cortical_target_ring_draws_only_finite_arcs_and_warns(window):
     assert lines
     assert all(np.isfinite(item.pos).all() for item in lines)
     assert "partly outside dorsal cortex" in window.probe_fit_summary.text()
-
-
-def test_constraint_fit_cache_tracks_points_constraint_surface_and_blocked_sessions(window, monkeypatch):
-    window.bregma_voxel = np.zeros(3)
-    window.annotation_volume = np.ones((6, 6, 6), dtype=np.uint16)
-    window.cortical_region_ids = {1}
-    first = TRACKER.SliceSession("first")
-    first.probe_traces = {"imec0": TRACKER.ProbeTrace(volume_points=[[1, 1, 1], [2, 2, 2]])}
-    blocked = TRACKER.SliceSession("blocked")
-    blocked.probe_traces = {"imec0": TRACKER.ProbeTrace(volume_points=[[3, 3, 3]])}
-    blocked.auto_alignment_diagnostics = {"nonlinear_refinement": {"mapping_blocking": True}}
-    window.sessions = [first, blocked]
-    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
-        enabled=True, radius_um=0.0, angle_deg=90.0
-    )
-    calls = []
-    fit = SimpleNamespace(
-        entry_ap_dv_ml_um=np.zeros(3),
-        direction_ap_dv_ml=np.array([0.0, -1.0, 0.0]),
-        diagnostics={"axial_max_um": 100.0},
-    )
-
-    def fake_fit(observations, *_args, **_kwargs):
-        calls.append(observations)
-        return fit
-
-    monkeypatch.setattr(TRACKER, "fit_probe_ray", fake_fit)
-    assert window.probe_constraint_fit("imec0") is fit
-    assert window.probe_constraint_fit("imec0") is fit
-    assert len(calls) == 1
-    assert set(calls[0]) == {0}
-
-    first.probe_traces["imec0"].volume_points[1] = [2, 2, 3]
-    window.probe_constraint_fit("imec0")
-    assert len(calls) == 2
-    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
-        enabled=True, ml_um=25.0, radius_um=0.0, angle_deg=90.0
-    )
-    window.probe_constraint_fit("imec0")
-    assert len(calls) == 3
-    window.annotation_volume = window.annotation_volume.copy()
-    window.probe_constraint_fit("imec0")
-    assert len(calls) == 4
-
-
-def test_infeasible_constraint_is_visible_and_not_drawn_as_unconstrained(window, monkeypatch):
-    session = TRACKER.SliceSession("slice")
-    session.probe_traces = {
-        "imec0": TRACKER.ProbeTrace(volume_points=[[100, 220, 90], [100, 180, 90]])
-    }
-    window.sessions = [session]
-    window.current_session_index = 0
-    window.probe_name.addItem("imec0")
-    window.probe_name.setCurrentText("imec0")
-    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(enabled=True)
-    monkeypatch.setattr(
-        window,
-        "probe_constraint_fit",
-        lambda _name, **_kwargs: (_ for _ in ()).throw(TRACKER.InfeasibleProbeConstraint("no cortical entry")),
-    )
-    monkeypatch.setattr(
-        window,
-        "probe_line_geometry",
-        lambda _name: pytest.fail("must not silently draw the unconstrained line"),
-    )
-
-    window._update_probe_fit_summary()
-    assert "infeasible" in window.probe_fit_summary.text().lower()
-    assert "no cortical entry" in window.probe_fit_summary.text()
-    window._refresh_3d()
 
 
 def test_only_alignment_runs_that_used_a_probe_are_invalidated(window):

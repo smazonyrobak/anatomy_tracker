@@ -313,17 +313,12 @@ def fuse_pose_predictions(poses: np.ndarray, weights: np.ndarray) -> np.ndarray:
 def brain_mask_affine(
     source_mask: np.ndarray,
     target_mask: np.ndarray,
-    orientation_inverted: bool = False,
 ) -> np.ndarray:
     source_y, source_x = np.nonzero(np.asarray(source_mask, dtype=bool))
     target_y, target_x = np.nonzero(np.asarray(target_mask, dtype=bool))
     if min(len(source_x), len(target_x)) < 64:
         raise ValueError("A brain surface is missing from the slice or predicted atlas plane")
     orientation, oriented_size = brain_orientation_affine(source_mask)
-    if orientation_inverted:
-        orientation = np.asarray(
-            [[-1.0, 0.0, oriented_size[0] - 1.0], [0.0, -1.0, oriented_size[1] - 1.0], [0.0, 0.0, 1.0]]
-        ) @ orientation
     source_points = (orientation @ np.column_stack((source_x, source_y, np.ones(len(source_x)))).T).T[:, :2]
     source_span = np.ptp(source_points, axis=0)
     target_span = np.asarray([np.ptp(target_x), np.ptp(target_y)], dtype=np.float64)

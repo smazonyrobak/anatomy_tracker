@@ -75,6 +75,69 @@ def direction_from_attack_angle(angle_deg: float, azimuth_deg: float) -> np.ndar
     )
 
 
+def insertion_plan_plane_feasibility(
+    constraint: ProbeInsertionConstraint,
+    plane: SlicePlane,
+    bregma_voxel: np.ndarray,
+    volume_shape: Sequence[int],
+    surface_dv: Callable[[float, float], float],
+    voxel_um: float = 25.0,
+) -> dict:
+    """Test whether any allowed insertion ray can intersect a candidate slice plane."""
+    angle_low, angle_high = _constraint_bounds(constraint)
+    maximum_depth = float(constraint.maximum_insertion_depth_um or 10000.0)
+    phases = np.linspace(0.0, 2.0 * np.pi, 17)[:-1]
+    entries = [(constraint.ap_um, constraint.ml_um)]
+    for fraction in (0.5, 1.0):
+        entries.extend(
+            (
+                constraint.ap_um + constraint.radius_um * fraction * np.cos(phase),
+                constraint.ml_um + constraint.radius_um * fraction * np.sin(phase),
+            )
+            for phase in phases
+        )
+
+    tangent_lr = np.tan(np.deg2rad(float(plane.tilt_lr_deg)))
+    tangent_dv = np.tan(np.deg2rad(float(plane.tilt_dv_deg)))
+    normal = np.asarray([-1.0, tangent_dv, -tangent_lr], dtype=np.float64)
+    normal /= np.linalg.norm(normal)
+    constant = float(voxel_um) * (
+        float(bregma_voxel[0])
+        - float(plane.ap_index)
+        - tangent_lr * (float(bregma_voxel[2]) - (float(volume_shape[2]) - 1.0) / 2.0)
+        - tangent_dv * (float(bregma_voxel[1]) - (float(volume_shape[1]) - 1.0) / 2.0)
+    ) / np.linalg.norm(np.asarray([-1.0, tangent_dv, -tangent_lr], dtype=np.float64))
+
+    angles = np.deg2rad(np.linspace(angle_low, angle_high, max(2, int(np.ceil(angle_high - angle_low)) + 1)))
+    horizontal_normal = float(np.hypot(normal[0], normal[2]))
+    derivative_center = -normal[1] * np.sin(angles)
+    derivative_radius = horizontal_normal * np.cos(angles)
+    minimum_derivative = float(np.min(derivative_center - derivative_radius))
+    maximum_derivative = float(np.max(derivative_center + derivative_radius))
+
+    required_depths = []
+    valid_entries = 0
+    for ap_um, ml_um in entries:
+        dv_um = float(surface_dv(float(ap_um), float(ml_um)))
+        if not np.isfinite(dv_um):
+            continue
+        valid_entries += 1
+        signed_distance = float(normal @ np.asarray([ap_um, dv_um, ml_um]) + constant)
+        if abs(signed_distance) <= float(voxel_um) / 2.0:
+            required_depths.append(0.0)
+        elif signed_distance > 0.0 and minimum_derivative < -1e-9:
+            required_depths.append(signed_distance / -minimum_derivative)
+        elif signed_distance < 0.0 and maximum_derivative > 1e-9:
+            required_depths.append(-signed_distance / maximum_derivative)
+    minimum_depth = min(required_depths, default=float("inf"))
+    return {
+        "feasible": bool(valid_entries and minimum_depth <= maximum_depth),
+        "minimum_required_depth_um": float(minimum_depth),
+        "maximum_depth_um": maximum_depth,
+        "valid_surface_entry_samples": int(valid_entries),
+    }
+
+
 def attack_angle_deg(direction_ap_dv_ml: np.ndarray) -> float:
     direction = np.asarray(direction_ap_dv_ml, dtype=np.float64)
     direction /= np.linalg.norm(direction)

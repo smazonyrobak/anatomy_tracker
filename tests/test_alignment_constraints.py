@@ -677,6 +677,56 @@ def test_slice_points_follow_rotation_and_both_flips_exactly():
     assert np.asarray(recovered) == pytest.approx(np.asarray(points))
 
 
+def test_user_selected_orientation_rejects_reflecting_model_affine():
+    source_mask = np.zeros((80, 120), dtype=np.uint8)
+    target_mask = np.zeros((100, 140), dtype=np.uint8)
+    cv2.ellipse(source_mask, (55, 42), (38, 25), 7, 0, 360, 1, -1)
+    cv2.circle(source_mask, (25, 35), 7, 0, -1)
+    cv2.ellipse(target_mask, (72, 50), (48, 31), 7, 0, 360, 1, -1)
+    cv2.circle(target_mask, (34, 41), 9, 0, -1)
+    reflecting = np.asarray([[-1.1, 0.0, 130.0], [0.0, 1.1, 4.0], [0.0, 0.0, 1.0]])
+
+    corrected = TRACKER.orientation_preserving_slice_to_atlas(
+        reflecting, source_mask, target_mask
+    )
+
+    assert np.linalg.det(corrected[:2, :2]) > 0.0
+
+
+def test_slice_flip_recomputes_atlas_points_and_tilt_without_mirroring_atlas(monkeypatch, tmp_path):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    try:
+        image = np.zeros((40, 60), dtype=np.uint8)
+        session = TRACKER.SliceSession(
+            name="slice",
+            raw_display=image,
+            adjusted=image,
+            rotated=image,
+            weight_image=image,
+            atlas_index=4,
+            atlas_tilt_ml_deg=7.0,
+            atlas_tilt_dv_deg=-3.0,
+            slice_atlas_transform=TRACKER.SliceAtlasTransform2D(np.eye(3), image.shape, image.shape),
+            probe_traces={"imec0": TRACKER.ProbeTrace(slice_points=[(10.0, 12.0)])},
+        )
+        window.sessions = [session]
+        window.current_session_index = 0
+        window.atlas_volume = np.zeros((8, *image.shape), dtype=np.uint8)
+        window.annotation_volume = np.ones((8, *image.shape), dtype=np.uint8)
+        window.current_atlas_image = image
+        monkeypatch.setattr(window, "_refresh_3d", lambda: None)
+
+        window._apply_slice_geometry(0.0, True, False)
+
+        assert session.atlas_tilt_ml_deg == pytest.approx(-7.0)
+        assert session.atlas_tilt_dv_deg == pytest.approx(-3.0)
+        assert session.probe_traces["imec0"].atlas_points == pytest.approx([(49.0, 12.0)])
+        assert session.probe_traces["imec0"].volume_points[0][2] == pytest.approx(49.0)
+    finally:
+        window.close()
+
+
 def test_offscreen_ui_requires_surfaces_and_global_alignment_uses_only_outlined_slices(tmp_path, monkeypatch):
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
     window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")

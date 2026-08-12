@@ -58,9 +58,9 @@ from probe_constraints import (
     SlicePlane,
     atlas_points_to_stereotaxic_um,
     fit_probe_ray,
+    insertion_plan_plane_feasibility,
     score_candidate_slice_plane,
     stereotaxic_to_volume as probe_stereotaxic_to_volume,
-    volume_to_stereotaxic_um as probe_volume_to_stereotaxic_um,
 )
 
 
@@ -1543,6 +1543,18 @@ def fit_surface_scale_translation(
     }
 
 
+def orientation_preserving_slice_to_atlas(
+    slice_to_atlas: np.ndarray,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+) -> np.ndarray:
+    """Keep the user-selected display orientation authoritative."""
+    matrix = np.asarray(slice_to_atlas, dtype=np.float64)
+    if np.linalg.det(matrix[:2, :2]) > 0.0:
+        return matrix
+    return brain_mask_affine(source_mask, target_mask)
+
+
 def refine_pose_search(
     converted: dict[int, tuple[float, float, float, np.ndarray | None]],
     records_by_session: dict[int, dict],
@@ -1574,6 +1586,11 @@ def refine_pose_search(
         name: specification
         for name, specification in (probe_constraints or {}).items()
         if specification["constraint"].enabled
+    }
+    observed_probe_constraints = {
+        name: specification
+        for name, specification in active_probe_constraints.items()
+        if sum(len(points) for points in specification["display_points_by_session"].values()) >= 2
     }
     if active_probe_constraints and bregma_voxel is None:
         raise ValueError("Bregma is required when surgical probe constraints are enabled")
@@ -1629,7 +1646,13 @@ def refine_pose_search(
                 matrix = brain_mask_affine(
                     prepared_inputs[filename]["brain_mask"],
                     target_mask,
-                    bool(records_by_session[session_index].get("initial_orientation_inverted", False)),
+                )
+            else:
+                filename = filenames[session_index]
+                matrix = orientation_preserving_slice_to_atlas(
+                    matrix,
+                    prepared_inputs[filename]["brain_mask"],
+                    target_mask,
                 )
             matrix, _ = fit_surface_scale_translation(
                 matrix,
@@ -1725,6 +1748,19 @@ def refine_pose_search(
                         *reference,
                     )
                 structural_distance = texture_distance + MIND_SURFACE_WEIGHT * surface_distance
+                plan_feasibility = {
+                    name: insertion_plan_plane_feasibility(
+                        specification["constraint"],
+                        SlicePlane(ap, tilt_lr, tilt_dv),
+                        bregma,
+                        atlas_volume.shape,
+                        surface_dv,
+                        VOXEL_UM,
+                    )
+                    for name, specification in active_probe_constraints.items()
+                } if active_probe_constraints else {}
+                if plan_feasibility and not all(value["feasible"] for value in plan_feasibility.values()):
+                    structural_distance = float("inf")
                 ap_prior = MIND_AP_PRIOR_WEIGHT * ((ap - predicted_ap) / ap_sigma) ** 2
                 tilt_prior = MIND_TILT_PRIOR_WEIGHT * (
                     ((tilt_lr - predicted_lr) / lr_sigma) ** 2
@@ -1737,6 +1773,7 @@ def refine_pose_search(
                         "surface_shape_distance": float(surface_distance),
                         "model_ap_prior": float(ap_prior),
                         "model_tilt_prior": float(tilt_prior),
+                        "probe_plan_feasibility": plan_feasibility,
                     },
                 )
                 evaluated_poses[session_index] += 1
@@ -1768,11 +1805,25 @@ def refine_pose_search(
             if not active_probe_constraints:
                 assignments, total = solve_ordered_lattice(values, ordered)
                 return assignments, total, None
+            plan_diagnostics = {
+                "applied": True,
+                "mode": "alignment_feasibility_only",
+                "probes": {
+                    name: {
+                        "constraint": asdict(specification["constraint"]),
+                        "trajectory_observations_used": name in observed_probe_constraints,
+                    }
+                    for name, specification in active_probe_constraints.items()
+                },
+            }
+            if not observed_probe_constraints:
+                assignments, total = solve_ordered_lattice(values, ordered)
+                return assignments, total, plan_diagnostics
             assert bregma is not None
-            return solve_probe_constrained_lattice(
+            assignments, total, diagnostics = solve_probe_constrained_lattice(
                 values,
                 ordered,
-                active_probe_constraints,
+                observed_probe_constraints,
                 candidate_probe_atlas_points,
                 lambda ap, lr, dv: coronal_oblique_slice(
                     annotation_volume,
@@ -1788,6 +1839,10 @@ def refine_pose_search(
                 float(tilt_dv),
                 quick=quick,
             )
+            diagnostics["mode"] = "alignment_feasibility_and_observed_geometry"
+            for name, value in plan_diagnostics["probes"].items():
+                diagnostics["probes"].setdefault(name, value)
+            return assignments, total, diagnostics
 
         initial_lattice = lattice(float(predicted_tilt[0]), float(predicted_tilt[1]), coarse_candidates)
         initial_assignment, _ = solve_ordered_lattice(initial_lattice, ordered_indices)
@@ -2089,7 +2144,13 @@ def solve_pose_alignment(
             matrix = brain_mask_affine(
                 prepared_inputs[filename]["brain_mask"],
                 atlas_mask,
-                bool(records_by_session[session_index].get("initial_orientation_inverted", False)),
+            )
+        else:
+            filename = Path(str(records_by_session[session_index]["Filenames"])).name
+            matrix = orientation_preserving_slice_to_atlas(
+                matrix,
+                prepared_inputs[filename]["brain_mask"],
+                atlas_mask,
             )
         matrix, surface_fit = fit_surface_scale_translation(
             matrix,
@@ -3169,11 +3230,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.sessions: list[SliceSession] = []
         self.current_session_index = -1
         self.probe_constraints: dict[str, ProbeInsertionConstraint] = {}
-        self._probe_constraint_fit_cache: dict[str, tuple[tuple, object | None, str | None]] = {}
-        self._probe_fit_preview_timer = QtCore.QTimer(self)
-        self._probe_fit_preview_timer.setSingleShot(True)
-        self._probe_fit_preview_timer.setInterval(150)
-        self._probe_fit_preview_timer.timeout.connect(self._refresh_probe_constraint_preview)
         self._loading_probe_constraints = False
         self.dynamic_gl_items: list[object] = []
         self.brain_mesh_item: gl.GLMeshItem | None = None
@@ -3275,9 +3331,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.rotation.setSingleStep(0.1)
         self.rotation.setSuffix(" deg")
         self.flip_horizontal = QtWidgets.QCheckBox("H")
-        self.flip_horizontal.setToolTip("Flip the slice horizontally")
+        self.flip_horizontal.setToolTip(
+            "Flip the displayed histology horizontally. The displayed A-to-P viewing orientation is authoritative."
+        )
         self.flip_vertical = QtWidgets.QCheckBox("V")
-        self.flip_vertical.setToolTip("Flip the slice vertically")
+        self.flip_vertical.setToolTip(
+            "Flip the displayed histology vertically. The displayed A-to-P viewing orientation is authoritative."
+        )
         slice_setup = QtWidgets.QGroupBox("Slices")
         slice_setup_layout = QtWidgets.QGridLayout(slice_setup)
         slice_setup_layout.addWidget(self.add_slice_btn, 0, 0)
@@ -3534,7 +3594,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         constraint_layout = QtWidgets.QGridLayout(constraint_group)
         self.use_probe_constraints = QtWidgets.QCheckBox("Use this probe's surgical constraints")
         self.use_probe_constraints.setToolTip(
-            "Use the planned bregma-centred insertion target and angle/depth limits for the active probe only."
+            "Restrict automatic slice alignment using the planned bregma-centred insertion target and "
+            "angle/depth limits. These values do not pull the final observed trajectory fit."
         )
         constraint_layout.addWidget(self.use_probe_constraints, 0, 0, 1, 6)
 
@@ -4392,13 +4453,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     f"{probe_name} surgical constraint changed",
                 )
         self._update_probe_constraint_controls()
-        self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
-        self.probe_fit_summary.setText("Fit: updating...")
-        self._probe_fit_preview_timer.start()
-
-    def _refresh_probe_constraint_preview(self) -> None:
-        self._update_probe_fit_summary(quick=True)
-        self._refresh_3d(quick_probe_fit=True)
+        self._update_probe_fit_summary()
+        self.status.setText(
+            f"{probe_name} surgical constraint updated; it will restrict the next automatic slice alignment."
+        )
+        self._refresh_3d()
 
     def _update_probe_constraint_controls(self) -> None:
         available = bool(self._active_probe_name())
@@ -4429,7 +4488,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     probe_name,
                     f"{probe_name} physical probe type changed",
                 )
-        self._probe_constraint_fit_cache.clear()
         self._update_probe_fit_summary()
         self._refresh_3d()
 
@@ -4450,112 +4508,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             np.array([ap_index, inside.min(), ml_index], dtype=np.float64), self.bregma_voxel
         )[1])
 
-    def probe_constraint_fit(self, probe_name: str, *, quick: bool = False):
-        constraint = self._probe_constraint(probe_name)
-        if constraint is None or not constraint.enabled:
-            return None
-        observations = {}
-        point_snapshot = []
-        for index, session in enumerate(self.sessions):
-            if (session.auto_alignment_diagnostics or {}).get(
-                "nonlinear_refinement", {}
-            ).get("mapping_blocking", False):
-                continue
-            trace = session.probe_traces.get(probe_name)
-            if trace is None or not trace.volume_points:
-                continue
-            volume_points = np.asarray(trace.volume_points, dtype=np.float64).reshape(-1, 3)
-            observations[index] = probe_volume_to_stereotaxic_um(
-                volume_points, self.bregma_voxel, VOXEL_UM
-            )
-            point_snapshot.append((index, tuple(map(tuple, volume_points.tolist()))))
-        if sum(len(points) for points in observations.values()) < 2:
-            return None
-
-        surface_locations = [(constraint.ap_um, constraint.ml_um)]
-        if constraint.radius_um:
-            for radius_fraction in (0.65, 1.0):
-                for phase in np.linspace(-np.pi, np.pi, 4, endpoint=False):
-                    surface_locations.append(
-                        (
-                            constraint.ap_um + constraint.radius_um * radius_fraction * np.cos(phase),
-                            constraint.ml_um + constraint.radius_um * radius_fraction * np.sin(phase),
-                        )
-                    )
-        surface_snapshot = tuple(
-            None if not np.isfinite(value) else float(value)
-            for value in (self._surface_dv_um(ap, ml) for ap, ml in surface_locations)
-        )
-        key = (
-            constraint,
-            bool(quick),
-            tuple(map(float, self.bregma_voxel)),
-            id(self.annotation_volume),
-            None if self.annotation_volume is None else tuple(self.annotation_volume.shape),
-            self.atlas_file_hashes.get("annotation_25.nrrd"),
-            frozenset(self.cortical_region_ids),
-            surface_snapshot,
-            tuple(point_snapshot),
-        )
-        cached = self._probe_constraint_fit_cache.get(probe_name)
-        if cached is not None and cached[0] == key:
-            if cached[2] is not None:
-                raise InfeasibleProbeConstraint(cached[2])
-            return cached[1]
-        try:
-            fit = fit_probe_ray(
-                observations,
-                self._effective_probe_constraint(constraint),
-                self._surface_dv_um,
-                max_starts=6 if quick else None,
-            )
-        except InfeasibleProbeConstraint as exc:
-            self._probe_constraint_fit_cache[probe_name] = (key, None, str(exc))
-            raise
-        self._probe_constraint_fit_cache[probe_name] = (key, fit, None)
-        return fit
-
-    def _probe_fit_record(self, probe_name: str) -> dict | None:
-        try:
-            fit = self.probe_constraint_fit(probe_name)
-        except InfeasibleProbeConstraint as exc:
-            return {"feasible": False, "reason": str(exc)}
-        if fit is None:
-            return None
-        return {
-            "entry_stereotaxic_um_ap_dv_ml": np.asarray(fit.entry_ap_dv_ml_um).tolist(),
-            "direction_stereotaxic_ap_dv_ml": np.asarray(fit.direction_ap_dv_ml).tolist(),
-            "angle_deg": float(fit.angle_deg),
-            "azimuth_deg": None if fit.azimuth_deg is None else float(fit.azimuth_deg),
-            "loss": float(fit.loss),
-            "diagnostics": fit.diagnostics,
-        }
-
-    def _update_probe_fit_summary(self, *_: object, quick: bool = False) -> None:
+    def _update_probe_fit_summary(self, *_: object) -> None:
         probe_name = self._active_probe_name()
         if not probe_name:
             self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
             self.probe_fit_summary.setText("Fit: select a probe")
             return
         points = self.all_probe_volume_points(probe_name)
-        constraint = self._probe_constraint(probe_name)
-        constrained = constraint is not None and constraint.enabled
         try:
-            if constrained:
-                above_brain, deep_endpoint, surface_direction = self.constrained_probe_line_geometry(
-                    probe_name,
-                    quick=quick,
-                )
-                entry = (
-                    None
-                    if above_brain is None or surface_direction is None
-                    else above_brain - surface_direction * 20.0
-                )
-            else:
-                entry, deep_endpoint, surface_direction = self.probe_brain_geometry(probe_name)
+            entry, deep_endpoint, surface_direction = self.probe_brain_geometry(probe_name)
         except InfeasibleProbeConstraint as exc:
             self.probe_fit_summary.setStyleSheet("color:#ff8c8c;")
-            self.probe_fit_summary.setText(f"Surgical plan infeasible: {exc}")
+            self.probe_fit_summary.setText(f"Observed fit infeasible: {exc}")
             self.probe_fit_summary.setToolTip(str(exc))
             return
         self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
@@ -4569,9 +4533,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         stereo_deep_direction /= np.linalg.norm(stereo_deep_direction)
         angle = np.degrees(np.arcsin(np.clip(abs(stereo_deep_direction[1]), 0.0, 1.0)))
         depth = float(np.linalg.norm(stereo_deep - stereo_entry))
-        prefix = "Constrained fit" if constrained else "Observed fit"
         self.probe_fit_summary.setText(
-            f"{prefix}: AP {stereo_entry[0]:+.0f} um | ML {stereo_entry[2]:+.0f} um | "
+            f"Observed fit: AP {stereo_entry[0]:+.0f} um | ML {stereo_entry[2]:+.0f} um | "
             f"angle {angle:.1f} deg | marked depth {depth:.0f} um | {len(points)} points"
         )
 
@@ -4623,10 +4586,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             and session.flip_vertical == bool(flip_vertical)
         ):
             return
+        old_slice_atlas_transform = session.slice_atlas_transform
         had_transform = (
             session.slice_atlas_transform is not None
             or (session.slice_to_atlas_x is not None and session.atlas_to_slice_x is not None)
         )
+        horizontal_changed = session.flip_horizontal != bool(flip_horizontal)
+        vertical_changed = session.flip_vertical != bool(flip_vertical)
+        rotation_changed = abs(session.rotation_deg - float(rotation_deg)) >= 0.05
         if session.auto_alignment_engine is not None:
             self._mark_alignment_run_stale(session, "contributor slice geometry changed")
         if session.brain_brush_selection_mask is not None and session.raw_display is not None:
@@ -4648,9 +4615,39 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.rotation_deg = float(rotation_deg)
         session.flip_horizontal = bool(flip_horizontal)
         session.flip_vertical = bool(flip_vertical)
-        self._update_slice_image(clear_transform=True)
+        preserve_auto_transform = had_transform and old_slice_atlas_transform is not None and not rotation_changed
+        self._update_slice_image(clear_transform=not preserve_auto_transform)
         if session.brain_brush_strokes:
             self._apply_smart_surface_selection(session, session.brain_brush_strokes)
+        if preserve_auto_transform:
+            if old_slice_atlas_transform.nonlinear is not None:
+                session.slice_atlas_transform = SliceAtlasTransform2D(
+                    old_slice_atlas_transform.display_to_affine_atlas_h,
+                    session.rotated.shape,
+                    old_slice_atlas_transform.atlas_shape,
+                )
+                diagnostics = dict(session.auto_alignment_diagnostics or {})
+                diagnostics["nonlinear_refinement"] = {
+                    "requested": True,
+                    "status": "invalidated",
+                    "reason": "Slice orientation changed after nonlinear anatomical fitting",
+                }
+                session.auto_alignment_diagnostics = diagnostics
+            session.atlas_tilt_ml_deg *= -1.0 if horizontal_changed else 1.0
+            session.atlas_tilt_dv_deg *= -1.0 if vertical_changed else 1.0
+            session.transformed_overlay = None
+            self._recompute_probe_points_from_slice_points(session)
+            self._refresh_transformed_overlay(session)
+            self._sync_current_pose_controls(session)
+            self._refresh_atlas()
+            self._refresh_points()
+            self._refresh_3d()
+            suffix = " Refit internal anatomy." if old_slice_atlas_transform.nonlinear is not None else ""
+            self.status.setText(
+                "Slice flip changed the atlas orientation; alignment and probe coordinates were recomputed."
+                + suffix
+            )
+            return
         n_pairs = min(len(session.atlas_landmarks), len(session.slice_landmarks))
         if had_transform and n_pairs >= 3 and self._rebuild_slice_transform(session):
             self._recompute_probe_points_from_slice_points(session)
@@ -4662,6 +4659,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.status.setText("Slice geometry changed; run auto-align again.")
         else:
             self.status.setText("Slice geometry changed; transform landmarks were moved with the slice.")
+
+    def _sync_current_pose_controls(self, session: SliceSession) -> None:
+        self.atlas_tilt_ml.blockSignals(True)
+        self.atlas_tilt_dv.blockSignals(True)
+        self.atlas_tilt_ml.setValue(round(session.atlas_tilt_ml_deg * 10))
+        self.atlas_tilt_dv.setValue(round(session.atlas_tilt_dv_deg * 10))
+        self.atlas_tilt_ml.blockSignals(False)
+        self.atlas_tilt_dv.blockSignals(False)
+        self.atlas_tilt_ml_value.setText(f"{session.atlas_tilt_ml_deg:+.1f}Â°")
+        self.atlas_tilt_dv_value.setText(f"{session.atlas_tilt_dv_deg:+.1f}Â°")
 
     def _update_slice_image(self, *, clear_transform: bool = False) -> None:
         session = self.current_session()
@@ -6068,20 +6075,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             }
             for name, constraint in enabled_probe_constraints.items()
         }
-        for name, specification in probe_constraint_snapshot.items():
-            point_count = sum(
-                len(points)
-                for points in specification["display_points_by_session"].values()
-            )
-            if point_count < 2:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Probe trajectory required",
-                    f"{name} needs at least two trajectory points on the slices being aligned "
-                    "before its surgical constraint can be used.",
-                )
-                return
-
         def alignment_input_snapshot(session: SliceSession) -> tuple:
             source = Path(session.path)
             source_stat = source.stat()
@@ -6643,23 +6636,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         above_brain = entry + surface_direction * 20.0
         return above_brain, deep_endpoint, surface_direction
 
-    def constrained_probe_line_geometry(
-        self, probe_name: str, *, quick: bool = False
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[None, None, None]:
-        fit = self.probe_constraint_fit(probe_name, quick=quick)
-        if fit is None:
-            return self.probe_line_geometry(probe_name)
-        entry = probe_stereotaxic_to_volume(
-            fit.entry_ap_dv_ml_um, self.bregma_voxel, VOXEL_UM
-        )
-        deep_direction = fit.direction_ap_dv_ml / STEREOTAXIC_AXIS_SIGN_AP_DV_ML
-        deep_direction /= np.linalg.norm(deep_direction)
-        surface_direction = -deep_direction
-        depth_um = max(0.0, float(fit.diagnostics["axial_max_um"]))
-        deep_endpoint = entry + deep_direction * (depth_um / VOXEL_UM)
-        return entry + surface_direction * 20.0, deep_endpoint, surface_direction
-
-    def _refresh_3d(self, *, quick_probe_fit: bool = False) -> None:
+    def _refresh_3d(self) -> None:
         for item in self.dynamic_gl_items:
             self.view3d.removeItem(item)
         self.dynamic_gl_items.clear()
@@ -6756,10 +6733,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.view3d.addItem(scatter)
             self.dynamic_gl_items.append(scatter)
             try:
-                above_brain, deep_endpoint, _ = self.constrained_probe_line_geometry(
-                    probe_name,
-                    quick=quick_probe_fit,
-                )
+                above_brain, deep_endpoint, _ = self.probe_line_geometry(probe_name)
             except InfeasibleProbeConstraint:
                 continue
             if above_brain is None or deep_endpoint is None:
@@ -7023,9 +6997,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 session.auto_alignment_diagnostics = diagnostics
         points = self.all_probe_volume_points(selected_probe)
         try:
-            _, marked_endpoint, surface_direction = self.constrained_probe_line_geometry(
-                selected_probe
-            )
+            _, marked_endpoint, surface_direction = self.probe_line_geometry(selected_probe)
         except InfeasibleProbeConstraint as exc:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -7350,15 +7322,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 if (constraint := self._probe_constraint(probe_name)) is None
                 else asdict(constraint)
             ),
-            "constrained_probe_fit": (
-                self._probe_fit_record(probe_name)
-                if any(
-                    (trace := session.probe_traces.get(probe_name)) is not None
-                    and trace.volume_points
-                    for session in self.sessions
-                )
-                else None
-            ),
+            "observed_probe_fit_uses_surgical_constraint": False,
             "probe_attack_angle_convention": "0 degrees horizontal; 90 degrees vertical",
             "insertion_target_coordinate_frame": (
                 "bregma-centred stereotaxic AP/ML um; uncertainty circle projected onto the Allen annotation surface"

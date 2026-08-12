@@ -234,7 +234,8 @@ def test_smart_selection_crop_and_surface_fit_recover_known_oblique_plane():
     assert abs(atlas_index - 280) < 10
     assert abs(tilt_lr - 6.0) < 5.0
     assert abs(tilt_dv + 4.0) < 5.0
-    assert np.linalg.det(matrix[:2, :2]) < 0.0
+    matrix = TRACKER.orientation_preserving_slice_to_atlas(matrix, selection, mask)
+    assert np.linalg.det(matrix[:2, :2]) > 0.0
     assert diagnostics["rms_after_atlas_px"] < 3.0
 
 

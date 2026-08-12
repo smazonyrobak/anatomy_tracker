@@ -10,6 +10,7 @@ from source.probe_constraints import (
     attack_angle_deg,
     direction_from_attack_angle,
     fit_probe_ray,
+    insertion_plan_plane_feasibility,
     score_candidate_slice_plane,
     stereotaxic_to_volume,
     volume_to_stereotaxic_um,
@@ -33,6 +34,29 @@ def plane_through(point_um, tilt_lr=0.0, tilt_dv=0.0):
         - np.tan(np.deg2rad(tilt_dv)) * (dv - (SHAPE[1] - 1.0) / 2.0)
     )
     return SlicePlane(index, tilt_lr, tilt_dv), np.asarray([ml, dv])
+
+
+def test_insertion_plan_filters_only_planes_the_allowed_shank_can_reach():
+    constraint = ProbeInsertionConstraint(
+        enabled=True,
+        ap_um=-1400.0,
+        ml_um=-1600.0,
+        radius_um=0.0,
+        angle_deg=90.0,
+        angle_tolerance_deg=0.0,
+        maximum_insertion_depth_um=1000.0,
+    )
+    surface_dv = lambda _ap, _ml: 0.0
+
+    intersecting, _ = plane_through([-1400.0, -500.0, -1600.0])
+    unreachable, _ = plane_through([-3000.0, -500.0, -1600.0])
+
+    assert insertion_plan_plane_feasibility(
+        constraint, intersecting, BREGMA, SHAPE, surface_dv
+    )["feasible"]
+    assert not insertion_plan_plane_feasibility(
+        constraint, unreachable, BREGMA, SHAPE, surface_dv
+    )["feasible"]
 
 
 def test_coordinate_conversion_is_exact_and_uses_tracker_axis_signs():
