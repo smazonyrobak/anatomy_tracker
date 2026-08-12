@@ -1,4 +1,4 @@
-import importlib.util
+﻿import importlib.util
 import os
 import sys
 import threading
@@ -59,6 +59,478 @@ def test_order_rejects_a_range_without_enough_distinct_sections():
 
     with pytest.raises(ValueError, match="too narrow"):
         TRACKER.solve_ordered_lattice(lattices, [0, 1, 2])
+
+
+def _synthetic_probe_candidate_callback(bregma, depths_um, expected_tilt=(0.0, 0.0)):
+    def callback(_probe_name, session_index, _ap, tilt_lr, tilt_dv):
+        assert (tilt_lr, tilt_dv) == pytest.approx(expected_tilt)
+        depth = depths_um[session_index]
+        dv = bregma[1] + np.sin(np.deg2rad(60.0)) * depth / TRACKER.VOXEL_UM
+        return np.asarray([[bregma[2], dv]], dtype=np.float64)
+
+    return callback
+
+
+def test_disabled_probe_constraint_is_exact_original_lattice_path():
+    lattices = {
+        0: {100: (0.2, {}), 104: (0.1, {})},
+        1: {116: (0.0, {}), 120: (0.3, {})},
+    }
+    expected_assignment, expected_total = TRACKER.solve_ordered_lattice(lattices, [0, 1])
+    calls = []
+
+    assignment, total, diagnostics = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1],
+        {
+            "imec0": {
+                "constraint": TRACKER.ProbeInsertionConstraint(enabled=False),
+                "display_points_by_session": {},
+            }
+        },
+        lambda *_args: calls.append(_args),
+        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        np.asarray([100.0, 20.0, 80.0]),
+        (220, 120, 160),
+        0.0,
+        0.0,
+    )
+
+    assert assignment == expected_assignment
+    assert total == expected_total
+    assert diagnostics == {"applied": False, "probes": {}}
+    assert calls == []
+
+
+def test_probe_constraint_recovers_true_ap_pair_over_coherent_image_decoy():
+    bregma = np.asarray([100.0, 20.0, 80.0])
+    depths = {0: 200.0, 1: 1000.0}
+    # A 60-degree insertion with posterior AP component intersects these
+    # coronal planes at indices 104 and 120.  The structurally preferred pair
+    # is a coherent 100 um anterior decoy.
+    lattices = {
+        0: {100: (0.0, {}), 104: (0.02, {})},
+        1: {116: (0.0, {}), 120: (0.02, {})},
+    }
+    constraint = TRACKER.ProbeInsertionConstraint(
+        enabled=True,
+        ap_um=0.0,
+        ml_um=0.0,
+        radius_um=25.0,
+        angle_deg=60.0,
+        angle_tolerance_deg=0.5,
+        maximum_insertion_depth_um=1500.0,
+    )
+
+    assignment, _, diagnostics = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1],
+        {"imec0": {"constraint": constraint}},
+        _synthetic_probe_candidate_callback(bregma, depths),
+        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        bregma,
+        (220, 120, 160),
+        0.0,
+        0.0,
+    )
+
+    assert assignment == {0: 104, 1: 120}
+    assert assignment[0] < assignment[1]
+    assert diagnostics["applied"] is True
+    assert diagnostics["probes"]["imec0"]["angle_deg"] == pytest.approx(60.0, abs=0.5)
+    assert diagnostics["probes"]["imec0"]["entry_ap_dv_ml_um"][0] == pytest.approx(0.0, abs=26.0)
+
+
+def test_probe_constraint_coexists_with_nonzero_exact_shared_tilt():
+    bregma = np.asarray([100.0, 20.0, 80.0])
+    depths = {0: 200.0, 1: 1000.0}
+    lattices = {
+        0: {104: (0.0, {}), 120: (0.2, {})},
+        1: {104: (0.1, {}), 120: (0.0, {})},
+    }
+
+    assignment, _, _ = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1],
+        {
+            "imec0": {
+                "constraint": TRACKER.ProbeInsertionConstraint(
+                    enabled=True,
+                    ap_um=0.0,
+                    ml_um=0.0,
+                    radius_um=25.0,
+                    angle_deg=60.0,
+                    angle_tolerance_deg=1.0,
+                )
+            }
+        },
+        _synthetic_probe_candidate_callback(bregma, depths, expected_tilt=(5.0, -3.0)),
+        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        bregma,
+        (220, 120, 160),
+        5.0,
+        -3.0,
+    )
+
+    assert assignment == {0: 104, 1: 120}
+    assert assignment[0] < assignment[1]
+
+
+def test_impossible_probe_constraint_rejects_instead_of_corrupting_pose():
+    bregma = np.asarray([100.0, 20.0, 80.0])
+    lattices = {0: {100: (0.0, {})}, 1: {100: (0.0, {})}}
+
+    def incompatible(_probe_name, session_index, _ap, _lr, _dv):
+        return np.asarray([[80.0 + 40.0 * session_index, 20.0 + 20.0 * session_index]])
+
+    with pytest.raises(TRACKER.InfeasibleProbeConstraint, match="No atlas pose satisfies"):
+        TRACKER.solve_probe_constrained_lattice(
+            lattices,
+            [],
+            {
+                "imec0": {
+                    "constraint": TRACKER.ProbeInsertionConstraint(
+                        enabled=True,
+                        ap_um=0.0,
+                        ml_um=0.0,
+                        radius_um=0.0,
+                        angle_deg=90.0,
+                        angle_tolerance_deg=0.0,
+                        maximum_insertion_depth_um=500.0,
+                    )
+                }
+            },
+            incompatible,
+            lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+            lambda _ap, _ml: 0.0,
+            bregma,
+            (220, 120, 160),
+            0.0,
+            0.0,
+        )
+
+
+def test_probe_constraint_searches_positive_coherent_shifts_before_refinement():
+    bregma = np.asarray([100.0, 20.0, 80.0])
+    depths = {0: 200.0, 1: 1000.0}
+    # More than eight negative coherent shifts precede the only feasible
+    # positive shift.  Seed screening must cover the complete bounded range.
+    candidates = list(range(60, 141, 4))
+    lattices = {
+        0: {ap: (abs(ap - 80.0) / 1000.0, {}) for ap in candidates},
+        1: {ap: (abs(ap - 96.0) / 1000.0, {}) for ap in candidates},
+    }
+    constraint = TRACKER.ProbeInsertionConstraint(
+        enabled=True,
+        ap_um=0.0,
+        ml_um=0.0,
+        radius_um=25.0,
+        angle_deg=60.0,
+        angle_tolerance_deg=0.5,
+        maximum_insertion_depth_um=1500.0,
+    )
+
+    assignment, _, diagnostics = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1],
+        {"imec0": {"constraint": constraint}},
+        _synthetic_probe_candidate_callback(bregma, depths),
+        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        bregma,
+        (220, 120, 160),
+        0.0,
+        0.0,
+    )
+
+    assert assignment == {0: 104, 1: 120}
+    assert diagnostics["seed_count"] > 8
+
+
+def test_two_probe_constraints_are_fitted_independently_and_vote_jointly():
+    bregma = np.asarray([100.0, 20.0, 80.0])
+    depths = {0: 200.0, 1: 1000.0}
+    lattices = {
+        0: {100: (0.0, {}), 104: (0.02, {})},
+        1: {116: (0.0, {}), 120: (0.02, {})},
+    }
+    constraints = {
+        name: {
+            "constraint": TRACKER.ProbeInsertionConstraint(
+                True, 0.0, ml_um, 25.0, 60.0, 0.5, 1500.0
+            )
+        }
+        for name, ml_um in (("imec0", -500.0), ("imec1", 500.0))
+    }
+
+    def callback(probe_name, session_index, _ap, _lr, _dv):
+        depth = depths[session_index]
+        ml_um = constraints[probe_name]["constraint"].ml_um
+        return np.asarray(
+            [[
+                bregma[2] + ml_um / TRACKER.VOXEL_UM,
+                bregma[1] + np.sin(np.deg2rad(60.0)) * depth / TRACKER.VOXEL_UM,
+            ]]
+        )
+
+    assignment, _, diagnostics = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1],
+        constraints,
+        callback,
+        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        bregma,
+        (220, 120, 160),
+        0.0,
+        0.0,
+    )
+
+    assert assignment == {0: 104, 1: 120}
+    assert set(diagnostics["probes"]) == {"imec0", "imec1"}
+    assert diagnostics["probes"]["imec0"]["entry_ap_dv_ml_um"][2] < 0.0
+    assert diagnostics["probes"]["imec1"]["entry_ap_dv_ml_um"][2] > 0.0
+
+
+def test_probe_constraint_beam_recovers_noncoherent_ap_corrections():
+    bregma = np.asarray([100.0, 20.0, 80.0])
+    depths = {0: 200.0, 1: 800.0, 2: 1400.0}
+    candidates = {
+        0: [80, 96, 104, 112, 128],
+        1: [88, 104, 116, 120, 136],
+        2: [92, 108, 124, 128, 144],
+    }
+    true_assignment = {0: 104, 1: 116, 2: 128}
+    # Give the true APs deliberately different structural ranks so neither
+    # coherent-shift nor same-rank seeding can reach the solution.
+    ranks = {
+        0: [80, 104, 96, 112, 128],
+        1: [104, 88, 120, 116, 136],
+        2: [124, 108, 92, 144, 128],
+    }
+    lattices = {
+        index: {
+            ap: (0.03 * ranks[index].index(ap), {})
+            for ap in candidates[index]
+        }
+        for index in candidates
+    }
+    constraint = TRACKER.ProbeInsertionConstraint(
+        True,
+        0.0,
+        0.0,
+        25.0,
+        60.0,
+        0.5,
+        1800.0,
+    )
+
+    assignment, _, _ = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1, 2],
+        {"imec0": {"constraint": constraint}},
+        _synthetic_probe_candidate_callback(bregma, depths),
+        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        bregma,
+        (220, 120, 160),
+        0.0,
+        0.0,
+    )
+
+    assert assignment == true_assignment
+
+
+def test_real_mind_probe_constraint_resolves_periodic_ap_decoy():
+    shape = (64, 80, 112)
+    bregma = np.asarray([12.0, 40.0, 56.0])
+    ap, dv, ml = np.indices(shape, dtype=np.float32)
+    brain = ((dv[0] - 40.0) / 34.0) ** 2 + ((ml[0] - 56.0) / 48.0) ** 2 <= 1.0
+    annotation = np.broadcast_to(brain, shape).copy().astype(np.uint8)
+    phase = 2.0 * np.pi * ap / 8.0
+    x = (ml - 56.0) / 42.0
+    y = (dv - 40.0) / 29.0
+    atlas = (
+        0.4
+        + 0.18 * np.sin(phase + 2.0 * x)
+        + 0.14 * np.cos(2.0 * phase + 3.0 * y)
+        + 0.2
+        * np.exp(
+            -(
+                (np.abs(x) - (0.3 + 0.05 * np.sin(phase))) ** 2 / 0.02
+                + (y + 0.1) ** 2 / 0.04
+            )
+        )
+    )
+    atlas = ((atlas - atlas[annotation > 0].min()) / np.ptp(atlas[annotation > 0])).astype(
+        np.float32
+    )
+    atlas *= annotation > 0
+
+    truth = [20, 28, 36]
+    decoy = [value + 8 for value in truth]
+    tilt = (8.0, -4.0)
+    sources = {}
+    for session_index, atlas_index in enumerate(truth):
+        image = TRACKER.coronal_oblique_slice(atlas, atlas_index, *tilt, order=1)
+        mask = TRACKER.coronal_oblique_slice(annotation, atlas_index, *tilt, order=0) > 0
+        canonical, canonical_mask = TRACKER.canonical_mind_input(image, mask)
+        sources[session_index] = TRACKER.mind_descriptor(canonical), canonical_mask
+
+    lattices = {}
+    for session_index, (true_ap, model_ap) in enumerate(zip(truth, decoy)):
+        lattices[session_index] = {}
+        for candidate_ap in (true_ap, model_ap):
+            image = TRACKER.coronal_oblique_slice_resampled(
+                atlas, candidate_ap, *tilt, order=1
+            )
+            mask = (
+                TRACKER.coronal_oblique_slice_resampled(
+                    annotation, candidate_ap, *tilt, order=0
+                )
+                > 0
+            )
+            canonical, canonical_mask = TRACKER.canonical_mind_input(image, mask)
+            texture, surface = TRACKER.mind_distance(
+                *sources[session_index],
+                TRACKER.mind_descriptor(canonical),
+                canonical_mask,
+            )
+            prior = TRACKER.MIND_AP_PRIOR_WEIGHT * ((candidate_ap - model_ap) / 8.0) ** 2
+            lattices[session_index][candidate_ap] = (
+                texture + TRACKER.MIND_SURFACE_WEIGHT * surface + prior,
+                {},
+            )
+
+    unconstrained, _ = TRACKER.solve_ordered_lattice(lattices, [0, 1, 2])
+    assert list(unconstrained.values()) == decoy
+
+    def surface_dv(ap_um, ml_um):
+        ap_index = int(round(ap_um / -TRACKER.VOXEL_UM + bregma[0]))
+        ml_index = int(round(ml_um / TRACKER.VOXEL_UM + bregma[2]))
+        surface = np.flatnonzero(annotation[ap_index, :, ml_index] > 0).min()
+        return float((surface - bregma[1]) * -TRACKER.VOXEL_UM)
+
+    true_entry = np.asarray([-50.0, surface_dv(-50.0, 50.0), 50.0])
+    angle = np.deg2rad(65.0)
+    azimuth = np.deg2rad(170.0)
+    direction = np.asarray(
+        [
+            np.cos(angle) * np.cos(azimuth),
+            -np.sin(angle),
+            np.cos(angle) * np.sin(azimuth),
+        ]
+    )
+    volume_entry = bregma + true_entry / (
+        TRACKER.VOXEL_UM * np.asarray([-1.0, -1.0, 1.0])
+    )
+    volume_direction = direction / (
+        TRACKER.VOXEL_UM * np.asarray([-1.0, -1.0, 1.0])
+    )
+    tan_lr, tan_dv = np.tan(np.deg2rad(tilt))
+    probe_points = {}
+    for session_index, atlas_index in enumerate(truth):
+        numerator = (
+            volume_entry[0]
+            - atlas_index
+            - tan_lr * (volume_entry[2] - (shape[2] - 1.0) / 2.0)
+            - tan_dv * (volume_entry[1] - (shape[1] - 1.0) / 2.0)
+        )
+        denominator = (
+            volume_direction[0]
+            - tan_lr * volume_direction[2]
+            - tan_dv * volume_direction[1]
+        )
+        intersection = volume_entry - numerator / denominator * volume_direction
+        probe_points[session_index] = np.asarray([[intersection[2], intersection[1]]])
+
+    assignment, _, diagnostics = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [0, 1, 2],
+        {
+            "imec0": {
+                "constraint": TRACKER.ProbeInsertionConstraint(
+                    True, 0.0, 0.0, 100.0, 65.0, 3.0, 2500.0
+                )
+            }
+        },
+        lambda _probe, session, _ap, _lr, _dv: probe_points[session],
+        lambda atlas_index, lr, dv: TRACKER.coronal_oblique_slice(
+            annotation, atlas_index, lr, dv, order=0
+        )
+        > 0,
+        surface_dv,
+        bregma,
+        shape,
+        *tilt,
+    )
+
+    fit = diagnostics["probes"]["imec0"]
+    assert assignment == dict(enumerate(truth))
+    assert fit["entry_ap_dv_ml_um"] == pytest.approx(true_entry, abs=1e-3)
+    assert fit["angle_deg"] == pytest.approx(65.0, abs=1e-3)
+
+
+def test_pose_search_reaches_feasible_tilt_and_ap_when_model_initial_pose_is_wrong(monkeypatch):
+    atlas = np.zeros((160, 20, 20), dtype=np.float32)
+    annotation = np.ones_like(atlas, dtype=np.uint8)
+    image = np.zeros((20, 20), dtype=np.float32)
+    record = {"Filenames": "slice.png", "model_uncertainty": {}}
+    prepared = {"slice.png": {"image": image, "brain_mask": np.ones_like(image, dtype=bool)}}
+    calls = []
+
+    def oblique(volume, ap, tilt_lr, tilt_dv, order):
+        if volume is annotation:
+            return np.ones((20, 20), dtype=np.uint8)
+        cost = (tilt_lr - 8.0) ** 2 + (tilt_dv + 4.0) ** 2
+        return np.full((20, 20), cost, dtype=np.float32)
+
+    def constrained(values, ordered, _constraints, _points, _mask, _surface, _bregma,
+                    _shape, tilt_lr, tilt_dv, *, quick=False):
+        calls.append((tilt_lr, tilt_dv, tuple(values[0]), quick))
+        if (tilt_lr, tilt_dv) != (8.0, -4.0) or 104 not in values[0]:
+            raise TRACKER.InfeasibleProbeConstraint("synthetic wrong pose")
+        return {0: 104}, values[0][104][0], {"applied": True, "probes": {}}
+
+    monkeypatch.setattr(TRACKER, "coronal_oblique_slice_resampled", oblique)
+    monkeypatch.setattr(TRACKER, "canonical_mind_input", lambda values, mask: (values, mask))
+    monkeypatch.setattr(TRACKER, "mind_descriptor", lambda values: values)
+    monkeypatch.setattr(
+        TRACKER,
+        "mind_distance",
+        lambda _source, _source_mask, target, _target_mask: (float(np.mean(target)), 0.0),
+    )
+    monkeypatch.setattr(TRACKER, "solve_probe_constrained_lattice", constrained)
+
+    pose, diagnostics, _ = TRACKER.refine_pose_search(
+        {0: (100.0, 0.0, 0.0, np.eye(3))},
+        {0: record},
+        atlas,
+        annotation,
+        prepared,
+        {},
+        None,
+        [],
+        None,
+        None,
+        global_alignment=False,
+        probe_constraints={
+            "imec0": {
+                "constraint": TRACKER.ProbeInsertionConstraint(enabled=True),
+                "display_points_by_session": {0: [(4.0, 4.0), (6.0, 8.0)]},
+            }
+        },
+        bregma_voxel=np.asarray([100.0, 10.0, 10.0]),
+        trusted_surface_points={0: [(2.0, 2.0)] * 8},
+        cortical_region_ids=frozenset({1}),
+    )
+
+    assert pose[0] == (104, 8.0, -4.0)
+    assert diagnostics[0]["probe_geometry_constraints"]["applied"] is True
+    assert any(lr == 8.0 and dv == -4.0 and len(candidates) > 1 for lr, dv, candidates, _ in calls)
 
 
 def _ellipse_case(missing_arc: bool = False):

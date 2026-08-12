@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -50,6 +50,16 @@ from diffeomorphic_registration_runtime import (
     verify_diffeomorphic_model_bundle,
 )
 from nonlinear_registration import NonlinearWarpAttestation, SliceAtlasTransform2D
+from probe_constraints import (
+    InfeasibleProbeConstraint,
+    ProbeInsertionConstraint,
+    SlicePlane,
+    atlas_points_to_stereotaxic_um,
+    fit_probe_ray,
+    score_candidate_slice_plane,
+    stereotaxic_to_volume as probe_stereotaxic_to_volume,
+    volume_to_stereotaxic_um as probe_volume_to_stereotaxic_um,
+)
 
 
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
@@ -87,6 +97,7 @@ MIND_CANONICAL_SIZE = (171, 120)
 MIND_AP_PRIOR_WEIGHT = 0.001
 MIND_TILT_PRIOR_WEIGHT = 0.0005
 MIND_SURFACE_WEIGHT = 0.05
+MIND_PROBE_GEOMETRY_WEIGHT = 1.0
 SURFACE_EDIT_ACTIONS = {"brain_outline_edit", "brain_outline_delete", "brain_outline_erase", "brain_outline_insert"}
 SURFACE_ACTIONS = SURFACE_EDIT_ACTIONS | {"brain_outline", "brain_brush"}
 CHANNEL_KEY_COLUMNS = ["probe_name", "probe_channel_number"]
@@ -120,6 +131,11 @@ PROBE_COLORS = (
     (255, 91, 137),
     (240, 209, 70),
 )
+PROBE_PHYSICAL_LENGTH_UM = {
+    "Neuropixels 1.0": 10000.0,
+    "Neuropixels 2.0 single-shank": 10000.0,
+    "Neuropixels 2.0 four-shank": 10000.0,
+}
 
 pg.setConfigOptions(imageAxisOrder="row-major", background="#0f131a", foreground="#d7e7f5")
 
@@ -821,8 +837,8 @@ def transform_slice_image(
     return transformed.astype(np.uint8), matrix
 
 
-def transform_points(points: list[tuple[float, float]], matrix: np.ndarray) -> list[tuple[float, float]]:
-    if not points:
+def transform_points(points: list[tuple[float, float]] | np.ndarray, matrix: np.ndarray) -> list[tuple[float, float]]:
+    if len(points) == 0:
         return []
     hom = np.column_stack([np.asarray(points, dtype=np.float64), np.ones(len(points), dtype=np.float64)])
     mapped = (matrix @ hom.T).T
@@ -1078,6 +1094,304 @@ def solve_ordered_lattice(
     return assignments, float(total)
 
 
+def solve_probe_constrained_lattice(
+    lattices: dict[int, dict[int, tuple[float, dict]]],
+    anterior_to_posterior: list[int],
+    probe_constraints: dict[str, dict],
+    candidate_atlas_points,
+    candidate_brain_mask,
+    surface_dv,
+    bregma_voxel: np.ndarray,
+    volume_shape: tuple[int, int, int],
+    tilt_lr_deg: float,
+    tilt_dv_deg: float,
+    *,
+    quick: bool = False,
+    beam_width: int = 12,
+) -> tuple[dict[int, int], float, dict]:
+    """Solve the existing AP lattice jointly with optional physical probe plans.
+
+    ``candidate_atlas_points`` returns the observed probe points mapped into a
+    candidate atlas slice.  The ordinary lattice is called directly when no
+    enabled constraint is supplied; that branch deliberately performs no new
+    arithmetic so existing automatic alignment remains exactly unchanged.
+    """
+    enabled = {
+        name: specification
+        for name, specification in probe_constraints.items()
+        if specification["constraint"].enabled
+    }
+    if not enabled:
+        assignments, total = solve_ordered_lattice(lattices, anterior_to_posterior)
+        return assignments, total, {"applied": False, "probes": {}}
+
+    baseline, _ = solve_ordered_lattice(lattices, anterior_to_posterior)
+    point_cache: dict[tuple[str, int, int], np.ndarray] = {}
+
+    def atlas_points(probe_name: str, session_index: int, ap: int) -> np.ndarray:
+        key = probe_name, session_index, int(ap)
+        if key not in point_cache:
+            point_cache[key] = np.asarray(
+                candidate_atlas_points(
+                    probe_name,
+                    session_index,
+                    int(ap),
+                    float(tilt_lr_deg),
+                    float(tilt_dv_deg),
+                ),
+                dtype=np.float64,
+            ).reshape(-1, 2)
+        return point_cache[key]
+
+    def fit_assignment(assignments: dict[int, int], max_starts: int | None = None):
+        fits = {}
+        for probe_name, specification in enabled.items():
+            observations = {}
+            for session_index, ap in assignments.items():
+                points = atlas_points(probe_name, session_index, ap)
+                if len(points):
+                    observations[session_index] = atlas_points_to_stereotaxic_um(
+                        points,
+                        SlicePlane(ap, tilt_lr_deg, tilt_dv_deg),
+                        bregma_voxel,
+                        volume_shape,
+                        VOXEL_UM,
+                    )
+            if sum(len(points) for points in observations.values()) < 2:
+                raise InfeasibleProbeConstraint(
+                    f"{probe_name} needs at least two trajectory observations before its surgical constraint can be used"
+                )
+            fits[probe_name] = fit_probe_ray(
+                observations,
+                specification["constraint"],
+                surface_dv,
+                max_starts=max_starts,
+            )
+        return fits
+
+    def geometry_score(
+        probe_name: str,
+        session_index: int,
+        ap: int,
+        fit,
+    ) -> tuple[float, bool]:
+        points = atlas_points(probe_name, session_index, ap)
+        if not len(points):
+            return 0.0, True
+        result = score_candidate_slice_plane(
+            points,
+            SlicePlane(ap, tilt_lr_deg, tilt_dv_deg),
+            fit,
+            bregma_voxel,
+            volume_shape,
+            voxel_um=VOXEL_UM,
+            brain_mask=candidate_brain_mask(
+                int(ap),
+                float(tilt_lr_deg),
+                float(tilt_dv_deg),
+            ),
+        )
+        return float(result["score"]), bool(result["feasible"])
+
+    # The unconstrained result and coherent AP shifts are deterministic seeds.
+    # Coherent shifts matter because a surgical plan often disambiguates an
+    # otherwise plausible anterior/posterior image match across several slices.
+    seeds = [baseline]
+    offsets = sorted(
+        {
+            int(ap - baseline[index])
+            for index, values in lattices.items()
+            for ap in values
+        }
+    )
+    if len(offsets) > 33:
+        offsets = [offsets[index] for index in np.linspace(0, len(offsets) - 1, 33).round().astype(int)]
+    for offset in offsets:
+        shifted = {
+            index: {
+                ap: (abs(ap - (baseline[index] + offset)), {})
+                for ap in values
+            }
+            for index, values in lattices.items()
+        }
+        try:
+            assignment, _ = solve_ordered_lattice(shifted, anterior_to_posterior)
+        except ValueError:
+            continue
+        seeds.append(assignment)
+    for rank in range(min(8, min(len(values) for values in lattices.values()))):
+        ranked = {
+            index: sorted(values, key=lambda ap: values[ap][0])[rank]
+            for index, values in lattices.items()
+        }
+        if all(
+            ranked[earlier] < ranked[later]
+            for earlier, later in zip(anterior_to_posterior, anterior_to_posterior[1:])
+            if earlier in ranked and later in ranked
+        ):
+            seeds.append(ranked)
+
+    # Cover non-coherent AP corrections without enumerating the Cartesian
+    # product.  Each partial assignment is scored with the same robust probe
+    # fit used by the final solver; a bounded beam keeps the search practical.
+    ordered_sessions = sorted(
+        lattices,
+        key=lambda index: (len(lattices[index]), index),
+    )
+    beam = [({}, 0.0)]
+    for session_index in ordered_sessions:
+        expanded = []
+        ranked_aps = sorted(
+            lattices[session_index],
+            key=lambda ap: lattices[session_index][ap][0],
+        )
+        if len(ranked_aps) > 24:
+            structural = ranked_aps[:12]
+            spread = [
+                ranked_aps[index]
+                for index in np.linspace(0, len(ranked_aps) - 1, 12).round().astype(int)
+            ]
+            ranked_aps = list(dict.fromkeys([*structural, *spread]))
+        for partial, partial_score in beam:
+            for ap in ranked_aps:
+                assignment = {**partial, session_index: ap}
+                order_valid = all(
+                    assignment[earlier] < assignment[later]
+                    for earlier, later in zip(
+                        anterior_to_posterior,
+                        anterior_to_posterior[1:],
+                    )
+                    if earlier in assignment and later in assignment
+                )
+                if not order_valid:
+                    continue
+                structural = partial_score + float(lattices[session_index][ap][0])
+                geometry = 0.0
+                if len(assignment) == len(lattices):
+                    try:
+                        fits = fit_assignment(assignment, max_starts=6)
+                    except InfeasibleProbeConstraint:
+                        continue
+                    geometry = MIND_PROBE_GEOMETRY_WEIGHT * float(
+                        np.mean([fit.loss for fit in fits.values()])
+                    )
+                expanded.append((assignment, structural, geometry))
+        if not expanded:
+            break
+        expanded.sort(key=lambda item: (item[2], item[1]))
+        beam = [
+            (assignment, structural)
+            for assignment, structural, _ in expanded[: max(1, int(beam_width))]
+        ]
+    seeds.extend(
+        assignment
+        for assignment, _ in beam
+        if len(assignment) == len(lattices)
+    )
+    unique_seeds = list({
+        tuple(sorted(assignment.items())): assignment
+        for assignment in seeds
+    }.values())
+
+    quick_feasible = []
+    failures = []
+    for assignment in unique_seeds:
+        try:
+            fits = fit_assignment(assignment, max_starts=6)
+        except InfeasibleProbeConstraint as exc:
+            failures.append(str(exc))
+            continue
+        structural = float(sum(lattices[index][ap][0] for index, ap in assignment.items()))
+        geometry = float(np.mean([fit.loss for fit in fits.values()]))
+        quick_feasible.append(
+            (structural + MIND_PROBE_GEOMETRY_WEIGHT * geometry, assignment, fits)
+        )
+    if not quick_feasible:
+        detail = failures[0] if failures else "no feasible candidate assignment"
+        raise InfeasibleProbeConstraint(
+            f"No atlas pose satisfies the enabled surgical probe constraints: {detail}"
+        )
+    if quick:
+        _, assignments, fits = min(quick_feasible, key=lambda item: item[0])
+    else:
+        feasible = []
+        for _, assignment, _ in sorted(quick_feasible, key=lambda item: item[0])[:4]:
+            try:
+                fits = fit_assignment(assignment)
+            except InfeasibleProbeConstraint as exc:
+                failures.append(str(exc))
+                continue
+            structural = float(sum(lattices[index][ap][0] for index, ap in assignment.items()))
+            geometry = float(np.mean([fit.loss for fit in fits.values()]))
+            feasible.append(
+                (structural + MIND_PROBE_GEOMETRY_WEIGHT * geometry, assignment, fits)
+            )
+        if not feasible:
+            raise InfeasibleProbeConstraint(
+                "No atlas pose satisfies the enabled surgical probe constraints: "
+                + failures[-1]
+            )
+        _, assignments, fits = min(feasible, key=lambda item: item[0])
+
+    # Alternate a fitted constrained ray with the ordered AP lattice.  This is
+    # bounded and deterministic; it permits individual AP corrections while
+    # retaining partial order and the caller's exactly shared cutting tilt.
+    for _ in range(1 if quick else 3):
+        constrained = {}
+        for session_index, values in lattices.items():
+            constrained[session_index] = {}
+            for ap, (score, components) in values.items():
+                candidate_scores = []
+                candidate_feasible = True
+                for probe_name, fit in fits.items():
+                    value, valid = geometry_score(probe_name, session_index, ap, fit)
+                    if len(atlas_points(probe_name, session_index, ap)):
+                        candidate_scores.append(value)
+                    candidate_feasible &= valid
+                geometry = float(np.mean(candidate_scores)) if candidate_scores else 0.0
+                constrained[session_index][ap] = (
+                    float(score + MIND_PROBE_GEOMETRY_WEIGHT * geometry)
+                    if candidate_feasible
+                    else float("inf"),
+                    components,
+                )
+        updated, _ = solve_ordered_lattice(constrained, anterior_to_posterior)
+        if not np.isfinite(sum(constrained[index][ap][0] for index, ap in updated.items())):
+            raise InfeasibleProbeConstraint(
+                "No ordered atlas assignment satisfies the enabled surgical probe constraints"
+            )
+        if updated == assignments:
+            break
+        assignments, fits = updated, fit_assignment(
+            updated,
+            max_starts=6 if quick else None,
+        )
+
+    structural_total = float(sum(lattices[index][ap][0] for index, ap in assignments.items()))
+    geometry_loss = float(np.mean([fit.loss for fit in fits.values()]))
+    diagnostics = {
+        "applied": True,
+        "weight": MIND_PROBE_GEOMETRY_WEIGHT,
+        "seed_count": len(unique_seeds),
+        "geometry_loss": geometry_loss,
+        "probes": {
+            name: {
+                "entry_ap_dv_ml_um": fit.entry_ap_dv_ml_um.tolist(),
+                "direction_ap_dv_ml": fit.direction_ap_dv_ml.tolist(),
+                "angle_deg": float(fit.angle_deg),
+                "loss": float(fit.loss),
+                "diagnostics": fit.diagnostics,
+            }
+            for name, fit in fits.items()
+        },
+    }
+    return (
+        assignments,
+        structural_total + MIND_PROBE_GEOMETRY_WEIGHT * geometry_loss,
+        diagnostics,
+    )
+
+
 def surface_crop_bounds(
     surface_points: list[tuple[float, float]],
     image_shape: tuple[int, int],
@@ -1235,6 +1549,10 @@ def refine_pose_search(
     cancel_event: threading.Event | None,
     *,
     global_alignment: bool,
+    probe_constraints: dict[str, dict] | None = None,
+    bregma_voxel: np.ndarray | None = None,
+    trusted_surface_points: dict[int, list[tuple[float, float]]] | None = None,
+    cortical_region_ids: frozenset[int] | None = None,
 ) -> tuple[dict[int, tuple[int, float, float]], dict[int, dict], tuple[float, float] | None]:
     sources = {}
     filenames = {}
@@ -1244,6 +1562,75 @@ def refine_pose_search(
         canonical, mask = canonical_mind_input(prepared["image"], prepared["brain_mask"])
         sources[session_index] = (mind_descriptor(canonical), mask)
         filenames[session_index] = filename
+
+    active_probe_constraints = {
+        name: specification
+        for name, specification in (probe_constraints or {}).items()
+        if specification["constraint"].enabled
+    }
+    if active_probe_constraints and bregma_voxel is None:
+        raise ValueError("Bregma is required when surgical probe constraints are enabled")
+    if active_probe_constraints and trusted_surface_points is None:
+        raise ValueError("Trusted surface points are required when surgical probe constraints are enabled")
+    if active_probe_constraints and not cortical_region_ids:
+        raise ValueError("Cortical atlas structure IDs are required when surgical probe constraints are enabled")
+    bregma = None if bregma_voxel is None else np.asarray(bregma_voxel, dtype=np.float64)
+    candidate_transform_cache: dict[tuple[int, int, float, float], np.ndarray] = {}
+
+    def surface_dv(ap_um: float, ml_um: float) -> float:
+        assert bregma is not None
+        ap = int(round(ap_um / (-VOXEL_UM) + bregma[0]))
+        ml = int(round(ml_um / VOXEL_UM + bregma[2]))
+        if not (0 <= ap < annotation_volume.shape[0] and 0 <= ml < annotation_volume.shape[2]):
+            return float("nan")
+        inside = np.flatnonzero(annotation_volume[ap, :, ml] > 0)
+        if not len(inside):
+            return float("nan")
+        if int(annotation_volume[ap, inside.min(), ml]) not in cortical_region_ids:
+            return float("nan")
+        return float((inside.min() - bregma[1]) * -VOXEL_UM)
+
+    def candidate_probe_atlas_points(
+        probe_name: str,
+        session_index: int,
+        ap: int,
+        tilt_lr: float,
+        tilt_dv: float,
+    ) -> np.ndarray:
+        display_points = np.asarray(
+            active_probe_constraints[probe_name]["display_points_by_session"].get(
+                session_index,
+                (),
+            ),
+            dtype=np.float64,
+        ).reshape(-1, 2)
+        if not len(display_points):
+            return np.empty((0, 2), dtype=np.float64)
+        key = session_index, int(ap), float(tilt_lr), float(tilt_dv)
+        matrix = candidate_transform_cache.get(key)
+        if matrix is None:
+            target_mask = coronal_oblique_slice(
+                annotation_volume,
+                int(ap),
+                float(tilt_lr),
+                float(tilt_dv),
+                order=0,
+            ) > 0
+            matrix = converted[session_index][3]
+            if matrix is None:
+                filename = filenames[session_index]
+                matrix = brain_mask_affine(
+                    prepared_inputs[filename]["brain_mask"],
+                    target_mask,
+                    bool(records_by_session[session_index].get("initial_orientation_inverted", False)),
+                )
+            matrix, _ = fit_surface_scale_translation(
+                matrix,
+                trusted_surface_points[session_index],
+                target_mask,
+            )
+            candidate_transform_cache[key] = matrix
+        return np.asarray(transform_points(display_points, matrix), dtype=np.float64)
 
     def atlas_reference(ap: int, tilt_lr: float, tilt_dv: float) -> tuple[np.ndarray, np.ndarray] | None:
         plane = coronal_oblique_slice_resampled(
@@ -1369,6 +1756,32 @@ def refine_pose_search(
             index: candidates_for(index, 4)
             for index in session_indices
         }
+
+        def solve_candidates(values, ordered, tilt_lr, tilt_dv, *, quick=False):
+            if not active_probe_constraints:
+                assignments, total = solve_ordered_lattice(values, ordered)
+                return assignments, total, None
+            assert bregma is not None
+            return solve_probe_constrained_lattice(
+                values,
+                ordered,
+                active_probe_constraints,
+                candidate_probe_atlas_points,
+                lambda ap, lr, dv: coronal_oblique_slice(
+                    annotation_volume,
+                    int(ap),
+                    float(lr),
+                    float(dv),
+                    order=0,
+                ) > 0,
+                surface_dv,
+                bregma,
+                tuple(atlas_volume.shape),
+                float(tilt_lr),
+                float(tilt_dv),
+                quick=quick,
+            )
+
         initial_lattice = lattice(float(predicted_tilt[0]), float(predicted_tilt[1]), coarse_candidates)
         initial_assignment, _ = solve_ordered_lattice(initial_lattice, ordered_indices)
         fixed_candidates = {index: [ap] for index, ap in initial_assignment.items()}
@@ -1388,11 +1801,63 @@ def refine_pose_search(
                 )
             values = lattice(tilt_lr, tilt_dv, fixed_candidates)
             assignments, total = solve_ordered_lattice(values, ordered_indices)
-            coarse_results.append((total, tilt_lr, tilt_dv, assignments))
-        _, coarse_lr, coarse_dv, _ = min(coarse_results, key=lambda item: item[0])
+            coarse_results.append((total, tilt_lr, tilt_dv, assignments, values))
+        if active_probe_constraints:
+            screened_coarse = []
+            constraint_failures = []
+            for _, tilt_lr, tilt_dv, _, values in sorted(
+                coarse_results, key=lambda item: item[0]
+            ):
+                try:
+                    assignments, total, geometry = solve_candidates(
+                        values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                    )
+                except InfeasibleProbeConstraint as exc:
+                    constraint_failures.append(str(exc))
+                    continue
+                screened_coarse.append(
+                    (total, tilt_lr, tilt_dv, assignments, geometry, values)
+                )
+            if not screened_coarse:
+                for _, tilt_lr, tilt_dv, _, _ in sorted(
+                    coarse_results, key=lambda item: item[0]
+                )[:8]:
+                    values = lattice(tilt_lr, tilt_dv, coarse_candidates)
+                    try:
+                        assignments, total, geometry = solve_candidates(
+                            values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                        )
+                    except InfeasibleProbeConstraint as exc:
+                        constraint_failures.append(str(exc))
+                        continue
+                    screened_coarse.append(
+                        (total, tilt_lr, tilt_dv, assignments, geometry, values)
+                    )
+            if not screened_coarse:
+                raise InfeasibleProbeConstraint(
+                    "No coarse atlas tilt satisfies the surgical probe constraints: "
+                    + constraint_failures[0]
+                )
+            constrained_coarse = []
+            for _, tilt_lr, tilt_dv, _, _, values in sorted(
+                screened_coarse, key=lambda item: item[0]
+            )[:4]:
+                assignments, total, geometry = solve_candidates(
+                    values, ordered_indices, tilt_lr, tilt_dv
+                )
+                constrained_coarse.append(
+                    (total, tilt_lr, tilt_dv, assignments, geometry)
+                )
+            _, coarse_lr, coarse_dv, _, _ = min(
+                constrained_coarse, key=lambda item: item[0]
+            )
+        else:
+            _, coarse_lr, coarse_dv, _, _ = min(coarse_results, key=lambda item: item[0])
 
         updated_lattice = lattice(coarse_lr, coarse_dv, coarse_candidates)
-        updated_assignment, _ = solve_ordered_lattice(updated_lattice, ordered_indices)
+        updated_assignment, _, _ = solve_candidates(
+            updated_lattice, ordered_indices, coarse_lr, coarse_dv
+        )
         fine_candidates = {
             index: [
                 ap
@@ -1421,15 +1886,57 @@ def refine_pose_search(
                 )
             values = lattice(tilt_lr, tilt_dv, fine_candidates)
             assignments, total = solve_ordered_lattice(values, ordered_indices)
-            fine_results.append((total, tilt_lr, tilt_dv, assignments))
-        _, best_lr, best_dv, _ = min(fine_results, key=lambda item: item[0])
+            fine_results.append((total, tilt_lr, tilt_dv, assignments, values))
+        if active_probe_constraints:
+            screened_fine = []
+            constraint_failures = []
+            for _, tilt_lr, tilt_dv, _, values in sorted(
+                fine_results, key=lambda item: item[0]
+            ):
+                try:
+                    assignments, total, geometry = solve_candidates(
+                        values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                    )
+                except InfeasibleProbeConstraint as exc:
+                    constraint_failures.append(str(exc))
+                    continue
+                screened_fine.append(
+                    (total, tilt_lr, tilt_dv, assignments, geometry)
+                )
+            if not screened_fine:
+                raise InfeasibleProbeConstraint(
+                    "No refined atlas tilt satisfies the surgical probe constraints: "
+                    + constraint_failures[0]
+                )
+            constrained_fine = []
+            for _, tilt_lr, tilt_dv, _, _ in sorted(
+                screened_fine, key=lambda item: item[0]
+            )[:4]:
+                values = next(
+                    item[4]
+                    for item in fine_results
+                    if item[1] == tilt_lr and item[2] == tilt_dv
+                )
+                assignments, total, geometry = solve_candidates(
+                    values, ordered_indices, tilt_lr, tilt_dv
+                )
+                constrained_fine.append(
+                    (total, tilt_lr, tilt_dv, assignments, geometry)
+                )
+            _, best_lr, best_dv, _, _ = min(
+                constrained_fine, key=lambda item: item[0]
+            )
+        else:
+            _, best_lr, best_dv, _, _ = min(fine_results, key=lambda item: item[0])
 
         final_candidates = {
             index: candidates_for(index, 1)
             for index in session_indices
         }
         final_lattice = lattice(best_lr, best_dv, final_candidates)
-        assignments, _ = solve_ordered_lattice(final_lattice, ordered_indices)
+        assignments, _, probe_geometry = solve_candidates(
+            final_lattice, ordered_indices, best_lr, best_dv
+        )
         group_pose = {
             index: (int(ap), float(best_lr), float(best_dv))
             for index, ap in assignments.items()
@@ -1442,22 +1949,41 @@ def refine_pose_search(
                 for candidate_ap, (score, _) in values.items()
                 if abs(candidate_ap - ap) >= 2
             )
-            best_score, components = values[ap]
-            if not np.isfinite(best_score):
+            structural_score, components = values[ap]
+            if not np.isfinite(structural_score):
                 raise ValueError("The AP search range contains no usable atlas brain sections")
-            margin = float(alternatives[0] - best_score) if alternatives else float("nan")
+            structural_margin = (
+                float(alternatives[0] - structural_score) if alternatives else float("nan")
+            )
             minimum, maximum = min(values), max(values)
             group_diagnostics[index] = {
                 **components,
-                "pose_search_score": float(best_score),
-                "pose_search_margin": margin,
-                "pose_search_flat": bool(np.isfinite(margin) and margin < 0.0003),
                 "pose_search_final_ap_candidate_count": int(len(values)),
                 "pose_search_evaluated_pose_count": int(evaluated_poses[index]),
                 "pose_search_boundary": bool(ap in (minimum, maximum)),
                 "pose_search_explicit_bounds": ap_bounds is not None,
-                "pose_search_method": "coarse-to-fine MIND + disagreement-weighted model prior",
+                "pose_search_method": (
+                    "coarse-to-fine MIND + disagreement-weighted model prior"
+                    + (
+                        " + jointly fitted surgical probe constraints"
+                        if probe_geometry is not None
+                        else ""
+                    )
+                ),
             }
+            group_diagnostics[index].update(
+                pose_search_score=float(structural_score),
+                pose_search_margin=structural_margin,
+                pose_search_flat=bool(
+                    np.isfinite(structural_margin) and structural_margin < 0.0003
+                ),
+            )
+            if probe_geometry is not None:
+                group_diagnostics[index].update(
+                    pose_search_structural_score=float(structural_score),
+                    pose_search_structural_margin=structural_margin,
+                    probe_geometry_constraints=probe_geometry,
+                )
         return group_pose, group_diagnostics, (float(best_lr), float(best_dv))
 
     groups = [list(converted)] if global_alignment else [[index] for index in converted]
@@ -1496,6 +2022,9 @@ def solve_pose_alignment(
     prepared_inputs: dict[str, dict[str, np.ndarray]],
     disagreement: dict[str, dict[str, float]],
     progress_messages: queue.SimpleQueue | None = None,
+    probe_constraints: dict[str, dict] | None = None,
+    bregma_voxel: np.ndarray | None = None,
+    cortical_region_ids: frozenset[int] | None = None,
 ) -> tuple[list[tuple], tuple[float, float] | None]:
     records_by_session = {
         filename_to_session[Path(str(record["Filenames"])).name]: dict(record)
@@ -1530,6 +2059,10 @@ def solve_pose_alignment(
         progress_messages,
         cancel_event,
         global_alignment=global_alignment,
+        probe_constraints=probe_constraints,
+        bregma_voxel=bregma_voxel,
+        trusted_surface_points=outline_snapshot,
+        cortical_region_ids=cortical_region_ids,
     )
 
     prepared = []
@@ -1631,6 +2164,9 @@ def prepare_run_and_solve_alignment(
     nonlinear_model_path: str,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
+    probe_constraints: dict[str, dict] | None = None,
+    bregma_voxel: np.ndarray | None = None,
+    cortical_region_ids: frozenset[int] | None = None,
 ) -> tuple[str, dict, dict[str, dict[str, float]], dict, list[tuple], tuple[float, float] | None]:
     alignment_started = time.perf_counter()
     records, disagreement, runtime_info, prepared_inputs = prepare_and_run_pose_predictions(
@@ -1660,6 +2196,9 @@ def prepare_run_and_solve_alignment(
         prepared_inputs=prepared_inputs,
         disagreement=disagreement,
         progress_messages=progress_messages,
+        probe_constraints=probe_constraints,
+        bregma_voxel=bregma_voxel,
+        cortical_region_ids=cortical_region_ids,
     )
     runtime_info["alignment_solver_seconds"] = float(time.perf_counter() - solver_started)
     nonlinear_started = time.perf_counter()
@@ -2637,9 +3176,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.annotation_volume: np.ndarray | None = None
         self.bregma_voxel = DEFAULT_BREGMA_VOXEL_AP_DV_ML.copy()
         self.region_names: dict[int, tuple[str, str]] = {}
+        self.cortical_region_ids: set[int] = set()
         self.current_atlas_image: np.ndarray | None = None
         self.sessions: list[SliceSession] = []
         self.current_session_index = -1
+        self.probe_constraints: dict[str, ProbeInsertionConstraint] = {}
+        self._probe_constraint_fit_cache: dict[str, tuple[tuple, object | None, str | None]] = {}
+        self._probe_fit_preview_timer = QtCore.QTimer(self)
+        self._probe_fit_preview_timer.setSingleShot(True)
+        self._probe_fit_preview_timer.setInterval(150)
+        self._probe_fit_preview_timer.timeout.connect(self._refresh_probe_constraint_preview)
+        self._loading_probe_constraints = False
         self.dynamic_gl_items: list[object] = []
         self.brain_mesh_item: gl.GLMeshItem | None = None
         self.auto_alignment_busy = False
@@ -2987,8 +3534,85 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         probe_layout.addWidget(self.probe_type, 1, 1, 1, 3)
         probe_layout.addWidget(QtWidgets.QLabel("Active probe (edit / map)"), 2, 0)
         probe_layout.addWidget(self.probe_name, 2, 1, 1, 3)
-        probe_layout.addWidget(self.map_btn, 3, 0, 1, 2)
-        probe_layout.addWidget(self.undo_mapping_btn, 3, 2, 1, 2)
+
+        constraint_group = QtWidgets.QGroupBox("Optional surgical constraints")
+        constraint_layout = QtWidgets.QGridLayout(constraint_group)
+        self.use_probe_constraints = QtWidgets.QCheckBox("Use this probe's surgical constraints")
+        self.use_probe_constraints.setToolTip(
+            "Use the planned bregma-centred insertion target and angle/depth limits for the active probe only."
+        )
+        constraint_layout.addWidget(self.use_probe_constraints, 0, 0, 1, 6)
+
+        self.insertion_ap_um = QtWidgets.QSpinBox()
+        self.insertion_ml_um = QtWidgets.QSpinBox()
+        for control in (self.insertion_ap_um, self.insertion_ml_um):
+            control.setKeyboardTracking(False)
+            control.setRange(-20000, 20000)
+            control.setSingleStep(int(VOXEL_UM))
+            control.setSuffix(" um")
+        self.insertion_ap_um.setToolTip("Planned AP coordinate from bregma; anterior is positive.")
+        self.insertion_ml_um.setToolTip(
+            "Planned ML coordinate from bregma; positive increases toward the animal's left "
+            "in the Allen CCF axis convention used by this app."
+        )
+        self.insertion_radius_um = QtWidgets.QSpinBox()
+        self.insertion_radius_um.setKeyboardTracking(False)
+        self.insertion_radius_um.setRange(0, 5000)
+        self.insertion_radius_um.setSingleStep(int(VOXEL_UM))
+        self.insertion_radius_um.setValue(250)
+        self.insertion_radius_um.setSuffix(" um")
+        self.insertion_radius_um.setToolTip(
+            "Allowed radial uncertainty around the planned AP/ML insertion coordinate."
+        )
+        constraint_layout.addWidget(QtWidgets.QLabel("Target AP"), 1, 0)
+        constraint_layout.addWidget(self.insertion_ap_um, 1, 1)
+        constraint_layout.addWidget(QtWidgets.QLabel("Target ML"), 1, 2)
+        constraint_layout.addWidget(self.insertion_ml_um, 1, 3)
+        constraint_layout.addWidget(QtWidgets.QLabel("Radius"), 1, 4)
+        constraint_layout.addWidget(self.insertion_radius_um, 1, 5)
+
+        self.attack_angle_deg = QtWidgets.QDoubleSpinBox()
+        self.attack_angle_tolerance_deg = QtWidgets.QDoubleSpinBox()
+        for control in (self.attack_angle_deg, self.attack_angle_tolerance_deg):
+            control.setKeyboardTracking(False)
+            control.setRange(0.0, 90.0)
+            control.setDecimals(1)
+            control.setSingleStep(0.5)
+            control.setSuffix(" deg")
+            control.setToolTip("Probe angle: 0 degrees is completely horizontal and 90 degrees is vertical.")
+        self.attack_angle_deg.setValue(90.0)
+        self.attack_angle_tolerance_deg.setValue(5.0)
+        constraint_layout.addWidget(QtWidgets.QLabel("Attack angle (0 horizontal / 90 vertical)"), 2, 0)
+        constraint_layout.addWidget(self.attack_angle_deg, 2, 1)
+        constraint_layout.addWidget(QtWidgets.QLabel("+/-"), 2, 2)
+        constraint_layout.addWidget(self.attack_angle_tolerance_deg, 2, 3)
+
+        self.limit_insertion_depth = QtWidgets.QCheckBox("Tighter planned depth")
+        self.max_insertion_depth_um = QtWidgets.QSpinBox()
+        self.max_insertion_depth_um.setKeyboardTracking(False)
+        self.max_insertion_depth_um.setRange(int(VOXEL_UM), 50000)
+        self.max_insertion_depth_um.setSingleStep(100)
+        self.max_insertion_depth_um.setValue(10000)
+        self.max_insertion_depth_um.setSuffix(" um")
+        depth_help = (
+            "Optional planned cortical-entry-to-tip limit. It can only tighten the selected probe's "
+            "always-enforced 10 mm physical shank limit."
+        )
+        self.limit_insertion_depth.setToolTip(depth_help)
+        self.max_insertion_depth_um.setToolTip(depth_help)
+        constraint_layout.addWidget(self.limit_insertion_depth, 2, 4)
+        constraint_layout.addWidget(self.max_insertion_depth_um, 2, 5)
+
+        self.probe_fit_summary = QtWidgets.QLabel("Fit: add at least two trajectory points")
+        self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
+        self.probe_fit_summary.setWordWrap(True)
+        constraint_layout.addWidget(self.probe_fit_summary, 3, 0, 1, 6)
+        for column in (1, 3, 5):
+            constraint_layout.setColumnStretch(column, 1)
+        probe_layout.addWidget(constraint_group, 3, 0, 1, 4)
+
+        probe_layout.addWidget(self.map_btn, 4, 0, 1, 2)
+        probe_layout.addWidget(self.undo_mapping_btn, 4, 2, 1, 2)
 
         self.endpoint_reference = QtWidgets.QComboBox()
         self.endpoint_reference.addItem("Deepest point is chanMap y=0 contact", "y0_contact")
@@ -3007,24 +3631,24 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         self.endpoint_reference.setToolTip(tip_help)
         self.marked_tip_to_y0_um.setToolTip(tip_help)
-        probe_layout.addWidget(QtWidgets.QLabel("Deepest point"), 4, 0)
-        probe_layout.addWidget(self.endpoint_reference, 4, 1, 1, 3)
-        probe_layout.addWidget(QtWidgets.QLabel("Tip to contact"), 5, 0)
-        probe_layout.addWidget(self.marked_tip_to_y0_um, 5, 1)
+        probe_layout.addWidget(QtWidgets.QLabel("Deepest point"), 5, 0)
+        probe_layout.addWidget(self.endpoint_reference, 5, 1, 1, 3)
+        probe_layout.addWidget(QtWidgets.QLabel("Tip to contact"), 6, 0)
+        probe_layout.addWidget(self.marked_tip_to_y0_um, 6, 1)
 
         self.point_counts = QtWidgets.QLabel("Transform atlas 0 / slice 0 | Probe 0")
         self.point_counts.setStyleSheet("color:#9fb4c8;")
         self.brightness_weighting = QtWidgets.QCheckBox("Brightness-weighted trajectory")
-        probe_layout.addWidget(self.brightness_weighting, 5, 2, 1, 2)
+        probe_layout.addWidget(self.brightness_weighting, 6, 2, 1, 2)
         self.probe_undo_point_btn = QtWidgets.QPushButton("Undo trajectory point")
         self.probe_clear_points_btn = QtWidgets.QPushButton("Clear trajectory")
-        probe_layout.addWidget(QtWidgets.QLabel("Trajectory"), 6, 0)
-        probe_layout.addWidget(self.probe_mode, 6, 1, 1, 3)
-        probe_layout.addWidget(self.probe_undo_point_btn, 7, 0, 1, 2)
-        probe_layout.addWidget(self.probe_clear_points_btn, 7, 2, 1, 2)
+        probe_layout.addWidget(QtWidgets.QLabel("Trajectory"), 7, 0)
+        probe_layout.addWidget(self.probe_mode, 7, 1, 1, 3)
+        probe_layout.addWidget(self.probe_undo_point_btn, 8, 0, 1, 2)
+        probe_layout.addWidget(self.probe_clear_points_btn, 8, 2, 1, 2)
         for column in range(4):
             probe_layout.setColumnStretch(column, 1)
-        probe_layout.setRowStretch(8, 1)
+        probe_layout.setRowStretch(9, 1)
         self.workflow_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.workflow_splitter.setChildrenCollapsible(False)
         self.workflow_splitter.setHandleWidth(8)
@@ -3188,11 +3812,19 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.browse_run_btn.clicked.connect(self._browse_run)
         self.run_folder.editingFinished.connect(self._refresh_probe_names)
         self.probe_name.currentTextChanged.connect(self._probe_selection_changed)
+        self.probe_type.currentTextChanged.connect(self._probe_type_changed)
+        self.use_probe_constraints.toggled.connect(self._probe_constraints_changed)
+        self.insertion_ap_um.valueChanged.connect(self._probe_constraints_changed)
+        self.insertion_ml_um.valueChanged.connect(self._probe_constraints_changed)
+        self.insertion_radius_um.valueChanged.connect(self._probe_constraints_changed)
+        self.attack_angle_deg.valueChanged.connect(self._probe_constraints_changed)
+        self.attack_angle_tolerance_deg.valueChanged.connect(self._probe_constraints_changed)
+        self.limit_insertion_depth.toggled.connect(self._probe_constraints_changed)
+        self.max_insertion_depth_um.valueChanged.connect(self._probe_constraints_changed)
         self.endpoint_reference.currentIndexChanged.connect(
-            lambda: self.marked_tip_to_y0_um.setEnabled(
-                self.endpoint_reference.currentData() == "physical_tip"
-            )
+            self._probe_reference_changed
         )
+        self.marked_tip_to_y0_um.valueChanged.connect(self._update_probe_fit_summary)
         self.map_btn.clicked.connect(self._map_channels_units_clicked)
         self.undo_mapping_btn.clicked.connect(self.undo_file_mapping)
         self.brightness_weighting.toggled.connect(self._trajectory_weighting_changed)
@@ -3254,6 +3886,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     f"{annotation_volume.shape} do not match"
                 )
             region_names = self._load_region_names(folder / "query.csv")
+            cortical_region_ids = self._load_cortical_region_ids(folder / "query.csv")
             query_file_hash = file_sha256(folder / "query.csv") if (folder / "query.csv").exists() else None
             atlas_file_hashes = {
                 template.name: file_sha256(template),
@@ -3292,6 +3925,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.query_file_hash = query_file_hash
         self._setup_auto_align_ap_range()
         self.region_names = region_names
+        self.cortical_region_ids = cortical_region_ids
         self._setup_3d_static(folder)
         self._set_plane_limits()
         self._refresh_atlas()
@@ -3315,6 +3949,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             region_id = int(getattr(row, "id"))
             names[region_id] = (str(getattr(row, "name", region_id)), str(getattr(row, "acronym", region_id)))
         return names
+
+    def _load_cortical_region_ids(self, query_path: Path) -> set[int]:
+        if not query_path.exists():
+            return set()
+        table = pd.read_csv(query_path, usecols=["id", "structure_id_path"])
+        paths = table["structure_id_path"].fillna("").astype(str)
+        return set(table.loc[paths.str.contains("/315/", regex=False), "id"].astype(int))
 
     def _setup_3d_static(self, folder: Path) -> None:
         self.view3d.clear()
@@ -3682,6 +4323,262 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _active_probe_name(self) -> str:
         return self.probe_name.currentText().strip()
 
+    def _probe_constraint(self, probe_name: str) -> ProbeInsertionConstraint | None:
+        return self.probe_constraints.get(probe_name)
+
+    def _effective_probe_constraint(
+        self,
+        constraint: ProbeInsertionConstraint,
+    ) -> ProbeInsertionConstraint:
+        physical = PROBE_PHYSICAL_LENGTH_UM[self.probe_type.currentText()]
+        maximum = (
+            physical
+            if constraint.maximum_insertion_depth_um is None
+            else min(float(constraint.maximum_insertion_depth_um), physical)
+        )
+        return ProbeInsertionConstraint(
+            enabled=constraint.enabled,
+            ap_um=constraint.ap_um,
+            ml_um=constraint.ml_um,
+            radius_um=constraint.radius_um,
+            angle_deg=constraint.angle_deg,
+            angle_tolerance_deg=constraint.angle_tolerance_deg,
+            maximum_insertion_depth_um=maximum,
+        )
+
+    def _set_probe_constraint_controls(self, constraint: ProbeInsertionConstraint | None) -> None:
+        constraint = constraint or ProbeInsertionConstraint(
+            radius_um=250.0,
+            angle_deg=90.0,
+            angle_tolerance_deg=5.0,
+        )
+        self._loading_probe_constraints = True
+        try:
+            self.use_probe_constraints.setChecked(constraint.enabled)
+            self.insertion_ap_um.setValue(round(constraint.ap_um))
+            self.insertion_ml_um.setValue(round(constraint.ml_um))
+            self.insertion_radius_um.setValue(round(max(constraint.radius_um, 0.0)))
+            self.attack_angle_deg.setValue(constraint.angle_deg)
+            self.attack_angle_tolerance_deg.setValue(constraint.angle_tolerance_deg)
+            self.limit_insertion_depth.setChecked(constraint.maximum_insertion_depth_um is not None)
+            if constraint.maximum_insertion_depth_um is not None:
+                self.max_insertion_depth_um.setValue(round(constraint.maximum_insertion_depth_um))
+        finally:
+            self._loading_probe_constraints = False
+        self._update_probe_constraint_controls()
+
+    def _probe_constraints_changed(self, *_: object) -> None:
+        if self._loading_probe_constraints:
+            return
+        probe_name = self._active_probe_name()
+        if not probe_name:
+            return
+        previous = self.probe_constraints.get(probe_name)
+        updated = ProbeInsertionConstraint(
+            enabled=self.use_probe_constraints.isChecked(),
+            ap_um=float(self.insertion_ap_um.value()),
+            ml_um=float(self.insertion_ml_um.value()),
+            radius_um=float(self.insertion_radius_um.value()),
+            angle_deg=float(self.attack_angle_deg.value()),
+            angle_tolerance_deg=float(self.attack_angle_tolerance_deg.value()),
+            maximum_insertion_depth_um=(
+                float(self.max_insertion_depth_um.value())
+                if self.limit_insertion_depth.isChecked()
+                else None
+            ),
+        )
+        self.probe_constraints[probe_name] = updated
+        if previous != updated:
+            for session in self.sessions:
+                self._mark_probe_constrained_alignment_stale(
+                    session,
+                    probe_name,
+                    f"{probe_name} surgical constraint changed",
+                )
+        self._update_probe_constraint_controls()
+        self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
+        self.probe_fit_summary.setText("Fit: updating...")
+        self._probe_fit_preview_timer.start()
+
+    def _refresh_probe_constraint_preview(self) -> None:
+        self._update_probe_fit_summary(quick=True)
+        self._refresh_3d(quick_probe_fit=True)
+
+    def _update_probe_constraint_controls(self) -> None:
+        available = bool(self._active_probe_name())
+        enabled = available and self.use_probe_constraints.isChecked()
+        self.use_probe_constraints.setEnabled(available)
+        for control in (
+            self.insertion_ap_um,
+            self.insertion_ml_um,
+            self.insertion_radius_um,
+            self.attack_angle_deg,
+            self.attack_angle_tolerance_deg,
+            self.limit_insertion_depth,
+        ):
+            control.setEnabled(enabled)
+        self.max_insertion_depth_um.setEnabled(enabled and self.limit_insertion_depth.isChecked())
+
+    def _probe_reference_changed(self, *_: object) -> None:
+        self.marked_tip_to_y0_um.setEnabled(self.endpoint_reference.currentData() == "physical_tip")
+        self._update_probe_fit_summary()
+
+    def _probe_type_changed(self, *_: object) -> None:
+        for probe_name, constraint in self.probe_constraints.items():
+            if not constraint.enabled:
+                continue
+            for session in self.sessions:
+                self._mark_probe_constrained_alignment_stale(
+                    session,
+                    probe_name,
+                    f"{probe_name} physical probe type changed",
+                )
+        self._probe_constraint_fit_cache.clear()
+        self._update_probe_fit_summary()
+        self._refresh_3d()
+
+    def _surface_dv_um(self, ap_um: float, ml_um: float) -> float:
+        if self.annotation_volume is None:
+            return float("nan")
+        ap_index = int(round(ap_um / (VOXEL_UM * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]) + self.bregma_voxel[0]))
+        ml_index = int(round(ml_um / (VOXEL_UM * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[2]) + self.bregma_voxel[2]))
+        if not (0 <= ap_index < self.annotation_volume.shape[0] and 0 <= ml_index < self.annotation_volume.shape[2]):
+            return float("nan")
+        inside = np.flatnonzero(self.annotation_volume[ap_index, :, ml_index] > 0)
+        if not len(inside):
+            return float("nan")
+        surface_id = int(self.annotation_volume[ap_index, inside.min(), ml_index])
+        if surface_id not in self.cortical_region_ids:
+            return float("nan")
+        return float(volume_to_stereotaxic_um(
+            np.array([ap_index, inside.min(), ml_index], dtype=np.float64), self.bregma_voxel
+        )[1])
+
+    def probe_constraint_fit(self, probe_name: str, *, quick: bool = False):
+        constraint = self._probe_constraint(probe_name)
+        if constraint is None or not constraint.enabled:
+            return None
+        observations = {}
+        point_snapshot = []
+        for index, session in enumerate(self.sessions):
+            if (session.auto_alignment_diagnostics or {}).get(
+                "nonlinear_refinement", {}
+            ).get("mapping_blocking", False):
+                continue
+            trace = session.probe_traces.get(probe_name)
+            if trace is None or not trace.volume_points:
+                continue
+            volume_points = np.asarray(trace.volume_points, dtype=np.float64).reshape(-1, 3)
+            observations[index] = probe_volume_to_stereotaxic_um(
+                volume_points, self.bregma_voxel, VOXEL_UM
+            )
+            point_snapshot.append((index, tuple(map(tuple, volume_points.tolist()))))
+        if sum(len(points) for points in observations.values()) < 2:
+            return None
+
+        surface_locations = [(constraint.ap_um, constraint.ml_um)]
+        if constraint.radius_um:
+            for radius_fraction in (0.65, 1.0):
+                for phase in np.linspace(-np.pi, np.pi, 4, endpoint=False):
+                    surface_locations.append(
+                        (
+                            constraint.ap_um + constraint.radius_um * radius_fraction * np.cos(phase),
+                            constraint.ml_um + constraint.radius_um * radius_fraction * np.sin(phase),
+                        )
+                    )
+        surface_snapshot = tuple(
+            None if not np.isfinite(value) else float(value)
+            for value in (self._surface_dv_um(ap, ml) for ap, ml in surface_locations)
+        )
+        key = (
+            constraint,
+            bool(quick),
+            tuple(map(float, self.bregma_voxel)),
+            id(self.annotation_volume),
+            None if self.annotation_volume is None else tuple(self.annotation_volume.shape),
+            self.atlas_file_hashes.get("annotation_25.nrrd"),
+            frozenset(self.cortical_region_ids),
+            surface_snapshot,
+            tuple(point_snapshot),
+        )
+        cached = self._probe_constraint_fit_cache.get(probe_name)
+        if cached is not None and cached[0] == key:
+            if cached[2] is not None:
+                raise InfeasibleProbeConstraint(cached[2])
+            return cached[1]
+        try:
+            fit = fit_probe_ray(
+                observations,
+                self._effective_probe_constraint(constraint),
+                self._surface_dv_um,
+                max_starts=6 if quick else None,
+            )
+        except InfeasibleProbeConstraint as exc:
+            self._probe_constraint_fit_cache[probe_name] = (key, None, str(exc))
+            raise
+        self._probe_constraint_fit_cache[probe_name] = (key, fit, None)
+        return fit
+
+    def _probe_fit_record(self, probe_name: str) -> dict | None:
+        try:
+            fit = self.probe_constraint_fit(probe_name)
+        except InfeasibleProbeConstraint as exc:
+            return {"feasible": False, "reason": str(exc)}
+        if fit is None:
+            return None
+        return {
+            "entry_stereotaxic_um_ap_dv_ml": np.asarray(fit.entry_ap_dv_ml_um).tolist(),
+            "direction_stereotaxic_ap_dv_ml": np.asarray(fit.direction_ap_dv_ml).tolist(),
+            "angle_deg": float(fit.angle_deg),
+            "azimuth_deg": None if fit.azimuth_deg is None else float(fit.azimuth_deg),
+            "loss": float(fit.loss),
+            "diagnostics": fit.diagnostics,
+        }
+
+    def _update_probe_fit_summary(self, *_: object, quick: bool = False) -> None:
+        probe_name = self._active_probe_name()
+        if not probe_name:
+            self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
+            self.probe_fit_summary.setText("Fit: select a probe")
+            return
+        points = self.all_probe_volume_points(probe_name)
+        constraint = self._probe_constraint(probe_name)
+        constrained = constraint is not None and constraint.enabled
+        try:
+            if constrained:
+                above_brain, deep_endpoint, surface_direction = self.constrained_probe_line_geometry(
+                    probe_name,
+                    quick=quick,
+                )
+                entry = (
+                    None
+                    if above_brain is None or surface_direction is None
+                    else above_brain - surface_direction * 20.0
+                )
+            else:
+                entry, deep_endpoint, surface_direction = self.probe_brain_geometry(probe_name)
+        except InfeasibleProbeConstraint as exc:
+            self.probe_fit_summary.setStyleSheet("color:#ff8c8c;")
+            self.probe_fit_summary.setText(f"Surgical plan infeasible: {exc}")
+            self.probe_fit_summary.setToolTip(str(exc))
+            return
+        self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
+        self.probe_fit_summary.setToolTip("")
+        if entry is None or deep_endpoint is None or surface_direction is None:
+            self.probe_fit_summary.setText("Fit: add at least two trajectory points")
+            return
+        stereo_entry = volume_to_stereotaxic_um(entry, self.bregma_voxel)
+        stereo_deep = volume_to_stereotaxic_um(deep_endpoint, self.bregma_voxel)
+        stereo_deep_direction = -surface_direction * STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+        stereo_deep_direction /= np.linalg.norm(stereo_deep_direction)
+        angle = np.degrees(np.arcsin(np.clip(abs(stereo_deep_direction[1]), 0.0, 1.0)))
+        depth = float(np.linalg.norm(stereo_deep - stereo_entry))
+        prefix = "Constrained fit" if constrained else "Observed fit"
+        self.probe_fit_summary.setText(
+            f"{prefix}: AP {stereo_entry[0]:+.0f} um | ML {stereo_entry[2]:+.0f} um | "
+            f"angle {angle:.1f} deg | marked depth {depth:.0f} um | {len(points)} points"
+        )
+
     @staticmethod
     def _probe_trace(
         session: SliceSession,
@@ -3960,6 +4857,19 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             diagnostics["stale_reasons"] = reasons
             member.auto_alignment_diagnostics = diagnostics
 
+    def _mark_probe_constrained_alignment_stale(
+        self,
+        session: SliceSession,
+        probe_name: str,
+        reason: str,
+    ) -> None:
+        geometry = (session.auto_alignment_diagnostics or {}).get(
+            "probe_geometry_constraints",
+            {},
+        )
+        if geometry.get("applied") and probe_name in geometry.get("probes", {}):
+            self._mark_alignment_run_stale(session, reason)
+
     def _slice_raw_to_display_points(self, session: SliceSession, points: list[tuple[float, float]]) -> list[tuple[float, float]]:
         return transform_points(points, session.slice_transform)
 
@@ -4078,6 +4988,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             )
         trace.signal_values.append(self._probe_point_signal(session, slice_raw_point))
         session.point_history.append(f"probe:{probe_name}")
+        self._mark_probe_constrained_alignment_stale(
+            session,
+            probe_name,
+            f"{probe_name} trajectory observations changed",
+        )
+        self._update_probe_fit_summary()
         self._refresh_3d()
         self.status.setText(f"Added {probe_name} trajectory point {len(trace.atlas_points)}")
 
@@ -4647,6 +5563,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _trajectory_weighting_changed(self, enabled: bool) -> None:
         self._refresh_3d()
+        self._update_probe_fit_summary()
         self.status.setText("Brightness-weighted trajectory on" if enabled else "Brightness-weighted trajectory off")
 
     def undo_last_point(self) -> None:
@@ -4737,9 +5654,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     trace.volume_points.pop()
                 if trace.signal_values:
                     trace.signal_values.pop()
+                self._mark_probe_constrained_alignment_stale(
+                    session,
+                    probe_name,
+                    f"{probe_name} trajectory observations changed",
+                )
                 self.status.setText(f"Undid {probe_name} trajectory point")
         self._refresh_atlas()
         self._refresh_points()
+        self._update_probe_fit_summary()
         self._refresh_3d()
 
     def clear_current_points(self) -> None:
@@ -4772,6 +5695,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 trace.slice_points.clear()
                 trace.volume_points.clear()
                 trace.signal_values.clear()
+                self._mark_probe_constrained_alignment_stale(
+                    session,
+                    probe_name,
+                    f"{probe_name} trajectory observations changed",
+                )
             token = f"probe:{probe_name}"
             session.point_history = [action for action in session.point_history if action != token]
             self.status.setText(
@@ -4781,6 +5709,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             )
         self._refresh_atlas()
         self._refresh_points()
+        self._update_probe_fit_summary()
         self._refresh_3d()
 
     def transform_current_slice(self) -> None:
@@ -4908,6 +5837,42 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         filename_to_session: dict[str, int] = {}
         geometry_snapshot: dict[int, tuple] = {}
         outline_snapshot: dict[int, list[tuple[float, float]]] = {}
+        enabled_probe_constraints = {
+            name: self._effective_probe_constraint(constraint)
+            for name, constraint in self.probe_constraints.items()
+            if constraint.enabled
+        }
+        probe_constraints_snapshot = tuple(sorted(enabled_probe_constraints.items()))
+        probe_constraint_snapshot = {
+            name: {
+                "constraint": constraint,
+                "display_points_by_session": {
+                    session_index: self._slice_raw_to_display_points(
+                        self.sessions[session_index],
+                        trace.slice_points,
+                    )
+                    for session_index in session_indices
+                    if (
+                        trace := self.sessions[session_index].probe_traces.get(name)
+                    ) is not None
+                    and trace.slice_points
+                },
+            }
+            for name, constraint in enabled_probe_constraints.items()
+        }
+        for name, specification in probe_constraint_snapshot.items():
+            point_count = sum(
+                len(points)
+                for points in specification["display_points_by_session"].values()
+            )
+            if point_count < 2:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Probe trajectory required",
+                    f"{name} needs at least two trajectory points on the slices being aligned "
+                    "before its surgical constraint can be used.",
+                )
+                return
 
         def alignment_input_snapshot(session: SliceSession) -> tuple:
             source = Path(session.path)
@@ -4939,6 +5904,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 id(session.slice_atlas_transform),
                 id(session.slice_to_atlas_x),
                 id(session.atlas_to_slice_x),
+                tuple(
+                    (
+                        name,
+                        tuple(session.probe_traces.get(name, ProbeTrace()).slice_points),
+                    )
+                    for name in sorted(enabled_probe_constraints)
+                ),
+                tuple(
+                    (name, tuple(sorted(asdict(constraint).items())))
+                    for name, constraint in sorted(enabled_probe_constraints.items())
+                ),
             )
 
         for sequence, session_index in enumerate(session_indices):
@@ -5028,6 +6004,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             str(NONLINEAR_MODEL_PATH),
             messages,
             cancel_event,
+            probe_constraint_snapshot,
+            self.bregma_voxel.copy(),
+            frozenset(self.cortical_region_ids),
         )
         timer = QtCore.QTimer(self)
         timer.setInterval(100)
@@ -5064,6 +6043,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 )
                 if current_atlas != atlas_snapshot:
                     raise RuntimeError("The atlas changed while automatic alignment was running; result discarded")
+                current_constraints = tuple(
+                    (name, self._effective_probe_constraint(constraint))
+                    for name, constraint in sorted(self.probe_constraints.items())
+                    if constraint.enabled
+                )
+                if current_constraints != probe_constraints_snapshot:
+                    raise RuntimeError(
+                        "A surgical probe constraint changed while automatic alignment was running; result discarded"
+                    )
                 for session_index, expected in geometry_snapshot.items():
                     session = self.sessions[session_index]
                     if alignment_input_snapshot(session) != expected:
@@ -5380,6 +6368,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 for point in map_session_display_to_atlas(session, np.asarray(display_points))
             ] if display_points else []
         self._recompute_session_volume_points(session)
+        self._update_probe_fit_summary()
 
     def _recompute_session_volume_points(self, session: SliceSession) -> None:
         if self.atlas_volume is None:
@@ -5396,6 +6385,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 ).tolist()
                 for point in trace.atlas_points
             ]
+        self._update_probe_fit_summary()
 
     def all_probe_volume_points(self, probe_name: str) -> np.ndarray:
         points = []
@@ -5447,14 +6437,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             direction = -direction
         return center, direction
 
-    def probe_line_geometry(self, probe_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[None, None, None]:
+    def probe_brain_geometry(self, probe_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[None, None, None]:
         points = self.all_probe_volume_points(probe_name)
         center, surface_direction = self.probe_regression(probe_name)
         if center is None or surface_direction is None or len(points) < 2:
             return None, None, None
         projection = (points - center) @ surface_direction
         deep_endpoint = center + surface_direction * projection.min()
-        above_parameter = projection.max() + 40.0
+        entry_parameter = projection.max()
         if self.annotation_volume is not None:
             radius = int(np.ceil(np.linalg.norm(self.annotation_volume.shape)))
             parameters = np.arange(-radius, radius + 1, dtype=np.float64)
@@ -5465,11 +6455,34 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             valid = indices[in_bounds]
             inside[in_bounds] = self.annotation_volume[valid[:, 0], valid[:, 1], valid[:, 2]] > 0
             if np.any(inside):
-                above_parameter = max(above_parameter, float(parameters[inside].max()) + 20.0)
-        above_brain = center + surface_direction * above_parameter
+                entry_parameter = max(entry_parameter, float(parameters[inside].max()))
+        entry = center + surface_direction * entry_parameter
+        return entry, deep_endpoint, surface_direction
+
+    def probe_line_geometry(self, probe_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[None, None, None]:
+        entry, deep_endpoint, surface_direction = self.probe_brain_geometry(probe_name)
+        if entry is None or deep_endpoint is None or surface_direction is None:
+            return None, None, None
+        above_brain = entry + surface_direction * 20.0
         return above_brain, deep_endpoint, surface_direction
 
-    def _refresh_3d(self) -> None:
+    def constrained_probe_line_geometry(
+        self, probe_name: str, *, quick: bool = False
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[None, None, None]:
+        fit = self.probe_constraint_fit(probe_name, quick=quick)
+        if fit is None:
+            return self.probe_line_geometry(probe_name)
+        entry = probe_stereotaxic_to_volume(
+            fit.entry_ap_dv_ml_um, self.bregma_voxel, VOXEL_UM
+        )
+        deep_direction = fit.direction_ap_dv_ml / STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+        deep_direction /= np.linalg.norm(deep_direction)
+        surface_direction = -deep_direction
+        depth_um = max(0.0, float(fit.diagnostics["axial_max_um"]))
+        deep_endpoint = entry + deep_direction * (depth_um / VOXEL_UM)
+        return entry + surface_direction * 20.0, deep_endpoint, surface_direction
+
+    def _refresh_3d(self, *, quick_probe_fit: bool = False) -> None:
         for item in self.dynamic_gl_items:
             self.view3d.removeItem(item)
         self.dynamic_gl_items.clear()
@@ -5565,7 +6578,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             )
             self.view3d.addItem(scatter)
             self.dynamic_gl_items.append(scatter)
-            above_brain, deep_endpoint, _ = self.probe_line_geometry(probe_name)
+            try:
+                above_brain, deep_endpoint, _ = self.constrained_probe_line_geometry(
+                    probe_name,
+                    quick=quick_probe_fit,
+                )
+            except InfeasibleProbeConstraint:
+                continue
             if above_brain is None or deep_endpoint is None:
                 continue
             line = gl.GLLinePlotItem(
@@ -5582,6 +6601,70 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.view3d.addItem(line)
             self.view3d.addItem(endpoints)
             self.dynamic_gl_items.extend([line, endpoints])
+
+        for constraint_probe, constraint in sorted(self.probe_constraints.items()):
+            if not constraint.enabled:
+                continue
+            selected = constraint_probe == selected_probe
+            constraint = self._effective_probe_constraint(constraint)
+            rgb = np.asarray(probe_color(constraint_probe), dtype=np.float32) / 255.0
+            angles = np.linspace(0.0, 2.0 * np.pi, 97)
+            ring_stereotaxic = np.column_stack(
+                [
+                    constraint.ap_um + constraint.radius_um * np.cos(angles),
+                    np.zeros_like(angles),
+                    constraint.ml_um + constraint.radius_um * np.sin(angles),
+                ]
+            )
+            ring_stereotaxic[:, 1] = [
+                self._surface_dv_um(ap_um, ml_um)
+                for ap_um, ml_um in ring_stereotaxic[:, (0, 2)]
+            ]
+            ring_volume = probe_stereotaxic_to_volume(
+                ring_stereotaxic, self.bregma_voxel, VOXEL_UM
+            )
+            ring_item = gl.GLLinePlotItem(
+                pos=volume_to_gl(ring_volume),
+                color=(*rgb, 0.9 if selected else 0.5),
+                width=2 if selected else 1,
+                antialias=True,
+            )
+            self.view3d.addItem(ring_item)
+            self.dynamic_gl_items.append(ring_item)
+
+            angle_low = max(0.0, constraint.angle_deg - constraint.angle_tolerance_deg)
+            angle_high = min(90.0, constraint.angle_deg + constraint.angle_tolerance_deg)
+            depth_um = min(float(constraint.maximum_insertion_depth_um), 4000.0)
+            cone_paths = []
+            for angle_deg, alpha in ((angle_low, 0.45), (angle_high, 0.75)):
+                horizontal = depth_um * np.cos(np.deg2rad(angle_deg))
+                ventral = depth_um * np.sin(np.deg2rad(angle_deg))
+                for azimuth in np.linspace(0.0, 2.0 * np.pi, 9)[:-1]:
+                    entry_dv_um = self._surface_dv_um(constraint.ap_um, constraint.ml_um)
+                    endpoint = np.array(
+                        [
+                            constraint.ap_um + horizontal * np.cos(azimuth),
+                            entry_dv_um - ventral,
+                            constraint.ml_um + horizontal * np.sin(azimuth),
+                        ]
+                    )
+                    path = np.vstack(
+                        [
+                            [constraint.ap_um, entry_dv_um, constraint.ml_um],
+                            endpoint,
+                        ]
+                    )
+                    volume = probe_stereotaxic_to_volume(path, self.bregma_voxel, VOXEL_UM)
+                    cone_paths.append((volume, alpha))
+            for volume, alpha in cone_paths:
+                cone_item = gl.GLLinePlotItem(
+                    pos=volume_to_gl(volume),
+                    color=(*rgb, alpha if selected else alpha * 0.55),
+                    width=1,
+                    antialias=True,
+                )
+                self.view3d.addItem(cone_item)
+                self.dynamic_gl_items.append(cone_item)
 
     def _resolve_data_folder(self, run_folder: Path) -> Path:
         if (run_folder / "channels.csv").exists() and (run_folder / "units.csv").exists():
@@ -5626,8 +6709,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.probe_clear_points_btn.setText(
             f"Clear {probe_name} trajectory" if probe_name else "Clear trajectory"
         )
+        self._set_probe_constraint_controls(self._probe_constraint(probe_name))
         self._refresh_points()
         self._refresh_3d()
+        self._update_probe_fit_summary()
         if self.probe_mode.isChecked():
             self._point_target_changed()
 
@@ -5734,7 +6819,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 diagnostics["nonlinear_refinement"] = result
                 session.auto_alignment_diagnostics = diagnostics
         points = self.all_probe_volume_points(selected_probe)
-        _, marked_endpoint, surface_direction = self.probe_line_geometry(selected_probe)
+        try:
+            _, marked_endpoint, surface_direction = self.constrained_probe_line_geometry(
+                selected_probe
+            )
+        except InfeasibleProbeConstraint as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Surgical constraint infeasible",
+                str(exc),
+            )
+            return
         if marked_endpoint is None or surface_direction is None or len(points) < 2:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -6047,6 +7142,24 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "stereotaxic_ap_convention": "0 at bregma; anterior positive; posterior negative",
             "stereotaxic_axis_sign_ap_dv_ml": STEREOTAXIC_AXIS_SIGN_AP_DV_ML.tolist(),
             "probe_type": self.probe_type.currentText(),
+            "insertion_constraint": (
+                None
+                if (constraint := self._probe_constraint(probe_name)) is None
+                else asdict(constraint)
+            ),
+            "constrained_probe_fit": (
+                self._probe_fit_record(probe_name)
+                if any(
+                    (trace := session.probe_traces.get(probe_name)) is not None
+                    and trace.volume_points
+                    for session in self.sessions
+                )
+                else None
+            ),
+            "probe_attack_angle_convention": "0 degrees horizontal; 90 degrees vertical",
+            "insertion_target_coordinate_frame": (
+                "bregma-centred stereotaxic AP/ML um; uncertainty circle projected onto the Allen annotation surface"
+            ),
             "channel_identity": ["probe_name", "probe_channel_number"],
             "unit_assignment": "structure_acronym inherited from the unit peak probe channel",
             "trajectory_sampling": "shank centerline at probe_vertical_position; horizontal position is retained but no probe-roll estimate is available",

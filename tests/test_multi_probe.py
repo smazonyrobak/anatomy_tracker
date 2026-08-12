@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -213,3 +214,250 @@ def test_manifest_contains_only_requested_probe_trace(window, tmp_path):
     assert manifest["slices"][0]["probe_atlas_points"] == [[11, 12]]
     assert manifest["slices"][0]["probe_volume_points"] == [[15, 16, 17]]
     assert TRACKER.probe_color("imec0") != TRACKER.probe_color("imec1")
+
+
+def test_insertion_constraints_are_retained_independently_per_probe(window):
+    window.probe_name.addItems(["imec0", "imec1"])
+    window.probe_name.setCurrentText("imec0")
+    window.use_probe_constraints.setChecked(True)
+    window.insertion_ap_um.setValue(-1400)
+    window.insertion_ml_um.setValue(900)
+    window.insertion_radius_um.setValue(200)
+    window.attack_angle_deg.setValue(72.0)
+    window.attack_angle_tolerance_deg.setValue(4.0)
+    window.limit_insertion_depth.setChecked(True)
+    window.max_insertion_depth_um.setValue(8500)
+
+    window.probe_name.setCurrentText("imec1")
+    assert not window.use_probe_constraints.isChecked()
+    window.use_probe_constraints.setChecked(True)
+    window.insertion_ap_um.setValue(-2200)
+    window.insertion_ml_um.setValue(-700)
+
+    window.probe_name.setCurrentText("imec0")
+    assert window.use_probe_constraints.isChecked()
+    assert window.insertion_ap_um.value() == -1400
+    assert window.insertion_ml_um.value() == 900
+    assert window.attack_angle_deg.value() == 72.0
+    assert window.attack_angle_tolerance_deg.value() == 4.0
+    assert window.max_insertion_depth_um.value() == 8500
+    assert window.probe_constraints["imec0"].maximum_insertion_depth_um == 8500
+    assert window.probe_constraints["imec1"].ap_um == -2200
+    assert window.probe_constraints["imec1"].ml_um == -700
+
+
+def test_enabled_constraint_is_written_with_explicit_angle_convention(window, tmp_path):
+    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
+        enabled=True,
+        ap_um=-1400,
+        ml_um=800,
+        radius_um=250,
+        angle_deg=75,
+        angle_tolerance_deg=5,
+        maximum_insertion_depth_um=9000,
+    )
+    window._write_manifest(
+        tmp_path,
+        "imec0",
+        "y0_contact",
+        np.array([15.0, 16.0, 17.0]),
+        np.array([15.0, 16.0, 17.0]),
+        np.array([0.0, -1.0, 0.0]),
+    )
+    manifest = json.loads(
+        (tmp_path / "anatomy" / "proprietary_trajectory_manifest_imec0.json").read_text()
+    )
+    assert manifest["insertion_constraint"] == {
+        "enabled": True,
+        "ap_um": -1400,
+        "ml_um": 800,
+        "radius_um": 250,
+        "angle_deg": 75,
+        "angle_tolerance_deg": 5,
+        "maximum_insertion_depth_um": 9000,
+    }
+    assert manifest["probe_attack_angle_convention"] == (
+        "0 degrees horizontal; 90 degrees vertical"
+    )
+
+
+def test_constraint_circle_is_projected_onto_annotation_surface(window):
+    window.atlas_volume = np.zeros((40, 30, 50), dtype=np.uint8)
+    window.annotation_volume = np.zeros_like(window.atlas_volume)
+    window.annotation_volume[:, 7:, :] = 1
+    window.cortical_region_ids = {1}
+    window.bregma_voxel = np.array([20.0, 10.0, 25.0])
+    window.probe_name.addItem("imec0")
+    window.probe_name.setCurrentText("imec0")
+    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
+        enabled=True,
+        radius_um=100,
+        angle_deg=90,
+        angle_tolerance_deg=5,
+    )
+    window._refresh_3d()
+
+    rings = [
+        item for item in window.dynamic_gl_items
+        if isinstance(item, TRACKER.gl.GLLinePlotItem) and len(item.pos) == 97
+    ]
+    assert len(rings) == 1
+    # Annotation surface is DV index 7, rendered as GL z = 320 - 7.
+    assert np.allclose(rings[0].pos[:, 2], TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML[1] - 7)
+
+
+def test_constraint_surface_requires_dorsal_isocortex_not_deeper_cortex(window, tmp_path):
+    query = tmp_path / "query.csv"
+    TRACKER.pd.DataFrame(
+        {
+            "id": [1, 2],
+            "structure_id_path": ["/997/315/1/", "/997/8/2/"],
+        }
+    ).to_csv(query, index=False)
+    assert window._load_cortical_region_ids(query) == {1}
+
+    window.annotation_volume = np.zeros((3, 6, 3), dtype=np.uint16)
+    window.bregma_voxel = np.array([1.0, 0.0, 1.0])
+    window.cortical_region_ids = {1}
+    window.annotation_volume[1, 2, 1] = 2
+    window.annotation_volume[1, 3, 1] = 1
+    assert np.isnan(window._surface_dv_um(0.0, 0.0))
+    window.annotation_volume[1, 2, 1] = 1
+    assert window._surface_dv_um(0.0, 0.0) == pytest.approx(-50.0)
+
+
+def test_constrained_probe_geometry_uses_stereotaxic_signs_and_robust_depth(window, monkeypatch):
+    window.bregma_voxel = np.array([216.0, 13.28, 229.56])
+    entry_stereo = np.array([-1400.0, -100.0, 800.0])
+    deep_stereo = np.array([0.6, -0.8, 0.0])
+    fit = SimpleNamespace(
+        entry_ap_dv_ml_um=entry_stereo,
+        direction_ap_dv_ml=deep_stereo,
+        diagnostics={"axial_max_um": 2250.0},
+    )
+    monkeypatch.setattr(window, "probe_constraint_fit", lambda _name, **_kwargs: fit)
+
+    above, deepest, toward_surface = window.constrained_probe_line_geometry("imec0")
+    entry_volume = TRACKER.probe_stereotaxic_to_volume(
+        entry_stereo, window.bregma_voxel, TRACKER.VOXEL_UM
+    )
+    deep_volume = deep_stereo / TRACKER.STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+    assert toward_surface == pytest.approx(-deep_volume)
+    assert deepest == pytest.approx(entry_volume + deep_volume * (2250.0 / TRACKER.VOXEL_UM))
+    assert above == pytest.approx(entry_volume - deep_volume * 20.0)
+
+
+def test_disabled_constraint_preserves_original_probe_line_exactly(window):
+    session = TRACKER.SliceSession("slice")
+    session.probe_traces = {
+        "imec0": TRACKER.ProbeTrace(volume_points=[[100, 220, 90], [100, 180, 90]])
+    }
+    window.sessions = [session]
+    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(enabled=False)
+    original = window.probe_line_geometry("imec0")
+    constrained_api = window.constrained_probe_line_geometry("imec0")
+    for expected, actual in zip(original, constrained_api):
+        assert actual == pytest.approx(expected, abs=0.0)
+
+
+def test_constraint_fit_cache_tracks_points_constraint_surface_and_blocked_sessions(window, monkeypatch):
+    window.bregma_voxel = np.zeros(3)
+    window.annotation_volume = np.ones((6, 6, 6), dtype=np.uint16)
+    window.cortical_region_ids = {1}
+    first = TRACKER.SliceSession("first")
+    first.probe_traces = {"imec0": TRACKER.ProbeTrace(volume_points=[[1, 1, 1], [2, 2, 2]])}
+    blocked = TRACKER.SliceSession("blocked")
+    blocked.probe_traces = {"imec0": TRACKER.ProbeTrace(volume_points=[[3, 3, 3]])}
+    blocked.auto_alignment_diagnostics = {"nonlinear_refinement": {"mapping_blocking": True}}
+    window.sessions = [first, blocked]
+    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
+        enabled=True, radius_um=0.0, angle_deg=90.0
+    )
+    calls = []
+    fit = SimpleNamespace(
+        entry_ap_dv_ml_um=np.zeros(3),
+        direction_ap_dv_ml=np.array([0.0, -1.0, 0.0]),
+        diagnostics={"axial_max_um": 100.0},
+    )
+
+    def fake_fit(observations, *_args, **_kwargs):
+        calls.append(observations)
+        return fit
+
+    monkeypatch.setattr(TRACKER, "fit_probe_ray", fake_fit)
+    assert window.probe_constraint_fit("imec0") is fit
+    assert window.probe_constraint_fit("imec0") is fit
+    assert len(calls) == 1
+    assert set(calls[0]) == {0}
+
+    first.probe_traces["imec0"].volume_points[1] = [2, 2, 3]
+    window.probe_constraint_fit("imec0")
+    assert len(calls) == 2
+    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
+        enabled=True, ml_um=25.0, radius_um=0.0, angle_deg=90.0
+    )
+    window.probe_constraint_fit("imec0")
+    assert len(calls) == 3
+    window.annotation_volume = window.annotation_volume.copy()
+    window.probe_constraint_fit("imec0")
+    assert len(calls) == 4
+
+
+def test_infeasible_constraint_is_visible_and_not_drawn_as_unconstrained(window, monkeypatch):
+    session = TRACKER.SliceSession("slice")
+    session.probe_traces = {
+        "imec0": TRACKER.ProbeTrace(volume_points=[[100, 220, 90], [100, 180, 90]])
+    }
+    window.sessions = [session]
+    window.current_session_index = 0
+    window.probe_name.addItem("imec0")
+    window.probe_name.setCurrentText("imec0")
+    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(enabled=True)
+    monkeypatch.setattr(
+        window,
+        "probe_constraint_fit",
+        lambda _name, **_kwargs: (_ for _ in ()).throw(TRACKER.InfeasibleProbeConstraint("no cortical entry")),
+    )
+    monkeypatch.setattr(
+        window,
+        "probe_line_geometry",
+        lambda _name: pytest.fail("must not silently draw the unconstrained line"),
+    )
+
+    window._update_probe_fit_summary()
+    assert "infeasible" in window.probe_fit_summary.text().lower()
+    assert "no cortical entry" in window.probe_fit_summary.text()
+    window._refresh_3d()
+
+
+def test_only_alignment_runs_that_used_a_probe_are_invalidated(window):
+    constrained = TRACKER.SliceSession("constrained")
+    constrained.auto_alignment_run_id = "run-constrained"
+    constrained.auto_alignment_diagnostics = {
+        "probe_geometry_constraints": {
+            "applied": True,
+            "probes": {"imec0": {}},
+        }
+    }
+    image_only = TRACKER.SliceSession("image-only")
+    image_only.auto_alignment_run_id = "run-image"
+    image_only.auto_alignment_diagnostics = {"pose_search_score": 0.1}
+    other_probe = TRACKER.SliceSession("other-probe")
+    other_probe.auto_alignment_run_id = "run-other"
+    other_probe.auto_alignment_diagnostics = {
+        "probe_geometry_constraints": {
+            "applied": True,
+            "probes": {"imec1": {}},
+        }
+    }
+    window.sessions = [constrained, image_only, other_probe]
+
+    window._mark_probe_constrained_alignment_stale(
+        constrained,
+        "imec0",
+        "imec0 surgical constraint changed",
+    )
+
+    assert constrained.auto_alignment_diagnostics["alignment_run_stale"]
+    assert not image_only.auto_alignment_diagnostics.get("alignment_run_stale", False)
+    assert not other_probe.auto_alignment_diagnostics.get("alignment_run_stale", False)
