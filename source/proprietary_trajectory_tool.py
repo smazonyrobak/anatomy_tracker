@@ -2164,9 +2164,6 @@ def prepare_run_and_solve_alignment(
     global_alignment: bool,
     engine: str,
     own_cnn_weight: float,
-    nonlinear_refinement: bool,
-    nonlinear_skip_reason: str | None,
-    nonlinear_model_path: str,
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
     probe_constraints: dict[str, dict] | None = None,
@@ -2206,133 +2203,105 @@ def prepare_run_and_solve_alignment(
         cortical_region_ids=cortical_region_ids,
     )
     runtime_info["alignment_solver_seconds"] = float(time.perf_counter() - solver_started)
-    nonlinear_started = time.perf_counter()
-    completed = []
-    for sequence, (
-        session_index,
-        atlas_index,
-        tilt_ml,
-        tilt_dv,
-        affine_transform,
-        prediction,
-        diagnostics,
-    ) in enumerate(prepared, start=1):
-        if cancel_event.is_set():
-            raise InterruptedError
-        transform = affine_transform
-        nonlinear_diagnostics = {
-            "requested": bool(nonlinear_refinement),
+    for *_, diagnostics in prepared:
+        diagnostics["nonlinear_refinement"] = {
+            "requested": False,
             "status": "not-run",
-            "reason": nonlinear_skip_reason,
+            "reason": "Use Fit current slice to atlas after reviewing the affine alignment",
         }
-        if nonlinear_refinement:
-            progress_messages.put(
-                (
-                    90 + round(9 * (sequence - 1) / max(len(prepared), 1)),
-                    f"Refining internal anatomy {sequence} / {len(prepared)}...",
-                )
-            )
-            filename = Path(str(prediction["Filenames"])).name
-            display_image = prepared_inputs[filename]["image"]
-            display_mask = prepared_inputs[filename]["brain_mask"].astype(np.uint8)
-            fixed_atlas = coronal_oblique_slice(
-                atlas_volume,
-                atlas_index,
-                tilt_ml,
-                tilt_dv,
-                order=1,
-            )
-            fixed_mask = coronal_oblique_slice(
-                annotation_volume,
-                atlas_index,
-                tilt_ml,
-                tilt_dv,
-                order=0,
-            ) > 0
-            moving_affine = affine_transform.render_display_image_in_atlas(display_image)
-            moving_mask = (
-                affine_transform.render_display_image_in_atlas(
-                    display_mask,
-                    interpolation=cv2.INTER_NEAREST,
-                )
-                > 0
-            )
-            try:
-                source_sha256 = diagnostics["input_crop"]["source_image_sha256"]
-                warp, accepted_diagnostics = run_diffeomorphic_registration(
-                    fixed_atlas,
-                    moving_affine,
-                    fixed_mask,
-                    moving_mask,
-                    nonlinear_model_path,
-                    pixel_spacing_um=VOXEL_UM,
-                    source_image_sha256=source_sha256,
-                )
-            except DiffeomorphicRegistrationRejected as exc:
-                nonlinear_diagnostics = {
-                    "requested": True,
-                    "status": "rejected",
-                    "reason": "; ".join(exc.failures),
-                    "rejection_categories": list(exc.categories),
-                    "mapping_blocking": bool(
-                        {"wrong_plane", "affine_input"}.intersection(exc.categories)
-                    ),
-                    "runtime": exc.diagnostics,
-                }
-            else:
-                attestation = NonlinearWarpAttestation.from_runtime(
-                    warp,
-                    fixed_mask,
-                    moving_mask,
-                    accepted_diagnostics,
-                )
-                transform = SliceAtlasTransform2D(
-                    affine_transform.display_to_affine_atlas_h,
-                    affine_transform.display_shape,
-                    affine_transform.atlas_shape,
-                    warp,
-                    attestation,
-                )
-                transform.check_invariants()
-                nonlinear_diagnostics = {
-                    "requested": True,
-                    "status": "accepted",
-                    "reason": None,
-                    "rejection_categories": [],
-                    "mapping_blocking": False,
-                    "runtime": accepted_diagnostics,
-                }
-        diagnostics["nonlinear_refinement"] = nonlinear_diagnostics
-        completed.append(
-            (
-                session_index,
-                atlas_index,
-                tilt_ml,
-                tilt_dv,
-                transform,
-                prediction,
-                diagnostics,
-            )
-        )
-        if nonlinear_refinement:
-            refinement_status = nonlinear_diagnostics["status"]
-            progress_messages.put(
-                (
-                    90 + round(9 * sequence / max(len(prepared), 1)),
-                    f"Experimental anatomical refinement {refinement_status} {sequence} / {len(prepared)}",
-                )
-            )
-    prepared = completed
-    runtime_info["nonlinear_refinement_seconds"] = float(time.perf_counter() - nonlinear_started)
     runtime_info["total_alignment_seconds"] = float(time.perf_counter() - alignment_started)
     for *_, diagnostics in prepared:
         diagnostics["alignment_solver_seconds"] = runtime_info["alignment_solver_seconds"]
-        diagnostics["nonlinear_refinement_seconds"] = runtime_info["nonlinear_refinement_seconds"]
         diagnostics["total_alignment_seconds"] = runtime_info["total_alignment_seconds"]
     if cancel_event.is_set():
         raise InterruptedError
     progress_messages.put((100, "Alignment ready"))
     return engine, runtime_info["component_provenance"], disagreement, runtime_info, prepared, shared_tilt
+
+
+def fit_slice_anatomy_to_atlas(
+    image_job: tuple,
+    affine_transform: SliceAtlasTransform2D,
+    atlas_index: int,
+    tilt_ml: float,
+    tilt_dv: float,
+    atlas_volume: np.ndarray,
+    annotation_volume: np.ndarray,
+    nonlinear_model_path: str,
+    progress_messages: queue.SimpleQueue,
+    cancel_event: threading.Event,
+) -> tuple[SliceAtlasTransform2D, dict]:
+    if affine_transform.nonlinear is not None:
+        raise ValueError("This slice already has a nonlinear anatomical fit")
+    progress_messages.put((5, "Preparing the aligned histology slice..."))
+    with tempfile.TemporaryDirectory(prefix="trajectory_nonlinear_") as temporary_folder:
+        image_paths, input_crops, prepared_inputs = prepare_pose_inputs(
+            [image_job], temporary_folder, progress_messages, cancel_event
+        )
+        filename = Path(image_paths[0]).name
+        display_image = prepared_inputs[filename]["image"]
+        display_mask = prepared_inputs[filename]["brain_mask"].astype(np.uint8)
+        fixed_atlas = coronal_oblique_slice(
+            atlas_volume, atlas_index, tilt_ml, tilt_dv, order=1
+        )
+        fixed_mask = (
+            coronal_oblique_slice(
+                annotation_volume, atlas_index, tilt_ml, tilt_dv, order=0
+            )
+            > 0
+        )
+        moving_affine = affine_transform.render_display_image_in_atlas(display_image)
+        moving_mask = (
+            affine_transform.render_display_image_in_atlas(
+                display_mask, interpolation=cv2.INTER_NEAREST
+            )
+            > 0
+        )
+        progress_messages.put((35, "Fitting internal anatomy on the fixed atlas plane..."))
+        source_sha256 = input_crops[filename]["source_image_sha256"]
+        try:
+            warp, accepted = run_diffeomorphic_registration(
+                fixed_atlas,
+                moving_affine,
+                fixed_mask,
+                moving_mask,
+                nonlinear_model_path,
+                pixel_spacing_um=VOXEL_UM,
+                source_image_sha256=source_sha256,
+            )
+        except DiffeomorphicRegistrationRejected as exc:
+            return affine_transform, {
+                "requested": True,
+                "status": "rejected",
+                "reason": "; ".join(exc.failures),
+                "rejection_categories": list(exc.categories),
+                "mapping_blocking": bool(
+                    {"wrong_plane", "affine_input"}.intersection(exc.categories)
+                ),
+                "runtime": exc.diagnostics,
+            }
+        if cancel_event.is_set():
+            raise InterruptedError
+        attestation = NonlinearWarpAttestation.from_runtime(
+            warp, fixed_mask, moving_mask, accepted
+        )
+        transform = SliceAtlasTransform2D(
+            affine_transform.display_to_affine_atlas_h,
+            affine_transform.display_shape,
+            affine_transform.atlas_shape,
+            warp,
+            attestation,
+        )
+        transform.check_invariants()
+        progress_messages.put((100, "Anatomical fit ready"))
+        return transform, {
+            "requested": True,
+            "status": "accepted",
+            "reason": None,
+            "rejection_categories": [],
+            "mapping_blocking": False,
+            "runtime": accepted,
+        }
 
 
 def atlas_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:
@@ -3447,24 +3416,23 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self._nonlinear_bundle_error = None
         except Exception as exc:
             self._nonlinear_bundle_error = str(exc)
-        self.nonlinear_refinement = QtWidgets.QCheckBox("Experimental nonlinear anatomy refinement")
-        self.nonlinear_refinement.setChecked(self._nonlinear_bundle_error is None)
-        self.nonlinear_refinement.setEnabled(self._nonlinear_bundle_error is None)
-        self.nonlinear_refinement.setToolTip(
-            "After pose and affine scale are frozen, an experimental model may deform local anatomy. "
+        self.fit_anatomy_btn = QtWidgets.QPushButton("Fit current slice to atlas (nonlinear)")
+        self.fit_anatomy_btn.setEnabled(False)
+        self.fit_anatomy_btn.setToolTip(
+            "After reviewing the AP, tilts and affine scale, deform local histology anatomy onto this fixed atlas plane. "
             "Only results passing conservative geometry and correspondence gates are used; a rejected result keeps "
             "the affine alignment for review."
         )
         self.nonlinear_model_status = QtWidgets.QLabel(
             "Experimental nonlinear model bundle verified"
             if self._nonlinear_bundle_error is None
-            else "No source-approved nonlinear release is available; automatic alignment remains affine-only."
+            else "No source-approved nonlinear release is installed; anatomical fitting is unavailable."
         )
         self.nonlinear_model_status.setStyleSheet("color:#9fb4c8;")
         self.nonlinear_model_status.setWordWrap(True)
         if self._nonlinear_bundle_error is not None:
             self.nonlinear_model_status.setToolTip(self._nonlinear_bundle_error)
-        automatic_layout.addWidget(self.nonlinear_refinement, 6, 0, 1, 2)
+        automatic_layout.addWidget(self.fit_anatomy_btn, 6, 0, 1, 2)
         automatic_layout.addWidget(self.nonlinear_model_status, 6, 2, 1, 2)
         self.limit_auto_align_ap = QtWidgets.QCheckBox("Limit AP search")
         self.limit_auto_align_ap.setToolTip(
@@ -3798,6 +3766,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.transform_btn.clicked.connect(self.transform_current_slice)
         self.auto_align_btn.clicked.connect(self._auto_align_clicked)
         self.auto_align_all_btn.clicked.connect(self._auto_align_all_clicked)
+        self.fit_anatomy_btn.clicked.connect(self._fit_current_slice_anatomy_clicked)
         self.new_outline_segment_btn.clicked.connect(self.start_new_surface_segment)
         self.auto_order_up_btn.clicked.connect(lambda: self._move_auto_order_item(-1))
         self.auto_order_down_btn.clicked.connect(lambda: self._move_auto_order_item(1))
@@ -5469,6 +5438,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.point_counts.setText("Surface 0 | Transform atlas 0 / slice 0 | Probe 0")
             self.auto_align_btn.setEnabled(False)
             self.auto_align_all_btn.setEnabled(False)
+            self._update_nonlinear_fit_button()
             self.alignment_summary.setText("Auto-align: not run")
             return
         n_pairs = min(len(session.atlas_landmarks), len(session.slice_landmarks))
@@ -5503,6 +5473,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             and self.plane_box.currentText() == "coronal"
             and not self.auto_alignment_busy
         )
+        self._update_nonlinear_fit_button()
         if session.auto_alignment_engine is not None:
             ap_um = int(round((session.atlas_index - float(self.bregma_voxel[0])) * VOXEL_UM * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]))
             scope = session.auto_alignment_scope or ("global" if session.auto_alignment_global else "single")
@@ -5750,7 +5721,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _set_auto_constraint_controls_enabled(self, enabled: bool) -> None:
         self.pose_engine.setEnabled(enabled)
         self.own_cnn_weight.setEnabled(enabled and self.pose_engine.currentText() == POSE_ENGINE_WEIGHTED)
-        self.nonlinear_refinement.setEnabled(enabled and self._nonlinear_bundle_error is None)
+        self._update_nonlinear_fit_button(enabled)
         self.limit_auto_align_ap.setEnabled(enabled)
         self.auto_align_ap_min.setEnabled(enabled and self.limit_auto_align_ap.isChecked())
         self.auto_align_ap_max.setEnabled(enabled and self.limit_auto_align_ap.isChecked())
@@ -5760,6 +5731,212 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _pose_engine_changed(self, engine: str) -> None:
         self.own_cnn_weight.setEnabled(not self.auto_alignment_busy and engine == POSE_ENGINE_WEIGHTED)
+
+    def _update_nonlinear_fit_button(self, controls_enabled: bool = True) -> None:
+        session = self.current_session()
+        transform = None if session is None else session.slice_atlas_transform
+        self.fit_anatomy_btn.setEnabled(
+            controls_enabled
+            and not self.auto_alignment_busy
+            and self._nonlinear_bundle_error is None
+            and transform is not None
+            and transform.nonlinear is None
+            and session.atlas_plane == "coronal"
+            and self.atlas_volume is not None
+            and self.annotation_volume is not None
+        )
+
+    def _automatic_alignment_image_job(self, session: SliceSession) -> tuple:
+        display_outline = self._slice_raw_to_display_points(
+            session,
+            session.brain_outline_points,
+        )
+        selection_crop = None
+        if (
+            session.brain_brush_strokes
+            and session.brain_brush_selection_mask is not None
+            and np.any(session.brain_brush_selection_mask)
+        ):
+            selection_y, selection_x = np.nonzero(session.brain_brush_selection_mask)
+            selection_crop = surface_crop_bounds(
+                [
+                    (float(selection_x.min()), float(selection_y.min())),
+                    (float(selection_x.max()), float(selection_y.max())),
+                ],
+                session.brain_brush_selection_mask.shape,
+                0.04,
+            )
+        return (
+            session.path,
+            session.rotation_deg,
+            session.flip_horizontal,
+            session.flip_vertical,
+            display_outline,
+            selection_crop,
+            session.brain_outline_closed,
+            (
+                None
+                if session.brain_brush_selection_mask is None
+                else session.brain_brush_selection_mask.copy()
+            ),
+        )
+
+    def _fit_current_slice_anatomy_clicked(self) -> None:
+        try:
+            self._fit_current_slice_anatomy()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Anatomical fitting failed", str(exc))
+            self.status.setText(f"Anatomical fitting failed: {exc}")
+
+    def _fit_current_slice_anatomy(self) -> None:
+        session = self.current_session()
+        if (
+            self.auto_alignment_busy
+            or session is None
+            or self.atlas_volume is None
+            or self.annotation_volume is None
+        ):
+            return
+        transform = session.slice_atlas_transform
+        if transform is None:
+            raise RuntimeError("Auto-align this slice before fitting its internal anatomy")
+        if transform.nonlinear is not None:
+            raise RuntimeError("This slice already has an accepted nonlinear anatomical fit")
+        if session.atlas_plane != "coronal":
+            raise RuntimeError("Nonlinear anatomical fitting currently supports coronal sections only")
+        verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
+
+        session_index = self.current_session_index
+        source_sha256 = file_sha256(Path(session.path))
+        atlas_snapshot = (
+            id(self.atlas_volume),
+            id(self.annotation_volume),
+            self.atlas_volume.shape,
+            tuple(self.bregma_voxel),
+        )
+        geometry_snapshot = (
+            id(transform),
+            session.atlas_index,
+            session.atlas_tilt_ml_deg,
+            session.atlas_tilt_dv_deg,
+            session.rotation_deg,
+            session.flip_horizontal,
+            session.flip_vertical,
+            source_sha256,
+        )
+        messages: queue.SimpleQueue = queue.SimpleQueue()
+        cancel_event = threading.Event()
+        progress = QtWidgets.QProgressDialog(
+            f"Fitting {session.name} to the fixed atlas plane...",
+            "Cancel",
+            0,
+            100,
+            self,
+        )
+        progress.setWindowTitle("Nonlinear anatomical fit")
+        progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.canceled.connect(cancel_event.set)
+        progress.show()
+
+        self.auto_alignment_busy = True
+        self._set_auto_constraint_controls_enabled(False)
+        self._refresh_point_counts()
+        self.status.setText(
+            f"Fitting internal anatomy for {session.name}; AP and tilts remain fixed and the interface remains available."
+        )
+        future = self.alignment_executor.submit(
+            fit_slice_anatomy_to_atlas,
+            self._automatic_alignment_image_job(session),
+            transform,
+            session.atlas_index,
+            session.atlas_tilt_ml_deg,
+            session.atlas_tilt_dv_deg,
+            self.atlas_volume,
+            self.annotation_volume,
+            str(NONLINEAR_MODEL_PATH),
+            messages,
+            cancel_event,
+        )
+        timer = QtCore.QTimer(self)
+        timer.setInterval(100)
+
+        def poll() -> None:
+            while True:
+                try:
+                    value, label = messages.get_nowait()
+                except queue.Empty:
+                    break
+                progress.setValue(value)
+                progress.setLabelText(label)
+            if not future.done():
+                return
+            timer.stop()
+            try:
+                if cancel_event.is_set():
+                    raise InterruptedError
+                fitted_transform, nonlinear_result = future.result()
+                if session_index >= len(self.sessions) or self.sessions[session_index] is not session:
+                    raise RuntimeError("The slice list changed while anatomical fitting was running; result discarded")
+                current_atlas = (
+                    id(self.atlas_volume),
+                    id(self.annotation_volume),
+                    None if self.atlas_volume is None else self.atlas_volume.shape,
+                    tuple(self.bregma_voxel),
+                )
+                current_geometry = (
+                    id(session.slice_atlas_transform),
+                    session.atlas_index,
+                    session.atlas_tilt_ml_deg,
+                    session.atlas_tilt_dv_deg,
+                    session.rotation_deg,
+                    session.flip_horizontal,
+                    session.flip_vertical,
+                    file_sha256(Path(session.path)),
+                )
+                if current_atlas != atlas_snapshot or current_geometry != geometry_snapshot:
+                    raise RuntimeError("The slice or atlas changed while anatomical fitting was running; result discarded")
+
+                if nonlinear_result["status"] == "accepted":
+                    self._verify_nonlinear_binding(session, fitted_transform)
+                diagnostics = dict(session.auto_alignment_diagnostics or {})
+                diagnostics["nonlinear_refinement"] = nonlinear_result
+                session.auto_alignment_diagnostics = diagnostics
+                session.slice_atlas_transform = fitted_transform
+                session.transformed_overlay = None
+                if nonlinear_result["status"] == "accepted":
+                    suffix = " + nonlinear anatomical fit"
+                    if not (session.auto_alignment_method or "").endswith(suffix):
+                        session.auto_alignment_method = (session.auto_alignment_method or "Affine alignment") + suffix
+                    self._recompute_probe_points_from_slice_points(session)
+                    if self.current_session_index == session_index:
+                        self._refresh_transformed_overlay(session)
+                        self._refresh_atlas()
+                    self._refresh_3d()
+                    self.status.setText(
+                        f"Anatomical fit accepted for {session.name}; AP and tilts were kept fixed."
+                    )
+                else:
+                    self.status.setText(
+                        f"Anatomical fit rejected for {session.name}; the affine alignment was retained: "
+                        f"{nonlinear_result['reason']}"
+                    )
+            except InterruptedError:
+                self.status.setText("Anatomical fitting cancelled; the affine alignment was kept unchanged.")
+            except Exception as exc:
+                QtWidgets.QMessageBox.critical(self, "Anatomical fitting failed", str(exc))
+                self.status.setText(f"Anatomical fitting failed: {exc}")
+            finally:
+                self._finish_auto_alignment_ui()
+
+        timer.timeout.connect(poll)
+        self._alignment_timer = timer
+        self._alignment_progress = progress
+        self._alignment_cancel_event = cancel_event
+        timer.start()
 
     def auto_align_current_slice(self) -> None:
         session = self.current_session()
@@ -5815,16 +5992,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             order_snapshot = []
         engine = self.pose_engine.currentText()
         own_cnn_weight = self.own_cnn_weight.value() / 100.0
-        nonlinear_refinement = self.nonlinear_refinement.isChecked()
-        if nonlinear_refinement:
-            verify_diffeomorphic_model_bundle(NONLINEAR_MODEL_PATH)
-        nonlinear_skip_reason = None
-        if not nonlinear_refinement:
-            nonlinear_skip_reason = (
-                "No source-approved nonlinear release is available; affine alignment remains active"
-                if self._nonlinear_bundle_error is not None
-                else "Nonlinear refinement was disabled by the user"
-            )
         if engine in (POSE_ENGINE_OWN_CNN, POSE_ENGINE_WEIGHTED) and (
             not OWN_CNN_MODEL_PATH.is_file() or not OWN_CNN_MODEL_PATH.with_suffix(".json").is_file()
         ):
@@ -5928,44 +6095,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         for sequence, session_index in enumerate(session_indices):
             session = self.sessions[session_index]
             filename = f"slice_{sequence:04d}.png"
-            display_outline = self._slice_raw_to_display_points(
-                session,
-                session.brain_outline_points,
-            )
-            selection_crop = None
-            if (
-                session.brain_brush_strokes
-                and session.brain_brush_selection_mask is not None
-                and np.any(session.brain_brush_selection_mask)
-            ):
-                selection_y, selection_x = np.nonzero(session.brain_brush_selection_mask)
-                selection_crop = surface_crop_bounds(
-                    [
-                        (float(selection_x.min()), float(selection_y.min())),
-                        (float(selection_x.max()), float(selection_y.max())),
-                    ],
-                    session.brain_brush_selection_mask.shape,
-                    0.04,
-                )
-            image_jobs.append(
-                (
-                    session.path,
-                    session.rotation_deg,
-                    session.flip_horizontal,
-                    session.flip_vertical,
-                    display_outline,
-                    selection_crop,
-                    session.brain_outline_closed,
-                    (
-                        None
-                        if session.brain_brush_selection_mask is None
-                        else session.brain_brush_selection_mask.copy()
-                    ),
-                )
-            )
+            image_jobs.append(self._automatic_alignment_image_job(session))
             filename_to_session[filename] = session_index
             geometry_snapshot[session_index] = alignment_input_snapshot(session)
-            outline_snapshot[session_index] = display_outline
+            outline_snapshot[session_index] = image_jobs[-1][4]
 
         messages: queue.SimpleQueue = queue.SimpleQueue()
         cancel_event = threading.Event()
@@ -5989,9 +6122,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._set_auto_constraint_controls_enabled(False)
         self._refresh_point_counts()
         scope = f"{len(session_indices)} outlined slices" if global_alignment else self.sessions[session_indices[0]].name
-        refinement_text = " with experimental nonlinear refinement" if nonlinear_refinement else " (affine-only)"
         self.status.setText(
-            f"{engine} and atlas refinement are aligning {scope}{refinement_text}; the interface remains available."
+            f"{engine} and atlas refinement are aligning {scope} (affine-only); the interface remains available."
         )
         future = self.alignment_executor.submit(
             prepare_run_and_solve_alignment,
@@ -6007,9 +6139,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             global_alignment,
             engine,
             own_cnn_weight,
-            nonlinear_refinement,
-            nonlinear_skip_reason,
-            str(NONLINEAR_MODEL_PATH),
             messages,
             cancel_event,
             probe_constraint_snapshot,

@@ -88,22 +88,19 @@ def _bound_transform(window, source_path, atlas_index, warp, mask):
 
 
 def test_worker_runs_post_affine_on_raw_normalized_image_and_exact_atlas_plane(monkeypatch):
-    shape, image, mask, prediction, prepared, runtime = _worker_inputs()
+    shape, image, mask, _prediction, prepared, _runtime = _worker_inputs()
     atlas = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
     annotation = np.ones(shape, dtype=np.uint16)
     captured = {}
-
     monkeypatch.setattr(
         TRACKER,
-        "prepare_and_run_pose_predictions",
+        "prepare_pose_inputs",
         lambda *_args: (
-            [prediction],
-            {"slice_0000.png": {}},
-            runtime,
+            ["slice_0000.png"],
+            {"slice_0000.png": {"source_image_sha256": "c" * 64}},
             {"slice_0000.png": {"image": image, "brain_mask": mask}},
         ),
     )
-    monkeypatch.setattr(TRACKER, "solve_pose_alignment", lambda *_args, **_kwargs: (prepared, None))
 
     from nonlinear_registration import NonlinearWarp2D
 
@@ -119,30 +116,21 @@ def test_worker_runs_post_affine_on_raw_normalized_image_and_exact_atlas_plane(m
 
     monkeypatch.setattr(TRACKER, "run_diffeomorphic_registration", accept)
     messages = queue.SimpleQueue()
-    result = TRACKER.prepare_run_and_solve_alignment(
-        [],
-        {"slice_0000.png": 0},
+    transform, diagnostics = TRACKER.fit_slice_anatomy_to_atlas(
+        (),
+        prepared[0][4],
+        1,
         2.0,
+        -3.0,
         atlas,
         annotation,
-        {0: []},
-        None,
-        [],
-        "test-run",
-        False,
-        TRACKER.POSE_ENGINE_DEEPSLICE,
-        0.2,
-        True,
-        None,
         "model.onnx",
         messages,
         threading.Event(),
     )
 
-    transform = result[4][0][4]
-    diagnostics = result[4][0][6]
     assert transform.nonlinear is not None
-    assert diagnostics["nonlinear_refinement"]["status"] == "accepted"
+    assert diagnostics["status"] == "accepted"
     assert np.array_equal(captured["fixed"], TRACKER.coronal_oblique_slice(atlas, 1, 2.0, -3.0, order=1))
     assert np.array_equal(captured["moving"], image)
     assert np.array_equal(captured["fixed_mask"], mask)
@@ -150,7 +138,7 @@ def test_worker_runs_post_affine_on_raw_normalized_image_and_exact_atlas_plane(m
     progress = []
     while not messages.empty():
         progress.append(messages.get()[0])
-    assert any(90 <= value <= 99 for value in progress)
+    assert 35 in progress
 
 
 @pytest.mark.parametrize(
@@ -160,21 +148,19 @@ def test_worker_runs_post_affine_on_raw_normalized_image_and_exact_atlas_plane(m
 def test_worker_rejection_keeps_the_frozen_affine_transform(
     monkeypatch, category, mapping_blocking
 ):
-    _, image, mask, prediction, prepared, runtime = _worker_inputs()
+    _, image, mask, _prediction, prepared, _runtime = _worker_inputs()
     atlas = np.zeros((4, *image.shape), dtype=np.float32)
     annotation = np.ones_like(atlas, dtype=np.uint16)
     affine = prepared[0][4]
     monkeypatch.setattr(
         TRACKER,
-        "prepare_and_run_pose_predictions",
+        "prepare_pose_inputs",
         lambda *_args: (
-            [prediction],
-            {"slice_0000.png": {}},
-            runtime,
+            ["slice_0000.png"],
+            {"slice_0000.png": {"source_image_sha256": "c" * 64}},
             {"slice_0000.png": {"image": image, "brain_mask": mask}},
         ),
     )
-    monkeypatch.setattr(TRACKER, "solve_pose_alignment", lambda *_args, **_kwargs: (prepared, None))
 
     def reject(*_args, **_kwargs):
         raise TRACKER.DiffeomorphicRegistrationRejected(
@@ -183,25 +169,17 @@ def test_worker_rejection_keeps_the_frozen_affine_transform(
 
     monkeypatch.setattr(TRACKER, "run_diffeomorphic_registration", reject)
     messages = queue.SimpleQueue()
-    result = TRACKER.prepare_run_and_solve_alignment(
-        [], {"slice_0000.png": 0}, 2.0, atlas, annotation, {0: []}, None, [], "test-run",
-        False, TRACKER.POSE_ENGINE_DEEPSLICE, 0.2, True, None, "model.onnx",
-        messages, threading.Event(),
+    transform, diagnostics = TRACKER.fit_slice_anatomy_to_atlas(
+        (), affine, 1, 2.0, -3.0, atlas, annotation, "model.onnx", messages, threading.Event()
     )
 
-    transform = result[4][0][4]
-    diagnostics = result[4][0][6]["nonlinear_refinement"]
     assert transform is affine
     assert transform.nonlinear is None
     assert diagnostics["status"] == "rejected"
     assert diagnostics["reason"] == "pair rejected"
     assert diagnostics["rejection_categories"] == [category]
     assert diagnostics["mapping_blocking"] is mapping_blocking
-    progress_labels = []
-    while not messages.empty():
-        progress_labels.append(messages.get()[1])
-    assert any("rejected" in label for label in progress_labels)
-    assert not any("passed runtime gates" in label for label in progress_labels)
+    assert not messages.empty()
 
 
 def test_mapping_blocking_rejection_blocks_export_but_other_rejection_requires_review(tmp_path):
@@ -588,18 +566,17 @@ def test_nonidentity_warp_has_one_overlay_probe_volume_and_export_convention(tmp
         app.processEvents()
 
 
-def test_no_promoted_bundle_is_explicit_and_affine_only_by_default(tmp_path):
+def test_no_promoted_bundle_disables_dedicated_anatomical_fit(tmp_path):
     if TRACKER.NONLINEAR_MODEL_PATH.is_file():
         pytest.skip("A promoted nonlinear bundle is installed")
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
     window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
     try:
-        assert not window.nonlinear_refinement.isChecked()
-        assert not window.nonlinear_refinement.isEnabled()
-        assert "affine-only" in window.nonlinear_model_status.text()
+        assert not window.fit_anatomy_btn.isEnabled()
+        assert "unavailable" in window.nonlinear_model_status.text()
         window._set_auto_constraint_controls_enabled(False)
         window._set_auto_constraint_controls_enabled(True)
-        assert not window.nonlinear_refinement.isEnabled()
+        assert not window.fit_anatomy_btn.isEnabled()
         image = np.zeros((12, 16), dtype=np.uint8)
         outline = [(float(index), float(index % 4)) for index in range(8)]
         window.atlas_volume = np.zeros((4, 12, 16), dtype=np.uint8)
@@ -611,19 +588,21 @@ def test_no_promoted_bundle_is_explicit_and_affine_only_by_default(tmp_path):
                 rotated=image,
                 weight_image=image,
                 brain_outline_points=outline,
+                slice_atlas_transform=TRACKER.SliceAtlasTransform2D(
+                    np.eye(3), image.shape, image.shape
+                ),
             )
         ]
         window.current_session_index = 0
-        window.nonlinear_refinement.setChecked(True)
         with pytest.raises(RuntimeError, match="Diffeomorphic ONNX model is unavailable"):
-            window._start_auto_alignment([0], global_alignment=False)
+            window._fit_current_slice_anatomy()
         assert not window.auto_alignment_busy
     finally:
         window.close()
         app.processEvents()
 
 
-def test_source_approved_bundle_enables_nonlinear_by_default(tmp_path, monkeypatch):
+def test_source_approved_bundle_enables_dedicated_fit_for_an_affine_slice(tmp_path, monkeypatch):
     monkeypatch.setattr(
         TRACKER,
         "verify_diffeomorphic_model_bundle",
@@ -632,12 +611,24 @@ def test_source_approved_bundle_enables_nonlinear_by_default(tmp_path, monkeypat
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
     window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
     try:
-        assert window.nonlinear_refinement.isChecked()
-        assert window.nonlinear_refinement.isEnabled()
+        image = np.zeros((12, 16), dtype=np.uint8)
+        window.atlas_volume = np.zeros((4, *image.shape), dtype=np.uint8)
+        window.annotation_volume = np.ones((4, *image.shape), dtype=np.uint8)
+        window.sessions = [
+            TRACKER.SliceSession(
+                "slice",
+                slice_atlas_transform=TRACKER.SliceAtlasTransform2D(
+                    np.eye(3), image.shape, image.shape
+                ),
+            )
+        ]
+        window.current_session_index = 0
+        window._update_nonlinear_fit_button()
+        assert window.fit_anatomy_btn.isEnabled()
         window._set_auto_constraint_controls_enabled(False)
-        assert not window.nonlinear_refinement.isEnabled()
+        assert not window.fit_anatomy_btn.isEnabled()
         window._set_auto_constraint_controls_enabled(True)
-        assert window.nonlinear_refinement.isEnabled()
+        assert window.fit_anatomy_btn.isEnabled()
     finally:
         window.close()
         app.processEvents()
