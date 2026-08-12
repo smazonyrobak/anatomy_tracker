@@ -37,7 +37,7 @@ from atlas_pose_runtime import (
     brain_mask_affine,
     fuse_pose_predictions,
     QUICKNII_COORDINATE_CONTRACT_VERSION,
-    run_atlas_pose_onnx,
+    run_atlas_pose_evaluated_onnx as run_atlas_pose_onnx,
 )
 from deepslice_runtime import (
     quicknii_to_tracker_alignment,
@@ -85,8 +85,8 @@ DEEPSLICE_REVIEW_AP_UM = 400.0
 DEEPSLICE_REVIEW_TILT_DEG = 5.0
 DEEPSLICE_REVIEW_SURFACE_RMS_PX = 8.0
 POSE_ENGINE_DEEPSLICE = "DeepSlice"
-POSE_ENGINE_OWN_CNN = "Own CNN"
-POSE_ENGINE_WEIGHTED = "Weighted vote"
+POSE_ENGINE_OWN_CNN = "AtlasPose (evaluated)"
+POSE_ENGINE_WEIGHTED = "Weighted vote (AtlasPose + DeepSlice)"
 POSE_ENGINES = (POSE_ENGINE_DEEPSLICE, POSE_ENGINE_OWN_CNN, POSE_ENGINE_WEIGHTED)
 DEFAULT_OWN_CNN_WEIGHT = 0.20
 OWN_CNN_MODEL_PATH = RESOURCE_DIR / "models" / "AtlasPose" / "atlas_pose.onnx"
@@ -3382,7 +3382,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         automatic_help.setStyleSheet("color:#9fb4c8;")
         self.pose_engine = QtWidgets.QComboBox()
         self.pose_engine.addItems(POSE_ENGINES)
-        self.pose_engine.setToolTip("Pose initializer used before the same atlas search and surface calibration")
+        self.pose_engine.setToolTip(
+            "DeepSlice is the default. AtlasPose passed all absolute-quality gates and beat DeepSlice on AP and L-R; "
+            "its small D-V advantage was statistically inconclusive."
+        )
         self.own_cnn_weight = QtWidgets.QSpinBox()
         self.own_cnn_weight.setRange(1, 99)
         self.own_cnn_weight.setValue(round(DEFAULT_OWN_CNN_WEIGHT * 100))
@@ -5826,9 +5829,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             not OWN_CNN_MODEL_PATH.is_file() or not OWN_CNN_MODEL_PATH.with_suffix(".json").is_file()
         ):
             raise RuntimeError(
-                "Own CNN model bundle is unavailable. Expected the trained ONNX model and atlas_pose.json at: "
+                "AtlasPose model bundle is unavailable. Expected atlas_pose.onnx and atlas_pose.json at: "
                 f"{OWN_CNN_MODEL_PATH.parent}. "
-                "Choose DeepSlice until the final model is installed."
+                "Choose DeepSlice until the evaluated model is installed."
             )
         alignment_run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
         atlas_snapshot = (

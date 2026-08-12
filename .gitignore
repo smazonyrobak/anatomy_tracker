@@ -15,4 +15,7 @@ tools/
 settings.json
 models/DeepSlice/*.onnx
 models/AtlasPose/*.onnx
+models/AtlasPose/SEALED_*
+models/AtlasPose/PRESEALED_*
+models/AtlasPose/FAILED_ATTEMPT_*
 models/DiffeomorphicRegistration/*.onnx

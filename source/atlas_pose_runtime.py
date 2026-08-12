@@ -23,6 +23,9 @@ AUTOMATIC_BRAIN_MASK_VERSION = "border-distance-conditional-hull-v6"
 APPROVED_ATLAS_POSE_MODEL_SHA256: str | None = None
 APPROVED_ATLAS_POSE_METADATA_SHA256: str | None = None
 APPROVED_ATLAS_POSE_EVIDENCE_SHA256: str | None = None
+EVALUATED_ATLAS_POSE_MODEL_SHA256 = "803383bde833bf1cb9549c2a9f44314c5c7827d2f67527901ec7a76f5d7a6495"
+EVALUATED_ATLAS_POSE_METADATA_SHA256 = "8035832414bee1b5d996ad94411363d2d782ead2b431a4a03971ba9e70574bbb"
+EVALUATED_ATLAS_POSE_EVIDENCE_SHA256 = "9cba7e3962099b12d582d8088702ac9b09fd4f858619a8faa4bf218897a66a26"
 ATLAS_POSE_RELEASE_GATE_THRESHOLDS = {
     "mean_ap_um": 60.0,
     "mean_lr_deg": 0.90,
@@ -801,6 +804,38 @@ def verify_atlas_pose_model_bundle(model_path: str | Path) -> tuple[str, str, st
     return verified
 
 
+def verify_atlas_pose_evaluated_bundle(
+    model_path: str | Path,
+) -> tuple[str, str, str, dict, dict]:
+    path = Path(model_path)
+    model_sha256, metadata_sha256, metadata = verify_atlas_pose_candidate_bundle(path)
+    evidence_path = path.with_name("RELEASE_REPORT.json")
+    if not evidence_path.is_file():
+        raise RuntimeError("AtlasPose evaluated model is missing its sealed evaluation report")
+    evidence_sha256 = _file_sha256(evidence_path)
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    integrity = evidence.pop("release_integrity_sha256", None)
+    if integrity != _canonical_json_sha256(evidence):
+        raise RuntimeError("AtlasPose evaluated-model evidence integrity check failed")
+    if (
+        (model_sha256, metadata_sha256, evidence_sha256)
+        != (
+            EVALUATED_ATLAS_POSE_MODEL_SHA256,
+            EVALUATED_ATLAS_POSE_METADATA_SHA256,
+            EVALUATED_ATLAS_POSE_EVIDENCE_SHA256,
+        )
+        or evidence.get("release_report_version") != 4
+        or evidence.get("model_sha256") != model_sha256
+        or evidence.get("metadata_sha256") != metadata_sha256
+        or evidence.get("release_approved") is not False
+        or evidence.get("promotion_ready") is not False
+        or not atlas_pose_release_quality_gate_valid(evidence.get("quality_gate", {}))
+        or evidence["quality_gate"].get("all_gates_passed") is not True
+    ):
+        raise RuntimeError("AtlasPose evaluated model does not match its source-pinned quality evidence")
+    return model_sha256, metadata_sha256, evidence_sha256, metadata, evidence
+
+
 @lru_cache(maxsize=4)
 def _load_atlas_pose_session(model_path: str, modified_ns: int, force_cpu: bool):
     del modified_ns
@@ -969,3 +1004,24 @@ def run_atlas_pose_candidate_onnx(
         cancel_event,
         require_release_approval=False,
     )
+
+
+def run_atlas_pose_evaluated_onnx(
+    images: list[np.ndarray],
+    masks: list[np.ndarray],
+    model_path: str | Path,
+    cancel_event=None,
+) -> tuple[np.ndarray, dict]:
+    """Run the source-pinned model that passed absolute gates but not superiority."""
+    _, _, evidence_sha256, _, evidence = verify_atlas_pose_evaluated_bundle(model_path)
+    prediction, runtime = _run_atlas_pose_onnx(
+        images,
+        masks,
+        model_path,
+        cancel_event,
+        require_release_approval=False,
+    )
+    runtime["release_evidence_sha256"] = evidence_sha256
+    runtime["evaluation_status"] = "absolute_quality_passed_superiority_inconclusive"
+    runtime["quality_gate"] = evidence["quality_gate"]
+    return prediction, runtime

@@ -1,0 +1,69 @@
+{
+  "model_sha256": "803383bde833bf1cb9549c2a9f44314c5c7827d2f67527901ec7a76f5d7a6495",
+  "source_sha256": {
+    "training/train_atlas_pose_v7.py": "2f00da2ea862f4fea3c9fe36b9c2397a3f49dc9d18ef23e7cad3c02246cb942d",
+    "training/atlas_pose_models_v7.py": "b24071cd10080a678e3bfac46da0e048c016c9ee8ab84f272afa5902882bd87d",
+    "training/synthetic_atlas.py": "2ed2cdf07d5f5789ad49053ba8672e7b4ab9c9c7a771ceeb2209d677715eb168",
+    "training/registered_section_dataset.py": "54b55154a86a736c59e9b506a57197226bf91ef1353c2c960fb0fad6a86bc1bd",
+    "training/atlas_pose_release_contract.py": "8ce5fa7298850745c9f9cbcfed21b4cd1b045794ee3e9b992e2ee5cc1b7b8be7",
+    "source/atlas_pose_runtime.py": "a6934736256a9db746fd047f3ba87fd9ca23fd8a09b25ae9d8a1be69582185a7",
+    "source/registered_image_quality.py": "4fa69ea4549ca30160376eb5a95263474602230e2a653b1b090a282ea59478e9"
+  },
+  "manifest_sha256": {
+    "F:\\AtlasPoseTraining_v7\\manifests\\train_100000_73191.npz": "d97270806a459fdd164cda4fbe216b4310d1045a98b3e0e7e694bac80c40901b",
+    "F:\\AtlasPoseTraining_v7\\manifests\\validation_1024_19841.npz": "439ec1de270a449d5ec19a9f353858469a096ee14a2dd037087b2d89b2998b67",
+    "F:\\AtlasPoseTraining_v7\\manifests\\train_100000_90821_59ee86b932a4_paired.npz": "35354426129bec65a4a6001df5b9e4bf30c665fce8c4d614efe68c1f1152856a",
+    "F:\\AtlasPoseTraining_v7\\manifests\\validation_1024_90822_61a2c600be79_paired.npz": "fc67c10ee31db5a17cf7bf792b4a8bdf88ccbc8458b4e2bebe006a70d0b5f507"
+  },
+  "registered_data_sha256": {
+    "datasets.jsonl": "e8ecb30857c6137845a3a62f72b6cc619e65e6212d2d6fd2d299bd7f55625eb8",
+    "sections.jsonl": "4caad9aa47dd44a30be6071a675dc6b3318af8ec2ec06ec667fd76bf5d61f117",
+    "provenance.json": "868cfb895ff7bba242b67a4961e522e00add1fff4fd92a0887319646aed47c72",
+    "downloads.jsonl": "963abd10fd904bff08ecd222c8dabb2fa7af550c2e561bf786301da53d405622",
+    "registered_image_quality.json": "4d791ce89b38c14956a0250727fbf9690d4d3d2c0a3f5e96ff4238cb80596bfd",
+    "nonsealed_image_tree_sha256": "0e9a59da8b4ae8f302efc9fc80bae1cea850f2f3c0411ae1385573f2c01c14a0"
+  },
+  "atlas_data_sha256": {
+    "average_template_25.nrrd": "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b",
+    "annotation_25.nrrd": "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42",
+    "query.csv": "5347daf90e02ac1d1cfcbf9c8af86ff23a2fb32cd7e7a2ba2881951931286dbd",
+    "atlas_labels.pkl": "9f8bc9f952a251a8f07be11c9536ff0fbf28f802892cfc39ee45e66c99a8fe3a"
+  },
+  "training_environment": {
+    "python": "3.11.15",
+    "torch": "2.11.0+cu128",
+    "timm": "1.0.28",
+    "numpy": "2.4.4",
+    "opencv": "4.13.0",
+    "onnx": "1.22.0",
+    "onnxruntime": "1.24.4",
+    "cuda": "12.8",
+    "cudnn": 91900,
+    "gpu": "NVIDIA GeForce RTX 2080 Ti"
+  },
+  "pretrained_backbone": {
+    "candidate": "convnext_tiny",
+    "timm_model_id": "convnext_tiny.fb_in22k_ft_in1k",
+    "architecture": "convnext_tiny",
+    "tag": "fb_in22k_ft_in1k",
+    "url": "https://dl.fbaipublicfiles.com/convnext/convnext_tiny_22k_1k_224.pth",
+    "hf_hub_id": "timm/convnext_tiny.fb_in22k_ft_in1k",
+    "license": "apache-2.0",
+    "initial_state_sha256": "cb977eb90bf5b2cdf7cf3361985523ee60955c3771e70a07897f675e39a9c4ea"
+  },
+  "git": {
+    "commit": "b67c05d89e2f531a600af91a2e4684a48d8522e6",
+    "tracked_source_dirty": false,
+    "tracked_source_status": []
+  },
+  "selection_split": "validation",
+  "training_splits": [
+    "synthetic_train",
+    "registered_train"
+  ],
+  "selection_data": "registered validation specimens with locked coverage/tail gates and synthetic validation robustness eligibility",
+  "excluded_from_selection": [
+    "registered_test",
+    "sealed_deepslice_s2p"
+  ]
+}

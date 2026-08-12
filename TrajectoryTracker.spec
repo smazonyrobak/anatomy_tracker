@@ -11,7 +11,7 @@ ATLAS_POSE_MODELS = ROOT / "models" / "AtlasPose"
 NONLINEAR_MODELS = ROOT / "models" / "DiffeomorphicRegistration"
 sys.path.insert(0, str(ROOT / "source"))
 from diffeomorphic_registration_runtime import verify_diffeomorphic_model_bundle
-from atlas_pose_runtime import verify_atlas_pose_model_bundle
+from atlas_pose_runtime import verify_atlas_pose_evaluated_bundle, verify_atlas_pose_model_bundle
 
 NONLINEAR_FILES = [
     NONLINEAR_MODELS / name
@@ -30,27 +30,41 @@ if all(path.is_file() for path in NONLINEAR_FILES):
 ATLAS_POSE_NAMES = [
     "atlas_pose.onnx",
     "atlas_pose.json",
+    "provenance.json",
     "RELEASE_REPORT.json",
-    "SEALED_metrics.json",
-    "SEALED_predictions.csv",
-    "PRESEALED_COMMITMENT.json",
-    "SEALED_CLAIM.json",
-    "SEALED_CONSUMPTION_RECEIPT.json",
 ]
 atlas_pose_release = ATLAS_POSE_MODELS / "RELEASE_REPORT.json"
-if atlas_pose_release.is_file() and json.loads(atlas_pose_release.read_text(encoding="utf-8")).get(
-    "release_report_version"
-) == 4:
+atlas_pose_evidence = (
+    json.loads(atlas_pose_release.read_text(encoding="utf-8"))
+    if atlas_pose_release.is_file()
+    else {}
+)
+if atlas_pose_evidence.get("release_approved") is True:
     ATLAS_POSE_NAMES.extend(
-        ("SEALED_RECOVERY_COMMITMENT.json", "FAILED_ATTEMPT_CLAIM.json", "FAILED_ATTEMPT_RECEIPT.json")
+        (
+            "SEALED_metrics.json",
+            "SEALED_predictions.csv",
+            "PRESEALED_COMMITMENT.json",
+            "SEALED_CLAIM.json",
+            "SEALED_CONSUMPTION_RECEIPT.json",
+        )
     )
+    if atlas_pose_evidence.get("release_report_version") == 4:
+        ATLAS_POSE_NAMES.extend(
+            ("SEALED_RECOVERY_COMMITMENT.json", "FAILED_ATTEMPT_CLAIM.json", "FAILED_ATTEMPT_RECEIPT.json")
+        )
 ATLAS_POSE_FILES = [
     ATLAS_POSE_MODELS / name
     for name in ATLAS_POSE_NAMES
 ]
 ATLAS_POSE_DATAS = []
 if all(path.is_file() for path in ATLAS_POSE_FILES):
-    verify_atlas_pose_model_bundle(ATLAS_POSE_FILES[0])
+    verifier = (
+        verify_atlas_pose_model_bundle
+        if atlas_pose_evidence.get("release_approved") is True
+        else verify_atlas_pose_evaluated_bundle
+    )
+    verifier(ATLAS_POSE_FILES[0])
     ATLAS_POSE_DATAS = [(str(path), "models/AtlasPose") for path in ATLAS_POSE_FILES]
 
 a = Analysis(
