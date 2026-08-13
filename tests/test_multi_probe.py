@@ -47,6 +47,56 @@ def test_probe_regressions_are_independent(window):
     assert not np.allclose(imec0, imec1)
 
 
+def test_final_trajectory_is_best_fit_inside_enabled_surgical_bounds(window, monkeypatch):
+    window.bregma_voxel = np.array([100.0, 100.0, 100.0])
+    monkeypatch.setattr(window, "_surface_dv_um", lambda _ap, _ml: 0.0)
+    constraint = TRACKER.ProbeInsertionConstraint(
+        True, -1400.0, -1600.0, 300.0, 50.0, 5.0, 10000.0
+    )
+    window.probe_constraints["imec0"] = constraint
+    observations = np.asarray(
+        [
+            [-1050.0, -500.0, -1200.0],
+            [-600.0, -1400.0, -800.0],
+            [-200.0, -2400.0, -300.0],
+        ]
+    )
+    volume = TRACKER.probe_stereotaxic_to_volume(
+        observations, window.bregma_voxel, TRACKER.VOXEL_UM
+    )
+    window.sessions = [
+        TRACKER.SliceSession(
+            "slice",
+            probe_traces={"imec0": TRACKER.ProbeTrace(volume_points=volume.tolist())},
+        )
+    ]
+
+    entry, deepest, surface_direction = window.probe_brain_geometry("imec0")
+    stereo_entry = TRACKER.volume_to_stereotaxic_um(entry, window.bregma_voxel)
+    stereo_direction = -surface_direction * TRACKER.STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+    stereo_direction /= np.linalg.norm(stereo_direction)
+    attack = np.degrees(np.arcsin(abs(stereo_direction[1])))
+
+    assert np.hypot(stereo_entry[0] - constraint.ap_um, stereo_entry[2] - constraint.ml_um) <= 300.0 + 1e-6
+    assert 45.0 - 1e-6 <= attack <= 55.0 + 1e-6
+    assert np.linalg.norm(
+        TRACKER.volume_to_stereotaxic_um(deepest, window.bregma_voxel) - stereo_entry
+    ) <= 10000.0 + 1e-6
+
+
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        ([-1.0, -1.0, 0.0], 0.0),
+        ([1.0, -1.0, 0.0], 0.0),
+        ([0.0, -1.0, 1.0], 90.0),
+        ([0.0, -1.0, -1.0], -90.0),
+    ],
+)
+def test_reported_roll_uses_bregma_lambda_axis(direction, expected):
+    assert TRACKER.signed_probe_roll_deg(direction) == pytest.approx(expected)
+
+
 def test_both_probe_regressions_render_together_with_distinct_colors(window):
     session = TRACKER.SliceSession("slice")
     session.probe_traces = {

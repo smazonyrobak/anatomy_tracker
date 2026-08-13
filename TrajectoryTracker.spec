@@ -8,25 +8,8 @@ import sys
 ROOT = Path(SPECPATH)
 DEEPSLICE_MODELS = ROOT / "models" / "DeepSlice"
 ATLAS_POSE_MODELS = ROOT / "models" / "AtlasPose"
-NONLINEAR_MODELS = ROOT / "models" / "DiffeomorphicRegistration"
 sys.path.insert(0, str(ROOT / "source"))
-from diffeomorphic_registration_runtime import verify_diffeomorphic_model_bundle
 from atlas_pose_runtime import verify_atlas_pose_evaluated_bundle, verify_atlas_pose_model_bundle
-
-NONLINEAR_FILES = [
-    NONLINEAR_MODELS / name
-    for name in (
-        "diffeomorphic.onnx",
-        "diffeomorphic.manifest.json",
-        "diffeomorphic.prelocked.json",
-    )
-]
-NONLINEAR_DATAS = []
-if all(path.is_file() for path in NONLINEAR_FILES):
-    verify_diffeomorphic_model_bundle(NONLINEAR_FILES[0])
-    NONLINEAR_DATAS = [
-        (str(path), "models/DiffeomorphicRegistration") for path in NONLINEAR_FILES
-    ]
 ATLAS_POSE_NAMES = [
     "atlas_pose.onnx",
     "atlas_pose.json",
@@ -75,7 +58,7 @@ a = Analysis(
         (str(DEEPSLICE_MODELS / "deepslice_mouse_primary_opset18.onnx"), "models/DeepSlice"),
         (str(DEEPSLICE_MODELS / "deepslice_mouse_secondary_opset18.onnx"), "models/DeepSlice"),
         (str(ROOT / "licenses" / "DeepSlice-LICENSE.txt"), "licenses"),
-    ] + ATLAS_POSE_DATAS + NONLINEAR_DATAS,
+    ] + ATLAS_POSE_DATAS,
     hiddenimports=["imagecodecs._imcd", "imagecodecs._shared_cython"],
     hookspath=[],
     hooksconfig={},
