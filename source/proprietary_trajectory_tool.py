@@ -4613,9 +4613,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                         transform_path.write_bytes(archive.read(transform_member))
                         session.slice_atlas_transform = SliceAtlasTransform2D.load_npz(transform_path)
                     elif min(len(session.atlas_landmarks), len(session.slice_landmarks)) >= 3:
-                        atlas_points = np.asarray(session.atlas_landmarks, dtype=np.float64)
+                        pair_count = min(len(session.atlas_landmarks), len(session.slice_landmarks))
+                        atlas_points = np.asarray(session.atlas_landmarks[:pair_count], dtype=np.float64)
                         slice_points = np.asarray(
-                            transform_points(session.slice_landmarks, session.slice_transform),
+                            transform_points(session.slice_landmarks[:pair_count], session.slice_transform),
                             dtype=np.float64,
                         )
                         session.slice_to_atlas_x = Rbf(

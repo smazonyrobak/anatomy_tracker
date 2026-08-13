@@ -94,3 +94,33 @@ def test_complete_session_round_trip_embeds_images_and_state(tmp_path):
     restored.close()
     window.close()
     app.processEvents()
+
+
+def test_session_load_preserves_an_unpaired_landmark_and_rebuilds_complete_pairs(tmp_path):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    image_path = tmp_path / "slice.tif"
+    image = np.arange(1200, dtype=np.uint16).reshape(30, 40)
+    tifffile.imwrite(image_path, image)
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    window.load_slice(image_path)
+    session = window.sessions[0]
+    session.atlas_landmarks = [(2.0, 2.0), (30.0, 2.0), (2.0, 20.0)]
+    session.slice_landmarks = [(3.0, 3.0), (31.0, 3.0), (3.0, 21.0), (18.0, 12.0)]
+    archive = tmp_path / "unpaired.attracker"
+    window.save_session_file(archive)
+
+    restored = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    restored.load_session_file(archive)
+
+    loaded = restored.sessions[0]
+    assert loaded.atlas_landmarks == [list(point) for point in session.atlas_landmarks]
+    assert loaded.slice_landmarks == [list(point) for point in session.slice_landmarks]
+    assert loaded.slice_to_atlas_x is not None
+    mapped = TRACKER.map_session_display_to_atlas(
+        loaded,
+        np.asarray(TRACKER.transform_points(loaded.slice_landmarks[:3], loaded.slice_transform)),
+    )
+    assert np.allclose(mapped, loaded.atlas_landmarks, atol=1e-6)
+    restored.close()
+    window.close()
+    app.processEvents()
