@@ -133,6 +133,7 @@ ANATOMY_MAPPING_COLUMNS = [
     "structure_id",
     "structure_name",
     "structure_acronym",
+    "structure_color_hex",
     "ccf_ap_index",
     "ccf_dv_index",
     "ccf_ml_index",
@@ -650,6 +651,91 @@ def attach_peak_channel_metadata(channels: pd.DataFrame, units: pd.DataFrame) ->
         keys = unresolved[["unit_key", *CHANNEL_KEY_COLUMNS]].head(10).to_dict("records")
         raise ValueError(f"Units have peak channels absent from channels.csv: {keys}")
     return units
+
+
+def probe_anatomy_view_data(
+    channels: pd.DataFrame,
+    units: pd.DataFrame,
+    probe_name: str,
+    region_colors: dict[int, str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    sites = canonical_channel_keys(channels)
+    sites = sites[sites["probe_name"].eq(probe_name)].copy()
+    if sites.empty:
+        raise ValueError(f"{probe_name} has no channels")
+    required = {
+        "probe_horizontal_position",
+        "probe_vertical_position",
+        "trajectory_distance_um",
+        "structure_acronym",
+    }
+    missing = sorted(required.difference(sites.columns))
+    if missing:
+        raise ValueError(f"Mapped channel metadata is missing: {', '.join(missing)}")
+    sites["probe_horizontal_position"] = pd.to_numeric(
+        sites["probe_horizontal_position"], errors="raise"
+    )
+    sites["probe_vertical_position"] = pd.to_numeric(
+        sites["probe_vertical_position"], errors="raise"
+    )
+    sites["trajectory_distance_um"] = pd.to_numeric(
+        sites["trajectory_distance_um"], errors="raise"
+    )
+    sites["structure_id"] = pd.to_numeric(
+        sites.get("structure_id", pd.Series(np.nan, index=sites.index)), errors="coerce"
+    )
+    sites["structure_name"] = sites.get(
+        "structure_name", pd.Series("", index=sites.index)
+    ).fillna("").astype(str)
+    sites["structure_acronym"] = sites["structure_acronym"].fillna("").astype(str)
+    saved_colors = sites.get(
+        "structure_color_hex", pd.Series("", index=sites.index)
+    ).fillna("").astype(str)
+    sites["structure_color_hex"] = [
+        saved.lstrip("#")
+        if len(saved.lstrip("#")) == 6
+        else region_colors.get(int(region_id), "354453")
+        if np.isfinite(region_id)
+        else "354453"
+        for saved, region_id in zip(saved_colors, sites["structure_id"].to_numpy(dtype=float))
+    ]
+    sites["region_key"] = [
+        str(int(region_id)) if np.isfinite(region_id) else "outside"
+        for region_id in sites["structure_id"].to_numpy(dtype=float)
+    ]
+    sites = sites.sort_values(
+        ["probe_vertical_position", "probe_horizontal_position"]
+    ).reset_index(drop=True)
+
+    mapped_units = canonical_channel_keys(units, units=True)
+    mapped_units = mapped_units[mapped_units["probe_name"].eq(probe_name)].copy()
+    channel_unit_counts = mapped_units["probe_channel_number"].value_counts()
+    sites["unit_count"] = sites["probe_channel_number"].map(channel_unit_counts).fillna(0).astype(int)
+    unit_regions = mapped_units[CHANNEL_KEY_COLUMNS].merge(
+        sites[CHANNEL_KEY_COLUMNS + ["region_key"]],
+        on=CHANNEL_KEY_COLUMNS,
+        how="left",
+        validate="many_to_one",
+    )
+    unit_counts = unit_regions["region_key"].fillna("outside").value_counts()
+
+    summary = (
+        sites.groupby("region_key", sort=False, dropna=False)
+        .agg(
+            structure_id=("structure_id", "first"),
+            structure_acronym=("structure_acronym", "first"),
+            structure_name=("structure_name", "first"),
+            structure_color_hex=("structure_color_hex", "first"),
+            channels=("probe_channel_number", "size"),
+            depth_min_um=("trajectory_distance_um", "min"),
+            depth_max_um=("trajectory_distance_um", "max"),
+        )
+        .reset_index()
+    )
+    summary["units"] = summary["region_key"].map(unit_counts).fillna(0).astype(int)
+    summary.loc[summary["structure_acronym"].eq(""), "structure_acronym"] = "Outside"
+    summary.loc[summary["structure_name"].eq(""), "structure_name"] = "Outside labelled atlas"
+    return sites, summary.sort_values("depth_min_um").reset_index(drop=True)
 
 
 def write_csv_atomic(table: pd.DataFrame, path: Path) -> None:
@@ -3383,6 +3469,185 @@ class CurveEditor(QtWidgets.QWidget):
         self.canvas.set_points(self.points)
 
 
+class ProbeAnatomyWidget(QtWidgets.QWidget):
+    def __init__(self, sites: pd.DataFrame) -> None:
+        super().__init__()
+        self.sites = sites
+        self._site_hits: list[tuple[QtCore.QPointF, pd.Series]] = []
+        self.setMouseTracking(True)
+        self.setMinimumSize(330, 560)
+
+    @staticmethod
+    def _color(value: str, alpha: int = 255) -> QtGui.QColor:
+        text = str(value).strip().lstrip("#")
+        color = QtGui.QColor(f"#{text}" if len(text) == 6 else "#354453")
+        color.setAlpha(alpha)
+        return color
+
+    def paintEvent(self, _: QtGui.QPaintEvent) -> None:
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QtGui.QColor("#0f131a"))
+        graph = QtCore.QRectF(54, 25, max(120, self.width() - 165), max(200, self.height() - 64))
+        x_values = self.sites["probe_horizontal_position"].to_numpy(dtype=float)
+        y_values = self.sites["trajectory_distance_um"].to_numpy(dtype=float)
+        x_mid = float((x_values.min() + x_values.max()) / 2.0)
+        x_span = max(float(np.ptp(x_values)) + 32.0, 64.0)
+        y_max = max(float(y_values.max()), 1.0)
+        body_width = min(130.0, graph.width() * 0.55)
+        body_left = graph.center().x() - body_width / 2.0
+        body_right = graph.center().x() + body_width / 2.0
+
+        def x_pos(value: float) -> float:
+            return graph.center().x() + (value - x_mid) / x_span * body_width * 0.78
+
+        def y_pos(value: float) -> float:
+            return graph.bottom() - value / y_max * graph.height()
+
+        tick_step = 1000.0 if y_max >= 3000 else 500.0
+        painter.setFont(QtGui.QFont("Segoe UI", 8))
+        for value in np.arange(0.0, y_max + tick_step, tick_step):
+            y = y_pos(float(value))
+            painter.setPen(QtGui.QPen(QtGui.QColor("#293847"), 1))
+            painter.drawLine(QtCore.QPointF(graph.left(), y), QtCore.QPointF(graph.right(), y))
+            painter.setPen(QtGui.QColor("#9fb4c8"))
+            painter.drawText(QtCore.QRectF(0, y - 9, 48, 18), QtCore.Qt.AlignmentFlag.AlignRight, f"{value / 1000:g}")
+        painter.save()
+        painter.translate(14, graph.center().y())
+        painter.rotate(-90)
+        painter.setPen(QtGui.QColor("#9fb4c8"))
+        painter.drawText(QtCore.QRectF(-90, -9, 180, 18), QtCore.Qt.AlignmentFlag.AlignCenter, "mm from probe tip")
+        painter.restore()
+
+        shank = QtGui.QPolygonF(
+            [
+                QtCore.QPointF(body_left, graph.top() - 10),
+                QtCore.QPointF(body_right, graph.top() - 10),
+                QtCore.QPointF(body_right, graph.bottom()),
+                QtCore.QPointF(graph.center().x(), graph.bottom() + 24),
+                QtCore.QPointF(body_left, graph.bottom()),
+            ]
+        )
+        painter.setPen(QtGui.QPen(QtGui.QColor("#718092"), 1.2))
+        painter.setBrush(QtGui.QColor("#202b37"))
+        painter.drawPolygon(shank)
+
+        rows = []
+        for depth, frame in self.sites.groupby("trajectory_distance_um", sort=True):
+            key = frame["region_key"].mode().iloc[0]
+            row = frame[frame["region_key"].eq(key)].iloc[0]
+            rows.append((float(depth), str(key), row))
+        if rows:
+            row_depths = np.asarray([row[0] for row in rows], dtype=float)
+            edges = np.r_[0.0, (row_depths[:-1] + row_depths[1:]) / 2.0, y_max]
+            start = 0
+            for index in range(1, len(rows) + 1):
+                if index < len(rows) and rows[index][1] == rows[start][1]:
+                    continue
+                lower, upper = float(edges[start]), float(edges[index])
+                record = rows[start][2]
+                top, bottom = y_pos(upper), y_pos(lower)
+                band = QtCore.QRectF(body_right + 18, top, 18, max(1.0, bottom - top))
+                painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                painter.setBrush(self._color(record["structure_color_hex"]))
+                painter.drawRoundedRect(band, 2, 2)
+                if band.height() >= 13:
+                    painter.setPen(QtGui.QColor("#d7e7f5"))
+                    painter.drawText(
+                        QtCore.QRectF(band.right() + 6, top, max(30, self.width() - band.right() - 8), band.height()),
+                        QtCore.Qt.AlignmentFlag.AlignVCenter,
+                        str(record["structure_acronym"]) or "Outside",
+                    )
+                start = index
+
+        self._site_hits.clear()
+        row_count = max(1, self.sites["trajectory_distance_um"].nunique())
+        site_size = float(np.clip(graph.height() / row_count * 1.15, 3.0, 7.0))
+        for _, site in self.sites.iterrows():
+            center = QtCore.QPointF(
+                x_pos(float(site["probe_horizontal_position"])),
+                y_pos(float(site["trajectory_distance_um"])),
+            )
+            self._site_hits.append((center, site))
+            painter.setPen(QtGui.QPen(QtGui.QColor("#d7e7f5"), 0.45))
+            painter.setBrush(self._color(site["structure_color_hex"]))
+            painter.drawRect(QtCore.QRectF(center.x() - site_size / 2, center.y() - site_size / 2, site_size, site_size))
+        painter.setPen(QtGui.QColor("#9fb4c8"))
+        painter.drawText(QtCore.QRectF(body_left, graph.bottom() + 28, body_width, 20), QtCore.Qt.AlignmentFlag.AlignCenter, "TIP")
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if not self._site_hits:
+            return
+        distances = [QtCore.QLineF(event.position(), point).length() for point, _ in self._site_hits]
+        index = int(np.argmin(distances))
+        if distances[index] > 10:
+            QtWidgets.QToolTip.hideText()
+            return
+        site = self._site_hits[index][1]
+        acronym = str(site["structure_acronym"]) or "Outside"
+        name = str(site["structure_name"]) or "Outside labelled atlas"
+        units = int(site.get("unit_count", 0))
+        QtWidgets.QToolTip.showText(
+            event.globalPosition().toPoint(),
+            f"Channel {int(site['probe_channel_number'])}\n{acronym} — {name}\n"
+            f"{float(site['trajectory_distance_um']):.0f} um from tip\n{units} unit{'s' if units != 1 else ''} on this peak channel",
+            self,
+        )
+
+
+class ProbeAnatomyDialog(QtWidgets.QDialog):
+    def __init__(self, probe_name: str, sites: pd.DataFrame, summary: pd.DataFrame, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"{probe_name} — Allen anatomy along probe")
+        self.resize(900, 720)
+        layout = QtWidgets.QVBoxLayout(self)
+        title = QtWidgets.QLabel(f"<b>{probe_name}</b> — mapped recording sites")
+        title.setStyleSheet("font-size:16px; color:#d7e7f5;")
+        subtitle = QtWidgets.QLabel(
+            "Each square is a physical recording site colored by its assigned Allen structure. "
+            "Hover a site for channel, structure, depth, and unit count."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color:#9fb4c8;")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter.addWidget(ProbeAnatomyWidget(sites))
+        table = QtWidgets.QTableWidget(len(summary), 5)
+        table.setHorizontalHeaderLabels(["Region", "Name", "Channels", "Units", "Depth from tip"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        for row, record in summary.iterrows():
+            acronym = QtWidgets.QTableWidgetItem(str(record["structure_acronym"]))
+            acronym.setBackground(ProbeAnatomyWidget._color(record["structure_color_hex"], 175))
+            acronym.setForeground(QtGui.QColor("#ffffff"))
+            table.setItem(row, 0, acronym)
+            table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(record["structure_name"])))
+            table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(int(record["channels"]))))
+            table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(int(record["units"]))))
+            table.setItem(
+                row,
+                4,
+                QtWidgets.QTableWidgetItem(
+                    f"{float(record['depth_min_um']):.0f}–{float(record['depth_max_um']):.0f} um"
+                ),
+            )
+        table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        for column in (2, 3, 4):
+            table.horizontalHeader().setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        splitter.addWidget(table)
+        splitter.setSizes([390, 500])
+        layout.addWidget(splitter, 1)
+        totals = QtWidgets.QLabel(
+            f"{len(sites)} channels • {int(summary['units'].sum())} units • "
+            f"{int(summary['structure_id'].notna().sum())} labelled structures"
+        )
+        totals.setStyleSheet("color:#b9d5e8; font-weight:600;")
+        layout.addWidget(totals)
+
+
 class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def __init__(
         self,
@@ -3402,6 +3667,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.annotation_volume: np.ndarray | None = None
         self.bregma_voxel = DEFAULT_BREGMA_VOXEL_AP_DV_ML.copy()
         self.region_names: dict[int, tuple[str, str]] = {}
+        self.region_colors: dict[int, str] = {}
         self.cortical_region_ids: set[int] = set()
         self.current_atlas_image: np.ndarray | None = None
         self.sessions: list[SliceSession] = []
@@ -3419,6 +3685,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._alignment_timer: QtCore.QTimer | None = None
         self._alignment_progress: QtWidgets.QProgressDialog | None = None
         self._session_cache_dirs: list[tempfile.TemporaryDirectory] = []
+        self._probe_anatomy_dialogs: dict[str, ProbeAnatomyDialog] = {}
 
         self._build_ui(default_run_folder)
         self._build_session_menu()
@@ -3743,6 +4010,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.run_folder = QtWidgets.QLineEdit(str(default_run_folder))
         self.browse_run_btn = QtWidgets.QPushButton("Browse")
         self.map_btn = QtWidgets.QPushButton("Map channels/units")
+        self.view_mapping_btn = QtWidgets.QPushButton("View mapped anatomy")
         self.undo_mapping_btn = QtWidgets.QPushButton("Undo file mapping")
         for button in (
             self.load_atlas_btn,
@@ -3850,7 +4118,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         probe_layout.addWidget(constraint_group, 3, 0, 1, 4)
 
         probe_layout.addWidget(self.map_btn, 4, 0, 1, 2)
-        probe_layout.addWidget(self.undo_mapping_btn, 4, 2, 1, 2)
+        probe_layout.addWidget(self.view_mapping_btn, 4, 2)
+        probe_layout.addWidget(self.undo_mapping_btn, 4, 3)
 
         self.endpoint_reference = QtWidgets.QComboBox()
         self.endpoint_reference.addItem("Known insertion depth from brain surface", "known_insertion_depth")
@@ -4068,6 +4337,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         self.mapping_insertion_depth_um.valueChanged.connect(self._mapping_insertion_depth_changed)
         self.map_btn.clicked.connect(self._map_channels_units_clicked)
+        self.view_mapping_btn.clicked.connect(self.view_mapped_probe_anatomy)
         self.undo_mapping_btn.clicked.connect(self.undo_file_mapping)
         self.brightness_weighting.toggled.connect(self._trajectory_weighting_changed)
         self.mode_group.buttonClicked.connect(self._point_target_changed)
@@ -4098,6 +4368,46 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Anatomy mapping failed", str(exc))
             self.status.setText(f"Mapping failed: {exc}")
+
+    def view_mapped_probe_anatomy(self) -> None:
+        probe_name = self._active_probe_name()
+        if not probe_name:
+            QtWidgets.QMessageBox.warning(self, "Probe missing", "Select the mapped probe to view.")
+            return
+        data_folder = self._resolve_data_folder(Path(self.run_folder.text().strip()))
+        channels_path = data_folder / "channels.csv"
+        units_path = data_folder / "units.csv"
+        if not channels_path.is_file() or not units_path.is_file():
+            QtWidgets.QMessageBox.warning(
+                self, "CSV files missing", f"Missing channels.csv or units.csv in:\n{data_folder}"
+            )
+            return
+        try:
+            sites, summary = probe_anatomy_view_data(
+                pd.read_csv(channels_path),
+                pd.read_csv(units_path),
+                probe_name,
+                self.region_colors,
+            )
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Mapped anatomy unavailable", str(exc))
+            return
+        previous = self._probe_anatomy_dialogs.pop(probe_name, None)
+        if previous is not None:
+            previous.close()
+        dialog = ProbeAnatomyDialog(probe_name, sites, summary, self)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.destroyed.connect(
+            lambda _=None, key=probe_name, target=dialog: (
+                self._probe_anatomy_dialogs.pop(key, None)
+                if self._probe_anatomy_dialogs.get(key) is target
+                else None
+            )
+        )
+        self._probe_anatomy_dialogs[probe_name] = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _browse_atlas(self) -> None:
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "Select atlas folder", self.atlas_path.text())
@@ -4435,7 +4745,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     f"Atlas template shape {atlas_volume.shape} and annotation shape "
                     f"{annotation_volume.shape} do not match"
                 )
-            region_names = self._load_region_names(folder / "query.csv")
+            region_names, region_colors = self._load_region_metadata(folder / "query.csv")
             cortical_region_ids = self._load_cortical_region_ids(folder / "query.csv")
             query_file_hash = file_sha256(folder / "query.csv") if (folder / "query.csv").exists() else None
             atlas_file_hashes = {
@@ -4476,6 +4786,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.query_file_hash = query_file_hash
         self._setup_auto_align_ap_range()
         self.region_names = region_names
+        self.region_colors = region_colors
         self.cortical_region_ids = cortical_region_ids
         self._setup_3d_static(folder)
         self._set_plane_limits()
@@ -4491,15 +4802,20 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             )
         return DEFAULT_BREGMA_VOXEL_AP_DV_ML.copy()
 
-    def _load_region_names(self, query_path: Path) -> dict[int, tuple[str, str]]:
+    def _load_region_metadata(
+        self, query_path: Path
+    ) -> tuple[dict[int, tuple[str, str]], dict[int, str]]:
         if not query_path.exists():
-            return {}
+            return {}, {}
         table = pd.read_csv(query_path)
         names: dict[int, tuple[str, str]] = {}
+        colors: dict[int, str] = {}
         for row in table.itertuples(index=False):
             region_id = int(getattr(row, "id"))
             names[region_id] = (str(getattr(row, "name", region_id)), str(getattr(row, "acronym", region_id)))
-        return names
+            color = str(getattr(row, "color_hex_triplet", "354453")).strip().lstrip("#")
+            colors[region_id] = color if len(color) == 6 else "354453"
+        return names, colors
 
     def _load_cortical_region_ids(self, query_path: Path) -> set[int]:
         if not query_path.exists():
@@ -7267,6 +7583,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         probe_name = self._active_probe_name()
         self.probe_mode.setEnabled(bool(probe_name))
         self.map_btn.setEnabled(bool(probe_name))
+        self.view_mapping_btn.setEnabled(bool(probe_name))
         self.probe_undo_point_btn.setText(
             f"Undo {probe_name} point" if probe_name else "Undo trajectory point"
         )
@@ -7406,6 +7723,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "structure_id": [item[0] for item in sampled],
             "structure_name": [item[1] for item in sampled],
             "structure_acronym": [item[2] for item in sampled],
+            "structure_color_hex": [
+                "" if item[0] is None else self.region_colors.get(int(item[0]), "354453")
+                for item in sampled
+            ],
             "ccf_ap_index": [item[3][0] for item in sampled],
             "ccf_dv_index": [item[3][1] for item in sampled],
             "ccf_ml_index": [item[3][2] for item in sampled],
@@ -7480,6 +7801,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             f"Mapped {selected_probe}: {mapped_channels}/{selected.sum()} channels, "
             f"{mapped_units}/{selected_units.sum()} units; assignments saved by peak channel"
         )
+        self.view_mapped_probe_anatomy()
 
     def undo_file_mapping(self) -> None:
         run_folder = Path(self.run_folder.text().strip())

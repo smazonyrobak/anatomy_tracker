@@ -122,3 +122,73 @@ def test_unit_regions_are_inherited_from_peak_channel_with_composite_probe_key()
     mapped = TRACKER.attach_peak_channel_metadata(channels, units)
     assert mapped["structure_acronym"].tolist() == ["A", "B"]
     assert mapped["structure_id"].tolist() == [101, 202]
+
+
+def test_probe_anatomy_view_uses_physical_sites_atlas_colors_and_unit_counts():
+    channels = TRACKER.pd.DataFrame(
+        {
+            "probe_name": ["imec0", "imec0", "imec0", "imec1"],
+            "probe_channel_number": [0, 1, 2, 0],
+            "probe_horizontal_position": [11.0, 59.0, 27.0, 11.0],
+            "probe_vertical_position": [0.0, 20.0, 40.0, 0.0],
+            "trajectory_distance_um": [220.0, 240.0, 260.0, 220.0],
+            "structure_id": [101, 101, 202, 303],
+            "structure_name": ["Region A", "Region A", "Region B", "Region C"],
+            "structure_acronym": ["A", "A", "B", "C"],
+        }
+    )
+    units = TRACKER.pd.DataFrame(
+        {
+            "unit_key": ["imec0:1", "imec0:2", "imec0:3", "imec1:1"],
+            "probe_name": ["imec0", "imec0", "imec0", "imec1"],
+            "probe_channel_number": [0, 0, 2, 0],
+        }
+    )
+
+    sites, summary = TRACKER.probe_anatomy_view_data(
+        channels, units, "imec0", {101: "112233", 202: "AABBCC"}
+    )
+
+    assert sites["probe_channel_number"].tolist() == [0, 1, 2]
+    assert sites["structure_color_hex"].tolist() == ["112233", "112233", "AABBCC"]
+    assert sites["unit_count"].tolist() == [2, 0, 1]
+    assert summary["structure_acronym"].tolist() == ["A", "B"]
+    assert summary["channels"].tolist() == [2, 1]
+    assert summary["units"].tolist() == [2, 1]
+    assert summary["depth_min_um"].tolist() == [220.0, 260.0]
+    assert summary["depth_max_um"].tolist() == [240.0, 260.0]
+
+
+def test_probe_anatomy_dialog_renders_mapped_sites():
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    channels = TRACKER.pd.DataFrame(
+        {
+            "probe_name": ["imec0", "imec0"],
+            "probe_channel_number": [0, 1],
+            "probe_horizontal_position": [11.0, 59.0],
+            "probe_vertical_position": [0.0, 20.0],
+            "trajectory_distance_um": [220.0, 240.0],
+            "structure_id": [101, 202],
+            "structure_name": ["Region A", "Region B"],
+            "structure_acronym": ["A", "B"],
+        }
+    )
+    units = TRACKER.pd.DataFrame(
+        {
+            "unit_key": ["imec0:1"],
+            "probe_name": ["imec0"],
+            "probe_channel_number": [0],
+        }
+    )
+    sites, summary = TRACKER.probe_anatomy_view_data(
+        channels, units, "imec0", {101: "112233", 202: "AABBCC"}
+    )
+    dialog = TRACKER.ProbeAnatomyDialog("imec0", sites, summary)
+    dialog.show()
+    app.processEvents()
+    image = dialog.grab().toImage()
+    assert image.width() >= 900
+    assert image.height() >= 700
+    assert "imec0" in dialog.windowTitle()
+    dialog.close()
+    app.processEvents()
