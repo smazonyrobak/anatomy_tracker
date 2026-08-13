@@ -3377,7 +3377,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         manual_help.setWordWrap(True)
         manual_help.setStyleSheet("color:#9fb4c8;")
         self.landmark_mode = QtWidgets.QPushButton("Add corresponding landmarks")
-        self.probe_mode = QtWidgets.QPushButton("Probe trajectory")
+        self.probe_mode = QtWidgets.QPushButton("Mark probe on slice")
+        self.probe_mode.setToolTip(
+            "Add probe observations directly on the histology before automatic alignment. "
+            "Their atlas/3D coordinates are calculated only after an alignment is accepted."
+        )
         self.auto_outline_mode = QtWidgets.QPushButton("Add / edit points")
         self.smart_surface_mode = QtWidgets.QPushButton("Smart brush")
         self.erase_surface_mode = QtWidgets.QPushButton("Erase points")
@@ -3606,7 +3610,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         constraint_layout.addWidget(self.use_probe_constraints, 0, 0, 1, 6)
         self.probe_constraint_scope = QtWidgets.QLabel(
-            "Alignment constraint only — edit values, then rerun Auto-align current or Auto-align all."
+            "1. Mark this probe on the raw slices.  2. Set the surgical plan.  "
+            "3. Rerun Auto-align current/all. Existing alignments never change automatically."
         )
         self.probe_constraint_scope.setStyleSheet("color:#7fbbe8;")
         self.probe_constraint_scope.setWordWrap(True)
@@ -4528,6 +4533,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.probe_fit_summary.setText("Fit: select a probe")
             return
         points = self.all_probe_volume_points(probe_name)
+        raw_count = sum(
+            len(trace.slice_points)
+            for session in self.sessions
+            if (trace := session.probe_traces.get(probe_name)) is not None
+        )
         try:
             entry, deep_endpoint, surface_direction = self.probe_brain_geometry(probe_name)
         except InfeasibleProbeConstraint as exc:
@@ -4538,7 +4548,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
         self.probe_fit_summary.setToolTip("")
         if entry is None or deep_endpoint is None or surface_direction is None:
-            self.probe_fit_summary.setText("Fit: add at least two trajectory points")
+            if raw_count:
+                constraint = self._probe_constraint(probe_name)
+                suffix = (
+                    " Surgical constraints require at least two observations across the selected alignment batch."
+                    if constraint is not None and constraint.enabled and raw_count < 2
+                    else " Rerun automatic alignment to solve atlas coordinates."
+                )
+                self.probe_fit_summary.setText(
+                    f"Pre-alignment observations: {raw_count}.{suffix}"
+                )
+            else:
+                self.probe_fit_summary.setText("Fit: mark the probe on at least two slice locations")
             return
         stereo_entry = volume_to_stereotaxic_um(entry, self.bregma_voxel)
         stereo_deep = volume_to_stereotaxic_um(deep_endpoint, self.bregma_voxel)
@@ -5001,10 +5022,28 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 "Select the probe whose trajectory point you are adding.",
             )
             return
-        if session.slice_atlas_transform is None and (
-            session.slice_to_atlas_x is None or session.atlas_to_slice_x is None
-        ):
-            QtWidgets.QMessageBox.warning(self, "Transform missing", "Transform the current slice before adding probe points.")
+        aligned = session.slice_atlas_transform is not None or (
+            session.slice_to_atlas_x is not None and session.atlas_to_slice_x is not None
+        )
+        if not aligned:
+            if slice_raw_point is None:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Slice observation required",
+                    "Before alignment, mark the probe directly on the histology slice. Atlas coordinates do not exist yet.",
+                )
+                return
+            trace = self._probe_trace(session, probe_name, create=True)
+            assert trace is not None
+            trace.slice_points.append(slice_raw_point)
+            trace.signal_values.append(self._probe_point_signal(session, slice_raw_point))
+            session.point_history.append(f"probe:{probe_name}")
+            self._update_probe_fit_summary()
+            self._refresh_points()
+            self.status.setText(
+                f"Added pre-alignment {probe_name} observation {len(trace.slice_points)} on {session.name}. "
+                "Its atlas/3D position will be solved by the next automatic alignment."
+            )
             return
         slice_display_point: tuple[float, float] | None = None
         if atlas_point is None and slice_raw_point is not None:
@@ -5043,7 +5082,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         self._update_probe_fit_summary()
         self._refresh_3d()
-        self.status.setText(f"Added {probe_name} trajectory point {len(trace.atlas_points)}")
+        self.status.setText(f"Added {probe_name} trajectory point {len(trace.slice_points)}")
 
     def _probe_point_signal(self, session: SliceSession, slice_raw_point: tuple[float, float]) -> float:
         if session.weight_image is None:
@@ -6097,6 +6136,31 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             for name, constraint in self.probe_constraints.items()
             if constraint.enabled
         }
+        insufficient_probe_observations = {
+            name: sum(
+                len(trace.slice_points)
+                for session_index in session_indices
+                if (trace := self.sessions[session_index].probe_traces.get(name)) is not None
+            )
+            for name in enabled_probe_constraints
+        }
+        insufficient_probe_observations = {
+            name: count
+            for name, count in insufficient_probe_observations.items()
+            if count < 2
+        }
+        if insufficient_probe_observations:
+            details = ", ".join(
+                f"{name}: {count}" for name, count in sorted(insufficient_probe_observations.items())
+            )
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Probe observations required",
+                "Enabled surgical constraints are solved from probe marks on the histology. "
+                "Add at least two marks for every enabled probe within the slices being aligned. "
+                f"Current counts: {details}.",
+            )
+            return
         probe_constraints_snapshot = tuple(sorted(enabled_probe_constraints.items()))
         probe_constraint_snapshot = {
             name: {
@@ -6188,8 +6252,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._set_auto_constraint_controls_enabled(False)
         self._refresh_point_counts()
         scope = f"{len(session_indices)} outlined slices" if global_alignment else self.sessions[session_indices[0]].name
+        constraint_names = ", ".join(sorted(enabled_probe_constraints))
+        constraint_text = (
+            f" with surgical geometry from {constraint_names}"
+            if constraint_names
+            else ""
+        )
+        order_text = " + partial AP order" if order_snapshot else ""
+        bounds_text = " + AP bounds" if ap_bounds is not None else ""
+        shared_text = " + shared tilt" if global_alignment else ""
         self.status.setText(
-            f"{engine} and atlas refinement are aligning {scope} (affine-only); the interface remains available."
+            f"{engine} and atlas refinement are jointly aligning {scope}{constraint_text}"
+            f"{bounds_text}{order_text}{shared_text}; the interface remains available."
         )
         future = self.alignment_executor.submit(
             prepare_run_and_solve_alignment,

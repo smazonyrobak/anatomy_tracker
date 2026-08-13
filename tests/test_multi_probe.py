@@ -158,6 +158,89 @@ def test_undo_and_clear_touch_only_selected_probe(window):
     assert session.point_history == ["probe:imec1"]
 
 
+def test_probe_marks_can_be_added_before_alignment(window):
+    image = np.arange(80 * 100, dtype=np.uint16).reshape(80, 100)
+    session = TRACKER.SliceSession(
+        "raw-slice",
+        raw_display=image,
+        adjusted=image,
+        rotated=image,
+        weight_image=image,
+    )
+    window.sessions = [session]
+    window.current_session_index = 0
+    window.probe_name.addItem("imec0")
+    window.probe_name.setCurrentText("imec0")
+    window.probe_mode.setChecked(True)
+
+    window._slice_clicked(25.0, 30.0)
+
+    trace = session.probe_traces["imec0"]
+    assert trace.slice_points == pytest.approx([(25.0, 30.0)])
+    assert trace.atlas_points == []
+    assert trace.volume_points == []
+    assert len(trace.signal_values) == 1
+    assert "pre-alignment" in window.status.text()
+
+
+def test_atlas_click_is_rejected_before_alignment_but_slice_marks_remain(window, monkeypatch):
+    image = np.zeros((80, 100), dtype=np.uint8)
+    session = TRACKER.SliceSession("raw-slice", rotated=image)
+    window.sessions = [session]
+    window.current_session_index = 0
+    window.probe_name.addItem("imec0")
+    window.probe_name.setCurrentText("imec0")
+    warnings = []
+    monkeypatch.setattr(
+        TRACKER.QtWidgets.QMessageBox,
+        "warning",
+        lambda *_args: warnings.append(_args[2]),
+    )
+
+    window._add_probe_point(atlas_point=(10.0, 20.0), slice_raw_point=None)
+
+    assert "imec0" not in session.probe_traces
+    assert warnings and "histology slice" in warnings[0]
+
+
+def test_enabled_surgical_constraint_requires_pre_alignment_marks_in_selected_batch(
+    window, monkeypatch, tmp_path
+):
+    source = tmp_path / "slice.tif"
+    source.write_bytes(b"slice")
+    image = np.zeros((40, 50), dtype=np.uint8)
+    session = TRACKER.SliceSession(
+        "slice",
+        path=str(source),
+        raw_display=image,
+        adjusted=image,
+        rotated=image,
+        weight_image=image,
+        brain_outline_points=[(float(i), float(i)) for i in range(8)],
+        probe_traces={"imec0": TRACKER.ProbeTrace(slice_points=[(10.0, 12.0)])},
+    )
+    window.sessions = [session]
+    window.current_session_index = 0
+    window.atlas_volume = np.zeros((20, 40, 50), dtype=np.uint8)
+    window.annotation_volume = np.ones((20, 40, 50), dtype=np.uint8)
+    window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
+        True, 0.0, 0.0, 250.0, 60.0, 5.0, 2000.0
+    )
+    warnings = []
+    monkeypatch.setattr(
+        TRACKER.QtWidgets.QMessageBox,
+        "warning",
+        lambda *_args: warnings.append(_args[2]),
+    )
+    submitted = []
+    monkeypatch.setattr(window.alignment_executor, "submit", lambda *_args: submitted.append(_args))
+
+    window._start_auto_alignment([0], global_alignment=False)
+
+    assert not submitted
+    assert warnings and "at least two marks" in warnings[0]
+
+
 def test_pose_recompute_updates_every_probe_trace(window):
     session = TRACKER.SliceSession("slice")
     session.slice_atlas_transform = TRACKER.SliceAtlasTransform2D(
