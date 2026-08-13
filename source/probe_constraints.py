@@ -257,6 +257,55 @@ def fit_observed_probe_ray(
     )
 
 
+def probe_plan_mismatch_score(
+    observations_by_slice: Mapping[Hashable, np.ndarray],
+    constraint: ProbeInsertionConstraint,
+    surface_dv: Callable[[float, float], float],
+    *,
+    prepared_entries: np.ndarray | None = None,
+    robust_scale_um: float = 50.0,
+) -> float:
+    """Cheap continuous ranking score used before exact hard-bound validation."""
+    angle_low, angle_high = _constraint_bounds(constraint)
+    groups = [
+        np.asarray(values, dtype=np.float64).reshape(-1, 3)
+        for values in observations_by_slice.values()
+        if len(values)
+    ]
+    points = np.concatenate(groups) if groups else np.empty((0, 3))
+    if len(points) < 2 or not np.isfinite(points).all():
+        return 0.0
+    center = points.mean(axis=0)
+    _, _, axes = np.linalg.svd(points - center, full_matrices=False)
+    direction = axes[0]
+    if direction[1] > 0.0:
+        direction = -direction
+    direction /= np.linalg.norm(direction)
+    angle = attack_angle_deg(direction)
+    constrained_angle = float(np.clip(angle, angle_low, angle_high))
+    azimuth = float(np.rad2deg(np.arctan2(direction[2], direction[0])))
+    constrained_direction = direction_from_attack_angle(constrained_angle, azimuth)
+
+    entries = (
+        prepare_insertion_surface_entries(constraint, surface_dv)
+        if prepared_entries is None
+        else np.asarray(prepared_entries, dtype=np.float64).reshape(-1, 3)
+    )
+    if not len(entries):
+        return 1e6
+    delta = points[None, :, :] - entries[:, None, :]
+    axial = delta @ constrained_direction
+    upper = (
+        10000.0
+        if constraint.maximum_insertion_depth_um is None
+        else float(constraint.maximum_insertion_depth_um)
+    )
+    closest_axial = np.clip(axial, 0.0, upper)
+    residual = delta - closest_axial[..., None] * constrained_direction
+    scores = np.mean(np.sum(residual**2, axis=2), axis=1) / robust_scale_um**2
+    return float(scores.min())
+
+
 def attack_angle_deg(direction_ap_dv_ml: np.ndarray) -> float:
     direction = np.asarray(direction_ap_dv_ml, dtype=np.float64)
     direction /= np.linalg.norm(direction)
@@ -307,6 +356,7 @@ def fit_probe_ray(
     robust_scale_um: float = 50.0,
     axial_tolerance_um: float = 25.0,
     max_starts: int | None = None,
+    require_consistent_observations: bool = True,
 ) -> ProbeRayFit | None:
     """Fit a dorsal-surface-to-deep ray in stereotaxic ``(AP,DV,ML)`` microns.
 
@@ -421,7 +471,11 @@ def fit_probe_ray(
         else axial <= float(maximum) + axial_tolerance_um
     )
     inliers = (distances <= inlier_limit) & within_segment
-    if np.count_nonzero(inliers) < max(2, int(np.ceil(0.7 * len(points)))) or np.median(distances) > inlier_limit:
+    observations_consistent = bool(
+        np.count_nonzero(inliers) >= max(2, int(np.ceil(0.7 * len(points))))
+        and np.median(distances) <= inlier_limit
+    )
+    if require_consistent_observations and not observations_consistent:
         raise InfeasibleProbeConstraint(
             "Probe observations are inconsistent with the insertion constraints"
         )
@@ -437,16 +491,16 @@ def fit_probe_ray(
             if maximum is None
             else selected_axial <= float(maximum) + axial_tolerance_um
         )
-        if not np.any(selected_within_segment & (selected <= inlier_limit)):
+        compatible = selected_within_segment & (selected <= inlier_limit)
+        if require_consistent_observations and not np.any(compatible):
             raise InfeasibleProbeConstraint(
                 f"Slice {label} has no probe observation compatible with the surgical constraints"
             )
-        compatible = selected_within_segment & (selected <= inlier_limit)
-        if not np.any(compatible):
-            raise InfeasibleProbeConstraint(
-                f"Slice {label} is inconsistent with the fitted probe trajectory"
-            )
-        if len(group) >= 5 and np.count_nonzero(compatible) <= int(np.floor(0.8 * len(group))):
+        if (
+            require_consistent_observations
+            and len(group) >= 5
+            and np.count_nonzero(compatible) <= int(np.floor(0.8 * len(group)))
+        ):
             raise InfeasibleProbeConstraint(
                 f"Slice {label} contains probe observations outside the physical insertion segment"
             )
@@ -456,6 +510,7 @@ def fit_probe_ray(
     depth = constraint.maximum_insertion_depth_um
     diagnostics = {
         "feasible": True,
+        "observations_consistent": observations_consistent,
         "slice_count": len(groups),
         "point_count": len(points),
         "median_orthogonal_residual_um": float(np.median(distances)),
@@ -463,16 +518,20 @@ def fit_probe_ray(
         "p95_orthogonal_residual_um": float(np.percentile(distances, 95.0)),
         "per_slice_rms_um": per_slice,
         "outlier_count": int(np.count_nonzero(~inliers)),
-        "axial_min_um": float(inlier_axial.min()),
-        "axial_max_um": float(inlier_axial.max()),
-        "axial_span_um": float(np.ptp(inlier_axial)),
+        "axial_min_um": float(inlier_axial.min()) if require_consistent_observations else float(axial.min()),
+        "axial_max_um": float(inlier_axial.max()) if require_consistent_observations else float(axial.max()),
+        "axial_span_um": float(np.ptp(inlier_axial)) if require_consistent_observations else float(np.ptp(axial)),
         "entry_disk_distance_um": disk_distance,
         "entry_disk_slack_um": float(radius - disk_distance),
         "angle_target_deg": float(constraint.angle_deg),
         "angle_tolerance_deg": float(constraint.angle_tolerance_deg),
         "angle_slack_deg": float(min(angle - angle_low, angle_high - angle)),
         "maximum_insertion_depth_um": None if depth is None else float(depth),
-        "at_depth_bound": bool(depth is not None and inlier_axial.max() >= depth - robust_scale_um),
+        "at_depth_bound": bool(
+            depth is not None
+            and (inlier_axial.max() if require_consistent_observations else axial.max())
+            >= depth - robust_scale_um
+        ),
         "optimizer_success": bool(result.success),
         "optimizer_message": str(result.message),
         "azimuth_identifiable": bool(angle < 89.9),

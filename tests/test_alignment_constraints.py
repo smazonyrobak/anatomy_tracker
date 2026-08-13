@@ -89,7 +89,6 @@ def test_disabled_probe_constraint_is_exact_original_lattice_path():
             }
         },
         lambda *_args: calls.append(_args),
-        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         np.asarray([100.0, 20.0, 80.0]),
         (220, 120, 160),
@@ -128,7 +127,6 @@ def test_probe_constraint_recovers_true_ap_pair_over_coherent_image_decoy():
         [0, 1],
         {"imec0": {"constraint": constraint}},
         _synthetic_probe_candidate_callback(bregma, depths),
-        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
         (220, 120, 160),
@@ -181,7 +179,6 @@ def test_probe_constraint_coexists_with_nonzero_exact_shared_tilt():
             }
         },
         tilted_callback,
-        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
         (220, 120, 160),
@@ -193,38 +190,59 @@ def test_probe_constraint_coexists_with_nonzero_exact_shared_tilt():
     assert assignment[0] < assignment[1]
 
 
-def test_impossible_probe_constraint_rejects_instead_of_corrupting_pose():
+def test_imperfect_probe_observations_are_scored_without_weakening_hard_bounds():
     bregma = np.asarray([100.0, 20.0, 80.0])
     lattices = {0: {100: (0.0, {})}, 1: {100: (0.0, {})}}
 
     def incompatible(_probe_name, session_index, _ap, _lr, _dv):
         return np.asarray([[80.0 + 40.0 * session_index, 20.0 + 20.0 * session_index]])
 
-    with pytest.raises(TRACKER.InfeasibleProbeConstraint, match="No atlas pose satisfies"):
-        TRACKER.solve_probe_constrained_lattice(
-            lattices,
-            [],
-            {
+    assignment, _, diagnostics = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [],
+        {
+            "imec0": {
+                "constraint": TRACKER.ProbeInsertionConstraint(
+                    enabled=True,
+                    ap_um=0.0,
+                    ml_um=0.0,
+                    radius_um=0.0,
+                    angle_deg=90.0,
+                    angle_tolerance_deg=0.0,
+                    maximum_insertion_depth_um=500.0,
+                )
+            }
+        },
+        incompatible,
+        lambda _ap, _ml: 0.0,
+        bregma,
+        (220, 120, 160),
+        0.0,
+        0.0,
+    )
+
+    assert assignment == {0: 100, 1: 100}
+    fit = diagnostics["probes"]["imec0"]
+    assert fit["angle_deg"] == pytest.approx(90.0)
+    assert fit["diagnostics"]["entry_disk_distance_um"] == pytest.approx(0.0)
+    assert fit["diagnostics"]["observations_consistent"] is False
+
+
+def test_alignment_review_flags_large_probe_plan_residual():
+    diagnostics = {
+        "probe_geometry_constraints": {
+            "probes": {
                 "imec0": {
-                    "constraint": TRACKER.ProbeInsertionConstraint(
-                        enabled=True,
-                        ap_um=0.0,
-                        ml_um=0.0,
-                        radius_um=0.0,
-                        angle_deg=90.0,
-                        angle_tolerance_deg=0.0,
-                        maximum_insertion_depth_um=500.0,
-                    )
+                    "trajectory_observations_used": True,
+                    "diagnostics": {"median_orthogonal_residual_um": 175.0},
                 }
-            },
-            incompatible,
-            lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
-            lambda _ap, _ml: 0.0,
-            bregma,
-            (220, 120, 160),
-            0.0,
-            0.0,
-        )
+            }
+        }
+    }
+
+    assert "probe-plan fit residual exceeds 150 um" in TRACKER.alignment_review_reasons(
+        {}, diagnostics
+    )
 
 
 def test_probe_constraint_searches_positive_coherent_shifts_before_refinement():
@@ -252,7 +270,6 @@ def test_probe_constraint_searches_positive_coherent_shifts_before_refinement():
         [0, 1],
         {"imec0": {"constraint": constraint}},
         _synthetic_probe_candidate_callback(bregma, depths),
-        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
         (220, 120, 160),
@@ -295,7 +312,6 @@ def test_two_probe_constraints_are_fitted_independently_and_vote_jointly():
         [0, 1],
         constraints,
         callback,
-        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
         (220, 120, 160),
@@ -347,7 +363,6 @@ def test_probe_constraint_beam_recovers_noncoherent_ap_corrections():
         [0, 1, 2],
         {"imec0": {"constraint": constraint}},
         _synthetic_probe_candidate_callback(bregma, depths),
-        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
         (220, 120, 160),
@@ -365,21 +380,14 @@ def test_probe_constraint_solver_memoizes_duplicate_assignment_fits(monkeypatch)
         1: {116: (0.0, {}), 120: (0.02, {})},
     }
     depths = {0: 200.0, 1: 1000.0}
-    original_search = TRACKER.fit_probe_ray
-    original_exact = TRACKER.fit_observed_probe_ray
-    search_calls = []
+    original_exact = TRACKER.fit_probe_ray
     exact_calls = []
-
-    def counted_search(*args, **kwargs):
-        search_calls.append(kwargs.get("max_starts"))
-        return original_search(*args, **kwargs)
 
     def counted_exact(*args, **kwargs):
         exact_calls.append(True)
         return original_exact(*args, **kwargs)
 
-    monkeypatch.setattr(TRACKER, "fit_probe_ray", counted_search)
-    monkeypatch.setattr(TRACKER, "fit_observed_probe_ray", counted_exact)
+    monkeypatch.setattr(TRACKER, "fit_probe_ray", counted_exact)
     TRACKER.solve_probe_constrained_lattice(
         lattices,
         [0, 1],
@@ -391,7 +399,6 @@ def test_probe_constraint_solver_memoizes_duplicate_assignment_fits(monkeypatch)
             }
         },
         _synthetic_probe_candidate_callback(bregma, depths),
-        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
         (220, 120, 160),
@@ -399,7 +406,6 @@ def test_probe_constraint_solver_memoizes_duplicate_assignment_fits(monkeypatch)
         0.0,
     )
 
-    assert search_calls and set(search_calls) == {6}
     assert exact_calls
 
 
@@ -434,7 +440,6 @@ def test_probe_lattice_moves_entry_within_radius_instead_of_rejecting_ordinary_l
             }
         },
         callback,
-        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
         (220, 120, 160),
@@ -562,10 +567,6 @@ def test_real_mind_probe_constraint_resolves_periodic_ap_decoy():
             }
         },
         lambda _probe, session, _ap, _lr, _dv: probe_points[session],
-        lambda atlas_index, lr, dv: TRACKER.coronal_oblique_slice(
-            annotation, atlas_index, lr, dv, order=0
-        )
-        > 0,
         surface_dv,
         bregma,
         shape,
@@ -592,8 +593,9 @@ def test_pose_search_reaches_feasible_tilt_and_ap_when_model_initial_pose_is_wro
         cost = (tilt_lr - 8.0) ** 2 + (tilt_dv + 4.0) ** 2
         return np.full((20, 20), cost, dtype=np.float32)
 
-    def constrained(values, ordered, _constraints, _points, _mask, _surface, _bregma,
-                    _shape, tilt_lr, tilt_dv, *, quick=False):
+    def constrained(values, ordered, _constraints, _points, _surface, _bregma,
+                    _shape, tilt_lr, tilt_dv, *, approximate_candidate_atlas_points=None,
+                    quick=False, screen_only=False):
         calls.append((tilt_lr, tilt_dv, tuple(values[0]), quick))
         if (tilt_lr, tilt_dv) != (8.0, -4.0) or 104 not in values[0]:
             raise TRACKER.InfeasibleProbeConstraint("synthetic wrong pose")
@@ -759,6 +761,39 @@ def test_user_selected_orientation_rejects_reflecting_model_affine():
     assert np.linalg.det(corrected[:2, :2]) > 0.0
 
 
+def test_final_affine_uses_user_orientation_instead_of_model_reflection():
+    shape = (12, 80, 120)
+    annotation = np.zeros(shape, dtype=np.uint8)
+    for index in range(shape[0]):
+        cv2.ellipse(annotation[index], (60, 40), (42, 28), 0, 0, 360, 1, -1)
+    source_mask = annotation[5].astype(bool)
+    y, x = np.nonzero(source_mask)
+    contour = np.column_stack((x, y))[:: max(1, len(x) // 100)]
+    reflecting = np.asarray(
+        [[-1.0, 0.0, shape[2] - 1.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    record = _pose_record("slice.png", shape, 5.0, 0.0, 0.0)
+    record["initial_slice_to_atlas"] = reflecting.tolist()
+
+    prepared, _ = TRACKER.solve_pose_alignment(
+        [record],
+        {"slice.png": 0},
+        annotation,
+        {0: [tuple(point) for point in contour]},
+        (5, 5),
+        [],
+        {"coordinate_contract": "test", "alignment_run_id": "orientation-test"},
+        global_alignment=False,
+        atlas_volume=annotation.astype(np.float32),
+        prepared_inputs={"slice.png": {"image": annotation[5], "brain_mask": source_mask}},
+        disagreement={"slice.png": {}},
+        progress_messages=None,
+    )
+
+    transform = prepared[0][4]
+    assert np.linalg.det(transform.display_to_affine_atlas_h[:2, :2]) > 0.0
+
+
 def test_slice_flip_recomputes_atlas_points_and_tilt_without_mirroring_atlas(monkeypatch, tmp_path):
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
     window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
@@ -912,6 +947,15 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
             )
             for name in ("a", "b")
         ]
+        window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
+            True, 0.0, 0.0, 0.0, 90.0, 0.0, 100.0
+        )
+        window.sessions[0].probe_traces["imec0"] = TRACKER.ProbeTrace(
+            slice_points=[(2.0, 2.0)]
+        )
+        window.sessions[1].probe_traces["imec0"] = TRACKER.ProbeTrace(
+            slice_points=[(37.0, 29.0)]
+        )
         window.current_session_index = 0
         for session in window.sessions:
             window.slice_list.addItem(session.name)
@@ -952,6 +996,15 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
                 },
                 "surface_scale": 1.0,
                 "surface_rms_after_atlas_px": 0.0,
+                "probe_geometry_constraints": {
+                    "applied": True,
+                    "probes": {
+                        "imec0": {
+                            "trajectory_observations_used": True,
+                            "diagnostics": {"median_orthogonal_residual_um": 10.0},
+                        }
+                    },
+                },
             }
             prepared.append(
                 (
@@ -988,6 +1041,7 @@ def test_offscreen_result_application_stores_one_exact_shared_tilt(tmp_path):
         assert all(session.auto_alignment_global for session in window.sessions)
         assert all(session.auto_alignment_scope == "global" for session in window.sessions)
         assert all(session.auto_alignment_run_id == "global-test" for session in window.sessions)
+        assert all(session.probe_traces["imec0"].atlas_points for session in window.sessions)
         peer_transform = window.sessions[1].slice_atlas_transform
         raw_ouv = window.sessions[0].deepslice_raw_ensemble_ouv.copy()
         window._section_changed(4)

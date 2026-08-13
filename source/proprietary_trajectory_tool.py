@@ -37,6 +37,7 @@ if SOURCE_MODULE_DIR not in sys.path:
 from atlas_pose_runtime import (
     automatic_brain_mask,
     brain_mask_affine,
+    brain_orientation_affine,
     fuse_pose_predictions,
     QUICKNII_COORDINATE_CONTRACT_VERSION,
     run_atlas_pose_evaluated_onnx as run_atlas_pose_onnx,
@@ -61,10 +62,9 @@ from probe_constraints import (
     atlas_points_to_stereotaxic_um,
     direction_from_attack_angle,
     fit_probe_ray,
-    fit_observed_probe_ray,
     insertion_plan_plane_feasibility,
     prepare_insertion_surface_entries,
-    score_candidate_slice_plane,
+    probe_plan_mismatch_score,
     stereotaxic_to_volume as probe_stereotaxic_to_volume,
 )
 
@@ -1203,15 +1203,16 @@ def solve_probe_constrained_lattice(
     anterior_to_posterior: list[int],
     probe_constraints: dict[str, dict],
     candidate_atlas_points,
-    candidate_brain_mask,
     surface_dv,
     bregma_voxel: np.ndarray,
     volume_shape: tuple[int, int, int],
     tilt_lr_deg: float,
     tilt_dv_deg: float,
     *,
+    approximate_candidate_atlas_points=None,
     quick: bool = False,
-    beam_width: int = 12,
+    screen_only: bool = False,
+    beam_width: int = 32,
 ) -> tuple[dict[int, int], float, dict]:
     """Solve the existing AP lattice jointly with optional physical probe plans.
 
@@ -1231,7 +1232,13 @@ def solve_probe_constrained_lattice(
 
     baseline, _ = solve_ordered_lattice(lattices, anterior_to_posterior)
     point_cache: dict[tuple[str, int, int], np.ndarray] = {}
-    fit_cache: dict[tuple[tuple[tuple[int, int], ...], bool, int | None], dict] = {}
+    approximate_point_cache: dict[tuple[str, int, int], np.ndarray] = {}
+    fit_cache: dict[tuple[tuple[int, int], ...], dict] = {}
+    mismatch_cache: dict[tuple[tuple[int, int], ...], float] = {}
+    surface_entries = {
+        name: prepare_insertion_surface_entries(specification["constraint"], surface_dv)
+        for name, specification in enabled.items()
+    }
 
     def atlas_points(probe_name: str, session_index: int, ap: int) -> np.ndarray:
         key = probe_name, session_index, int(ap)
@@ -1248,71 +1255,88 @@ def solve_probe_constrained_lattice(
             ).reshape(-1, 2)
         return point_cache[key]
 
-    def fit_assignment(
+    def approximate_atlas_points(probe_name: str, session_index: int, ap: int) -> np.ndarray:
+        if approximate_candidate_atlas_points is None:
+            return atlas_points(probe_name, session_index, ap)
+        key = probe_name, session_index, int(ap)
+        if key not in approximate_point_cache:
+            approximate_point_cache[key] = np.asarray(
+                approximate_candidate_atlas_points(
+                    probe_name,
+                    session_index,
+                    int(ap),
+                    float(tilt_lr_deg),
+                    float(tilt_dv_deg),
+                ),
+                dtype=np.float64,
+            ).reshape(-1, 2)
+        return approximate_point_cache[key]
+
+    def observations(
+        probe_name: str,
         assignments: dict[int, int],
         *,
-        search_fit: bool,
-        max_starts: int | None = None,
-    ):
-        cache_key = (tuple(sorted(assignments.items())), search_fit, max_starts)
+        approximate: bool = False,
+    ) -> dict[int, np.ndarray]:
+        values = {}
+        for session_index, ap in assignments.items():
+            points = (
+                approximate_atlas_points(probe_name, session_index, ap)
+                if approximate
+                else atlas_points(probe_name, session_index, ap)
+            )
+            if len(points):
+                values[session_index] = atlas_points_to_stereotaxic_um(
+                    points,
+                    SlicePlane(ap, tilt_lr_deg, tilt_dv_deg),
+                    bregma_voxel,
+                    volume_shape,
+                    VOXEL_UM,
+                )
+        return values
+
+    def fit_assignment(assignments: dict[int, int]):
+        cache_key = tuple(sorted(assignments.items()))
         if cache_key in fit_cache:
             return fit_cache[cache_key]
         fits = {}
         for probe_name, specification in enabled.items():
-            observations = {}
-            for session_index, ap in assignments.items():
-                points = atlas_points(probe_name, session_index, ap)
-                if len(points):
-                    observations[session_index] = atlas_points_to_stereotaxic_um(
-                        points,
-                        SlicePlane(ap, tilt_lr_deg, tilt_dv_deg),
-                        bregma_voxel,
-                        volume_shape,
-                        VOXEL_UM,
-                    )
-            if sum(len(points) for points in observations.values()) < 2:
+            probe_observations = observations(probe_name, assignments)
+            if sum(len(points) for points in probe_observations.values()) < 2:
                 raise InfeasibleProbeConstraint(
                     f"{probe_name} needs at least two trajectory observations before its surgical constraint can be used"
                 )
-            if search_fit:
-                fits[probe_name] = fit_probe_ray(
-                    observations,
-                    specification["constraint"],
-                    surface_dv,
-                    max_starts=max_starts,
-                )
-            else:
-                fits[probe_name] = fit_observed_probe_ray(
-                    observations,
-                    specification["constraint"],
-                    surface_dv,
-                )
+            fits[probe_name] = fit_probe_ray(
+                probe_observations,
+                specification["constraint"],
+                surface_dv,
+                max_starts=6 if quick else 12,
+                require_consistent_observations=False,
+            )
         fit_cache[cache_key] = fits
         return fits
 
-    def geometry_score(
-        probe_name: str,
-        session_index: int,
-        ap: int,
-        fit,
-    ) -> tuple[float, bool]:
-        points = atlas_points(probe_name, session_index, ap)
-        if not len(points):
-            return 0.0, True
-        result = score_candidate_slice_plane(
-            points,
-            SlicePlane(ap, tilt_lr_deg, tilt_dv_deg),
-            fit,
-            bregma_voxel,
-            volume_shape,
-            voxel_um=VOXEL_UM,
-            brain_mask=candidate_brain_mask(
-                int(ap),
-                float(tilt_lr_deg),
-                float(tilt_dv_deg),
-            ),
-        )
-        return float(result["score"]), bool(result["feasible"])
+    def mismatch_score(assignments: dict[int, int]) -> float:
+        cache_key = tuple(sorted(assignments.items()))
+        if cache_key not in mismatch_cache:
+            scores = []
+            for probe_name, specification in enabled.items():
+                probe_observations = observations(
+                    probe_name,
+                    assignments,
+                    approximate=True,
+                )
+                if sum(len(points) for points in probe_observations.values()) >= 2:
+                    scores.append(
+                        probe_plan_mismatch_score(
+                            probe_observations,
+                            specification["constraint"],
+                            surface_dv,
+                            prepared_entries=surface_entries[probe_name],
+                        )
+                    )
+            mismatch_cache[cache_key] = float(np.mean(scores)) if scores else 0.0
+        return mismatch_cache[cache_key]
 
     # The unconstrained result and coherent AP shifts are deterministic seeds.
     # Coherent shifts matter because a surgical plan often disambiguates an
@@ -1356,8 +1380,17 @@ def solve_probe_constrained_lattice(
     # product. A bounded beam evaluates exact hard-bound observed regressions.
     ordered_sessions = sorted(
         lattices,
-        key=lambda index: (len(lattices[index]), index),
+        key=lambda index: (
+            -sum(
+                len(specification.get("display_points_by_session", {}).get(index, ()))
+                for specification in enabled.values()
+            ),
+            len(lattices[index]),
+            index,
+        ),
     )
+    screening_beam_width = min(int(beam_width), 8) if quick else int(beam_width)
+    screening_ap_limit = 10 if quick else 16
     beam = [({}, 0.0)]
     for session_index in ordered_sessions:
         expanded = []
@@ -1365,11 +1398,17 @@ def solve_probe_constrained_lattice(
             lattices[session_index],
             key=lambda ap: lattices[session_index][ap][0],
         )
-        if len(ranked_aps) > 24:
-            structural = ranked_aps[:12]
+        if len(ranked_aps) > screening_ap_limit:
+            structural_count = screening_ap_limit // 2 + screening_ap_limit % 2
+            spread_count = screening_ap_limit - structural_count
+            structural = ranked_aps[:structural_count]
             spread = [
                 ranked_aps[index]
-                for index in np.linspace(0, len(ranked_aps) - 1, 12).round().astype(int)
+                for index in np.linspace(
+                    0,
+                    len(ranked_aps) - 1,
+                    spread_count,
+                ).round().astype(int)
             ]
             ranked_aps = list(dict.fromkeys([*structural, *spread]))
         for partial, partial_score in beam:
@@ -1386,22 +1425,14 @@ def solve_probe_constrained_lattice(
                 if not order_valid:
                     continue
                 structural = partial_score + float(lattices[session_index][ap][0])
-                geometry = 0.0
-                if len(assignment) == len(lattices):
-                    try:
-                        fits = fit_assignment(assignment, search_fit=True, max_starts=6)
-                    except InfeasibleProbeConstraint:
-                        continue
-                    geometry = MIND_PROBE_GEOMETRY_WEIGHT * float(
-                        np.mean([fit.loss for fit in fits.values()])
-                    )
+                geometry = MIND_PROBE_GEOMETRY_WEIGHT * mismatch_score(assignment)
                 expanded.append((assignment, structural, geometry))
         if not expanded:
             break
-        expanded.sort(key=lambda item: (item[2], item[1]))
+        expanded.sort(key=lambda item: item[1] + item[2])
         beam = [
             (assignment, structural)
-            for assignment, structural, _ in expanded[: max(1, int(beam_width))]
+            for assignment, structural, _ in expanded[: max(1, screening_beam_width)]
         ]
     seeds.extend(
         assignment
@@ -1415,9 +1446,34 @@ def solve_probe_constrained_lattice(
 
     quick_feasible = []
     failures = []
-    for assignment in unique_seeds:
+    ranked_seeds = sorted(
+        unique_seeds,
+        key=lambda assignment: (
+            sum(lattices[index][ap][0] for index, ap in assignment.items())
+            + MIND_PROBE_GEOMETRY_WEIGHT * mismatch_score(assignment)
+        ),
+    )
+    if screen_only:
+        assignments = ranked_seeds[0]
+        structural_total = float(
+            sum(lattices[index][ap][0] for index, ap in assignments.items())
+        )
+        mismatch = mismatch_score(assignments)
+        return (
+            assignments,
+            structural_total + MIND_PROBE_GEOMETRY_WEIGHT * mismatch,
+            {
+                "applied": True,
+                "approximate_screen_only": True,
+                "seed_count": len(unique_seeds),
+                "geometry_loss": mismatch,
+                "probes": {},
+            },
+        )
+    required_feasible = 1 if quick else 2
+    for assignment in ranked_seeds:
         try:
-            fits = fit_assignment(assignment, search_fit=True, max_starts=6)
+            fits = fit_assignment(assignment)
         except InfeasibleProbeConstraint as exc:
             failures.append(str(exc))
             continue
@@ -1426,6 +1482,8 @@ def solve_probe_constrained_lattice(
         quick_feasible.append(
             (structural + MIND_PROBE_GEOMETRY_WEIGHT * geometry, assignment, fits)
         )
+        if len(quick_feasible) >= required_feasible:
+            break
     if not quick_feasible:
         detail = failures[0] if failures else "no feasible candidate assignment"
         raise InfeasibleProbeConstraint(
@@ -1434,67 +1492,13 @@ def solve_probe_constrained_lattice(
     if quick:
         _, assignments, fits = min(quick_feasible, key=lambda item: item[0])
     else:
-        feasible = []
-        for _, assignment, _ in sorted(quick_feasible, key=lambda item: item[0]):
-            try:
-                fits = fit_assignment(assignment, search_fit=False)
-            except InfeasibleProbeConstraint as exc:
-                failures.append(str(exc))
-                continue
-            structural = float(sum(lattices[index][ap][0] for index, ap in assignment.items()))
-            geometry = float(np.mean([fit.loss for fit in fits.values()]))
-            feasible.append(
-                (structural + MIND_PROBE_GEOMETRY_WEIGHT * geometry, assignment, fits)
-            )
-            if len(feasible) == 4:
-                break
+        feasible = sorted(quick_feasible, key=lambda item: item[0])[:4]
         if not feasible:
             raise InfeasibleProbeConstraint(
                 "No atlas pose satisfies the enabled surgical probe constraints: "
                 + failures[-1]
             )
         _, assignments, fits = min(feasible, key=lambda item: item[0])
-
-    # Alternate a fitted constrained ray with the ordered AP lattice.  This is
-    # bounded and deterministic; it permits individual AP corrections while
-    # retaining partial order and the caller's exactly shared cutting tilt.
-    for _ in range(1 if quick else 3):
-        constrained = {}
-        for session_index, values in lattices.items():
-            constrained[session_index] = {}
-            for ap, (score, components) in values.items():
-                candidate_scores = []
-                candidate_feasible = True
-                for probe_name, fit in fits.items():
-                    value, valid = geometry_score(probe_name, session_index, ap, fit)
-                    if len(atlas_points(probe_name, session_index, ap)):
-                        candidate_scores.append(value)
-                    candidate_feasible &= valid
-                geometry = float(np.mean(candidate_scores)) if candidate_scores else 0.0
-                constrained[session_index][ap] = (
-                    float(score + MIND_PROBE_GEOMETRY_WEIGHT * geometry)
-                    if candidate_feasible
-                    else float("inf"),
-                    components,
-                )
-        updated, _ = solve_ordered_lattice(constrained, anterior_to_posterior)
-        if not np.isfinite(sum(constrained[index][ap][0] for index, ap in updated.items())):
-            raise InfeasibleProbeConstraint(
-                "No ordered atlas assignment satisfies the enabled surgical probe constraints"
-            )
-        if updated == assignments:
-            break
-        try:
-            updated_fits = fit_assignment(
-                updated,
-                search_fit=quick,
-                max_starts=6 if quick else None,
-            )
-        except InfeasibleProbeConstraint:
-            # Per-slice scores can prefer a combination whose joint regression
-            # is invalid. Retain the last jointly validated solution.
-            break
-        assignments, fits = updated, updated_fits
 
     structural_total = float(sum(lattices[index][ap][0] for index, ap in assignments.items()))
     geometry_loss = float(np.mean([fit.loss for fit in fits.values()]))
@@ -1559,6 +1563,14 @@ def alignment_review_reasons(disagreement: dict, diagnostics: dict) -> list[str]
         reasons.append("ambiguous AP score curve")
     if diagnostics.get("surface_rms_after_atlas_px", 0.0) > DEEPSLICE_REVIEW_SURFACE_RMS_PX:
         reasons.append("poor surface fit")
+    surgical = diagnostics.get("probe_geometry_constraints", {})
+    residuals = [
+        float(probe.get("diagnostics", {}).get("median_orthogonal_residual_um", 0.0))
+        for probe in surgical.get("probes", {}).values()
+        if probe.get("trajectory_observations_used", True)
+    ]
+    if residuals and max(residuals) > 150.0:
+        reasons.append("probe-plan fit residual exceeds 150 um")
     return reasons
 
 
@@ -1722,6 +1734,11 @@ def refine_pose_search(
         raise ValueError("Cortical atlas structure IDs are required when surgical probe constraints are enabled")
     bregma = None if bregma_voxel is None else np.asarray(bregma_voxel, dtype=np.float64)
     candidate_transform_cache: dict[tuple[int, int, float, float], np.ndarray] = {}
+    approximate_transform_cache: dict[tuple[int, int, float, float], np.ndarray] = {}
+    candidate_mask_cache: dict[tuple[int, float, float], np.ndarray] = {}
+    candidate_mask_geometry_cache: dict[
+        tuple[int, float, float], tuple[np.ndarray, np.ndarray]
+    ] = {}
 
     def surface_dv(ap_um: float, ml_um: float) -> float:
         assert bregma is not None
@@ -1740,6 +1757,102 @@ def refine_pose_search(
         name: prepare_insertion_surface_entries(specification["constraint"], surface_dv)
         for name, specification in active_probe_constraints.items()
     }
+    approximate_source_geometry = {}
+    if observed_probe_constraints:
+        for session_index in converted:
+            filename = filenames[session_index]
+            source_mask = np.asarray(prepared_inputs[filename]["brain_mask"], dtype=np.uint8)
+            orientation, _ = brain_orientation_affine(source_mask)
+            contours, _ = cv2.findContours(
+                source_mask,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            surface = np.asarray(
+                transform_points(np.concatenate(contours).reshape(-1, 2), orientation),
+                dtype=np.float64,
+            )
+            approximate_source_geometry[session_index] = (
+                orientation,
+                (surface.min(axis=0) + surface.max(axis=0)) / 2.0,
+                np.maximum(np.ptp(surface, axis=0), 1.0),
+            )
+
+    def candidate_brain_mask(ap: int, tilt_lr: float, tilt_dv: float) -> np.ndarray:
+        key = int(ap), float(tilt_lr), float(tilt_dv)
+        if key not in candidate_mask_cache:
+            candidate_mask_cache[key] = coronal_oblique_slice(
+                annotation_volume,
+                *key,
+                order=0,
+            ) > 0
+        return candidate_mask_cache[key]
+
+    def probe_display_points(probe_name: str, session_index: int) -> np.ndarray:
+        return np.asarray(
+            active_probe_constraints[probe_name]["display_points_by_session"].get(
+                session_index,
+                (),
+            ),
+            dtype=np.float64,
+        ).reshape(-1, 2)
+
+    def approximate_candidate_matrix(
+        session_index: int,
+        ap: int,
+        tilt_lr: float,
+        tilt_dv: float,
+    ) -> np.ndarray:
+        key = session_index, int(ap), float(tilt_lr), float(tilt_dv)
+        matrix = approximate_transform_cache.get(key)
+        if matrix is None:
+            mask_key = int(ap), float(tilt_lr), float(tilt_dv)
+            if mask_key not in candidate_mask_geometry_cache:
+                target_y, target_x = np.nonzero(
+                    candidate_brain_mask(ap, tilt_lr, tilt_dv)
+                )
+                candidate_mask_geometry_cache[mask_key] = (
+                    np.asarray(
+                        [
+                            (target_x.min() + target_x.max()) / 2.0,
+                            (target_y.min() + target_y.max()) / 2.0,
+                        ],
+                        dtype=np.float64,
+                    ),
+                    np.asarray(
+                        [np.ptp(target_x), np.ptp(target_y)],
+                        dtype=np.float64,
+                    ),
+                )
+            target_center, target_span = candidate_mask_geometry_cache[mask_key]
+            base, source_center, source_span = approximate_source_geometry[
+                session_index
+            ]
+            scale = float(np.median(target_span / source_span))
+            scale_and_translation = np.asarray(
+                [
+                    [scale, 0.0, target_center[0] - scale * source_center[0]],
+                    [0.0, scale, target_center[1] - scale * source_center[1]],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            )
+            matrix = scale_and_translation @ base
+            approximate_transform_cache[key] = matrix
+        return matrix
+
+    def approximate_candidate_probe_atlas_points(
+        probe_name: str,
+        session_index: int,
+        ap: int,
+        tilt_lr: float,
+        tilt_dv: float,
+    ) -> np.ndarray:
+        display_points = probe_display_points(probe_name, session_index)
+        if not len(display_points):
+            return np.empty((0, 2), dtype=np.float64)
+        matrix = approximate_candidate_matrix(session_index, ap, tilt_lr, tilt_dv)
+        return np.asarray(transform_points(display_points, matrix), dtype=np.float64)
 
     def candidate_probe_atlas_points(
         probe_name: str,
@@ -1748,39 +1861,19 @@ def refine_pose_search(
         tilt_lr: float,
         tilt_dv: float,
     ) -> np.ndarray:
-        display_points = np.asarray(
-            active_probe_constraints[probe_name]["display_points_by_session"].get(
-                session_index,
-                (),
-            ),
-            dtype=np.float64,
-        ).reshape(-1, 2)
+        display_points = probe_display_points(probe_name, session_index)
         if not len(display_points):
             return np.empty((0, 2), dtype=np.float64)
         key = session_index, int(ap), float(tilt_lr), float(tilt_dv)
         matrix = candidate_transform_cache.get(key)
         if matrix is None:
-            target_mask = coronal_oblique_slice(
-                annotation_volume,
-                int(ap),
-                float(tilt_lr),
-                float(tilt_dv),
-                order=0,
-            ) > 0
-            matrix = converted[session_index][3]
-            if matrix is None:
-                filename = filenames[session_index]
-                matrix = brain_mask_affine(
-                    prepared_inputs[filename]["brain_mask"],
-                    target_mask,
-                )
-            else:
-                filename = filenames[session_index]
-                matrix = orientation_preserving_slice_to_atlas(
-                    matrix,
-                    prepared_inputs[filename]["brain_mask"],
-                    target_mask,
-                )
+            target_mask = candidate_brain_mask(ap, tilt_lr, tilt_dv)
+            matrix = approximate_candidate_matrix(
+                session_index,
+                ap,
+                tilt_lr,
+                tilt_dv,
+            )
             matrix, _ = fit_surface_scale_translation(
                 matrix,
                 trusted_surface_points[session_index],
@@ -1937,7 +2030,15 @@ def refine_pose_search(
             for index in session_indices
         }
 
-        def solve_candidates(values, ordered, tilt_lr, tilt_dv, *, quick=False):
+        def solve_candidates(
+            values,
+            ordered,
+            tilt_lr,
+            tilt_dv,
+            *,
+            quick=False,
+            approximate_only=False,
+        ):
             if not active_probe_constraints:
                 assignments, total = solve_ordered_lattice(values, ordered)
                 return assignments, total, None
@@ -1960,22 +2061,29 @@ def refine_pose_search(
                 values,
                 ordered,
                 observed_probe_constraints,
-                candidate_probe_atlas_points,
-                lambda ap, lr, dv: coronal_oblique_slice(
-                    annotation_volume,
-                    int(ap),
-                    float(lr),
-                    float(dv),
-                    order=0,
-                ) > 0,
+                (
+                    approximate_candidate_probe_atlas_points
+                    if approximate_only
+                    else candidate_probe_atlas_points
+                ),
                 surface_dv,
                 bregma,
                 tuple(atlas_volume.shape),
                 float(tilt_lr),
                 float(tilt_dv),
+                approximate_candidate_atlas_points=(
+                    approximate_candidate_probe_atlas_points
+                    if not approximate_only
+                    else None
+                ),
                 quick=quick,
+                screen_only=approximate_only,
             )
-            diagnostics["mode"] = "alignment_feasibility_and_observed_geometry_hard_bounds"
+            diagnostics["mode"] = (
+                "approximate_alignment_constraint_screen"
+                if approximate_only
+                else "alignment_feasibility_and_observed_geometry_hard_bounds"
+            )
             for name, value in plan_diagnostics["probes"].items():
                 diagnostics["probes"].setdefault(name, value)
             return assignments, total, diagnostics
@@ -2013,7 +2121,12 @@ def refine_pose_search(
                 values = lattice(tilt_lr, tilt_dv, coarse_candidates)
                 try:
                     assignments, total, geometry = solve_candidates(
-                        values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                        values,
+                        ordered_indices,
+                        tilt_lr,
+                        tilt_dv,
+                        quick=True,
+                        approximate_only=True,
                     )
                 except InfeasibleProbeConstraint as exc:
                     constraint_failures.append(str(exc))
@@ -2028,7 +2141,12 @@ def refine_pose_search(
                     values = lattice(tilt_lr, tilt_dv, coarse_candidates)
                     try:
                         assignments, total, geometry = solve_candidates(
-                            values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                            values,
+                            ordered_indices,
+                            tilt_lr,
+                            tilt_dv,
+                            quick=True,
+                            approximate_only=True,
                         )
                     except InfeasibleProbeConstraint as exc:
                         constraint_failures.append(str(exc))
@@ -2042,14 +2160,26 @@ def refine_pose_search(
                     + constraint_failures[0]
                 )
             constrained_coarse = []
+            exact_failures = []
             for _, tilt_lr, tilt_dv, _, _, values in sorted(
                 screened_coarse, key=lambda item: item[0]
-            )[:4]:
-                assignments, total, geometry = solve_candidates(
-                    values, ordered_indices, tilt_lr, tilt_dv
-                )
+            ):
+                try:
+                    assignments, total, geometry = solve_candidates(
+                        values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                    )
+                except InfeasibleProbeConstraint as exc:
+                    exact_failures.append(str(exc))
+                    continue
                 constrained_coarse.append(
                     (total, tilt_lr, tilt_dv, assignments, geometry)
+                )
+                if constrained_coarse:
+                    break
+            if not constrained_coarse:
+                raise InfeasibleProbeConstraint(
+                    "No coarse atlas tilt satisfies the surgical probe constraints: "
+                    + exact_failures[0]
                 )
             _, coarse_lr, coarse_dv, _, _ = min(
                 constrained_coarse, key=lambda item: item[0]
@@ -2059,7 +2189,7 @@ def refine_pose_search(
 
         updated_lattice = lattice(coarse_lr, coarse_dv, coarse_candidates)
         updated_assignment, _, _ = solve_candidates(
-            updated_lattice, ordered_indices, coarse_lr, coarse_dv
+            updated_lattice, ordered_indices, coarse_lr, coarse_dv, quick=True
         )
         fine_candidates = {
             index: [
@@ -2093,12 +2223,20 @@ def refine_pose_search(
         if active_probe_constraints:
             screened_fine = []
             constraint_failures = []
-            for _, tilt_lr, tilt_dv, _, values in sorted(
+            for _, tilt_lr, tilt_dv, structural_assignment, values in sorted(
                 fine_results, key=lambda item: item[0]
             ):
                 try:
                     assignments, total, geometry = solve_candidates(
-                        values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                        {
+                            index: {structural_assignment[index]: values[index][structural_assignment[index]]}
+                            for index in session_indices
+                        },
+                        ordered_indices,
+                        tilt_lr,
+                        tilt_dv,
+                        quick=True,
+                        approximate_only=True,
                     )
                 except InfeasibleProbeConstraint as exc:
                     constraint_failures.append(str(exc))
@@ -2107,39 +2245,75 @@ def refine_pose_search(
                     (total, tilt_lr, tilt_dv, assignments, geometry)
                 )
             if not screened_fine:
+                for _, tilt_lr, tilt_dv, _, values in sorted(
+                    fine_results, key=lambda item: item[0]
+                ):
+                    try:
+                        assignments, total, geometry = solve_candidates(
+                            values,
+                            ordered_indices,
+                            tilt_lr,
+                            tilt_dv,
+                            quick=True,
+                            approximate_only=True,
+                        )
+                    except InfeasibleProbeConstraint as exc:
+                        constraint_failures.append(str(exc))
+                        continue
+                    screened_fine.append(
+                        (total, tilt_lr, tilt_dv, assignments, geometry)
+                    )
+            if not screened_fine:
                 raise InfeasibleProbeConstraint(
                     "No refined atlas tilt satisfies the surgical probe constraints: "
                     + constraint_failures[0]
                 )
             constrained_fine = []
+            exact_failures = []
             for _, tilt_lr, tilt_dv, _, _ in sorted(
                 screened_fine, key=lambda item: item[0]
-            )[:4]:
+            ):
                 values = next(
                     item[4]
                     for item in fine_results
                     if item[1] == tilt_lr and item[2] == tilt_dv
                 )
-                assignments, total, geometry = solve_candidates(
-                    values, ordered_indices, tilt_lr, tilt_dv
-                )
+                try:
+                    assignments, total, geometry = solve_candidates(
+                        values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                    )
+                except InfeasibleProbeConstraint as exc:
+                    exact_failures.append(str(exc))
+                    continue
                 constrained_fine.append(
                     (total, tilt_lr, tilt_dv, assignments, geometry)
                 )
-            _, best_lr, best_dv, _, _ = min(
+                if constrained_fine:
+                    break
+            if not constrained_fine:
+                raise InfeasibleProbeConstraint(
+                    "No refined atlas tilt satisfies the surgical probe constraints: "
+                    + exact_failures[0]
+                )
+            _, best_lr, best_dv, fine_assignments, probe_geometry = min(
                 constrained_fine, key=lambda item: item[0]
             )
         else:
             _, best_lr, best_dv, _, _ = min(fine_results, key=lambda item: item[0])
+            fine_assignments = None
+            probe_geometry = None
 
         final_candidates = {
             index: candidates_for(index, 1)
             for index in session_indices
         }
         final_lattice = lattice(best_lr, best_dv, final_candidates)
-        assignments, _, probe_geometry = solve_candidates(
-            final_lattice, ordered_indices, best_lr, best_dv
-        )
+        if active_probe_constraints:
+            assignments = fine_assignments
+        else:
+            assignments, _, probe_geometry = solve_candidates(
+                final_lattice, ordered_indices, best_lr, best_dv
+            )
         group_pose = {
             index: (int(ap), float(best_lr), float(best_dv))
             for index, ap in assignments.items()
@@ -2280,25 +2454,16 @@ def solve_pose_alignment(
             float(tilt_dv),
             order=0,
         ) > 0
-        if matrix is None:
-            filename = Path(str(records_by_session[session_index]["Filenames"])).name
-            matrix = brain_mask_affine(
-                prepared_inputs[filename]["brain_mask"],
-                atlas_mask,
-            )
-        else:
-            filename = Path(str(records_by_session[session_index]["Filenames"])).name
-            matrix = orientation_preserving_slice_to_atlas(
-                matrix,
-                prepared_inputs[filename]["brain_mask"],
-                atlas_mask,
-            )
+        filename = Path(str(records_by_session[session_index]["Filenames"])).name
+        matrix = brain_mask_affine(
+            prepared_inputs[filename]["brain_mask"],
+            atlas_mask,
+        )
         matrix, surface_fit = fit_surface_scale_translation(
             matrix,
             outline_snapshot[session_index],
             atlas_mask,
         )
-        filename = Path(str(records_by_session[session_index]["Filenames"])).name
         affine_transform = SliceAtlasTransform2D(
             matrix,
             prepared_inputs[filename]["image"].shape,
@@ -4247,12 +4412,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 new_sessions = []
                 for index, record in enumerate(state["sessions"]):
                     image_member = record["image_member"]
-                    suffix = Path(image_member).suffix
-                    image_path = cache_path / f"slice_{index:04d}{suffix}"
-                    with archive.open(image_member) as input_file, open(image_path, "wb") as output_file:
-                        shutil.copyfileobj(input_file, output_file)
-                    if file_sha256(image_path) != record["image_sha256"]:
-                        raise ValueError(f"Embedded slice failed its integrity check: {record['name']}")
+                    original_path = Path(record.get("original_path", ""))
+                    image_path = original_path if original_path.is_file() else None
+                    if image_path is not None and file_sha256(image_path) != record["image_sha256"]:
+                        image_path = None
+                    if image_path is None:
+                        suffix = Path(image_member).suffix
+                        image_path = cache_path / f"slice_{index:04d}{suffix}"
+                        with archive.open(image_member) as input_file, open(image_path, "wb") as output_file:
+                            shutil.copyfileobj(input_file, output_file)
+                        if file_sha256(image_path) != record["image_sha256"]:
+                            raise ValueError(f"Embedded slice failed its integrity check: {record['name']}")
                     session = SliceSession(name=record["name"], path=str(image_path))
                     self._load_session_image(session)
                     for name, value in record["fields"].items():
@@ -6981,39 +7151,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     else dict(deepslice_component["ensemble_disagreement"]),
                 )
             )
-
-        for probe_name, constraint in self.probe_constraints.items():
-            if not constraint.enabled:
-                continue
-            observations = {
-                session.name: volume_to_stereotaxic_um(
-                    np.asarray(probe_updates[probe_name][1], dtype=np.float64),
-                    self.bregma_voxel,
-                )
-                for session, _, _, _, _, diagnostics, probe_updates, *_ in staged
-                if probe_name in probe_updates
-                and probe_updates[probe_name][1]
-                and diagnostics.get("probe_geometry_constraints", {})
-                .get("probes", {})
-                .get(probe_name, {})
-                .get("trajectory_observations_used", True)
-            }
-            if sum(len(points) for points in observations.values()) < 2:
-                continue
-            observed_fit = fit_observed_probe_ray(
-                observations,
-                self._effective_probe_constraint(constraint),
-                self._surface_dv_um,
-            )
-            for _, _, _, _, _, diagnostics, _, *_ in staged:
-                geometry = diagnostics.get("probe_geometry_constraints", {})
-                if geometry.get("applied") and probe_name in geometry.get("probes", {}):
-                    geometry["probes"][probe_name]["post_alignment_observed_fit"] = {
-                        "entry_ap_dv_ml_um": observed_fit.entry_ap_dv_ml_um.tolist(),
-                        "direction_ap_dv_ml": observed_fit.direction_ap_dv_ml.tolist(),
-                        "angle_deg": float(observed_fit.angle_deg),
-                        "diagnostics": observed_fit.diagnostics,
-                    }
 
         for (
             session,

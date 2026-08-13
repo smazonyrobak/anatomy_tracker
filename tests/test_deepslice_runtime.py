@@ -181,7 +181,6 @@ def test_real_deepslice_predictions_flow_into_physical_constraint_solver():
             }
         },
         lambda _probe, session, _ap, _lr, _dv: points[session],
-        lambda _ap, _lr, _dv: np.ones((320, 456), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
         TRACKER.ALLEN_CCF_25_SHAPE_AP_DV_ML,
