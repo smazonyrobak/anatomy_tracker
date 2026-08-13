@@ -391,7 +391,7 @@ def test_enabled_constraint_is_written_with_explicit_angle_convention(window, tm
         "0 degrees horizontal; 90 degrees vertical"
     )
     assert manifest["probe_tip_location_mode"] == "deepest_mark_is_tip"
-    assert manifest["physical_tip_to_y0_contact_um"] == 200.0
+    assert manifest["physical_tip_to_y0_contact_um"] == 220.0
     assert manifest["insertion_depth_from_surface_um"] == 150.0
 
 

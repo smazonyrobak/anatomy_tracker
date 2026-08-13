@@ -141,11 +141,11 @@ PROBE_PHYSICAL_LENGTH_UM = {
     "Neuropixels 2.0 four-shank": 10000.0,
 }
 PROBE_TIP_TO_Y0_CONTACT_UM = {
-    # SpikeGLX/chanMap y=0 is the first recording row; the Neuropixels site-layout
-    # contract places the centre of that row 200 um from the physical tip.
-    "Neuropixels 1.0": 200.0,
-    "Neuropixels 2.0 single-shank": 200.0,
-    "Neuropixels 2.0 four-shank": 200.0,
+    # SpikeGLX/chanMap y=0 is the first recording row. These offsets are the
+    # physical-tip coordinates in the ProbeInterface Neuropixels catalogue.
+    "Neuropixels 1.0": 220.0,
+    "Neuropixels 2.0 single-shank": 217.0,
+    "Neuropixels 2.0 four-shank": 217.0,
 }
 
 

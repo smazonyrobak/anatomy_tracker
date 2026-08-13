@@ -30,7 +30,7 @@ def test_deepest_mark_tip_places_contacts_toward_surface():
     )
     assert np.allclose(tip, deepest)
     assert tip_depth == observed_depth == 40.0 * VOXEL_UM
-    assert np.allclose(y0, tip + np.array([0.0, -200.0 / VOXEL_UM, 0.0]))
+    assert np.allclose(y0, tip + np.array([0.0, -220.0 / VOXEL_UM, 0.0]))
     assert np.all(np.diff(contacts[:, 1]) < 0.0)
 
 
