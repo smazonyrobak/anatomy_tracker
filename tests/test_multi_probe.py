@@ -283,10 +283,14 @@ def test_manifest_contains_only_requested_probe_trace(window, tmp_path):
     window._write_manifest(
         tmp_path,
         "imec1",
-        "y0_contact",
+        "deepest_mark_is_tip",
+        np.array([15.0, 10.0, 17.0]),
         np.array([15.0, 16.0, 17.0]),
         np.array([15.0, 16.0, 17.0]),
+        np.array([15.0, 8.0, 17.0]),
         np.array([0.0, -1.0, 0.0]),
+        150.0,
+        150.0,
     )
 
     manifest = json.loads(
@@ -328,6 +332,27 @@ def test_insertion_constraints_are_retained_independently_per_probe(window):
     assert window.probe_constraints["imec1"].ml_um == -700
 
 
+def test_tip_location_is_retained_independently_per_probe(window):
+    window.probe_name.addItems(["imec0", "imec1"])
+    window.probe_name.setCurrentText("imec0")
+    window.endpoint_reference.setCurrentIndex(
+        window.endpoint_reference.findData("known_insertion_depth")
+    )
+    window.mapping_insertion_depth_um.setValue(3200.0)
+
+    window.probe_name.setCurrentText("imec1")
+    assert window.endpoint_reference.currentIndex() == -1
+    window.endpoint_reference.setCurrentIndex(
+        window.endpoint_reference.findData("deepest_mark_is_tip")
+    )
+
+    window.probe_name.setCurrentText("imec0")
+    assert window.endpoint_reference.currentData() == "known_insertion_depth"
+    assert window.mapping_insertion_depth_um.value() == 3200.0
+    window.probe_name.setCurrentText("imec1")
+    assert window.endpoint_reference.currentData() == "deepest_mark_is_tip"
+
+
 def test_enabled_constraint_is_written_with_explicit_angle_convention(window, tmp_path):
     window.probe_constraints["imec0"] = TRACKER.ProbeInsertionConstraint(
         enabled=True,
@@ -341,10 +366,14 @@ def test_enabled_constraint_is_written_with_explicit_angle_convention(window, tm
     window._write_manifest(
         tmp_path,
         "imec0",
-        "y0_contact",
+        "deepest_mark_is_tip",
+        np.array([15.0, 10.0, 17.0]),
         np.array([15.0, 16.0, 17.0]),
         np.array([15.0, 16.0, 17.0]),
+        np.array([15.0, 8.0, 17.0]),
         np.array([0.0, -1.0, 0.0]),
+        150.0,
+        150.0,
     )
     manifest = json.loads(
         (tmp_path / "anatomy" / "proprietary_trajectory_manifest_imec0.json").read_text()
@@ -361,6 +390,9 @@ def test_enabled_constraint_is_written_with_explicit_angle_convention(window, tm
     assert manifest["probe_attack_angle_convention"] == (
         "0 degrees horizontal; 90 degrees vertical"
     )
+    assert manifest["probe_tip_location_mode"] == "deepest_mark_is_tip"
+    assert manifest["physical_tip_to_y0_contact_um"] == 200.0
+    assert manifest["insertion_depth_from_surface_um"] == 150.0
 
 
 def test_constraint_circle_is_projected_onto_annotation_surface(window):

@@ -196,8 +196,9 @@ def test_mapping_blocking_rejection_blocks_export_but_other_rejection_requires_r
         )
         window.sessions = [session]
         arguments = (
-            tmp_path, "imec0", "y0_contact",
-            np.ones(3), np.ones(3), np.array([0.0, -1.0, 0.0]),
+            tmp_path, "imec0", "deepest_mark_is_tip",
+            np.ones(3), np.ones(3), np.ones(3), np.ones(3),
+            np.array([0.0, -1.0, 0.0]), 0.0, 0.0,
         )
         with pytest.raises(RuntimeError, match="pose/input"):
             window._write_manifest(*arguments)
@@ -281,10 +282,14 @@ def test_changed_source_invalidates_alignment_when_slice_is_reloaded(tmp_path):
             window._write_manifest(
                 tmp_path,
                 "imec0",
-                "y0_contact",
+                "deepest_mark_is_tip",
+                np.ones(3),
+                np.ones(3),
                 np.ones(3),
                 np.ones(3),
                 np.array([0.0, -1.0, 0.0]),
+                0.0,
+                0.0,
             )
         assert window._load_session_image(session)
         assert session.slice_atlas_transform is None
@@ -368,10 +373,14 @@ def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_p
         window._write_manifest(
             tmp_path,
             "imec0",
-            "y0_contact",
+            "deepest_mark_is_tip",
+            np.array([1.0, 2.0, 3.0]),
+            np.array([1.0, 2.0, 3.0]),
             np.array([1.0, 2.0, 3.0]),
             np.array([1.0, 2.0, 3.0]),
             np.array([0.0, -1.0, 0.0]),
+            0.0,
+            0.0,
         )
 
         manifest_path = tmp_path / "anatomy" / "proprietary_trajectory_manifest_imec0.json"
@@ -387,10 +396,14 @@ def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_p
         window._write_manifest(
             tmp_path,
             "imec0",
-            "y0_contact",
+            "deepest_mark_is_tip",
+            np.array([1.0, 2.0, 3.0]),
+            np.array([1.0, 2.0, 3.0]),
             np.array([1.0, 2.0, 3.0]),
             np.array([1.0, 2.0, 3.0]),
             np.array([0.0, -1.0, 0.0]),
+            0.0,
+            0.0,
         )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         replacement = manifest["slices"][0]["slice_atlas_transform"]["sidecar"]
@@ -434,10 +447,14 @@ def test_mapping_manifest_references_a_checksum_verified_nonlinear_sidecar(tmp_p
             window._write_manifest(
                 rejected_folder,
                 "imec0",
-                "y0_contact",
+                "deepest_mark_is_tip",
+                np.ones(3),
+                np.ones(3),
                 np.ones(3),
                 np.ones(3),
                 np.array([0.0, -1.0, 0.0]),
+                0.0,
+                0.0,
             )
     finally:
         window.close()
@@ -540,10 +557,14 @@ def test_nonidentity_warp_has_one_overlay_probe_volume_and_export_convention(tmp
         window._write_manifest(
             tmp_path,
             "imec0",
-            "y0_contact",
+            "deepest_mark_is_tip",
+            expected_volume,
+            expected_volume,
             expected_volume,
             expected_volume,
             np.array([0.0, -1.0, 0.0]),
+            0.0,
+            0.0,
         )
         manifest_path = tmp_path / "anatomy" / "proprietary_trajectory_manifest_imec0.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -715,7 +736,7 @@ def test_mapping_promotion_failure_rolls_back_every_output(tmp_path, monkeypatch
         window.run_folder.setText(str(tmp_path))
         window.probe_name.addItem("imec0")
         window.probe_name.setCurrentText("imec0")
-        window.endpoint_reference.setCurrentIndex(0)
+        window.endpoint_reference.setCurrentIndex(1)
 
         original_promote = TRACKER.promote_staged_mapping_outputs
 

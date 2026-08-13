@@ -140,6 +140,57 @@ PROBE_PHYSICAL_LENGTH_UM = {
     "Neuropixels 2.0 single-shank": 10000.0,
     "Neuropixels 2.0 four-shank": 10000.0,
 }
+PROBE_TIP_TO_Y0_CONTACT_UM = {
+    # SpikeGLX/chanMap y=0 is the first recording row; the Neuropixels site-layout
+    # contract places the centre of that row 200 um from the physical tip.
+    "Neuropixels 1.0": 200.0,
+    "Neuropixels 2.0 single-shank": 200.0,
+    "Neuropixels 2.0 four-shank": 200.0,
+}
+
+
+def probe_mapping_coordinates(
+    brain_entry: np.ndarray,
+    deepest_mark: np.ndarray,
+    surface_direction: np.ndarray,
+    endpoint_mode: str,
+    insertion_depth_um: float | None,
+    channel_vertical_um: np.ndarray,
+    probe_type: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float]:
+    direction = np.asarray(surface_direction, dtype=np.float64)
+    direction /= np.linalg.norm(direction)
+    entry = np.asarray(brain_entry, dtype=np.float64)
+    mark = np.asarray(deepest_mark, dtype=np.float64)
+    observed_depth_um = float((entry - mark) @ direction * VOXEL_UM)
+    if endpoint_mode == "known_insertion_depth":
+        tip_depth_um = float(insertion_depth_um)
+        if tip_depth_um + VOXEL_UM < observed_depth_um:
+            raise ValueError(
+                f"Insertion depth ({tip_depth_um:.0f} um) is shallower than the deepest marked electrode "
+                f"point ({observed_depth_um:.0f} um)."
+            )
+    elif endpoint_mode == "deepest_mark_is_tip":
+        tip_depth_um = observed_depth_um
+    else:
+        raise ValueError("Choose how the physical probe tip should be located.")
+    physical_length_um = PROBE_PHYSICAL_LENGTH_UM[probe_type]
+    if not 0.0 < tip_depth_um <= physical_length_um:
+        raise ValueError(
+            f"Surface-to-tip depth must be between 0 and {physical_length_um:.0f} um for {probe_type}."
+        )
+    tip = entry - direction * (tip_depth_um / VOXEL_UM)
+    tip_to_y0_um = PROBE_TIP_TO_Y0_CONTACT_UM[probe_type]
+    y0_contact = tip + direction * (tip_to_y0_um / VOXEL_UM)
+    channel_distance_from_tip_um = tip_to_y0_um + np.asarray(channel_vertical_um, dtype=np.float64)
+    if np.any(channel_distance_from_tip_um < 0.0) or np.any(
+        channel_distance_from_tip_um > physical_length_um
+    ):
+        raise ValueError(f"Channel geometry extends outside the {physical_length_um:.0f} um physical shank.")
+    coordinates = tip[None, :] + direction[None, :] * (
+        channel_distance_from_tip_um[:, None] / VOXEL_UM
+    )
+    return tip, y0_contact, coordinates, tip_depth_um, observed_depth_um
 
 pg.setConfigOptions(imageAxisOrder="row-major", background="#0f131a", foreground="#d7e7f5")
 
@@ -3237,6 +3288,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.current_session_index = -1
         self.probe_constraints: dict[str, ProbeInsertionConstraint] = {}
         self._loading_probe_constraints = False
+        self.probe_endpoint_settings: dict[str, tuple[str | None, float]] = {}
+        self._loading_probe_endpoint = False
         self.dynamic_gl_items: list[object] = []
         self.brain_mesh_item: gl.GLMeshItem | None = None
         self.auto_alignment_busy = False
@@ -3661,7 +3714,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         constraint_layout.addWidget(QtWidgets.QLabel("+/-"), 3, 2)
         constraint_layout.addWidget(self.attack_angle_tolerance_deg, 3, 3)
 
-        self.limit_insertion_depth = QtWidgets.QCheckBox("Tighter planned depth")
+        self.limit_insertion_depth = QtWidgets.QCheckBox("Limit feasible insertion depth")
         self.max_insertion_depth_um = QtWidgets.QSpinBox()
         self.max_insertion_depth_um.setKeyboardTracking(False)
         self.max_insertion_depth_um.setRange(int(VOXEL_UM), 50000)
@@ -3669,8 +3722,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.max_insertion_depth_um.setValue(10000)
         self.max_insertion_depth_um.setSuffix(" um")
         depth_help = (
-            "Optional planned cortical-entry-to-tip limit. It can only tighten the selected probe's "
-            "always-enforced 10 mm physical shank limit."
+            "Auto-alignment constraint only: reject candidate slice poses that would place a marked "
+            "electrode point deeper than this distance from the cortical entry. Leave off to use only "
+            "the selected probe's physical shank limit. Changes apply after rerunning auto-alignment."
         )
         self.limit_insertion_depth.setToolTip(depth_help)
         self.max_insertion_depth_um.setToolTip(depth_help)
@@ -3689,26 +3743,30 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         probe_layout.addWidget(self.undo_mapping_btn, 4, 2, 1, 2)
 
         self.endpoint_reference = QtWidgets.QComboBox()
-        self.endpoint_reference.addItem("Deepest point is chanMap y=0 contact", "y0_contact")
-        self.endpoint_reference.addItem("Deepest point is physical probe tip", "physical_tip")
+        self.endpoint_reference.addItem("Known insertion depth from brain surface", "known_insertion_depth")
+        self.endpoint_reference.addItem("Deepest marked dot is the probe tip", "deepest_mark_is_tip")
         self.endpoint_reference.setCurrentIndex(-1)
-        self.endpoint_reference.setPlaceholderText("Choose reference")
-        self.marked_tip_to_y0_um = QtWidgets.QDoubleSpinBox()
-        self.marked_tip_to_y0_um.setKeyboardTracking(False)
-        self.marked_tip_to_y0_um.setRange(0.0, 2000.0)
-        self.marked_tip_to_y0_um.setDecimals(1)
-        self.marked_tip_to_y0_um.setSuffix(" um")
-        self.marked_tip_to_y0_um.setValue(0.0)
-        self.marked_tip_to_y0_um.setEnabled(False)
+        self.endpoint_reference.setPlaceholderText("Choose how to locate the probe tip")
+        self.mapping_insertion_depth_um = QtWidgets.QDoubleSpinBox()
+        self.mapping_insertion_depth_um.setKeyboardTracking(False)
+        self.mapping_insertion_depth_um.setRange(1.0, 10000.0)
+        self.mapping_insertion_depth_um.setDecimals(1)
+        self.mapping_insertion_depth_um.setSuffix(" um")
+        self.mapping_insertion_depth_um.setValue(3000.0)
+        self.mapping_insertion_depth_um.setEnabled(False)
         tip_help = (
-            "If the deepest marked point is the physical tip, enter its distance to the lowest recording contact."
+            "Choose whether the physical tip is placed at the known surgical insertion depth from the "
+            "brain surface, or at the deepest electrode dot marked on the histology. Recording-contact "
+            "positions are then placed automatically from the selected probe geometry."
         )
         self.endpoint_reference.setToolTip(tip_help)
-        self.marked_tip_to_y0_um.setToolTip(tip_help)
-        probe_layout.addWidget(QtWidgets.QLabel("Deepest point"), 5, 0)
+        self.mapping_insertion_depth_um.setToolTip(
+            "Exact distance travelled from the fitted cortical entry to the physical probe tip during surgery."
+        )
+        probe_layout.addWidget(QtWidgets.QLabel("Probe tip location"), 5, 0)
         probe_layout.addWidget(self.endpoint_reference, 5, 1, 1, 3)
-        probe_layout.addWidget(QtWidgets.QLabel("Tip to contact"), 6, 0)
-        probe_layout.addWidget(self.marked_tip_to_y0_um, 6, 1)
+        probe_layout.addWidget(QtWidgets.QLabel("Insertion depth from surface"), 6, 0)
+        probe_layout.addWidget(self.mapping_insertion_depth_um, 6, 1)
 
         self.point_counts = QtWidgets.QLabel("Transform atlas 0 / slice 0 | Probe 0")
         self.point_counts.setStyleSheet("color:#9fb4c8;")
@@ -3899,7 +3957,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.endpoint_reference.currentIndexChanged.connect(
             self._probe_reference_changed
         )
-        self.marked_tip_to_y0_um.valueChanged.connect(self._update_probe_fit_summary)
+        self.mapping_insertion_depth_um.valueChanged.connect(self._mapping_insertion_depth_changed)
         self.map_btn.clicked.connect(self._map_channels_units_clicked)
         self.undo_mapping_btn.clicked.connect(self.undo_file_mapping)
         self.brightness_weighting.toggled.connect(self._trajectory_weighting_changed)
@@ -4493,8 +4551,33 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.max_insertion_depth_um.setEnabled(enabled and self.limit_insertion_depth.isChecked())
 
     def _probe_reference_changed(self, *_: object) -> None:
-        self.marked_tip_to_y0_um.setEnabled(self.endpoint_reference.currentData() == "physical_tip")
+        self.mapping_insertion_depth_um.setEnabled(
+            self.endpoint_reference.currentData() == "known_insertion_depth"
+        )
+        if not self._loading_probe_endpoint and self._active_probe_name():
+            self.probe_endpoint_settings[self._active_probe_name()] = (
+                self.endpoint_reference.currentData(),
+                self.mapping_insertion_depth_um.value(),
+            )
         self._update_probe_fit_summary()
+
+    def _mapping_insertion_depth_changed(self, *_: object) -> None:
+        if not self._loading_probe_endpoint and self._active_probe_name():
+            self.probe_endpoint_settings[self._active_probe_name()] = (
+                self.endpoint_reference.currentData(),
+                self.mapping_insertion_depth_um.value(),
+            )
+        self._update_probe_fit_summary()
+
+    def _set_probe_endpoint_controls(self, probe_name: str) -> None:
+        mode, depth = self.probe_endpoint_settings.get(probe_name, (None, 3000.0))
+        self._loading_probe_endpoint = True
+        try:
+            self.endpoint_reference.setCurrentIndex(self.endpoint_reference.findData(mode))
+            self.mapping_insertion_depth_um.setValue(depth)
+        finally:
+            self._loading_probe_endpoint = False
+        self.mapping_insertion_depth_um.setEnabled(mode == "known_insertion_depth")
 
     def _probe_type_changed(self, *_: object) -> None:
         for probe_name, constraint in self.probe_constraints.items():
@@ -4590,7 +4673,15 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             lifecycle = ""
         self.probe_fit_summary.setText(
             f"Observed fit: AP {stereo_entry[0]:+.0f} um | ML {stereo_entry[2]:+.0f} um | "
-            f"angle {angle:.1f} deg | marked depth {depth:.0f} um | {len(points)} points{lifecycle}"
+            f"angle {angle:.1f} deg | deepest mark {depth:.0f} um | {len(points)} points"
+            + (
+                f" | mapping tip depth {self.mapping_insertion_depth_um.value():.0f} um"
+                if self.endpoint_reference.currentData() == "known_insertion_depth"
+                else " | mapping tip = deepest mark"
+                if self.endpoint_reference.currentData() == "deepest_mark_is_tip"
+                else " | choose probe tip location before mapping"
+            )
+            + lifecycle
         )
 
     @staticmethod
@@ -7034,6 +7125,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             f"Clear {probe_name} trajectory" if probe_name else "Clear trajectory"
         )
         self._set_probe_constraint_controls(self._probe_constraint(probe_name))
+        self._set_probe_endpoint_controls(probe_name)
         self._refresh_points()
         self._refresh_3d()
         self._update_probe_fit_summary()
@@ -7144,7 +7236,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 session.auto_alignment_diagnostics = diagnostics
         points = self.all_probe_volume_points(selected_probe)
         try:
-            _, marked_endpoint, surface_direction = self.probe_line_geometry(selected_probe)
+            brain_entry, deepest_mark, surface_direction = self.probe_brain_geometry(selected_probe)
         except InfeasibleProbeConstraint as exc:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -7152,7 +7244,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 str(exc),
             )
             return
-        if marked_endpoint is None or surface_direction is None or len(points) < 2:
+        if brain_entry is None or deepest_mark is None or surface_direction is None or len(points) < 2:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Probe line missing",
@@ -7171,21 +7263,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if endpoint_reference is None:
             QtWidgets.QMessageBox.warning(
                 self,
-                "Trajectory reference required",
-                "Specify whether the deepest marked point is the chanMap y=0 recording contact or the physical probe tip.",
+                "Probe tip location required",
+                "Choose either the known surgical insertion depth or 'deepest marked dot is the probe tip'.",
             )
             return
-        y0_offset_um = 0.0
-        if endpoint_reference == "physical_tip":
-            y0_offset_um = self.marked_tip_to_y0_um.value()
-            if y0_offset_um <= 0:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Tip offset required",
-                    "Enter the positive physical-tip to lowest-recording-contact distance for this probe.",
-                )
-                return
-        y0_contact = marked_endpoint + surface_direction * (y0_offset_um / VOXEL_UM)
 
         channels = canonical_channel_keys(pd.read_csv(channels_path))
         units = canonical_channel_keys(pd.read_csv(units_path), units=True)
@@ -7198,8 +7279,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         distance_um = pd.to_numeric(
             channels.loc[selected, "probe_vertical_position"], errors="raise"
         ).to_numpy(dtype=float)
-
-        coords = y0_contact[None, :] + surface_direction[None, :] * (distance_um[:, None] / VOXEL_UM)
+        try:
+            physical_tip, y0_contact, coords, insertion_depth_um, observed_depth_um = probe_mapping_coordinates(
+                brain_entry,
+                deepest_mark,
+                surface_direction,
+                str(endpoint_reference),
+                self.mapping_insertion_depth_um.value()
+                if endpoint_reference == "known_insertion_depth"
+                else None,
+                distance_um,
+                self.probe_type.currentText(),
+            )
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Probe geometry infeasible", str(exc))
+            return
         sampled = [self._sample_region(coord) for coord in coords]
         stereotaxic = np.asarray([volume_to_stereotaxic_um(coord, self.bregma_voxel) for coord in coords])
         mapped_at = datetime.now().isoformat(timespec="seconds")
@@ -7219,7 +7313,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "stereotaxic_ap_um": stereotaxic[:, 0],
             "stereotaxic_dv_um": stereotaxic[:, 1],
             "stereotaxic_ml_um": stereotaxic[:, 2],
-            "trajectory_distance_um": distance_um,
+            "trajectory_distance_um": PROBE_TIP_TO_Y0_CONTACT_UM[self.probe_type.currentText()] + distance_um,
             "probe_type": self.probe_type.currentText(),
             "anatomy_source": "proprietary_trajectory_tracker",
             "anatomy_assignment_method": "peak_channel_on_trajectory_centerline",
@@ -7249,9 +7343,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 staging_root,
                 selected_probe,
                 str(endpoint_reference),
-                marked_endpoint,
+                brain_entry,
+                deepest_mark,
+                physical_tip,
                 y0_contact,
                 surface_direction,
+                insertion_depth_um,
+                observed_depth_um,
             )
             staged_hashes = verify_staged_mapping_outputs(
                 staging_root,
@@ -7342,10 +7440,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self,
         data_folder: Path,
         probe_name: str,
-        endpoint_reference: str,
-        marked_endpoint: np.ndarray,
+        endpoint_mode: str,
+        brain_entry: np.ndarray,
+        deepest_mark: np.ndarray,
+        physical_tip: np.ndarray,
         y0_contact: np.ndarray,
         surface_direction: np.ndarray,
+        insertion_depth_um: float,
+        observed_depth_um: float,
     ) -> None:
         anatomy_dir = data_folder / "anatomy"
         anatomy_dir.mkdir(exist_ok=True)
@@ -7476,18 +7578,25 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             ),
             "channel_identity": ["probe_name", "probe_channel_number"],
             "unit_assignment": "structure_acronym inherited from the unit peak probe channel",
-            "trajectory_sampling": "shank centerline at probe_vertical_position; horizontal position is retained but no probe-roll estimate is available",
-            "vertical_reference": "probe_vertical_position is relative to the chanMap y=0 recording contact",
-            "marked_endpoint_reference": endpoint_reference,
-            "marked_endpoint_to_y0_contact_um": (
-                self.marked_tip_to_y0_um.value() if endpoint_reference == "physical_tip" else 0.0
+            "trajectory_sampling": "shank centerline at each recording contact; horizontal position is retained but no probe-roll estimate is available",
+            "vertical_reference": (
+                "probe_vertical_position is relative to the lowest chanMap recording row; "
+                "the physical tip offset is supplied by the selected Neuropixels geometry"
             ),
+            "probe_tip_location_mode": endpoint_mode,
+            "insertion_depth_from_surface_um": insertion_depth_um,
+            "deepest_mark_depth_from_surface_um": observed_depth_um,
+            "physical_tip_to_y0_contact_um": PROBE_TIP_TO_Y0_CONTACT_UM[self.probe_type.currentText()],
             "brightness_weighted_trajectory": self.brightness_weighting.isChecked(),
             "automatic_alignment_engine": alignment_engines[0] if len(alignment_engines) == 1 else None,
             "automatic_alignment_engines": alignment_engines,
             "automatic_alignment_runs": alignment_runs,
-            "marked_endpoint_voxel_ap_dv_ml": marked_endpoint.tolist(),
-            "marked_endpoint_stereotaxic_um_ap_dv_ml": volume_to_stereotaxic_um(marked_endpoint, self.bregma_voxel).tolist(),
+            "brain_entry_voxel_ap_dv_ml": brain_entry.tolist(),
+            "brain_entry_stereotaxic_um_ap_dv_ml": volume_to_stereotaxic_um(brain_entry, self.bregma_voxel).tolist(),
+            "deepest_mark_voxel_ap_dv_ml": deepest_mark.tolist(),
+            "deepest_mark_stereotaxic_um_ap_dv_ml": volume_to_stereotaxic_um(deepest_mark, self.bregma_voxel).tolist(),
+            "physical_tip_voxel_ap_dv_ml": physical_tip.tolist(),
+            "physical_tip_stereotaxic_um_ap_dv_ml": volume_to_stereotaxic_um(physical_tip, self.bregma_voxel).tolist(),
             "y0_contact_voxel_ap_dv_ml": y0_contact.tolist(),
             "y0_contact_stereotaxic_um_ap_dv_ml": volume_to_stereotaxic_um(y0_contact, self.bregma_voxel).tolist(),
             "surface_direction_ap_dv_ml": surface_direction.tolist(),
