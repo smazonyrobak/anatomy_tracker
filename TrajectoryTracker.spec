@@ -76,7 +76,7 @@ a = Analysis(
         (str(DEEPSLICE_MODELS / "deepslice_mouse_secondary_opset18.onnx"), "models/DeepSlice"),
         (str(ROOT / "licenses" / "DeepSlice-LICENSE.txt"), "licenses"),
     ] + ATLAS_POSE_DATAS + NONLINEAR_DATAS,
-    hiddenimports=[],
+    hiddenimports=["imagecodecs._imcd", "imagecodecs._shared_cython"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
