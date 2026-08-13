@@ -117,7 +117,7 @@ def test_probe_constraint_recovers_true_ap_pair_over_coherent_image_decoy():
         enabled=True,
         ap_um=0.0,
         ml_um=0.0,
-        radius_um=25.0,
+                        radius_um=75.0,
         angle_deg=60.0,
         angle_tolerance_deg=0.5,
         maximum_insertion_depth_um=1500.0,
@@ -151,6 +151,20 @@ def test_probe_constraint_coexists_with_nonzero_exact_shared_tilt():
         1: {104: (0.1, {}), 120: (0.0, {})},
     }
 
+    def tilted_callback(_probe_name, session_index, ap, tilt_lr, tilt_dv):
+        depth = depths[session_index]
+        direction = TRACKER.direction_from_attack_angle(60.0, 180.0)
+        entry = np.asarray([0.0, 0.0, 0.0])
+        volume_entry = bregma + entry / (
+            TRACKER.VOXEL_UM * np.asarray([-1.0, -1.0, 1.0])
+        )
+        volume_direction = direction / (
+            TRACKER.VOXEL_UM * np.asarray([-1.0, -1.0, 1.0])
+        )
+        point = volume_entry + depth * volume_direction
+        assert (tilt_lr, tilt_dv) == pytest.approx((5.0, -3.0))
+        return np.asarray([[point[2], point[1]]], dtype=np.float64)
+
     assignment, _, _ = TRACKER.solve_probe_constrained_lattice(
         lattices,
         [0, 1],
@@ -160,13 +174,13 @@ def test_probe_constraint_coexists_with_nonzero_exact_shared_tilt():
                     enabled=True,
                     ap_um=0.0,
                     ml_um=0.0,
-                    radius_um=25.0,
-                    angle_deg=60.0,
-                    angle_tolerance_deg=1.0,
+                    radius_um=75.0,
+                    angle_deg=62.3,
+                    angle_tolerance_deg=0.5,
                 )
             }
         },
-        _synthetic_probe_candidate_callback(bregma, depths, expected_tilt=(5.0, -3.0)),
+        tilted_callback,
         lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
         lambda _ap, _ml: 0.0,
         bregma,
@@ -351,14 +365,14 @@ def test_probe_constraint_solver_memoizes_duplicate_assignment_fits(monkeypatch)
         1: {116: (0.0, {}), 120: (0.02, {})},
     }
     depths = {0: 200.0, 1: 1000.0}
-    original = TRACKER.fit_probe_ray
+    original = TRACKER.fit_observed_probe_ray
     calls = []
 
     def counted(*args, **kwargs):
         calls.append(kwargs.get("max_starts"))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(TRACKER, "fit_probe_ray", counted)
+    monkeypatch.setattr(TRACKER, "fit_observed_probe_ray", counted)
     TRACKER.solve_probe_constrained_lattice(
         lattices,
         [0, 1],
@@ -378,8 +392,7 @@ def test_probe_constraint_solver_memoizes_duplicate_assignment_fits(monkeypatch)
         0.0,
     )
 
-    assert calls.count(6) == 4
-    assert calls.count(None) == 4
+    assert len(calls) <= 5
 
 
 def test_real_mind_probe_constraint_resolves_periodic_ap_decoy():

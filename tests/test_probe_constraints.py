@@ -11,10 +11,51 @@ from source.probe_constraints import (
     direction_from_attack_angle,
     fit_probe_ray,
     insertion_plan_plane_feasibility,
+    fit_observed_probe_ray,
+    prepare_insertion_surface_entries,
     score_candidate_slice_plane,
     stereotaxic_to_volume,
     volume_to_stereotaxic_um,
 )
+
+
+def test_observed_fit_cannot_exceed_hard_attack_angle_bound():
+    constraint = ProbeInsertionConstraint(
+        True, 0.0, 0.0, 100.0, 50.0, 5.0, 2000.0
+    )
+    direction = direction_from_attack_angle(55.7, 180.0)
+    observations = {"slice": np.asarray([200.0 * direction, 1000.0 * direction])}
+    with pytest.raises(InfeasibleProbeConstraint, match="55.700.*45.000-55.000"):
+        fit_observed_probe_ray(observations, constraint, lambda _ap, _ml: 0.0)
+
+
+def test_observed_fit_accepts_exact_angle_boundary():
+    constraint = ProbeInsertionConstraint(
+        True, 0.0, 0.0, 100.0, 50.0, 5.0, 2000.0
+    )
+    direction = direction_from_attack_angle(55.0, 180.0)
+    observations = {"slice": np.asarray([200.0 * direction, 1000.0 * direction])}
+    fit = fit_observed_probe_ray(observations, constraint, lambda _ap, _ml: 0.0)
+    assert fit.angle_deg == pytest.approx(55.0, abs=1e-7)
+    assert fit.diagnostics["angle_slack_deg"] == pytest.approx(0.0, abs=1e-7)
+
+
+def test_candidate_planes_reuse_prepared_cortical_entries():
+    calls = []
+    constraint = ProbeInsertionConstraint(True, 0.0, 0.0, 250.0, 50.0, 5.0, 2000.0)
+    surface = lambda ap, ml: calls.append((ap, ml)) or 0.0
+    entries = prepare_insertion_surface_entries(constraint, surface)
+    initial_calls = len(calls)
+    for ap_index in range(80, 121):
+        insertion_plan_plane_feasibility(
+            constraint,
+            SlicePlane(ap_index, 4.0, -3.0),
+            BREGMA,
+            SHAPE,
+            surface,
+            prepared_entries=entries,
+        )
+    assert len(calls) == initial_calls == 33
 
 
 BREGMA = np.asarray([216.0, 332.0 / 25.0, 5739.0 / 25.0])

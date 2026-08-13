@@ -57,8 +57,10 @@ from probe_constraints import (
     ProbeInsertionConstraint,
     SlicePlane,
     atlas_points_to_stereotaxic_um,
-    fit_probe_ray,
+    direction_from_attack_angle,
+    fit_observed_probe_ray,
     insertion_plan_plane_feasibility,
+    prepare_insertion_surface_entries,
     score_candidate_slice_plane,
     stereotaxic_to_volume as probe_stereotaxic_to_volume,
 )
@@ -1129,7 +1131,7 @@ def solve_probe_constrained_lattice(
 
     baseline, _ = solve_ordered_lattice(lattices, anterior_to_posterior)
     point_cache: dict[tuple[str, int, int], np.ndarray] = {}
-    fit_cache: dict[tuple[int | None, tuple[tuple[int, int], ...]], dict] = {}
+    fit_cache: dict[tuple[tuple[int, int], ...], dict] = {}
 
     def atlas_points(probe_name: str, session_index: int, ap: int) -> np.ndarray:
         key = probe_name, session_index, int(ap)
@@ -1147,7 +1149,7 @@ def solve_probe_constrained_lattice(
         return point_cache[key]
 
     def fit_assignment(assignments: dict[int, int], max_starts: int | None = None):
-        cache_key = max_starts, tuple(sorted(assignments.items()))
+        cache_key = tuple(sorted(assignments.items()))
         if cache_key in fit_cache:
             return fit_cache[cache_key]
         fits = {}
@@ -1167,11 +1169,10 @@ def solve_probe_constrained_lattice(
                 raise InfeasibleProbeConstraint(
                     f"{probe_name} needs at least two trajectory observations before its surgical constraint can be used"
                 )
-            fits[probe_name] = fit_probe_ray(
+            fits[probe_name] = fit_observed_probe_ray(
                 observations,
                 specification["constraint"],
                 surface_dv,
-                max_starts=max_starts,
             )
         fit_cache[cache_key] = fits
         return fits
@@ -1239,8 +1240,7 @@ def solve_probe_constrained_lattice(
             seeds.append(ranked)
 
     # Cover non-coherent AP corrections without enumerating the Cartesian
-    # product.  Each partial assignment is scored with the same robust probe
-    # fit used by the final solver; a bounded beam keeps the search practical.
+    # product. A bounded beam evaluates exact hard-bound observed regressions.
     ordered_sessions = sorted(
         lattices,
         key=lambda index: (len(lattices[index]), index),
@@ -1614,6 +1614,11 @@ def refine_pose_search(
             return float("nan")
         return float((inside.min() - bregma[1]) * -VOXEL_UM)
 
+    insertion_surface_entries = {
+        name: prepare_insertion_surface_entries(specification["constraint"], surface_dv)
+        for name, specification in active_probe_constraints.items()
+    }
+
     def candidate_probe_atlas_points(
         probe_name: str,
         session_index: int,
@@ -1756,6 +1761,7 @@ def refine_pose_search(
                         atlas_volume.shape,
                         surface_dv,
                         VOXEL_UM,
+                        insertion_surface_entries[name],
                     )
                     for name, specification in active_probe_constraints.items()
                 } if active_probe_constraints else {}
@@ -1839,7 +1845,7 @@ def refine_pose_search(
                 float(tilt_dv),
                 quick=quick,
             )
-            diagnostics["mode"] = "alignment_feasibility_and_observed_geometry"
+            diagnostics["mode"] = "alignment_feasibility_and_observed_geometry_hard_bounds"
             for name, value in plan_diagnostics["probes"].items():
                 diagnostics["probes"].setdefault(name, value)
             return assignments, total, diagnostics
@@ -3592,12 +3598,19 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
         constraint_group = QtWidgets.QGroupBox("Optional surgical constraints")
         constraint_layout = QtWidgets.QGridLayout(constraint_group)
-        self.use_probe_constraints = QtWidgets.QCheckBox("Use this probe's surgical constraints")
+        self.use_probe_constraints = QtWidgets.QCheckBox("Use for the next automatic slice alignment")
         self.use_probe_constraints.setToolTip(
             "Restrict automatic slice alignment using the planned bregma-centred insertion target and "
-            "angle/depth limits. These values do not pull the final observed trajectory fit."
+            "angle/depth limits. Changes take effect only after Auto-align current/all is run again; "
+            "they never modify an existing alignment or pull the later observed trajectory regression."
         )
         constraint_layout.addWidget(self.use_probe_constraints, 0, 0, 1, 6)
+        self.probe_constraint_scope = QtWidgets.QLabel(
+            "Alignment constraint only — edit values, then rerun Auto-align current or Auto-align all."
+        )
+        self.probe_constraint_scope.setStyleSheet("color:#7fbbe8;")
+        self.probe_constraint_scope.setWordWrap(True)
+        constraint_layout.addWidget(self.probe_constraint_scope, 1, 0, 1, 6)
 
         self.insertion_ap_um = QtWidgets.QSpinBox()
         self.insertion_ml_um = QtWidgets.QSpinBox()
@@ -3620,12 +3633,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.insertion_radius_um.setToolTip(
             "Allowed radial uncertainty around the planned AP/ML insertion coordinate."
         )
-        constraint_layout.addWidget(QtWidgets.QLabel("Target AP"), 1, 0)
-        constraint_layout.addWidget(self.insertion_ap_um, 1, 1)
-        constraint_layout.addWidget(QtWidgets.QLabel("Target ML"), 1, 2)
-        constraint_layout.addWidget(self.insertion_ml_um, 1, 3)
-        constraint_layout.addWidget(QtWidgets.QLabel("Radius"), 1, 4)
-        constraint_layout.addWidget(self.insertion_radius_um, 1, 5)
+        constraint_layout.addWidget(QtWidgets.QLabel("Target AP"), 2, 0)
+        constraint_layout.addWidget(self.insertion_ap_um, 2, 1)
+        constraint_layout.addWidget(QtWidgets.QLabel("Target ML"), 2, 2)
+        constraint_layout.addWidget(self.insertion_ml_um, 2, 3)
+        constraint_layout.addWidget(QtWidgets.QLabel("Radius"), 2, 4)
+        constraint_layout.addWidget(self.insertion_radius_um, 2, 5)
 
         self.attack_angle_deg = QtWidgets.QDoubleSpinBox()
         self.attack_angle_tolerance_deg = QtWidgets.QDoubleSpinBox()
@@ -3638,10 +3651,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             control.setToolTip("Probe angle: 0 degrees is completely horizontal and 90 degrees is vertical.")
         self.attack_angle_deg.setValue(90.0)
         self.attack_angle_tolerance_deg.setValue(5.0)
-        constraint_layout.addWidget(QtWidgets.QLabel("Attack angle (0 horizontal / 90 vertical)"), 2, 0)
-        constraint_layout.addWidget(self.attack_angle_deg, 2, 1)
-        constraint_layout.addWidget(QtWidgets.QLabel("+/-"), 2, 2)
-        constraint_layout.addWidget(self.attack_angle_tolerance_deg, 2, 3)
+        constraint_layout.addWidget(QtWidgets.QLabel("Attack angle (0 horizontal / 90 vertical)"), 3, 0)
+        constraint_layout.addWidget(self.attack_angle_deg, 3, 1)
+        constraint_layout.addWidget(QtWidgets.QLabel("+/-"), 3, 2)
+        constraint_layout.addWidget(self.attack_angle_tolerance_deg, 3, 3)
 
         self.limit_insertion_depth = QtWidgets.QCheckBox("Tighter planned depth")
         self.max_insertion_depth_um = QtWidgets.QSpinBox()
@@ -3656,13 +3669,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         self.limit_insertion_depth.setToolTip(depth_help)
         self.max_insertion_depth_um.setToolTip(depth_help)
-        constraint_layout.addWidget(self.limit_insertion_depth, 2, 4)
-        constraint_layout.addWidget(self.max_insertion_depth_um, 2, 5)
+        constraint_layout.addWidget(self.limit_insertion_depth, 3, 4)
+        constraint_layout.addWidget(self.max_insertion_depth_um, 3, 5)
 
         self.probe_fit_summary = QtWidgets.QLabel("Fit: add at least two trajectory points")
         self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
         self.probe_fit_summary.setWordWrap(True)
-        constraint_layout.addWidget(self.probe_fit_summary, 3, 0, 1, 6)
+        constraint_layout.addWidget(self.probe_fit_summary, 4, 0, 1, 6)
         for column in (1, 3, 5):
             constraint_layout.setColumnStretch(column, 1)
         probe_layout.addWidget(constraint_group, 3, 0, 1, 4)
@@ -4455,7 +4468,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._update_probe_constraint_controls()
         self._update_probe_fit_summary()
         self.status.setText(
-            f"{probe_name} surgical constraint updated; it will restrict the next automatic slice alignment."
+            f"{probe_name} surgical constraint updated. Existing results are unchanged; rerun Auto-align current/all to apply it."
         )
         self._refresh_3d()
 
@@ -4533,9 +4546,30 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         stereo_deep_direction /= np.linalg.norm(stereo_deep_direction)
         angle = np.degrees(np.arcsin(np.clip(abs(stereo_deep_direction[1]), 0.0, 1.0)))
         depth = float(np.linalg.norm(stereo_deep - stereo_entry))
+        constraint = self._probe_constraint(probe_name)
+        constrained_sessions = [
+            session
+            for session in self.sessions
+            if (geometry := (session.auto_alignment_diagnostics or {}).get(
+                "probe_geometry_constraints", {}
+            )).get("applied")
+            and probe_name in geometry.get("probes", {})
+        ]
+        if constraint is not None and constraint.enabled:
+            applied = bool(constrained_sessions) and not any(
+                (session.auto_alignment_diagnostics or {}).get("alignment_run_stale", False)
+                for session in constrained_sessions
+            )
+            lifecycle = (
+                " | surgical constraint applied by auto-alignment"
+                if applied
+                else " | surgical constraint pending — rerun Auto-align"
+            )
+        else:
+            lifecycle = ""
         self.probe_fit_summary.setText(
             f"Observed fit: AP {stereo_entry[0]:+.0f} um | ML {stereo_entry[2]:+.0f} um | "
-            f"angle {angle:.1f} deg | marked depth {depth:.0f} um | {len(points)} points"
+            f"angle {angle:.1f} deg | marked depth {depth:.0f} um | {len(points)} points{lifecycle}"
         )
 
     @staticmethod
@@ -5526,6 +5560,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             constraint_text = f" | AP search shift {search_shift:.0f} um" if search_shift >= 0.5 else ""
             scale_text = f" | surface scale {float(diagnostics.get('surface_scale', 1.0)):.3f}x"
             reasons = alignment_review_reasons(disagreement, diagnostics)
+            surgical = diagnostics.get("probe_geometry_constraints", {})
+            surgical_text = ""
+            if surgical.get("applied"):
+                surgical_text = " | surgical constraints applied"
+                if diagnostics.get("alignment_run_stale", False):
+                    surgical_text = " | surgical constraints changed — RERUN AUTO-ALIGN"
             nonlinear = diagnostics.get("nonlinear_refinement", {})
             nonlinear_status = nonlinear.get("status", "not-run")
             nonlinear_text = {
@@ -5542,7 +5582,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.alignment_summary.setText(
                 f"{session.auto_alignment_engine} {scope}: AP {ap_um:+d} um | L-R {session.atlas_tilt_ml_deg:+.1f}° | "
                 f"D-V {session.atlas_tilt_dv_deg:+.1f}°{scale_text}{constraint_text}{disagreement_text}"
-                f"{nonlinear_text}{review_text}"
+                f"{surgical_text}{nonlinear_text}{review_text}"
             )
         else:
             self.alignment_summary.setText("Auto-align: not run")
@@ -6378,6 +6418,39 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     else dict(deepslice_component["ensemble_disagreement"]),
                 )
             )
+
+        for probe_name, constraint in self.probe_constraints.items():
+            if not constraint.enabled:
+                continue
+            observations = {
+                session.name: volume_to_stereotaxic_um(
+                    np.asarray(probe_updates[probe_name][1], dtype=np.float64),
+                    self.bregma_voxel,
+                )
+                for session, _, _, _, _, diagnostics, probe_updates, *_ in staged
+                if probe_name in probe_updates
+                and probe_updates[probe_name][1]
+                and diagnostics.get("probe_geometry_constraints", {})
+                .get("probes", {})
+                .get(probe_name, {})
+                .get("trajectory_observations_used", True)
+            }
+            if sum(len(points) for points in observations.values()) < 2:
+                continue
+            observed_fit = fit_observed_probe_ray(
+                observations,
+                self._effective_probe_constraint(constraint),
+                self._surface_dv_um,
+            )
+            for _, _, _, _, _, diagnostics, _, *_ in staged:
+                geometry = diagnostics.get("probe_geometry_constraints", {})
+                if geometry.get("applied") and probe_name in geometry.get("probes", {}):
+                    geometry["probes"][probe_name]["post_alignment_observed_fit"] = {
+                        "entry_ap_dv_ml_um": observed_fit.entry_ap_dv_ml_um.tolist(),
+                        "direction_ap_dv_ml": observed_fit.direction_ap_dv_ml.tolist(),
+                        "angle_deg": float(observed_fit.angle_deg),
+                        "diagnostics": observed_fit.diagnostics,
+                    }
 
         for (
             session,

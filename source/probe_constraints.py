@@ -4,7 +4,7 @@ from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import brentq, least_squares
 
 
 AXIS_SIGN_AP_DV_ML = np.asarray((-1.0, -1.0, 1.0), dtype=np.float64)
@@ -82,20 +82,13 @@ def insertion_plan_plane_feasibility(
     volume_shape: Sequence[int],
     surface_dv: Callable[[float, float], float],
     voxel_um: float = 25.0,
+    prepared_entries: np.ndarray | None = None,
 ) -> dict:
     """Test whether any allowed insertion ray can intersect a candidate slice plane."""
     angle_low, angle_high = _constraint_bounds(constraint)
     maximum_depth = float(constraint.maximum_insertion_depth_um or 10000.0)
-    phases = np.linspace(0.0, 2.0 * np.pi, 17)[:-1]
-    entries = [(constraint.ap_um, constraint.ml_um)]
-    for fraction in (0.5, 1.0):
-        entries.extend(
-            (
-                constraint.ap_um + constraint.radius_um * fraction * np.cos(phase),
-                constraint.ml_um + constraint.radius_um * fraction * np.sin(phase),
-            )
-            for phase in phases
-        )
+    if prepared_entries is None:
+        prepared_entries = prepare_insertion_surface_entries(constraint, surface_dv)
 
     tangent_lr = np.tan(np.deg2rad(float(plane.tilt_lr_deg)))
     tangent_dv = np.tan(np.deg2rad(float(plane.tilt_dv_deg)))
@@ -117,10 +110,7 @@ def insertion_plan_plane_feasibility(
 
     required_depths = []
     valid_entries = 0
-    for ap_um, ml_um in entries:
-        dv_um = float(surface_dv(float(ap_um), float(ml_um)))
-        if not np.isfinite(dv_um):
-            continue
+    for ap_um, dv_um, ml_um in np.asarray(prepared_entries, dtype=np.float64).reshape(-1, 3):
         valid_entries += 1
         signed_distance = float(normal @ np.asarray([ap_um, dv_um, ml_um]) + constant)
         if abs(signed_distance) <= float(voxel_um) / 2.0:
@@ -136,6 +126,135 @@ def insertion_plan_plane_feasibility(
         "maximum_depth_um": maximum_depth,
         "valid_surface_entry_samples": int(valid_entries),
     }
+
+
+def prepare_insertion_surface_entries(
+    constraint: ProbeInsertionConstraint,
+    surface_dv: Callable[[float, float], float],
+) -> np.ndarray:
+    """Sample the insertion disk once; candidate planes reuse these surface points."""
+    _constraint_bounds(constraint)
+    phases = np.linspace(0.0, 2.0 * np.pi, 17)[:-1]
+    entries = [(constraint.ap_um, constraint.ml_um)]
+    for fraction in (0.5, 1.0):
+        entries.extend(
+            (
+                constraint.ap_um + constraint.radius_um * fraction * np.cos(phase),
+                constraint.ml_um + constraint.radius_um * fraction * np.sin(phase),
+            )
+            for phase in phases
+        )
+    sampled = [
+        (float(ap), float(dv), float(ml))
+        for ap, ml in entries
+        if np.isfinite(dv := surface_dv(float(ap), float(ml)))
+    ]
+    return np.asarray(sampled, dtype=np.float64).reshape(-1, 3)
+
+
+def fit_observed_probe_ray(
+    observations_by_slice: Mapping[Hashable, np.ndarray],
+    constraint: ProbeInsertionConstraint,
+    surface_dv: Callable[[float, float], float],
+    *,
+    robust_scale_um: float = 50.0,
+    axial_tolerance_um: float = 25.0,
+) -> ProbeRayFit:
+    """Validate the ordinary displayed regression itself against hard surgical bounds."""
+    angle_low, angle_high = _constraint_bounds(constraint)
+    groups = {
+        label: np.asarray(values, dtype=np.float64).reshape(-1, 3)
+        for label, values in observations_by_slice.items()
+        if len(values)
+    }
+    points = np.concatenate(list(groups.values())) if groups else np.empty((0, 3))
+    if len(points) < 2 or not np.isfinite(points).all():
+        raise InfeasibleProbeConstraint("At least two finite probe observations are required")
+    center = points.mean(axis=0)
+    _, _, axes = np.linalg.svd(points - center, full_matrices=False)
+    direction = axes[0]
+    if direction[1] > 0.0:
+        direction = -direction
+    direction /= np.linalg.norm(direction)
+    angle = attack_angle_deg(direction)
+    tolerance = 1e-7
+    if angle < angle_low - tolerance or angle > angle_high + tolerance:
+        raise InfeasibleProbeConstraint(
+            f"Observed attack angle {angle:.3f} deg is outside the allowed "
+            f"{angle_low:.3f}-{angle_high:.3f} deg range"
+        )
+
+    projected = (points - center) @ direction
+    shallowest = float(projected.min())
+    maximum_depth = float(constraint.maximum_insertion_depth_um or 10000.0)
+    parameters = np.linspace(shallowest - maximum_depth, shallowest + axial_tolerance_um, 257)
+
+    def surface_offset(parameter: float) -> float:
+        point = center + float(parameter) * direction
+        surface = float(surface_dv(float(point[0]), float(point[2])))
+        return float(point[1] - surface) if np.isfinite(surface) else float("nan")
+
+    offsets = np.asarray([surface_offset(value) for value in parameters])
+    entries = []
+    for first, second, value_first, value_second in zip(
+        parameters[:-1], parameters[1:], offsets[:-1], offsets[1:]
+    ):
+        if not np.isfinite(value_first) or not np.isfinite(value_second):
+            continue
+        if value_first == 0.0:
+            entries.append(center + first * direction)
+        elif value_first * value_second < 0.0:
+            root = brentq(surface_offset, float(first), float(second), xtol=1e-6)
+            entries.append(center + root * direction)
+    if not entries:
+        raise InfeasibleProbeConstraint("Observed trajectory does not intersect the valid cortical surface")
+    entry = min(entries, key=lambda value: abs(float(((points - value) @ direction).min())))
+    disk_distance = float(np.hypot(entry[0] - constraint.ap_um, entry[2] - constraint.ml_um))
+    if disk_distance > constraint.radius_um + 1e-6:
+        raise InfeasibleProbeConstraint(
+            f"Observed cortical entry is {disk_distance:.1f} um from target, outside the "
+            f"allowed {constraint.radius_um:.1f} um radius"
+        )
+    residuals, axial = _ray_residuals(points, entry, direction, constraint.maximum_insertion_depth_um)
+    distances = np.linalg.norm(residuals, axis=1)
+    if np.any(axial < -axial_tolerance_um):
+        raise InfeasibleProbeConstraint("Observed points extend above the planned cortical entry")
+    if constraint.maximum_insertion_depth_um is not None and np.any(
+        axial > constraint.maximum_insertion_depth_um + axial_tolerance_um
+    ):
+        raise InfeasibleProbeConstraint("Observed points exceed the allowed insertion depth")
+    if np.median(distances) > 3.0 * robust_scale_um:
+        raise InfeasibleProbeConstraint("Observed points do not form one feasible probe trajectory")
+    for label, group in groups.items():
+        group_residuals, group_axial = _ray_residuals(
+            group, entry, direction, constraint.maximum_insertion_depth_um
+        )
+        if not np.any(
+            (np.linalg.norm(group_residuals, axis=1) <= 3.0 * robust_scale_um)
+            & (group_axial >= -axial_tolerance_um)
+            & (group_axial <= maximum_depth + axial_tolerance_um)
+        ):
+            raise InfeasibleProbeConstraint(f"Slice {label} has no observation on the feasible segment")
+    diagnostics = {
+        "feasible": True,
+        "fit_kind": "ordinary_observed_regression_hard_bounds",
+        "angle_range_deg": [float(angle_low), float(angle_high)],
+        "entry_disk_distance_um": disk_distance,
+        "entry_disk_slack_um": float(constraint.radius_um - disk_distance),
+        "angle_slack_deg": float(min(angle - angle_low, angle_high - angle)),
+        "maximum_insertion_depth_um": constraint.maximum_insertion_depth_um,
+        "axial_min_um": float(axial.min()),
+        "axial_max_um": float(axial.max()),
+        "median_orthogonal_residual_um": float(np.median(distances)),
+    }
+    return ProbeRayFit(
+        entry,
+        direction,
+        float(angle),
+        float(np.rad2deg(np.arctan2(direction[2], direction[0])) % 360.0),
+        float(np.mean((distances / robust_scale_um) ** 2)),
+        diagnostics,
+    )
 
 
 def attack_angle_deg(direction_ap_dv_ml: np.ndarray) -> float:
