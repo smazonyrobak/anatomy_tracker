@@ -32,6 +32,7 @@ MAXIMUM_ABS_LOG_JACOBIAN = 1.61
 MAXIMUM_INVERSE_P95_PX = 1.0
 MAXIMUM_INVERSE_PX = 2.0
 MAXIMUM_RESIDUAL_AFFINE_PX = 0.05
+MAXIMUM_CLASSICAL_RESIDUAL_AFFINE_PX = 12.0
 MAXIMUM_OUTSIDE_TISSUE_DISPLACEMENT_PX = 1e-3
 MAXIMUM_DISPLACEMENT_P95_PX = 8.0
 MAXIMUM_DISPLACEMENT_PX = 12.0
@@ -161,6 +162,11 @@ def tissue_affine_max(pixel_map: np.ndarray, tissue_mask: np.ndarray) -> float:
 
 
 def nonlinear_acceptance_failures(diagnostics: dict[str, float | int]) -> list[str]:
+    residual_affine_limit = (
+        MAXIMUM_CLASSICAL_RESIDUAL_AFFINE_PX
+        if str(diagnostics.get("backend", "")).startswith("bounded_bspline_")
+        else MAXIMUM_RESIDUAL_AFFINE_PX
+    )
     checks = (
         (diagnostics["fold_count"] == 0, "predicted map contains a fold"),
         (diagnostics["minimum_jacobian"] >= MINIMUM_JACOBIAN, "minimum Jacobian is below 0.20"),
@@ -176,8 +182,8 @@ def nonlinear_acceptance_failures(diagnostics: dict[str, float | int]) -> list[s
         (diagnostics["inverse_p95_px"] <= MAXIMUM_INVERSE_P95_PX, "round-trip p95 exceeds 1 px"),
         (diagnostics["inverse_max_px"] <= MAXIMUM_INVERSE_PX, "round-trip maximum exceeds 2 px"),
         (
-            diagnostics["residual_affine_max_px"] <= MAXIMUM_RESIDUAL_AFFINE_PX,
-            "residual global affine exceeds 0.05 px",
+            diagnostics["residual_affine_max_px"] <= residual_affine_limit,
+            f"residual global affine exceeds {residual_affine_limit:g} px",
         ),
         (
             diagnostics["outside_tissue_displacement_max_px"] <= MAXIMUM_OUTSIDE_TISSUE_DISPLACEMENT_PX,

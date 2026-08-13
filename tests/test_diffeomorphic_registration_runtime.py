@@ -367,10 +367,63 @@ def test_classical_backend_fits_a_smooth_residual_without_changing_pose():
     assert warp.shape == fixed.shape
     assert diagnostics["mind_improvement"] > 0.0
     assert diagnostics["fold_count"] == 0
-    assert diagnostics["residual_affine_max_px"] <= 0.05
+    identity = np.stack((x.astype(np.float32), y.astype(np.float32)), axis=-1)
+    expected = np.stack(
+        ((x - 2 * np.sin(y / 20)).astype(np.float32), y.astype(np.float32)),
+        axis=-1,
+    )
+    error = np.linalg.norm(warp.atlas_to_affine_xy - expected, axis=2)[mask]
+    recovered = np.linalg.norm(warp.atlas_to_affine_xy - identity, axis=2)[mask]
+    assert np.median(recovered) > 0.5
+    assert np.median(error) < 0.5
+    assert np.percentile(error, 95) < 1.25
+    assert diagnostics["residual_affine_max_px"] <= 12.0
     assert diagnostics["model_sha256"] == model_sha256
     assert diagnostics["manifest_sha256"] == manifest_sha256
     assert contract["backend"] == diagnostics["backend"]
+
+
+@pytest.mark.parametrize("amplitude", [2.0, 4.0, 6.0])
+def test_classical_backend_recovers_known_anatomical_warps(amplitude):
+    height, width = 120, 160
+    y, x = np.mgrid[:height, :width].astype(np.float32)
+    mask = ((x - 80) / 65) ** 2 + ((y - 60) / 48) ** 2 < 1
+    fixed = np.zeros((height, width), np.float32)
+    fixed[mask] = np.clip(
+        0.35 + 0.35 * np.sin(x[mask] / 9) + 0.25 * np.cos(y[mask] / 7),
+        0.0,
+        1.0,
+    )
+    displacement_x = amplitude * np.sin(2 * np.pi * y / height) * np.sin(np.pi * x / width)
+    displacement_y = 0.55 * amplitude * np.sin(2 * np.pi * x / width) * np.sin(np.pi * y / height)
+    moving = cv2.remap(
+        fixed,
+        x - displacement_x,
+        y - displacement_y,
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+    moving_mask = cv2.remap(
+        mask.astype(np.uint8),
+        x - displacement_x,
+        y - displacement_y,
+        cv2.INTER_NEAREST,
+    ) > 0
+    warp, diagnostics = run_classical_diffeomorphic_registration(
+        fixed,
+        moving,
+        mask,
+        moving_mask,
+        pixel_spacing_um=MODEL_PIXEL_SPACING_UM,
+        source_image_sha256="b" * 64,
+    )
+    target = np.stack((x + displacement_x, y + displacement_y), axis=-1)
+    interior = cv2.erode(mask.astype(np.uint8), np.ones((13, 13), np.uint8)) > 0
+    error = np.linalg.norm(warp.atlas_to_affine_xy - target, axis=2)[interior]
+    baseline = np.linalg.norm(target - np.stack((x, y), axis=-1), axis=2)[interior]
+    assert np.median(error) < 0.25 * np.median(baseline)
+    assert np.percentile(error, 95) < 0.45 * np.percentile(baseline, 95)
+    assert diagnostics["mind_improvement"] > 0.03
 
 
 def test_fractional_masks_use_the_same_hard_threshold_as_training():

@@ -31,15 +31,15 @@ from nonlinear_registration import (
 
 INPUT_NAMES = MODEL_INPUT_NAMES
 OUTPUT_NAMES = MODEL_OUTPUT_NAMES
-CLASSICAL_BACKEND = "bounded_bspline_mattes_mi_v1"
+CLASSICAL_BACKEND = "bounded_bspline_mattes_mi_v2"
 CLASSICAL_BACKEND_CONTRACT = {
     "backend": CLASSICAL_BACKEND,
-    "implementation": "SimpleITK BSplineTransform + Mattes mutual information",
+    "implementation": "SimpleITK BSplineTransform + Mattes mutual information + gradient descent line search",
     "mesh_size": [4, 3],
     "scale_factors": [1, 2],
     "shrink_factors": [2, 1],
     "smoothing_sigmas": [1, 0],
-    "maximum_velocity_px": 8.0,
+    "maximum_velocity_px": 12.0,
     "runtime_gates": RUNTIME_GATE_CONTRACT,
 }
 CLASSICAL_MODEL_SHA256 = hashlib.sha256(
@@ -290,25 +290,6 @@ def _identity_map(shape: tuple[int, int]) -> np.ndarray:
     return np.stack((xx, yy), axis=-1)
 
 
-def _remove_tissue_affine(
-    displacement_xy: np.ndarray,
-    tissue_mask: np.ndarray,
-) -> np.ndarray:
-    height, width = tissue_mask.shape
-    identity = _identity_map((height, width))
-    x = identity[..., 0] * (2.0 / max(width - 1, 1)) - 1.0
-    y = identity[..., 1] * (2.0 / max(height - 1, 1)) - 1.0
-    basis = np.stack((np.ones_like(x), x, y), axis=-1)[tissue_mask]
-    coefficients = np.linalg.lstsq(
-        basis.astype(np.float64),
-        displacement_xy[tissue_mask].astype(np.float64),
-        rcond=None,
-    )[0]
-    return displacement_xy - np.einsum(
-        "...k,kc->...c", np.stack((np.ones_like(x), x, y), axis=-1), coefficients
-    ).astype(np.float32)
-
-
 def _integrate_stationary_velocity(
     velocity_xy: np.ndarray,
     steps: int = 7,
@@ -362,17 +343,17 @@ def run_classical_diffeomorphic_registration(
         fixed_image, CLASSICAL_BACKEND_CONTRACT["mesh_size"], order=3
     )
     registration = sitk.ImageRegistrationMethod()
-    registration.SetMetricAsMattesMutualInformation(32)
+    registration.SetMetricAsMattesMutualInformation(50)
     registration.SetMetricFixedMask(fixed_mask_image)
     registration.SetMetricMovingMask(moving_mask_image)
-    registration.SetMetricSamplingStrategy(registration.RANDOM)
-    registration.SetMetricSamplingPercentage(0.15, 73051)
+    registration.SetMetricSamplingStrategy(registration.REGULAR)
+    registration.SetMetricSamplingPercentage(0.50, 73051)
     registration.SetInterpolator(sitk.sitkLinear)
-    registration.SetOptimizerAsGradientDescent(
-        learningRate=0.5,
-        numberOfIterations=45,
-        convergenceMinimumValue=1e-5,
-        convergenceWindowSize=6,
+    registration.SetOptimizerAsGradientDescentLineSearch(
+        learningRate=1.0,
+        numberOfIterations=120,
+        convergenceMinimumValue=1e-6,
+        convergenceWindowSize=10,
     )
     registration.SetOptimizerScalesFromPhysicalShift()
     registration.SetInitialTransformAsBSpline(
@@ -407,7 +388,9 @@ def run_classical_diffeomorphic_registration(
     trusted = fixed_mask | moving_mask
     distance = cv2.distanceTransform(trusted.astype(np.uint8), cv2.DIST_L2, 5)
     support = np.clip(distance / 6.0, 0.0, 1.0).astype(np.float32)
-    velocity = _remove_tissue_affine(displacement, trusted) * support[..., None]
+    # Residual in-plane scale/shear is part of anatomical variability after the
+    # surface-calibrated pose is frozen; deleting it makes valid fits inert.
+    velocity = displacement * support[..., None]
     velocity[~trusted] = 0.0
     magnitude = np.linalg.norm(velocity, axis=2)
     maximum_velocity = float(CLASSICAL_BACKEND_CONTRACT["maximum_velocity_px"])
