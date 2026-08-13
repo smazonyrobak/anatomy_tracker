@@ -365,14 +365,21 @@ def test_probe_constraint_solver_memoizes_duplicate_assignment_fits(monkeypatch)
         1: {116: (0.0, {}), 120: (0.02, {})},
     }
     depths = {0: 200.0, 1: 1000.0}
-    original = TRACKER.fit_observed_probe_ray
-    calls = []
+    original_search = TRACKER.fit_probe_ray
+    original_exact = TRACKER.fit_observed_probe_ray
+    search_calls = []
+    exact_calls = []
 
-    def counted(*args, **kwargs):
-        calls.append(kwargs.get("max_starts"))
-        return original(*args, **kwargs)
+    def counted_search(*args, **kwargs):
+        search_calls.append(kwargs.get("max_starts"))
+        return original_search(*args, **kwargs)
 
-    monkeypatch.setattr(TRACKER, "fit_observed_probe_ray", counted)
+    def counted_exact(*args, **kwargs):
+        exact_calls.append(True)
+        return original_exact(*args, **kwargs)
+
+    monkeypatch.setattr(TRACKER, "fit_probe_ray", counted_search)
+    monkeypatch.setattr(TRACKER, "fit_observed_probe_ray", counted_exact)
     TRACKER.solve_probe_constrained_lattice(
         lattices,
         [0, 1],
@@ -392,7 +399,53 @@ def test_probe_constraint_solver_memoizes_duplicate_assignment_fits(monkeypatch)
         0.0,
     )
 
-    assert len(calls) <= 5
+    assert search_calls and set(search_calls) == {6}
+    assert exact_calls
+
+
+def test_probe_lattice_moves_entry_within_radius_instead_of_rejecting_ordinary_line():
+    bregma = np.asarray([100.0, 20.0, 80.0])
+    lattices = {
+        0: {83: (0.0, {}), 84: (0.1, {})},
+        1: {83: (0.0, {}), 84: (0.1, {})},
+    }
+
+    def callback(_probe_name, session_index, _ap, _lr, _dv):
+        depth = 250.0 + 700.0 * session_index
+        return np.asarray(
+            [[bregma[2], bregma[1] + depth / TRACKER.VOXEL_UM]],
+            dtype=np.float64,
+        )
+
+    assignment, _, diagnostics = TRACKER.solve_probe_constrained_lattice(
+        lattices,
+        [],
+        {
+            "imec0": {
+                "constraint": TRACKER.ProbeInsertionConstraint(
+                    enabled=True,
+                    ap_um=0.0,
+                    ml_um=0.0,
+                    radius_um=400.0,
+                    angle_deg=90.0,
+                    angle_tolerance_deg=0.0,
+                    maximum_insertion_depth_um=1500.0,
+                )
+            }
+        },
+        callback,
+        lambda _ap, _lr, _dv: np.ones((120, 160), dtype=bool),
+        lambda _ap, _ml: 0.0,
+        bregma,
+        (220, 120, 160),
+        0.0,
+        0.0,
+    )
+
+    fit = diagnostics["probes"]["imec0"]
+    assert assignment == {0: 84, 1: 84}
+    assert fit["diagnostics"]["entry_disk_distance_um"] <= 400.0 + 1e-6
+    assert fit["entry_ap_dv_ml_um"][0] == pytest.approx(400.0, abs=1.0)
 
 
 def test_real_mind_probe_constraint_resolves_periodic_ap_decoy():

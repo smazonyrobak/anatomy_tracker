@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import pickle
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -58,6 +60,7 @@ from probe_constraints import (
     SlicePlane,
     atlas_points_to_stereotaxic_um,
     direction_from_attack_angle,
+    fit_probe_ray,
     fit_observed_probe_ray,
     insertion_plan_plane_feasibility,
     prepare_insertion_surface_entries,
@@ -102,6 +105,38 @@ MIND_AP_PRIOR_WEIGHT = 0.001
 MIND_TILT_PRIOR_WEIGHT = 0.0005
 MIND_SURFACE_WEIGHT = 0.05
 MIND_PROBE_GEOMETRY_WEIGHT = 1.0
+SESSION_ARCHIVE_FORMAT = "Proprietary Anatomy Tracker session"
+SESSION_ARCHIVE_VERSION = 1
+SESSION_STATE_FIELDS = (
+    "rotation_deg",
+    "flip_horizontal",
+    "flip_vertical",
+    "curve_points",
+    "atlas_plane",
+    "atlas_index",
+    "atlas_tilt_ml_deg",
+    "atlas_tilt_dv_deg",
+    "atlas_landmarks",
+    "slice_landmarks",
+    "brain_outline_points",
+    "brain_outline_segment_starts",
+    "brain_outline_closed",
+    "brain_brush_strokes",
+    "auto_alignment_score",
+    "auto_alignment_global",
+    "auto_alignment_extent",
+    "auto_alignment_method",
+    "auto_alignment_engine",
+    "auto_alignment_scope",
+    "auto_alignment_run_id",
+    "manual_refined_from_run_id",
+    "auto_alignment_diagnostics",
+    "alignment_source_sha256",
+    "deepslice_raw_ensemble_ouv",
+    "deepslice_version",
+    "deepslice_model_hashes",
+    "deepslice_ensemble_disagreement",
+)
 SURFACE_EDIT_ACTIONS = {"brain_outline_edit", "brain_outline_delete", "brain_outline_erase", "brain_outline_insert"}
 SURFACE_ACTIONS = SURFACE_EDIT_ACTIONS | {"brain_outline", "brain_brush"}
 CHANNEL_KEY_COLUMNS = ["probe_name", "probe_channel_number"]
@@ -207,6 +242,20 @@ def file_sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def json_value(value):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {str(key): json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_value(item) for item in value]
+    return value
 
 
 def prepare_pose_inputs(
@@ -1182,7 +1231,7 @@ def solve_probe_constrained_lattice(
 
     baseline, _ = solve_ordered_lattice(lattices, anterior_to_posterior)
     point_cache: dict[tuple[str, int, int], np.ndarray] = {}
-    fit_cache: dict[tuple[tuple[int, int], ...], dict] = {}
+    fit_cache: dict[tuple[tuple[tuple[int, int], ...], bool, int | None], dict] = {}
 
     def atlas_points(probe_name: str, session_index: int, ap: int) -> np.ndarray:
         key = probe_name, session_index, int(ap)
@@ -1199,8 +1248,13 @@ def solve_probe_constrained_lattice(
             ).reshape(-1, 2)
         return point_cache[key]
 
-    def fit_assignment(assignments: dict[int, int], max_starts: int | None = None):
-        cache_key = tuple(sorted(assignments.items()))
+    def fit_assignment(
+        assignments: dict[int, int],
+        *,
+        search_fit: bool,
+        max_starts: int | None = None,
+    ):
+        cache_key = (tuple(sorted(assignments.items())), search_fit, max_starts)
         if cache_key in fit_cache:
             return fit_cache[cache_key]
         fits = {}
@@ -1220,11 +1274,19 @@ def solve_probe_constrained_lattice(
                 raise InfeasibleProbeConstraint(
                     f"{probe_name} needs at least two trajectory observations before its surgical constraint can be used"
                 )
-            fits[probe_name] = fit_observed_probe_ray(
-                observations,
-                specification["constraint"],
-                surface_dv,
-            )
+            if search_fit:
+                fits[probe_name] = fit_probe_ray(
+                    observations,
+                    specification["constraint"],
+                    surface_dv,
+                    max_starts=max_starts,
+                )
+            else:
+                fits[probe_name] = fit_observed_probe_ray(
+                    observations,
+                    specification["constraint"],
+                    surface_dv,
+                )
         fit_cache[cache_key] = fits
         return fits
 
@@ -1327,7 +1389,7 @@ def solve_probe_constrained_lattice(
                 geometry = 0.0
                 if len(assignment) == len(lattices):
                     try:
-                        fits = fit_assignment(assignment, max_starts=6)
+                        fits = fit_assignment(assignment, search_fit=True, max_starts=6)
                     except InfeasibleProbeConstraint:
                         continue
                     geometry = MIND_PROBE_GEOMETRY_WEIGHT * float(
@@ -1355,7 +1417,7 @@ def solve_probe_constrained_lattice(
     failures = []
     for assignment in unique_seeds:
         try:
-            fits = fit_assignment(assignment, max_starts=6)
+            fits = fit_assignment(assignment, search_fit=True, max_starts=6)
         except InfeasibleProbeConstraint as exc:
             failures.append(str(exc))
             continue
@@ -1373,9 +1435,9 @@ def solve_probe_constrained_lattice(
         _, assignments, fits = min(quick_feasible, key=lambda item: item[0])
     else:
         feasible = []
-        for _, assignment, _ in sorted(quick_feasible, key=lambda item: item[0])[:4]:
+        for _, assignment, _ in sorted(quick_feasible, key=lambda item: item[0]):
             try:
-                fits = fit_assignment(assignment)
+                fits = fit_assignment(assignment, search_fit=False)
             except InfeasibleProbeConstraint as exc:
                 failures.append(str(exc))
                 continue
@@ -1384,6 +1446,8 @@ def solve_probe_constrained_lattice(
             feasible.append(
                 (structural + MIND_PROBE_GEOMETRY_WEIGHT * geometry, assignment, fits)
             )
+            if len(feasible) == 4:
+                break
         if not feasible:
             raise InfeasibleProbeConstraint(
                 "No atlas pose satisfies the enabled surgical probe constraints: "
@@ -1420,10 +1484,17 @@ def solve_probe_constrained_lattice(
             )
         if updated == assignments:
             break
-        assignments, fits = updated, fit_assignment(
-            updated,
-            max_starts=6 if quick else None,
-        )
+        try:
+            updated_fits = fit_assignment(
+                updated,
+                search_fit=quick,
+                max_starts=6 if quick else None,
+            )
+        except InfeasibleProbeConstraint:
+            # Per-slice scores can prefer a combination whose joint regression
+            # is invalid. Retain the last jointly validated solution.
+            break
+        assignments, fits = updated, updated_fits
 
     structural_total = float(sum(lattices[index][ap][0] for index, ap in assignments.items()))
     geometry_loss = float(np.mean([fit.loss for fit in fits.values()]))
@@ -1741,6 +1812,14 @@ def refine_pose_search(
     evaluated_poses = {session_index: 0 for session_index in converted}
 
     def candidates_for(session_index: int, step: int) -> list[int]:
+        if active_probe_constraints and ap_bounds is None:
+            return ap_candidate_indices(
+                converted[session_index][0],
+                atlas_volume.shape[0],
+                None,
+                step,
+                48,
+            )
         record = records_by_session[session_index]
         uncertainty = record.get("model_uncertainty", {})
         radius_um = max(
@@ -1924,9 +2003,14 @@ def refine_pose_search(
         if active_probe_constraints:
             screened_coarse = []
             constraint_failures = []
-            for _, tilt_lr, tilt_dv, _, values in sorted(
-                coarse_results, key=lambda item: item[0]
-            ):
+            # A surgical constraint must jointly choose AP and tilt. Screening
+            # only the unconstrained AP winner falsely rejects feasible poses.
+            # Search the structurally credible tilt quartile with each slice's
+            # complete coarse AP lattice, then perform the exact refinement.
+            ranked_coarse = sorted(coarse_results, key=lambda item: item[0])
+            primary_count = max(12, len(ranked_coarse) // 4)
+            for _, tilt_lr, tilt_dv, _, _ in ranked_coarse[:primary_count]:
+                values = lattice(tilt_lr, tilt_dv, coarse_candidates)
                 try:
                     assignments, total, geometry = solve_candidates(
                         values, ordered_indices, tilt_lr, tilt_dv, quick=True
@@ -1937,10 +2021,10 @@ def refine_pose_search(
                 screened_coarse.append(
                     (total, tilt_lr, tilt_dv, assignments, geometry, values)
                 )
+            # If the image-ranked tilts conflict with the surgical plan, finish
+            # the bounded grid before declaring the user's constraints infeasible.
             if not screened_coarse:
-                for _, tilt_lr, tilt_dv, _, _ in sorted(
-                    coarse_results, key=lambda item: item[0]
-                )[:8]:
+                for _, tilt_lr, tilt_dv, _, _ in ranked_coarse[primary_count:]:
                     values = lattice(tilt_lr, tilt_dv, coarse_candidates)
                     try:
                         assignments, total, geometry = solve_candidates(
@@ -3297,10 +3381,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._alignment_cancel_event: threading.Event | None = None
         self._alignment_timer: QtCore.QTimer | None = None
         self._alignment_progress: QtWidgets.QProgressDialog | None = None
+        self._session_cache_dirs: list[tempfile.TemporaryDirectory] = []
 
         self._build_ui(default_run_folder)
+        self._build_session_menu()
         if self.atlas_folder.exists():
             self.load_atlas_folder(self.atlas_folder)
+
+    def _build_session_menu(self) -> None:
+        file_menu = self.menuBar().addMenu("File")
+        self.load_session_action = file_menu.addAction("Open session...")
+        self.load_session_action.setShortcut(QtGui.QKeySequence.StandardKey.Open)
+        self.save_session_action = file_menu.addAction("Save session...")
+        self.save_session_action.setShortcut(QtGui.QKeySequence.StandardKey.Save)
+        self.load_session_action.triggered.connect(self._load_session_dialog)
+        self.save_session_action.triggered.connect(self._save_session_dialog)
 
     def _build_ui(self, default_run_folder: str | Path) -> None:
         root = QtWidgets.QWidget()
@@ -4000,6 +4095,309 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if path:
             self.run_folder.setText(path)
             self._refresh_probe_names()
+
+    def _save_session_dialog(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save complete tracker session",
+            str(self.default_slices_folder / "trajectory_session.attracker"),
+            "Anatomy Tracker session (*.attracker)",
+        )
+        if not path:
+            return
+        destination = Path(path)
+        if destination.suffix.lower() != ".attracker":
+            destination = destination.with_suffix(".attracker")
+        try:
+            self.save_session_file(destination)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Session save failed", str(exc))
+            return
+        self.status.setText(f"Saved complete session: {destination}")
+
+    def _load_session_dialog(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Open tracker session",
+            str(self.default_slices_folder),
+            "Anatomy Tracker session (*.attracker)",
+        )
+        if not path:
+            return
+        try:
+            self.load_session_file(Path(path))
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Session load failed", str(exc))
+
+    def save_session_file(self, destination: Path) -> None:
+        if self.auto_alignment_busy:
+            raise RuntimeError("Wait for automatic alignment to finish or cancel it before saving")
+        destination = Path(destination)
+        temporary = destination.with_name(destination.name + ".tmp")
+        order = [
+            {
+                "session_index": int(self.auto_slice_order.item(row).data(QtCore.Qt.ItemDataRole.UserRole)),
+                "checked": self.auto_slice_order.item(row).checkState() == QtCore.Qt.CheckState.Checked,
+            }
+            for row in range(self.auto_slice_order.count())
+        ]
+        state = {
+            "format": SESSION_ARCHIVE_FORMAT,
+            "version": SESSION_ARCHIVE_VERSION,
+            "saved_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "atlas_folder": str(self.atlas_folder),
+            "atlas_file_hashes": self.atlas_file_hashes,
+            "query_file_hash": self.query_file_hash,
+            "run_folder": self.run_folder.text(),
+            "probe_type": self.probe_type.currentText(),
+            "probe_names": [self.probe_name.itemText(index) for index in range(self.probe_name.count())],
+            "active_probe": self._active_probe_name(),
+            "probe_constraints": {
+                name: asdict(constraint) for name, constraint in self.probe_constraints.items()
+            },
+            "probe_endpoint_settings": {
+                name: [mode, depth]
+                for name, (mode, depth) in self.probe_endpoint_settings.items()
+            },
+            "current_session_index": self.current_session_index,
+            "alignment_tab": self.alignment_tabs.currentIndex(),
+            "pose_engine": self.pose_engine.currentText(),
+            "own_cnn_weight": self.own_cnn_weight.value(),
+            "limit_ap_search": self.limit_auto_align_ap.isChecked(),
+            "ap_search_min_um": self.auto_align_ap_min.value(),
+            "ap_search_max_um": self.auto_align_ap_max.value(),
+            "outline_point_count": self.outline_point_count.value(),
+            "brush_radius": self.brush_radius.value(),
+            "brightness_weighting": self.brightness_weighting.isChecked(),
+            "atlas_opacity": self.atlas_opacity.value(),
+            "brain_opacity": self.brain_opacity.value(),
+            "show_all_slice_planes": self.show_all_slice_planes.isChecked(),
+            "auto_slice_order": order,
+            "splitters": {
+                "workspace": self.workspace_splitter.sizes(),
+                "setup": self.setup_splitter.sizes(),
+                "workflow": self.workflow_splitter.sizes(),
+                "slice_workspace": self.slice_workspace_splitter.sizes(),
+            },
+            "sessions": [],
+        }
+        try:
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                with tempfile.TemporaryDirectory() as transform_folder:
+                    for index, session in enumerate(self.sessions):
+                        source = Path(session.path)
+                        if not source.is_file():
+                            raise FileNotFoundError(f"Loaded slice is missing: {source}")
+                        image_member = f"slices/{index:04d}{source.suffix.lower()}"
+                        archive.write(source, image_member)
+                        record = {
+                            "name": session.name,
+                            "original_path": str(source),
+                            "image_member": image_member,
+                            "image_sha256": file_sha256(source),
+                            "fields": {
+                                name: json_value(getattr(session, name))
+                                for name in SESSION_STATE_FIELDS
+                            },
+                            "point_history": list(session.point_history),
+                            "probe_traces": {
+                                name: json_value(asdict(trace))
+                                for name, trace in session.probe_traces.items()
+                            },
+                        }
+                        if session.brain_brush_selection_mask is not None:
+                            mask_member = f"state/{index:04d}_brush_mask.npz"
+                            payload = io.BytesIO()
+                            np.savez_compressed(
+                                payload,
+                                mask=np.asarray(session.brain_brush_selection_mask, dtype=np.uint8),
+                            )
+                            archive.writestr(mask_member, payload.getvalue())
+                            record["brush_mask_member"] = mask_member
+                        if session.slice_atlas_transform is not None:
+                            transform_member = f"state/{index:04d}_slice_atlas_transform.npz"
+                            transform_path = Path(transform_folder) / f"{index:04d}.npz"
+                            session.slice_atlas_transform.save_npz(transform_path)
+                            archive.write(transform_path, transform_member)
+                            record["transform_member"] = transform_member
+                        state["sessions"].append(record)
+                archive.writestr(
+                    "session.json",
+                    json.dumps(json_value(state), indent=2, allow_nan=False).encode("utf-8"),
+                )
+            os.replace(temporary, destination)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    def load_session_file(self, source: Path) -> None:
+        if self.auto_alignment_busy:
+            raise RuntimeError("Wait for automatic alignment to finish or cancel it before opening a session")
+        source = Path(source)
+        cache = tempfile.TemporaryDirectory(prefix="anatomy_tracker_session_")
+        cache_path = Path(cache.name)
+        try:
+            with zipfile.ZipFile(source, "r") as archive:
+                state = json.loads(archive.read("session.json"))
+                if state.get("format") != SESSION_ARCHIVE_FORMAT or state.get("version") != SESSION_ARCHIVE_VERSION:
+                    raise ValueError("Unsupported or invalid Anatomy Tracker session file")
+                saved_hashes = state.get("atlas_file_hashes", {})
+                if saved_hashes and self.atlas_file_hashes and saved_hashes != self.atlas_file_hashes:
+                    raise ValueError("This session was saved with a different atlas installation")
+                new_sessions = []
+                for index, record in enumerate(state["sessions"]):
+                    image_member = record["image_member"]
+                    suffix = Path(image_member).suffix
+                    image_path = cache_path / f"slice_{index:04d}{suffix}"
+                    with archive.open(image_member) as input_file, open(image_path, "wb") as output_file:
+                        shutil.copyfileobj(input_file, output_file)
+                    if file_sha256(image_path) != record["image_sha256"]:
+                        raise ValueError(f"Embedded slice failed its integrity check: {record['name']}")
+                    session = SliceSession(name=record["name"], path=str(image_path))
+                    self._load_session_image(session)
+                    for name, value in record["fields"].items():
+                        if name in SESSION_STATE_FIELDS:
+                            setattr(session, name, value)
+                    session.point_history = list(record.get("point_history", []))
+                    session.probe_traces = {
+                        name: ProbeTrace(**trace)
+                        for name, trace in record.get("probe_traces", {}).items()
+                    }
+                    session.adjusted = apply_curve(session.raw_display, session.curve_points)
+                    session.rotated, session.slice_transform = transform_slice_image(
+                        session.adjusted,
+                        session.rotation_deg,
+                        session.flip_horizontal,
+                        session.flip_vertical,
+                    )
+                    session.weight_image, _ = transform_slice_image(
+                        session.raw_display,
+                        session.rotation_deg,
+                        session.flip_horizontal,
+                        session.flip_vertical,
+                    )
+                    if mask_member := record.get("brush_mask_member"):
+                        with np.load(io.BytesIO(archive.read(mask_member)), allow_pickle=False) as values:
+                            session.brain_brush_selection_mask = values["mask"].astype(bool)
+                    if transform_member := record.get("transform_member"):
+                        transform_path = cache_path / f"transform_{index:04d}.npz"
+                        transform_path.write_bytes(archive.read(transform_member))
+                        session.slice_atlas_transform = SliceAtlasTransform2D.load_npz(transform_path)
+                    elif min(len(session.atlas_landmarks), len(session.slice_landmarks)) >= 3:
+                        atlas_points = np.asarray(session.atlas_landmarks, dtype=np.float64)
+                        slice_points = np.asarray(
+                            transform_points(session.slice_landmarks, session.slice_transform),
+                            dtype=np.float64,
+                        )
+                        session.slice_to_atlas_x = Rbf(
+                            slice_points[:, 0], slice_points[:, 1], atlas_points[:, 0], function="thin_plate", smooth=0.0
+                        )
+                        session.slice_to_atlas_y = Rbf(
+                            slice_points[:, 0], slice_points[:, 1], atlas_points[:, 1], function="thin_plate", smooth=0.0
+                        )
+                        session.atlas_to_slice_x = Rbf(
+                            atlas_points[:, 0], atlas_points[:, 1], slice_points[:, 0], function="thin_plate", smooth=0.0
+                        )
+                        session.atlas_to_slice_y = Rbf(
+                            atlas_points[:, 0], atlas_points[:, 1], slice_points[:, 1], function="thin_plate", smooth=0.0
+                        )
+                    new_sessions.append(session)
+        except Exception:
+            cache.cleanup()
+            raise
+
+        atlas_folder = Path(state.get("atlas_folder", ""))
+        if self.atlas_volume is None and atlas_folder.is_dir():
+            self.load_atlas_folder(atlas_folder)
+        if state.get("atlas_file_hashes") and self.atlas_file_hashes != state["atlas_file_hashes"]:
+            cache.cleanup()
+            raise ValueError("The atlas required by this session is not available")
+
+        for old_cache in self._session_cache_dirs:
+            old_cache.cleanup()
+        self._session_cache_dirs = [cache]
+        self.sessions = new_sessions
+        self.current_session_index = -1
+        self.probe_constraints = {
+            name: ProbeInsertionConstraint(**value)
+            for name, value in state.get("probe_constraints", {}).items()
+        }
+        self.probe_endpoint_settings = {
+            name: (value[0], float(value[1]))
+            for name, value in state.get("probe_endpoint_settings", {}).items()
+        }
+        self.run_folder.setText(state.get("run_folder", ""))
+        self.probe_type.blockSignals(True)
+        self.probe_type.setCurrentText(state.get("probe_type", self.probe_type.currentText()))
+        self.probe_type.blockSignals(False)
+        self.pose_engine.setCurrentText(state.get("pose_engine", self.pose_engine.currentText()))
+        self.own_cnn_weight.setValue(state.get("own_cnn_weight", self.own_cnn_weight.value()))
+        self.limit_auto_align_ap.setChecked(state.get("limit_ap_search", False))
+        self.auto_align_ap_min.setValue(state.get("ap_search_min_um", self.auto_align_ap_min.value()))
+        self.auto_align_ap_max.setValue(state.get("ap_search_max_um", self.auto_align_ap_max.value()))
+        self.outline_point_count.setValue(state.get("outline_point_count", 50))
+        self.brush_radius.setValue(state.get("brush_radius", self.brush_radius.value()))
+        self.brightness_weighting.setChecked(state.get("brightness_weighting", False))
+        self.atlas_opacity.setValue(state.get("atlas_opacity", 65))
+        self.brain_opacity.setValue(state.get("brain_opacity", 45))
+        self.show_all_slice_planes.setChecked(state.get("show_all_slice_planes", False))
+        self.alignment_tabs.setCurrentIndex(state.get("alignment_tab", 1))
+        for name, sizes in state.get("splitters", {}).items():
+            splitter = getattr(self, f"{name}_splitter", None)
+            if splitter is not None:
+                splitter.setSizes(sizes)
+
+        self.slice_list.blockSignals(True)
+        self.slice_list.clear()
+        for session in self.sessions:
+            self.slice_list.addItem(session.name, session.path)
+            self.slice_list.setItemData(
+                self.slice_list.count() - 1,
+                f"Embedded from {source}\nOriginal: {next(record['original_path'] for record in state['sessions'] if record['name'] == session.name)}",
+                QtCore.Qt.ItemDataRole.ToolTipRole,
+            )
+        self.slice_list.blockSignals(False)
+        self._update_auto_order_labels()
+        ordered = state.get("auto_slice_order", [])
+        self.auto_slice_order.blockSignals(True)
+        for target_row, item_state in enumerate(ordered):
+            source_row = next(
+                (
+                    row for row in range(self.auto_slice_order.count())
+                    if self.auto_slice_order.item(row).data(QtCore.Qt.ItemDataRole.UserRole) == item_state["session_index"]
+                ),
+                -1,
+            )
+            if source_row >= 0:
+                item = self.auto_slice_order.takeItem(source_row)
+                item.setCheckState(
+                    QtCore.Qt.CheckState.Checked if item_state["checked"] else QtCore.Qt.CheckState.Unchecked
+                )
+                self.auto_slice_order.insertItem(target_row, item)
+        self.auto_slice_order.blockSignals(False)
+
+        self._refresh_probe_names()
+        required_probe_names = set(state.get("probe_names", [])) | set(self.probe_constraints)
+        required_probe_names.update(
+            name for session in self.sessions for name in session.probe_traces
+        )
+        existing = {self.probe_name.itemText(index) for index in range(self.probe_name.count())}
+        for name in sorted(required_probe_names - existing):
+            color = probe_color(name)
+            swatch = QtGui.QPixmap(12, 12)
+            swatch.fill(QtGui.QColor(*color))
+            self.probe_name.addItem(QtGui.QIcon(swatch), name)
+        active_probe = state.get("active_probe", "")
+        if active_probe:
+            self.probe_name.setCurrentText(active_probe)
+        index = int(np.clip(state.get("current_session_index", 0), 0, max(0, len(self.sessions) - 1)))
+        if self.sessions:
+            self.slice_list.setCurrentIndex(index)
+            self._switch_slice(index)
+        else:
+            self._update_slice_navigation()
+        self._probe_selection_changed()
+        self.status.setText(f"Restored complete session from {source}")
 
     def load_atlas_folder(self, folder: Path) -> None:
         template = folder / "average_template_25.nrrd"
@@ -7680,6 +8078,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self._alignment_cancel_event.set()
         self._finish_auto_alignment_ui()
         self.alignment_executor.shutdown(wait=False, cancel_futures=True)
+        for cache in self._session_cache_dirs:
+            cache.cleanup()
+        self._session_cache_dirs.clear()
         super().closeEvent(event)
 
 
