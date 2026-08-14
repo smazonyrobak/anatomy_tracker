@@ -8,8 +8,10 @@ import sys
 ROOT = Path(SPECPATH)
 DEEPSLICE_MODELS = ROOT / "models" / "DeepSlice"
 ATLAS_POSE_MODELS = ROOT / "models" / "AtlasPose"
+DENSE_REGISTRATION_MODELS = ROOT / "models" / "DiffeomorphicRegistration"
 sys.path.insert(0, str(ROOT / "source"))
 from atlas_pose_runtime import verify_atlas_pose_evaluated_bundle, verify_atlas_pose_model_bundle
+from dense_registration_runtime import verify_dense_registration_bundle
 ATLAS_POSE_NAMES = [
     "atlas_pose.onnx",
     "atlas_pose.json",
@@ -50,6 +52,21 @@ if all(path.is_file() for path in ATLAS_POSE_FILES):
     verifier(ATLAS_POSE_FILES[0])
     ATLAS_POSE_DATAS = [(str(path), "models/AtlasPose") for path in ATLAS_POSE_FILES]
 
+DENSE_REGISTRATION_FILES = [
+    DENSE_REGISTRATION_MODELS / "dense_registration.onnx",
+    DENSE_REGISTRATION_MODELS / "dense_registration.metadata.json",
+]
+DENSE_REGISTRATION_PRESENT = [path.is_file() for path in DENSE_REGISTRATION_FILES]
+if any(DENSE_REGISTRATION_PRESENT) and not all(DENSE_REGISTRATION_PRESENT):
+    raise RuntimeError("The dense-registration bundle is incomplete")
+DENSE_REGISTRATION_DATAS = []
+if all(DENSE_REGISTRATION_PRESENT):
+    verify_dense_registration_bundle(*DENSE_REGISTRATION_FILES)
+    DENSE_REGISTRATION_DATAS = [
+        (str(path), "models/DiffeomorphicRegistration")
+        for path in DENSE_REGISTRATION_FILES
+    ]
+
 a = Analysis(
     [str(ROOT / "source" / "proprietary_trajectory_tool.py")],
     pathex=[str(ROOT / "source")],
@@ -58,7 +75,7 @@ a = Analysis(
         (str(DEEPSLICE_MODELS / "deepslice_mouse_primary_opset18.onnx"), "models/DeepSlice"),
         (str(DEEPSLICE_MODELS / "deepslice_mouse_secondary_opset18.onnx"), "models/DeepSlice"),
         (str(ROOT / "licenses" / "DeepSlice-LICENSE.txt"), "licenses"),
-    ] + ATLAS_POSE_DATAS,
+    ] + ATLAS_POSE_DATAS + DENSE_REGISTRATION_DATAS,
     hiddenimports=["imagecodecs._imcd", "imagecodecs._shared_cython"],
     hookspath=[],
     hooksconfig={},

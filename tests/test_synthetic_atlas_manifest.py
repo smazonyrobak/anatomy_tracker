@@ -180,7 +180,7 @@ def test_local_model_binary_matches_metadata_and_onnx_contract():
     assert np.isfinite(orientation).all()
 
 
-def test_pyinstaller_bundles_model_and_metadata():
+def test_pyinstaller_bundles_release_models_and_metadata():
     spec = (ROOT / "TrajectoryTracker.spec").read_text(encoding="utf-8")
     for name in (
         "SEALED_predictions.csv",
@@ -189,5 +189,8 @@ def test_pyinstaller_bundles_model_and_metadata():
         "SEALED_CONSUMPTION_RECEIPT.json",
     ):
         assert f'"{name}"' in spec
-    assert "DiffeomorphicRegistration" not in spec
+    assert '"dense_registration.onnx"' in spec
+    assert '"dense_registration.metadata.json"' in spec
+    assert '"models/DiffeomorphicRegistration"' in spec
+    assert "verify_dense_registration_bundle" in spec
     assert "verify_atlas_pose_model_bundle" in spec

@@ -40,10 +40,16 @@ def test_complete_session_round_trip_embeds_images_and_state(tmp_path):
         volume_points=[[10.0, 11.0, 12.0]],
         signal_values=[13.0],
     )
+    atlas_y, atlas_x = np.mgrid[:30, :40].astype(np.float32)
+    dense_identity = np.stack((atlas_x, atlas_y), axis=-1)
     first.slice_atlas_transform = TRACKER.SliceAtlasTransform2D(
         np.eye(3),
         first_image.shape,
         (30, 40),
+        dense_identity,
+        dense_identity,
+        np.ones((30, 40), dtype=bool),
+        '{"model":"AtlasWarp-test"}',
     )
     first.auto_alignment_engine = TRACKER.POSE_ENGINE_OWN_CNN
     first.auto_alignment_diagnostics = {"probe_geometry_constraints": {"applied": True}}
@@ -80,6 +86,12 @@ def test_complete_session_round_trip_embeds_images_and_state(tmp_path):
     assert restored.sessions[0].brain_brush_selection_mask.sum() == 16
     assert restored.sessions[0].probe_traces["imec0"].slice_points == [[4.0, 5.0]]
     assert restored.sessions[0].slice_atlas_transform is not None
+    assert restored.sessions[0].slice_atlas_transform.nonlinear
+    assert np.array_equal(
+        restored.sessions[0].slice_atlas_transform.atlas_to_affine_xy,
+        dense_identity,
+    )
+    assert restored.sessions[0].slice_atlas_transform.registration_metadata_json == '{"model":"AtlasWarp-test"}'
     assert restored.sessions[0].auto_alignment_engine == TRACKER.POSE_ENGINE_OWN_CNN
     assert restored.probe_constraints["imec0"].radius_um == 400.0
     assert restored.probe_endpoint_settings["imec0"] == ("known_insertion_depth", 3200.0)
@@ -115,7 +127,7 @@ def test_session_load_preserves_an_unpaired_landmark_and_rebuilds_complete_pairs
     loaded = restored.sessions[0]
     assert loaded.atlas_landmarks == [list(point) for point in session.atlas_landmarks]
     assert loaded.slice_landmarks == [list(point) for point in session.slice_landmarks]
-    assert loaded.slice_to_atlas_x is not None
+    assert loaded.slice_to_atlas_tps is not None
     mapped = TRACKER.map_session_display_to_atlas(
         loaded,
         np.asarray(TRACKER.transform_points(loaded.slice_landmarks[:3], loaded.slice_transform)),
@@ -124,3 +136,51 @@ def test_session_load_preserves_an_unpaired_landmark_and_rebuilds_complete_pairs
     restored.close()
     window.close()
     app.processEvents()
+
+
+def test_session_load_rejects_transform_shape_that_does_not_match_slice(tmp_path):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    image_path = tmp_path / "slice.tif"
+    image = np.arange(1200, dtype=np.uint16).reshape(30, 40)
+    tifffile.imwrite(image_path, image)
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    window.load_slice(image_path)
+    window.sessions[0].slice_atlas_transform = TRACKER.SliceAtlasTransform2D(
+        np.eye(3), (31, 40), (30, 40)
+    )
+    archive = tmp_path / "bad-display-shape.attracker"
+    window.save_session_file(archive)
+
+    restored = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    try:
+        with pytest.raises(ValueError, match="does not match its displayed slice shape"):
+            restored.load_session_file(archive)
+    finally:
+        restored.close()
+        window.close()
+        app.processEvents()
+
+
+def test_session_load_rejects_transform_shape_that_does_not_match_loaded_atlas(tmp_path):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    image_path = tmp_path / "slice.tif"
+    image = np.arange(1200, dtype=np.uint16).reshape(30, 40)
+    tifffile.imwrite(image_path, image)
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    window.load_slice(image_path)
+    window.sessions[0].slice_atlas_transform = TRACKER.SliceAtlasTransform2D(
+        np.eye(3), image.shape, (31, 40)
+    )
+    archive = tmp_path / "bad-atlas-shape.attracker"
+    window.save_session_file(archive)
+
+    restored = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    restored.atlas_volume = np.zeros((2, 30, 40), dtype=np.uint8)
+    restored.annotation_volume = np.zeros_like(restored.atlas_volume, dtype=np.uint16)
+    try:
+        with pytest.raises(ValueError, match="does not match the coronal atlas canvas"):
+            restored.load_session_file(archive)
+    finally:
+        restored.close()
+        window.close()
+        app.processEvents()
