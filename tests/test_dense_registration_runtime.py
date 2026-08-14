@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sys
 
 import numpy as np
 import onnxruntime as ort
@@ -168,7 +169,9 @@ class _FakeSession:
         ]
 
     def get_providers(self):
-        return self.providers if self.owner.session_providers is None else self.owner.session_providers
+        if self.owner.session_providers is not None:
+            return self.owner.session_providers
+        return [provider[0] if isinstance(provider, tuple) else provider for provider in self.providers]
 
     def run(self, names, feed):
         self.owner.names, self.owner.feed = names, feed
@@ -177,6 +180,18 @@ class _FakeSession:
 
 class _FakeOrt:
     __version__ = PINNED_ONNXRUNTIME_DIRECTML_VERSION
+
+    class SessionOptions:
+        def __init__(self):
+            self.enable_mem_pattern = True
+            self.execution_mode = None
+            self.graph_optimization_level = None
+
+    class ExecutionMode:
+        ORT_SEQUENTIAL = "sequential"
+
+    class GraphOptimizationLevel:
+        ORT_ENABLE_ALL = "all"
 
     def __init__(
         self,
@@ -198,12 +213,15 @@ class _FakeOrt:
         self.output_shape = output_shape
         self.tensor_type = tensor_type
         self.outputs = outputs or [_model_map(2.0), _model_map(-2.0)]
-        self.session = self.names = self.feed = None
+        self.session = self.session_options = self.names = self.feed = None
+        self.session_count = 0
 
     def get_available_providers(self):
         return self.available
 
-    def InferenceSession(self, _path, providers):
+    def InferenceSession(self, _path, sess_options, providers):
+        self.session_count += 1
+        self.session_options = sess_options
         return _FakeSession(providers, self)
 
 
@@ -409,13 +427,37 @@ def test_runtime_uses_directml_and_preserves_map_directions(tmp_path):
     ort = _FakeOrt()
     result = _run(model, metadata_path, ort)
     yy, xx = np.mgrid[: NATIVE_SHAPE[0], : NATIVE_SHAPE[1]]
-    assert ort.session.providers == [runtime.PRODUCTION_PROVIDER]
+    assert ort.session.providers == [
+        (runtime.PRODUCTION_PROVIDER, {"device_id": 0}),
+        "CPUExecutionProvider",
+    ]
+    assert ort.session_options.enable_mem_pattern is False
+    assert ort.session_options.execution_mode == ort.ExecutionMode.ORT_SEQUENTIAL
+    assert ort.session_options.graph_optimization_level == ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     assert ort.names == list(OUTPUT_NAMES)
     assert set(ort.feed) == set(INPUT_NAMES)
     assert np.allclose(result["atlas_to_affine_xy"][..., 0], xx + 2.0)
     assert np.allclose(result["affine_to_atlas_xy"][..., 0], xx - 2.0)
     assert result["metadata"]["provider"] == runtime.PRODUCTION_PROVIDER
     assert json.loads(result["registration_metadata_json"])["method"] == "dense-registration-onnx-v2"
+
+
+def test_production_directml_session_is_reused(tmp_path, monkeypatch):
+    model, _, _ = _write_v2_bundle(tmp_path)
+    ort = _FakeOrt()
+    monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+    runtime._load_dense_registration_session.cache_clear()
+    try:
+        first = runtime._load_dense_registration_session(
+            str(model.resolve()), model.stat().st_mtime_ns
+        )
+        second = runtime._load_dense_registration_session(
+            str(model.resolve()), model.stat().st_mtime_ns
+        )
+        assert first is second
+        assert ort.session_count == 1
+    finally:
+        runtime._load_dense_registration_session.cache_clear()
 
 
 def test_runtime_records_evaluated_bundle_status_without_claiming_release(tmp_path):

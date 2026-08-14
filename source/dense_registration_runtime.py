@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import threading
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -650,6 +652,29 @@ def _check_session_contract(session) -> None:
             raise RuntimeError("Dense-registration ONNX tensor shapes differ from the runtime contract")
 
 
+def _new_directml_session(ort_module, model_path: str):
+    options = ort_module.SessionOptions()
+    options.enable_mem_pattern = False
+    options.execution_mode = ort_module.ExecutionMode.ORT_SEQUENTIAL
+    options.graph_optimization_level = ort_module.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return ort_module.InferenceSession(
+        model_path,
+        sess_options=options,
+        providers=[(PRODUCTION_PROVIDER, {"device_id": 0}), "CPUExecutionProvider"],
+    )
+
+
+@lru_cache(maxsize=2)
+def _load_dense_registration_session(model_path: str, modified_ns: int):
+    del modified_ns
+    import onnxruntime as ort
+
+    return _new_directml_session(ort, model_path)
+
+
+_INFERENCE_LOCK = threading.Lock()
+
+
 def run_dense_registration(
     model_path: str | Path,
     atlas_image: np.ndarray,
@@ -679,7 +704,8 @@ def run_dense_registration(
         slice_mask,
         preprocessing_contract=verified["preprocessing_contract"],
     )
-    if ort_module is None:
+    injected_ort = ort_module is not None
+    if not injected_ort:
         import onnxruntime as ort_module
     if getattr(ort_module, "__version__", None) != PINNED_ONNXRUNTIME_DIRECTML_VERSION:
         raise RuntimeError("Dense-registration DirectML runtime version is unsupported")
@@ -687,16 +713,22 @@ def run_dense_registration(
         raise RuntimeError(
             "The required DmlExecutionProvider is unavailable"
         )
-    session = ort_module.InferenceSession(
-        str(model_path), providers=[PRODUCTION_PROVIDER]
+    resolved_model = Path(model_path).resolve()
+    session = (
+        _new_directml_session(ort_module, str(resolved_model))
+        if injected_ort
+        else _load_dense_registration_session(
+            str(resolved_model), resolved_model.stat().st_mtime_ns
+        )
     )
     if session.get_providers()[0] != PRODUCTION_PROVIDER:
         raise RuntimeError("ONNX Runtime did not activate the required primary provider")
     _check_session_contract(session)
-    forward, inverse = session.run(
-        list(OUTPUT_NAMES),
-        {INPUT_NAMES[0]: fixed, INPUT_NAMES[1]: moving},
-    )
+    with _INFERENCE_LOCK:
+        forward, inverse = session.run(
+            list(OUTPUT_NAMES),
+            {INPUT_NAMES[0]: fixed, INPUT_NAMES[1]: moving},
+        )
     atlas_to_affine = native_absolute_map(forward)
     affine_to_atlas = native_absolute_map(inverse)
     atlas_mask_native = _native_mask(atlas_mask)

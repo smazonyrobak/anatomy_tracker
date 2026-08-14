@@ -2836,6 +2836,93 @@ def coronal_oblique_slice_resampled(
     )
 
 
+def run_automatic_warp_batch(
+    jobs: list[dict],
+    atlas_volume: np.ndarray,
+    annotation_volume: np.ndarray,
+    model_path: Path,
+    metadata_path: Path,
+    model_sha256: str,
+    metadata_sha256: str,
+    progress_messages: queue.SimpleQueue,
+    cancel_event: threading.Event,
+) -> list[dict]:
+    completed = []
+    for sequence, job in enumerate(jobs):
+        if cancel_event.is_set():
+            raise InterruptedError
+        progress_messages.put(
+            (sequence, f"Preparing {job['name']} ({sequence + 1} / {len(jobs)})...")
+        )
+        path = Path(job["path"])
+        raw = (
+            tifffile.imread(str(path))
+            if path.suffix.lower() in {".tif", ".tiff"}
+            else cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+        )
+        display_raw, _ = downsample_for_display(as_gray(raw))
+        raw_slice, _ = transform_slice_image(
+            normalize_u8(display_raw),
+            job["rotation_deg"],
+            job["flip_horizontal"],
+            job["flip_vertical"],
+        )
+        slice_mask = registration_brain_mask(
+            raw_slice,
+            job["surface_points"],
+            job["outline_closed"],
+            job["selection_mask"],
+        )
+        atlas_image = coronal_oblique_slice(
+            atlas_volume,
+            job["atlas_index"],
+            job["tilt_ml_deg"],
+            job["tilt_dv_deg"],
+            order=1,
+        )
+        atlas_mask = coronal_oblique_slice(
+            annotation_volume,
+            job["atlas_index"],
+            job["tilt_ml_deg"],
+            job["tilt_dv_deg"],
+            order=0,
+        ) > 0
+        base_h = brain_mask_affine(slice_mask, atlas_mask)
+        if len(job["surface_points"]) >= 8:
+            base_h, _ = fit_surface_scale_translation(
+                base_h, job["surface_points"], atlas_mask
+            )
+        canvases = dense_registration_canvases(
+            raw_slice, slice_mask, atlas_image, atlas_mask, base_h
+        )
+        if cancel_event.is_set():
+            raise InterruptedError
+        progress_messages.put(
+            (sequence, f"Warping {job['name']} ({sequence + 1} / {len(jobs)})...")
+        )
+        result = run_dense_registration(
+            model_path,
+            *canvases,
+            expected_model_sha256=model_sha256,
+            expected_metadata_sha256=metadata_sha256,
+            metadata_path=metadata_path,
+        )
+        completed.append(
+            {
+                "session_index": job["session_index"],
+                "base_h": base_h,
+                "display_shape": raw_slice.shape,
+                "slice_image_sha256": array_sha256(raw_slice),
+                "tissue_mask_sha256": array_sha256(slice_mask.astype(np.uint8)),
+                "result": result,
+            }
+        )
+        progress_messages.put(
+            (sequence + 1, f"Warped {sequence + 1} / {len(jobs)} aligned slices")
+        )
+    return completed
+
+
 def plane_axis(plane: str) -> int:
     return {"coronal": 0, "horizontal": 1, "sagittal": 2}[plane]
 
@@ -4041,12 +4128,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "grayscale pixels and the current trusted tissue surface; display brightness is ignored. Review the "
             "atlas overlay after it finishes."
         )
+        self.automatic_warp_all_btn = QtWidgets.QPushButton("Apply to all aligned slices")
+        self.automatic_warp_all_btn.setToolTip(
+            "Apply the trained anatomical warp to every non-stale slice produced by automatic section matching. "
+            "Slices are processed sequentially in the background and installed together when the batch succeeds."
+        )
         self.undo_point_btn = QtWidgets.QPushButton("Undo landmark")
         self.clear_points_btn = QtWidgets.QPushButton("Clear landmarks")
         manual_layout.addWidget(manual_help, 0, 0, 1, 2)
         manual_layout.addWidget(self.landmark_mode, 1, 0)
         manual_layout.addWidget(self.transform_btn, 1, 1)
-        manual_layout.addWidget(self.automatic_warp_btn, 2, 0, 1, 2)
+        manual_layout.addWidget(self.automatic_warp_btn, 2, 0)
+        manual_layout.addWidget(self.automatic_warp_all_btn, 2, 1)
         manual_layout.addWidget(self.undo_point_btn, 3, 0)
         manual_layout.addWidget(self.clear_points_btn, 3, 1)
         manual_layout.setColumnStretch(0, 1)
@@ -4189,6 +4282,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.add_slice_btn,
             self.transform_btn,
             self.automatic_warp_btn,
+            self.automatic_warp_all_btn,
             self.auto_align_btn,
             self.auto_align_all_btn,
             self.map_btn,
@@ -4473,6 +4567,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.curve_editor.points_changed.connect(self._curve_changed)
         self.transform_btn.clicked.connect(self.transform_current_slice)
         self.automatic_warp_btn.clicked.connect(self._automatic_warp_clicked)
+        self.automatic_warp_all_btn.clicked.connect(self._automatic_warp_all_clicked)
         self.auto_align_btn.clicked.connect(self._auto_align_clicked)
         self.auto_align_all_btn.clicked.connect(self._auto_align_all_clicked)
         self.new_outline_segment_btn.clicked.connect(self.start_new_surface_segment)
@@ -6690,12 +6785,25 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         self._refresh_point_counts()
 
+    def _automatic_warp_sessions(self) -> list[tuple[int, SliceSession]]:
+        return [
+            (index, session)
+            for index, session in enumerate(self.sessions)
+            if session.atlas_plane == "coronal"
+            and session.auto_alignment_run_id is not None
+            and session.slice_atlas_transform is not None
+            and not (session.auto_alignment_diagnostics or {}).get(
+                "alignment_run_stale", False
+            )
+        ]
+
     def _refresh_point_counts(self) -> None:
         session = self.current_session()
         if session is None:
             self.point_counts.setText("Surface 0 | Transform atlas 0 / slice 0 | Probe 0")
             self.transform_btn.setEnabled(False)
             self.automatic_warp_btn.setEnabled(False)
+            self.automatic_warp_all_btn.setEnabled(False)
             self.auto_align_btn.setEnabled(False)
             self.auto_align_all_btn.setEnabled(False)
             self.map_btn.setEnabled(False)
@@ -6737,6 +6845,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             and self.atlas_volume is not None
             and self.annotation_volume is not None
             and session.atlas_plane == "coronal"
+            and not self.auto_alignment_busy
+        )
+        self.automatic_warp_all_btn.setEnabled(
+            len(self._automatic_warp_sessions()) >= 2
+            and self.atlas_volume is not None
+            and self.annotation_volume is not None
             and not self.auto_alignment_busy
         )
         self.auto_align_btn.setEnabled(
@@ -7142,9 +7256,48 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "snapshot": snapshot,
         }
 
+    def _automatic_warp_batch_snapshot(self, session: SliceSession) -> tuple:
+        source = Path(session.path)
+        source_stat = source.stat()
+        selection_digest = (
+            None
+            if session.brain_brush_selection_mask is None
+            else array_sha256(session.brain_brush_selection_mask.astype(np.uint8))
+        )
+        return (
+            id(session),
+            str(source),
+            source_stat.st_size,
+            source_stat.st_mtime_ns,
+            session.atlas_plane,
+            int(session.atlas_index),
+            float(session.atlas_tilt_ml_deg),
+            float(session.atlas_tilt_dv_deg),
+            float(session.rotation_deg),
+            bool(session.flip_horizontal),
+            bool(session.flip_vertical),
+            tuple(np.asarray(session.slice_transform, dtype=np.float64).ravel()),
+            tuple(tuple(point) for point in session.brain_outline_points),
+            tuple(session.brain_outline_segment_starts),
+            bool(session.brain_outline_closed),
+            selection_digest,
+            session.auto_alignment_run_id,
+            bool((session.auto_alignment_diagnostics or {}).get("alignment_run_stale", False)),
+            id(session.slice_atlas_transform),
+            id(session.slice_to_atlas_tps),
+            id(session.atlas_to_slice_tps),
+        )
+
     def _automatic_warp_clicked(self) -> None:
         try:
             self.apply_automatic_anatomical_warp()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Automatic anatomical warp failed", str(exc))
+            self.status.setText(f"Automatic anatomical warp failed: {exc}")
+
+    def _automatic_warp_all_clicked(self) -> None:
+        try:
+            self.apply_automatic_anatomical_warp_all()
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Automatic anatomical warp failed", str(exc))
             self.status.setText(f"Automatic anatomical warp failed: {exc}")
@@ -7233,6 +7386,147 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             operation_name="Automatic anatomical warp",
         )
 
+    def apply_automatic_anatomical_warp_all(self) -> None:
+        if self.auto_alignment_busy:
+            return
+        aligned = self._automatic_warp_sessions()
+        if len(aligned) < 2:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Aligned slices required",
+                "Run automatic section matching on at least two non-stale slices first.",
+            )
+            return
+        if self.atlas_volume is None or self.annotation_volume is None:
+            return
+        if bundle_error := self._dense_registration_bundle_error():
+            QtWidgets.QMessageBox.warning(self, "Automatic anatomical warp unavailable", bundle_error)
+            self.status.setText(bundle_error)
+            return
+
+        atlas_snapshot = (
+            id(self.atlas_volume),
+            id(self.annotation_volume),
+            str(self.atlas_folder),
+            tuple(self.atlas_volume.shape),
+            tuple(sorted(self.atlas_file_hashes.items())),
+            tuple(float(value) for value in self.bregma_voxel),
+        )
+        snapshots = {
+            index: self._automatic_warp_batch_snapshot(session)
+            for index, session in aligned
+        }
+        session_objects = {index: session for index, session in aligned}
+        jobs = [
+            {
+                "session_index": index,
+                "name": session.name,
+                "path": session.path,
+                "rotation_deg": float(session.rotation_deg),
+                "flip_horizontal": bool(session.flip_horizontal),
+                "flip_vertical": bool(session.flip_vertical),
+                "surface_points": self._slice_raw_to_display_points(
+                    session, session.brain_outline_points
+                ),
+                "outline_closed": bool(session.brain_outline_closed),
+                "selection_mask": (
+                    None
+                    if session.brain_brush_selection_mask is None
+                    else session.brain_brush_selection_mask.copy()
+                ),
+                "atlas_index": int(session.atlas_index),
+                "tilt_ml_deg": float(session.atlas_tilt_ml_deg),
+                "tilt_dv_deg": float(session.atlas_tilt_dv_deg),
+            }
+            for index, session in aligned
+        ]
+        messages: queue.SimpleQueue = queue.SimpleQueue()
+        cancel_event = threading.Event()
+        progress = QtWidgets.QProgressDialog(
+            f"Warping {len(jobs)} aligned slices...",
+            "Cancel",
+            0,
+            len(jobs),
+            self,
+        )
+        progress.setWindowTitle("Automatic anatomical warp")
+        progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.canceled.connect(cancel_event.set)
+        progress.show()
+
+        self.auto_alignment_busy = True
+        self._set_auto_constraint_controls_enabled(False)
+        self._refresh_point_counts()
+        self.status.setText(
+            f"Automatically warping {len(jobs)} aligned slices; the interface remains available."
+        )
+        future = self.alignment_executor.submit(
+            run_automatic_warp_batch,
+            jobs,
+            self.atlas_volume,
+            self.annotation_volume,
+            DENSE_REGISTRATION_MODEL_PATH,
+            DENSE_REGISTRATION_METADATA_PATH,
+            DENSE_REGISTRATION_MODEL_SHA256,
+            DENSE_REGISTRATION_METADATA_SHA256,
+            messages,
+            cancel_event,
+        )
+
+        def install(results: list[dict]) -> None:
+            current_atlas = (
+                id(self.atlas_volume),
+                id(self.annotation_volume),
+                str(self.atlas_folder),
+                None if self.atlas_volume is None else tuple(self.atlas_volume.shape),
+                tuple(sorted(self.atlas_file_hashes.items())),
+                tuple(float(value) for value in self.bregma_voxel),
+            )
+            if current_atlas != atlas_snapshot:
+                raise RuntimeError(
+                    "The atlas changed while automatic anatomical registration was running; results discarded"
+                )
+            if {result["session_index"] for result in results} != set(snapshots):
+                raise RuntimeError("Automatic anatomical registration returned an incomplete slice batch")
+            for index, expected in snapshots.items():
+                if (
+                    index >= len(self.sessions)
+                    or self.sessions[index] is not session_objects[index]
+                    or self._automatic_warp_batch_snapshot(self.sessions[index]) != expected
+                ):
+                    raise RuntimeError(
+                        f"{session_objects[index].name} changed while registration was running; all results discarded"
+                    )
+            staged = [
+                self._stage_automatic_anatomical_warp_result(
+                    self.sessions[result["session_index"]],
+                    result["base_h"],
+                    result["display_shape"],
+                    result["slice_image_sha256"],
+                    result["tissue_mask_sha256"],
+                    result["result"],
+                )
+                for result in results
+            ]
+            self._commit_automatic_anatomical_warp_results(staged)
+            self.status.setText(
+                f"Applied automatic anatomical warp to {len(staged)} aligned slices; every probe observation was remapped."
+            )
+
+        self._watch_alignment_future(
+            future,
+            messages,
+            cancel_event,
+            progress,
+            install,
+            failure_title="Automatic anatomical warp failed",
+            operation_name="Automatic anatomical warp",
+        )
+
     def _apply_automatic_anatomical_warp_result(
         self,
         session: SliceSession,
@@ -7242,6 +7536,28 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         tissue_mask_sha256: str,
         result: dict,
     ) -> None:
+        staged = self._stage_automatic_anatomical_warp_result(
+            session,
+            base_h,
+            display_shape,
+            slice_image_sha256,
+            tissue_mask_sha256,
+            result,
+        )
+        self._commit_automatic_anatomical_warp_results([staged])
+        self.status.setText(
+            f"Applied automatic anatomical warp to {session.name}; every probe observation was remapped through it."
+        )
+
+    def _stage_automatic_anatomical_warp_result(
+        self,
+        session: SliceSession,
+        base_h: np.ndarray,
+        display_shape: tuple[int, int],
+        slice_image_sha256: str,
+        tissue_mask_sha256: str,
+        result: dict,
+    ) -> dict:
         runtime_metadata = dict(result["metadata"])
         registration = {
             "kind": "automatic",
@@ -7278,23 +7594,29 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             else candidate.render_display_image_in_atlas(session.rotated)
         )
         diagnostics = replace_coordinate_registration(session.auto_alignment_diagnostics, registration)
+        return {
+            "session": session,
+            "transform": candidate,
+            "overlay": transformed_overlay,
+            "diagnostics": diagnostics,
+            "probe_updates": probe_updates,
+        }
 
-        session.slice_atlas_transform = candidate
-        session.slice_to_atlas_tps = None
-        session.atlas_to_slice_tps = None
-        session.transformed_overlay = transformed_overlay
-        session.auto_alignment_diagnostics = diagnostics
+    def _commit_automatic_anatomical_warp_results(self, staged: list[dict]) -> None:
+        for update in staged:
+            session = update["session"]
+            session.slice_atlas_transform = update["transform"]
+            session.slice_to_atlas_tps = None
+            session.atlas_to_slice_tps = None
+            session.transformed_overlay = update["overlay"]
+            session.auto_alignment_diagnostics = update["diagnostics"]
+            self._commit_probe_coordinate_updates(session, update["probe_updates"])
         self._probe_fit_cache.clear()
-        self._commit_probe_coordinate_updates(session, probe_updates)
-
-        if session is self.current_session():
+        if any(update["session"] is self.current_session() for update in staged):
             self._refresh_atlas()
             self._refresh_points()
         self._update_probe_fit_summary()
         self._refresh_3d()
-        self.status.setText(
-            f"Applied automatic anatomical warp to {session.name}; every probe observation was remapped through it."
-        )
 
     def _watch_alignment_future(
         self,

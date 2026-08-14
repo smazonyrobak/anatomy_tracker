@@ -1,6 +1,8 @@
 import importlib.util
 import os
+import queue
 import sys
+import threading
 import time
 from concurrent.futures import Future
 from pathlib import Path
@@ -86,6 +88,43 @@ def make_window_session(tmp_path):
     return app, window, session, image
 
 
+def make_warp_all_window(tmp_path):
+    app, window, first, image = make_window_session(tmp_path)
+    for name in ("slice-2.tif", "unaligned.tif"):
+        path = tmp_path / name
+        tifffile.imwrite(path, image)
+        window.load_slice(path)
+    for index, session in enumerate(window.sessions[:2]):
+        session.auto_alignment_run_id = "shared-run"
+        session.auto_alignment_engine = TRACKER.POSE_ENGINE_OWN_CNN
+        session.auto_alignment_diagnostics = {
+            "alignment_run_id": "shared-run",
+            "coordinate_registration": {"kind": "unselected", "status": "pending"},
+        }
+        session.atlas_index = index
+        session.slice_atlas_transform = TRACKER.SliceAtlasTransform2D(
+            np.eye(3), image.shape, TRACKER.DENSE_REGISTRATION_SHAPE
+        )
+        session.brain_brush_selection_mask = np.ones_like(image, dtype=bool)
+    window._refresh_point_counts()
+    return app, window, image
+
+
+def install_test_bundle(window, tmp_path, monkeypatch):
+    model = tmp_path / "dense_registration.onnx"
+    metadata = tmp_path / "dense_registration.metadata.json"
+    model.write_bytes(b"model")
+    metadata.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(TRACKER, "DENSE_REGISTRATION_MODEL_PATH", model)
+    monkeypatch.setattr(TRACKER, "DENSE_REGISTRATION_METADATA_PATH", metadata)
+    monkeypatch.setattr(TRACKER, "DENSE_REGISTRATION_MODEL_SHA256", "a" * 64)
+    monkeypatch.setattr(TRACKER, "DENSE_REGISTRATION_METADATA_SHA256", "b" * 64)
+    window.alignment_executor.shutdown(wait=False)
+    executor = ControlledExecutor()
+    window.alignment_executor = executor
+    return executor
+
+
 def test_dense_canvases_use_nonidentity_affine_raw_grayscale_and_nearest_binary_mask():
     raw = np.arange(160 * 228, dtype=np.uint8).reshape(160, 228)
     mask = np.zeros_like(raw, dtype=bool)
@@ -131,6 +170,51 @@ def test_registration_mask_priority_is_smart_then_outline_then_automatic(monkeyp
     automatic[7:9, 7:9] = True
     monkeypatch.setattr(TRACKER, "automatic_brain_mask", lambda _: automatic)
     assert np.array_equal(TRACKER.registration_brain_mask(image, [], False, None), automatic)
+
+
+def test_batch_worker_loads_and_warps_slices_sequentially(tmp_path, monkeypatch):
+    yy, xx = np.mgrid[: TRACKER.DENSE_REGISTRATION_SHAPE[0], : TRACKER.DENSE_REGISTRATION_SHAPE[1]]
+    image = ((3 * xx + 5 * yy) % 256).astype(np.uint8)
+    path = tmp_path / "slice.tif"
+    tifffile.imwrite(path, image)
+    jobs = [
+        {
+            "session_index": index,
+            "name": f"slice-{index}",
+            "path": str(path),
+            "rotation_deg": 0.0,
+            "flip_horizontal": False,
+            "flip_vertical": False,
+            "surface_points": [],
+            "outline_closed": False,
+            "selection_mask": np.ones_like(image, dtype=bool),
+            "atlas_index": index,
+            "tilt_ml_deg": 0.0,
+            "tilt_dv_deg": 0.0,
+        }
+        for index in (0, 1)
+    ]
+    calls = []
+    monkeypatch.setattr(
+        TRACKER,
+        "run_dense_registration",
+        lambda _model, *_canvases, **_kwargs: calls.append(len(calls)) or identity_result(),
+    )
+    messages = queue.SimpleQueue()
+    results = TRACKER.run_automatic_warp_batch(
+        jobs,
+        np.stack((image, image)),
+        np.ones((2, *image.shape), dtype=np.uint16),
+        tmp_path / "model.onnx",
+        tmp_path / "model.metadata.json",
+        "a" * 64,
+        "b" * 64,
+        messages,
+        threading.Event(),
+    )
+    assert calls == [0, 1]
+    assert [result["session_index"] for result in results] == [0, 1]
+    assert messages.get_nowait()[0] == 0
 
 
 def test_background_warp_uses_weight_image_not_brightness_curve_and_is_nonblocking(tmp_path, monkeypatch):
@@ -204,6 +288,78 @@ def test_background_warp_uses_weight_image_not_brightness_curve_and_is_nonblocki
         assert session.slice_atlas_transform.nonlinear
         assert session.auto_alignment_diagnostics["coordinate_registration"]["status"] == "applied"
         assert session.auto_alignment_diagnostics["coordinate_registration"]["kind"] == "automatic"
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_warp_all_aligned_slices_is_nonblocking_atomic_and_preserves_browsing(
+    tmp_path, monkeypatch
+):
+    app, window, image = make_warp_all_window(tmp_path)
+    executor = install_test_bundle(window, tmp_path, monkeypatch)
+    try:
+        window.slice_list.setCurrentIndex(0)
+        previous_unaligned = window.sessions[2].slice_atlas_transform
+        window.apply_automatic_anatomical_warp_all()
+        assert window.auto_alignment_busy
+        function, arguments = executor.arguments
+        assert function is TRACKER.run_automatic_warp_batch
+        jobs = arguments[0]
+        assert [job["session_index"] for job in jobs] == [0, 1]
+
+        window.slice_list.setCurrentIndex(2)
+        results = [
+            {
+                "session_index": index,
+                "base_h": np.eye(3),
+                "display_shape": image.shape,
+                "slice_image_sha256": "f" * 64,
+                "tissue_mask_sha256": "e" * 64,
+                "result": identity_result(),
+            }
+            for index in (0, 1)
+        ]
+        executor.future.set_result(results)
+        process_until(app, lambda: not window.auto_alignment_busy)
+
+        assert window.current_session_index == 2
+        assert all(session.slice_atlas_transform.nonlinear for session in window.sessions[:2])
+        assert all(
+            session.auto_alignment_diagnostics["coordinate_registration"]["kind"]
+            == "automatic"
+            for session in window.sessions[:2]
+        )
+        assert window.sessions[2].slice_atlas_transform is previous_unaligned
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_warp_all_discards_entire_batch_when_one_slice_changes(tmp_path, monkeypatch):
+    app, window, image = make_warp_all_window(tmp_path)
+    executor = install_test_bundle(window, tmp_path, monkeypatch)
+    monkeypatch.setattr(TRACKER.QtWidgets.QMessageBox, "critical", lambda *args: None)
+    previous = [session.slice_atlas_transform for session in window.sessions[:2]]
+    try:
+        window.apply_automatic_anatomical_warp_all()
+        window.sessions[1].atlas_index += 1
+        executor.future.set_result(
+            [
+                {
+                    "session_index": index,
+                    "base_h": np.eye(3),
+                    "display_shape": image.shape,
+                    "slice_image_sha256": "f" * 64,
+                    "tissue_mask_sha256": "e" * 64,
+                    "result": identity_result(),
+                }
+                for index in (0, 1)
+            ]
+        )
+        process_until(app, lambda: not window.auto_alignment_busy)
+        assert [session.slice_atlas_transform for session in window.sessions[:2]] == previous
+        assert "all results discarded" in window.status.text()
     finally:
         window.close()
         app.processEvents()
