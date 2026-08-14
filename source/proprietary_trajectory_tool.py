@@ -152,6 +152,20 @@ ANATOMY_MAPPING_COLUMNS = [
     "anatomy_assignment_method",
     "anatomy_mapped_at",
 ]
+ANATOMY_NUMERIC_COLUMNS = {
+    "structure_id",
+    "ccf_ap_index",
+    "ccf_dv_index",
+    "ccf_ml_index",
+    "atlas_region_id",
+    "atlas_ap",
+    "atlas_dv",
+    "atlas_ml",
+    "stereotaxic_ap_um",
+    "stereotaxic_dv_um",
+    "stereotaxic_ml_um",
+    "trajectory_distance_um",
+}
 PROBE_COLORS = (
     (40, 181, 246),
     (255, 153, 51),
@@ -653,6 +667,31 @@ def attach_peak_channel_metadata(channels: pd.DataFrame, units: pd.DataFrame) ->
     return units
 
 
+def assign_probe_anatomy(
+    channels: pd.DataFrame,
+    selected: pd.Series,
+    assignments: dict[str, object],
+) -> None:
+    for name, values in assignments.items():
+        scalar = pd.api.types.is_scalar(values)
+        if name in ANATOMY_NUMERIC_COLUMNS:
+            values = pd.to_numeric(
+                pd.Series([values] if scalar else values), errors="raise"
+            ).to_numpy(dtype=float)
+            values = values[0] if scalar else values
+            if name not in channels.columns:
+                channels[name] = np.nan
+            elif not pd.api.types.is_numeric_dtype(channels[name]):
+                channels[name] = pd.to_numeric(channels[name], errors="coerce")
+        else:
+            values = values if scalar else pd.Series(values, dtype="object").to_numpy()
+            if name not in channels.columns:
+                channels[name] = pd.Series(pd.NA, index=channels.index, dtype="object")
+            elif channels[name].dtype != object:
+                channels[name] = channels[name].astype(object)
+        channels.loc[selected, name] = values
+
+
 def probe_anatomy_view_data(
     channels: pd.DataFrame,
     units: pd.DataFrame,
@@ -664,6 +703,7 @@ def probe_anatomy_view_data(
     if sites.empty:
         raise ValueError(f"{probe_name} has no channels")
     required = {
+        "anatomy_mapped_at",
         "probe_horizontal_position",
         "probe_vertical_position",
         "trajectory_distance_um",
@@ -672,6 +712,12 @@ def probe_anatomy_view_data(
     missing = sorted(required.difference(sites.columns))
     if missing:
         raise ValueError(f"Mapped channel metadata is missing: {', '.join(missing)}")
+    mapped_at = sites["anatomy_mapped_at"].fillna("").astype(str).str.strip()
+    distances = pd.to_numeric(sites["trajectory_distance_um"], errors="coerce")
+    if mapped_at.eq("").any() or not np.isfinite(distances.to_numpy(dtype=float)).all():
+        raise ValueError(
+            f"{probe_name} has not been mapped yet. Run Map channels/units for this probe first."
+        )
     sites["probe_horizontal_position"] = pd.to_numeric(
         sites["probe_horizontal_position"], errors="raise"
     )
@@ -782,6 +828,7 @@ def verify_staged_mapping_outputs(
     channel_rows: int,
     unit_rows: int,
     probe_name: str,
+    region_colors: dict[int, str] | None = None,
 ) -> dict[Path, str]:
     channels = pd.read_csv(staging_root / "channels.csv")
     units = pd.read_csv(staging_root / "units.csv")
@@ -809,6 +856,7 @@ def verify_staged_mapping_outputs(
         if missing:
             raise RuntimeError(f"Staged {label} mapping is missing columns: {', '.join(missing)}")
         canonical_channel_keys(table, units=label == "units")
+    probe_anatomy_view_data(channels, units, probe_name, region_colors or {})
 
     manifest_path = staging_root / "anatomy" / f"proprietary_trajectory_manifest_{probe_name}.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -7746,10 +7794,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "anatomy_assignment_method": "peak_channel_on_trajectory_centerline",
             "anatomy_mapped_at": mapped_at,
         }
-        for name, values in assignments.items():
-            if name not in channels.columns:
-                channels[name] = pd.Series(pd.NA, index=channels.index, dtype="object")
-            channels.loc[selected, name] = values
+        assign_probe_anatomy(channels, selected, assignments)
 
         units = attach_peak_channel_metadata(channels, units)
         selected_units = units["probe_name"].eq(selected_probe)
@@ -7783,6 +7828,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 len(channels),
                 len(units),
                 selected_probe,
+                self.region_colors,
             )
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             backup_dir = data_folder / "anatomy" / "backups" / f"{timestamp}_{selected_probe}"

@@ -124,6 +124,34 @@ def test_unit_regions_are_inherited_from_peak_channel_with_composite_probe_key()
     assert mapped["structure_id"].tolist() == [101, 202]
 
 
+def test_second_probe_mapping_accepts_outside_atlas_contacts_in_numeric_columns():
+    channels = TRACKER.pd.DataFrame(
+        {
+            "probe_name": ["imec0", "imec0", "imec1", "imec1"],
+            "structure_id": [101.0, 202.0, np.nan, np.nan],
+            "ccf_ap_index": [10.0, 11.0, np.nan, np.nan],
+            "anatomy_mapped_at": ["2026-08-14", "2026-08-14", np.nan, np.nan],
+        }
+    )
+    selected = channels["probe_name"].eq("imec1")
+    TRACKER.assign_probe_anatomy(
+        channels,
+        selected,
+        {
+            "structure_id": [303, None],
+            "ccf_ap_index": [12, None],
+            "anatomy_mapped_at": "2026-08-15",
+            "probe_type": "Neuropixels 1.0",
+        },
+    )
+    assert channels.loc[selected, "structure_id"].tolist()[0] == 303
+    assert np.isnan(channels.loc[selected, "structure_id"].tolist()[1])
+    assert channels.loc[selected, "ccf_ap_index"].tolist()[0] == 12
+    assert np.isnan(channels.loc[selected, "ccf_ap_index"].tolist()[1])
+    assert channels.loc[selected, "anatomy_mapped_at"].tolist() == ["2026-08-15", "2026-08-15"]
+    assert channels.loc[selected, "probe_type"].tolist() == ["Neuropixels 1.0", "Neuropixels 1.0"]
+
+
 def test_probe_anatomy_view_uses_physical_sites_atlas_colors_and_unit_counts():
     channels = TRACKER.pd.DataFrame(
         {
@@ -135,6 +163,7 @@ def test_probe_anatomy_view_uses_physical_sites_atlas_colors_and_unit_counts():
             "structure_id": [101, 101, 202, 303],
             "structure_name": ["Region A", "Region A", "Region B", "Region C"],
             "structure_acronym": ["A", "A", "B", "C"],
+            "anatomy_mapped_at": ["2026-08-14"] * 4,
         }
     )
     units = TRACKER.pd.DataFrame(
@@ -171,6 +200,7 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
             "structure_id": [101, 202],
             "structure_name": ["Region A", "Region B"],
             "structure_acronym": ["A", "B"],
+            "anatomy_mapped_at": ["2026-08-14"] * 2,
         }
     )
     units = TRACKER.pd.DataFrame(
@@ -192,3 +222,55 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
     assert "imec0" in dialog.windowTitle()
     dialog.close()
     app.processEvents()
+
+
+def test_probe_anatomy_view_rejects_an_unmapped_probe():
+    channels = TRACKER.pd.DataFrame(
+        {
+            "probe_name": ["imec1", "imec1"],
+            "probe_channel_number": [0, 1],
+            "probe_horizontal_position": [11.0, 59.0],
+            "probe_vertical_position": [0.0, 20.0],
+            "trajectory_distance_um": [np.nan, np.nan],
+            "structure_acronym": [np.nan, np.nan],
+            "anatomy_mapped_at": [np.nan, np.nan],
+        }
+    )
+    units = TRACKER.pd.DataFrame(
+        {
+            "unit_key": ["imec1:1"],
+            "probe_name": ["imec1"],
+            "probe_channel_number": [0],
+        }
+    )
+    with pytest.raises(ValueError, match="has not been mapped yet"):
+        TRACKER.probe_anatomy_view_data(channels, units, "imec1", {})
+
+
+def test_staged_mapping_rejects_an_unmapped_selected_probe(tmp_path):
+    channels = TRACKER.pd.DataFrame(
+        {
+            "probe_name": ["imec1"],
+            "probe_channel_number": [0],
+            "probe_horizontal_position": [11.0],
+            "probe_vertical_position": [0.0],
+            **{name: [np.nan] for name in TRACKER.ANATOMY_MAPPING_COLUMNS},
+        }
+    )
+    units = TRACKER.pd.DataFrame(
+        {
+            "unit_key": ["imec1:1"],
+            "probe_name": ["imec1"],
+            "probe_channel_number": [0],
+            **{name: [np.nan] for name in TRACKER.ANATOMY_MAPPING_COLUMNS},
+        }
+    )
+    TRACKER.write_csv_atomic(channels, tmp_path / "channels.csv")
+    TRACKER.write_csv_atomic(units, tmp_path / "units.csv")
+    TRACKER.write_anatomy_sidecars(tmp_path, channels, units)
+    anatomy = tmp_path / "anatomy"
+    (anatomy / "proprietary_trajectory_manifest_imec1.json").write_text(
+        '{"probe_name":"imec1","slices":[]}', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="has not been mapped yet"):
+        TRACKER.verify_staged_mapping_outputs(tmp_path, 1, 1, "imec1")
