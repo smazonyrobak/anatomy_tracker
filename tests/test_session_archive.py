@@ -184,3 +184,51 @@ def test_session_load_rejects_transform_shape_that_does_not_match_loaded_atlas(t
         restored.close()
         window.close()
         app.processEvents()
+
+
+def test_remove_all_slices_can_cancel_clear_and_load_another_brain(tmp_path, monkeypatch):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    paths = [tmp_path / name for name in ("0.tif", "1.tif", "new-brain.tif")]
+    image = np.arange(1200, dtype=np.uint16).reshape(30, 40)
+    for index, path in enumerate(paths):
+        tifffile.imwrite(path, image + index)
+
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    window.load_slice(paths[0])
+    window.load_slice(paths[1])
+    window.sessions[0].brain_outline_points = [(float(index), 2.0) for index in range(8)]
+    window._update_auto_order_labels()
+
+    monkeypatch.setattr(
+        TRACKER.QtWidgets.QMessageBox,
+        "question",
+        lambda *args: TRACKER.QtWidgets.QMessageBox.StandardButton.No,
+    )
+    window.remove_all_slices_btn.click()
+    assert len(window.sessions) == 2
+    assert window.slice_list.count() == 2
+
+    monkeypatch.setattr(
+        TRACKER.QtWidgets.QMessageBox,
+        "question",
+        lambda *args: TRACKER.QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    window.remove_all_slices_btn.click()
+    assert window.sessions == []
+    assert window.current_session_index == -1
+    assert window.slice_list.count() == 0
+    assert window.slice_position.text() == "0 / 0"
+    assert window.auto_slice_order.count() == 0
+    assert window.slice_panel.image_shape is None
+    assert not window.remove_all_slices_btn.isEnabled()
+    assert all(path.exists() for path in paths[:2])
+
+    window.load_slice(paths[2])
+    assert len(window.sessions) == 1
+    assert window.current_session() is window.sessions[0]
+    assert window.slice_position.text() == "1 / 1"
+    assert window.slice_panel.image_shape == image.shape
+    assert window.remove_all_slices_btn.isEnabled()
+
+    window.close()
+    app.processEvents()

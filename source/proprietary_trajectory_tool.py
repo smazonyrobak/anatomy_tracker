@@ -4015,6 +4015,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         atlas_setup_layout.setColumnStretch(2, 2)
 
         self.add_slice_btn = QtWidgets.QPushButton("Add slices")
+        self.remove_all_slices_btn = QtWidgets.QPushButton("Remove all slices")
+        self.remove_all_slices_btn.setToolTip("Remove every loaded slice and its unsaved annotations")
+        self.remove_all_slices_btn.setEnabled(False)
         self.previous_slice_btn = QtWidgets.QPushButton("‹")
         self.previous_slice_btn.setToolTip("Previous slice (Ctrl+Left)")
         self.previous_slice_btn.setFixedWidth(32)
@@ -4050,7 +4053,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         slice_setup = QtWidgets.QGroupBox("Slices")
         slice_setup_layout = QtWidgets.QGridLayout(slice_setup)
         slice_setup_layout.addWidget(self.add_slice_btn, 0, 0)
-        slice_setup_layout.addWidget(slice_picker, 0, 1, 1, 4)
+        slice_setup_layout.addWidget(self.remove_all_slices_btn, 0, 1)
+        slice_setup_layout.addWidget(slice_picker, 0, 2, 1, 3)
         slice_setup_layout.addWidget(QtWidgets.QLabel("Rotation"), 1, 0)
         slice_setup_layout.addWidget(self.rotation, 1, 1)
         slice_setup_layout.addWidget(QtWidgets.QLabel("Flip"), 1, 2)
@@ -4558,6 +4562,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.atlas_tilt_dv.valueChanged.connect(self._atlas_tilt_changed)
         self.axis_position_um.valueChanged.connect(self._axis_um_changed)
         self.add_slice_btn.clicked.connect(self._load_slice_dialog)
+        self.remove_all_slices_btn.clicked.connect(self._remove_all_slices)
         self.slice_list.currentIndexChanged.connect(self._switch_slice)
         self.previous_slice_btn.clicked.connect(lambda: self._step_slice(-1))
         self.next_slice_btn.clicked.connect(lambda: self._step_slice(1))
@@ -5381,6 +5386,45 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._switch_slice(first_index)
         self.status.setText(f"Loaded {len(paths)} slices")
 
+    def _remove_all_slices(self) -> None:
+        if not self.sessions or self.auto_alignment_busy:
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Remove all slices?",
+            "Remove every loaded slice and its unsaved points and alignments?\n\n"
+            "The original image files will not be deleted.",
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.status.setText("Removing slices cancelled")
+            return
+
+        count = len(self.sessions)
+        self.sessions.clear()
+        self.current_session_index = -1
+        self._probe_fit_cache.clear()
+        self.slice_list.blockSignals(True)
+        self.slice_list.clear()
+        self.slice_list.blockSignals(False)
+        self.auto_slice_order.blockSignals(True)
+        self.auto_slice_order.clear()
+        self.auto_slice_order.blockSignals(False)
+        self.slice_panel.clear_outline_selection()
+        self.slice_panel.set_base(None)
+        self.slice_panel.set_overlay(None)
+        self.atlas_panel.set_overlay(None)
+        self.curve_editor.set_histogram(None)
+        self.curve_editor.set_points([(0.0, 0.0), (255.0, 255.0)])
+        for cache in self._session_cache_dirs:
+            cache.cleanup()
+        self._session_cache_dirs.clear()
+        self._update_slice_navigation()
+        self._refresh_atlas()
+        self._refresh_points()
+        self._refresh_3d()
+        self._update_probe_fit_summary()
+        self.status.setText(f"Removed {count} slices; ready to load another brain")
+
     def load_slice(self, path: Path, *, select: bool = True) -> None:
         session = SliceSession(
             name=path.name,
@@ -5487,6 +5531,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.slice_position.setText(f"{index + 1 if index >= 0 else 0} / {count}")
         self.previous_slice_btn.setEnabled(index > 0)
         self.next_slice_btn.setEnabled(0 <= index < count - 1)
+        self.remove_all_slices_btn.setEnabled(count > 0 and not self.auto_alignment_busy)
 
     def current_session(self) -> SliceSession | None:
         if 0 <= self.current_session_index < len(self.sessions):
@@ -6798,6 +6843,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
 
     def _refresh_point_counts(self) -> None:
+        self.remove_all_slices_btn.setEnabled(bool(self.sessions) and not self.auto_alignment_busy)
         session = self.current_session()
         if session is None:
             self.point_counts.setText("Surface 0 | Transform atlas 0 / slice 0 | Probe 0")
