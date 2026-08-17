@@ -1,0 +1,70 @@
+{
+  "run_name": "joint-development-5000-r4322",
+  "workspace": "F:\\AtlasJointTraining",
+  "atlas": "C:\\Users\\slic\\Desktop\\Proprietary Anatomy Tracker\\data\\Allen Brain Atlas 25um",
+  "registered_root": "F:\\AtlasPoseTraining_v7\\allen_registered_full_quicknii_ras_v2_20260811",
+  "pose_checkpoint": "F:\\AtlasPoseTraining_v7\\runs\\v7_100k_convnext_quicknii_v2_maskv6_trustedp5_rf50_cons005\\best.pt",
+  "dense_checkpoint": "F:\\AtlasWarpTraining\\runs\\final-v2-v13-100k-r4322\\best-validation.pt",
+  "device": "cuda",
+  "amp": true,
+  "amp_initial_scale": 512.0,
+  "seed": 4322,
+  "data_seed": 880301,
+  "total_views": 5000,
+  "stop_after_views": 2000,
+  "batch_size": 2,
+  "negatives_per_sample": 3,
+  "validation_negatives_per_sample": 6,
+  "refinement_steps": 2,
+  "candidate_chunk_size": 4,
+  "gradient_checkpointing": false,
+  "learning_rate": 0.0001,
+  "weight_decay": 0.0001,
+  "ema_decay": 0.995,
+  "gradient_clip": 1.0,
+  "scheduler_warmup_views": 200,
+  "stages": [
+    {"name": "review", "until_views": 600},
+    {"name": "geometry", "until_views": 1600},
+    {"name": "joint", "until_views": 5000}
+  ],
+  "live_initializer_fraction_by_stage": {
+    "review": 0.25,
+    "geometry": 0.5,
+    "joint": 0.75
+  },
+  "stratum_probabilities_by_stage": {
+    "review": [0.3, 0.5, 0.2],
+    "geometry": [0.15, 0.5, 0.35],
+    "joint": [0.1, 0.45, 0.45]
+  },
+  "registered_fraction_by_stage": {
+    "review": 0.0,
+    "geometry": 0.25,
+    "joint": 0.5
+  },
+  "high_tilt_fraction_by_stage": {
+    "review": 0.2,
+    "geometry": 0.15,
+    "joint": 0.15
+  },
+  "loss_weights": {
+    "initializer_pose": 1.0,
+    "refined_pose": 1.0,
+    "plane_anchor": 0.15,
+    "ranking": 0.25,
+    "dense": 1.0
+  },
+  "validation_every_views": 500,
+  "checkpoint_every_views": 500,
+  "validation_count_per_stratum": 16,
+  "validation_batch_size": 2,
+  "high_tilt_validation_count_per_stratum": 8,
+  "high_tilt_selection_weight": 0.2,
+  "registered_validation_count": 96,
+  "registered_validation_batch_size": 2,
+  "registered_validation_weight": 0.5,
+  "validation_seed": 990011,
+  "early_stopping_patience_validations": 0,
+  "progress_every_seconds": 30
+}
