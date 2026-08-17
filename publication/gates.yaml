@@ -46,13 +46,10 @@ joint_feedback:
     requirement: "true plane ranked above frozen near-negative set at preregistered rate"
   deformation_cannot_hide_pose:
     requirement: "wrong-pose stress test passes frozen compatibility and field-magnitude checks"
-confidence:
-  thresholds: "freeze from validation before hidden test"
+risk_ranking:
   required_reports:
     - "risk_coverage_and_aurc"
     - "error_threshold_detection_auroc_and_auprc"
-    - "false_safe_rate"
-    - "reliability_calibration"
 constraints:
   hard_satisfaction_rate_minimum: 1.0
   disabled_constraint_invariance_required: true

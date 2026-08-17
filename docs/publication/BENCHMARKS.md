@@ -52,12 +52,15 @@ All newly trained controls receive identical data manifests, preprocessing, seed
 - forward/reverse endpoint and cycle error;
 - fold fraction/count, minimum Jacobian and SD log-Jacobian.
 
-### Confidence
+### Compatibility-derived risk
 
 - risk--coverage and area under risk--coverage;
 - AUROC/AUPRC for exceeding frozen error thresholds;
-- calibration error and reliability plots;
-- false-safe rate and accepted-case error at fixed coverage.
+- accepted-case error at fixed coverage.
+
+The version-1 risk score is evaluated only as an ordering statistic. It is not
+reported as a calibrated probability; probability calibration would require a
+separately prespecified development-only fit and qualification.
 
 ### Probe utility
 
@@ -78,6 +81,12 @@ All newly trained controls receive identical data manifests, preprocessing, seed
 ## Robustness
 
 Use paired clean/corrupted images so degradation is measured within sample. Sweep rotation, scale, brightness/background, tiling/vignette, tears, missing cortex, occlusion, blur, bubbles, specks and blowout independently and in combinations. Separately hold out laboratory, acquisition/stain and unusual anatomy. Report full severity curves rather than one aggregate.
+
+The independent synthetic benchmark reuses Allen CCF anatomy, and the AtlasPose
+warm start was exposed to the full AP domain. Its independent manifests,
+deformations, artifacts and dense-training AP blocks test transformation recovery;
+they do not constitute unseen anatomy or unseen AP coordinates. Only animal- and
+laboratory-held-out real data can support that generalization claim.
 
 ## Prespecified ablations
 

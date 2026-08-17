@@ -78,7 +78,7 @@ Superiority to a comparator requires a paired brain-level confidence interval ex
 - plane-anchor/corner error and catastrophic-error rates;
 - landmark p95 error, macro Dice, bottom-30% Dice, boundary F1, ASSD and HD95;
 - forward/reverse endpoint error, cycle error, negative-Jacobian fraction, minimum determinant and SD log-Jacobian;
-- risk--coverage, failure-detection AUROC, calibration error and false-safe rate;
+- risk--coverage and failure-detection AUROC/AUPRC from the compatibility-derived risk ordering;
 - trajectory entry, angular, roll, depth and region-sequence errors;
 - latency, peak memory, failure rate and manual interaction time.
 

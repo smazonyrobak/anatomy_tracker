@@ -4,7 +4,7 @@ created_date: "2026-08-17"
 status: "protocol_frozen_implementation_and_hidden_seed_pending"
 purpose: >-
   One-shot exact end-to-end measurement of pose localization, bounded nonlinear
-  correspondence, confidence, and recurrent improvement after the candidate is frozen.
+  correspondence, compatibility-derived risk ranking, and recurrent improvement after the candidate is frozen.
 scope:
   species: "Mus musculus"
   plane: "whole coronal section"
@@ -23,7 +23,8 @@ cases:
 independence:
   required:
     - "No import from the training joint generator."
-    - "Disjoint AP-index blocks from development cases."
+    - "Disjoint manifests, perturbations, and dense-training AP blocks from joint development cases."
+    - "Report overlap with every pretrained pose source; same-CCF AP centers are not claimed as unseen anatomy."
     - "Independent deformation and artifact implementation, not merely new random seeds."
     - "Evaluator source and dependencies hashed before hidden-seed creation."
     - "Hidden seed created after checkpoint freeze and unavailable to model selection."
@@ -41,7 +42,7 @@ independence:
 outputs_required:
   - "initial pose and every recurrent pose"
   - "final forward and inverse absolute pixel maps"
-  - "compatibility score and declared uncertainty"
+  - "compatibility-derived monotone risk score"
   - "valid/missing tissue masks"
   - "wall time, provider and peak memory"
 metrics:
@@ -59,10 +60,9 @@ metrics:
     - "end-to-end region correspondence from predicted pose and warp"
     - "iteration-wise pose and correspondence monotonicity"
     - "true-plane rank among frozen near negatives"
-  confidence:
+  risk_ranking:
     - "risk-coverage and AURC"
     - "error-threshold AUROC/AUPRC"
-    - "false-safe rate"
 execution:
   checkpoint_frozen_before_seed: true
   maximum_recorded_runs: 1
