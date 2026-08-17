@@ -1291,3 +1291,52 @@ def test_surface_edits_preserve_authoritative_crop_and_alignment_state(tmp_path,
     finally:
         window.close()
         app.processEvents()
+
+
+def test_smart_brush_highlight_persists_and_tracks_outline_edits(tmp_path):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    try:
+        image = np.zeros((36, 48), dtype=np.uint8)
+        mask = np.zeros_like(image)
+        mask[10:26, 10:31] = 1
+        session = TRACKER.SliceSession(
+            name="highlighted",
+            raw_display=image,
+            adjusted=image,
+            rotated=image,
+            weight_image=image,
+            brain_outline_points=[(10.0, 10.0), (30.0, 10.0), (30.0, 25.0), (10.0, 25.0)],
+            brain_outline_closed=True,
+            brain_brush_strokes=[(False, [(20.0, 18.0)])],
+            brain_brush_selection_mask=mask,
+        )
+        window.sessions = [session]
+        window.slice_list.addItem(session.name)
+        window.current_session_index = 0
+        window.slice_panel.set_base(image)
+
+        window.alignment_tabs.setCurrentIndex(1)
+        window._refresh_points()
+        before = window._surface_highlight_mask(session).copy()
+        assert window.slice_panel.selection_item.isVisible()
+
+        window.alignment_tabs.setCurrentIndex(0)
+        assert window.slice_panel.selection_item.isVisible()
+
+        window.alignment_tabs.setCurrentIndex(1)
+        window.auto_outline_mode.setChecked(True)
+        window._slice_clicked(35.0, 17.0)
+        after_insert = window._surface_highlight_mask(session).copy()
+        assert not np.array_equal(after_insert, before)
+        assert window.slice_panel.selection_item.isVisible()
+
+        inserted = session.brain_outline_points.index((35.0, 17.0))
+        window._surface_point_deleted(inserted)
+        after_delete = window._surface_highlight_mask(session)
+        assert np.array_equal(after_delete, before)
+        assert window.slice_panel.selection_item.isVisible()
+        assert session.brain_brush_selection_mask is mask
+    finally:
+        window.close()
+        app.processEvents()
