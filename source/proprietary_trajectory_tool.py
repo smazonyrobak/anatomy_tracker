@@ -3791,6 +3791,323 @@ class CurveEditor(QtWidgets.QWidget):
         self.canvas.set_points(self.points)
 
 
+def probe_aligned_atlas_section(
+    atlas_volume: np.ndarray,
+    annotation_volume: np.ndarray,
+    sites: pd.DataFrame,
+    bregma_voxel: np.ndarray | None = None,
+) -> dict[str, object]:
+    """Sample a vertical Allen-atlas plane containing the fitted probe line."""
+    if atlas_volume.shape != annotation_volume.shape or atlas_volume.ndim != 3:
+        raise ValueError("Atlas template and annotation volumes must have one matching 3-D shape")
+    stereotaxic_columns = ("stereotaxic_ap_um", "stereotaxic_dv_um", "stereotaxic_ml_um")
+    coordinate_columns = next(
+        (
+            columns
+            for columns in (
+                ("ccf_ap_index", "ccf_dv_index", "ccf_ml_index"),
+                ("atlas_ap", "atlas_dv", "atlas_ml"),
+            )
+            if set(columns).issubset(sites.columns)
+        ),
+        None,
+    )
+    if bregma_voxel is not None and set(stereotaxic_columns).issubset(sites.columns):
+        stereotaxic = sites.loc[:, stereotaxic_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        observed = np.asarray(bregma_voxel, dtype=np.float64) + stereotaxic / (
+            VOXEL_UM * STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+        )
+    elif coordinate_columns is not None:
+        observed = sites.loc[:, coordinate_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    else:
+        raise ValueError("Mapped channels do not contain Allen CCF coordinates")
+    distances = pd.to_numeric(sites["trajectory_distance_um"], errors="coerce").to_numpy(dtype=float)
+    valid = np.isfinite(distances) & np.isfinite(observed).all(axis=1)
+    if np.count_nonzero(valid) < 2 or np.unique(distances[valid]).size < 2:
+        raise ValueError("At least two mapped probe depths are required to construct the trajectory plane")
+
+    design = np.column_stack((distances[valid], np.ones(np.count_nonzero(valid))))
+    slope, intercept = np.linalg.lstsq(design, observed[valid], rcond=None)[0]
+    slope_norm = float(np.linalg.norm(slope))
+    if slope_norm < 1e-9:
+        raise ValueError("Mapped channel coordinates do not define a probe direction")
+    fitted_coordinates = distances[:, None] * slope + intercept
+    direction = slope / slope_norm
+    horizontal = np.asarray([direction[0], 0.0, direction[2]], dtype=np.float64)
+    if np.linalg.norm(horizontal) < 1e-6:
+        horizontal = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
+    else:
+        horizontal /= np.linalg.norm(horizontal)
+    stereotaxic_horizontal = horizontal * STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+    dominant = 0 if abs(stereotaxic_horizontal[0]) > abs(stereotaxic_horizontal[2]) else 2
+    if stereotaxic_horizontal[dominant] < 0.0:
+        horizontal *= -1.0
+
+    anchor = fitted_coordinates[valid].mean(axis=0)
+    corners = np.asarray(
+        [
+            (ap, dv, ml)
+            for ap in (0.0, atlas_volume.shape[0] - 1.0)
+            for dv in (0.0, atlas_volume.shape[1] - 1.0)
+            for ml in (0.0, atlas_volume.shape[2] - 1.0)
+        ],
+        dtype=np.float64,
+    )
+    projected = (corners - anchor) @ horizontal
+    x_min = float(np.floor(projected.min()))
+    x_max = float(np.ceil(projected.max()))
+    x_values = np.linspace(x_min, x_max, int(x_max - x_min) + 1, dtype=np.float64)
+    dv_values = np.arange(atlas_volume.shape[1], dtype=np.float64)
+    plane_dv, plane_x = np.meshgrid(dv_values, x_values, indexing="ij")
+    coordinates = anchor[:, None, None] + horizontal[:, None, None] * plane_x[None, :, :]
+    coordinates = np.broadcast_to(coordinates, (3, *plane_x.shape)).copy()
+    coordinates[1] = plane_dv
+    atlas = map_coordinates(
+        atlas_volume,
+        coordinates,
+        output=np.float32,
+        order=1,
+        mode="constant",
+        cval=0.0,
+        prefilter=False,
+    )
+    annotation = map_coordinates(
+        annotation_volume,
+        coordinates,
+        order=0,
+        mode="constant",
+        cval=0,
+        prefilter=False,
+    ).astype(annotation_volume.dtype, copy=False)
+    intensity_values = atlas[annotation > 0]
+    if not intensity_values.size:
+        intensity_values = atlas[np.isfinite(atlas)]
+    low, high = np.percentile(intensity_values, (1.0, 99.0))
+    atlas_u8 = np.clip((atlas - low) * 255.0 / max(float(high - low), 1e-6), 0.0, 255.0).astype(np.uint8)
+
+    unique_distances = np.unique(distances[np.isfinite(distances)])
+    path_coordinates = unique_distances[:, None] * slope + intercept
+    path_pixels = np.column_stack(((path_coordinates - anchor) @ horizontal - x_min, path_coordinates[:, 1]))
+    tip_coordinate = intercept
+    tip_pixel = np.asarray([(tip_coordinate - anchor) @ horizontal - x_min, tip_coordinate[1]])
+    horizontal_stereotaxic = horizontal * STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+    bearing_deg = float(np.degrees(np.arctan2(horizontal_stereotaxic[2], horizontal_stereotaxic[0])))
+    return {
+        "atlas": atlas_u8,
+        "annotation": annotation,
+        "anchor": anchor,
+        "horizontal": horizontal,
+        "x_min": x_min,
+        "x_max": x_max,
+        "path_pixels": path_pixels,
+        "tip_pixel": tip_pixel,
+        "bearing_deg": bearing_deg,
+    }
+
+
+class ProbeAtlasSectionWidget(QtWidgets.QWidget):
+    def __init__(
+        self,
+        probe_name: str,
+        sites: pd.DataFrame,
+        atlas_volume: np.ndarray,
+        annotation_volume: np.ndarray,
+        region_names: dict[int, tuple[str, str]],
+        region_colors: dict[int, str],
+        bregma_voxel: np.ndarray,
+    ) -> None:
+        super().__init__()
+        self.probe_name = probe_name
+        self.region_names = region_names
+        self.region_colors = region_colors
+        self.bregma_voxel = np.asarray(bregma_voxel, dtype=np.float64)
+        self.section = probe_aligned_atlas_section(
+            atlas_volume, annotation_volume, sites, bregma_voxel
+        )
+        self.atlas = np.asarray(self.section["atlas"], dtype=np.uint8)
+        self.annotation = np.asarray(self.section["annotation"])
+        self._hovered_region: int | None = None
+        self._pinned_region: int | None = None
+        self._contours: dict[int, list[np.ndarray]] = {}
+        self._status = "Hover a region for its name and stereotaxic coordinates; click to pin it."
+        self._image = self._colored_atlas_image()
+        self.setMouseTracking(True)
+        self.setMinimumSize(520, 500)
+
+    @staticmethod
+    def _rgb(value: str) -> np.ndarray:
+        text = str(value).strip().lstrip("#")
+        if len(text) != 6:
+            text = "354453"
+        return np.asarray([int(text[index : index + 2], 16) for index in (0, 2, 4)], dtype=np.float32)
+
+    def _colored_atlas_image(self) -> QtGui.QImage:
+        rgb = np.repeat(self.atlas[:, :, None], 3, axis=2).astype(np.float32)
+        region_ids, inverse = np.unique(self.annotation, return_inverse=True)
+        palette = np.asarray(
+            [
+                np.zeros(3, dtype=np.float32)
+                if int(region_id) == 0
+                else self._rgb(self.region_colors.get(int(region_id), "354453"))
+                for region_id in region_ids
+            ]
+        )
+        color_layer = palette[inverse].reshape(*self.annotation.shape, 3)
+        inside = self.annotation > 0
+        rgb[inside] = 0.64 * rgb[inside] + 0.36 * color_layer[inside]
+        boundary = np.zeros(self.annotation.shape, dtype=bool)
+        boundary[:, 1:] |= self.annotation[:, 1:] != self.annotation[:, :-1]
+        boundary[1:, :] |= self.annotation[1:, :] != self.annotation[:-1, :]
+        boundary &= inside
+        rgb[boundary] = 0.35 * rgb[boundary] + 0.65 * np.asarray([225, 238, 248])
+        rgb = np.ascontiguousarray(np.clip(rgb, 0, 255).astype(np.uint8))
+        return QtGui.QImage(
+            rgb.data,
+            rgb.shape[1],
+            rgb.shape[0],
+            rgb.strides[0],
+            QtGui.QImage.Format.Format_RGB888,
+        ).copy()
+
+    def _image_rect(self) -> QtCore.QRectF:
+        available = QtCore.QRectF(12.0, 12.0, max(1.0, self.width() - 24.0), max(1.0, self.height() - 54.0))
+        ratio = self.atlas.shape[1] / self.atlas.shape[0]
+        if available.width() / available.height() > ratio:
+            width = available.height() * ratio
+            return QtCore.QRectF(available.center().x() - width / 2.0, available.top(), width, available.height())
+        height = available.width() / ratio
+        return QtCore.QRectF(available.left(), available.center().y() - height / 2.0, available.width(), height)
+
+    def _source_point(self, position: QtCore.QPointF) -> tuple[float, float] | None:
+        target = self._image_rect()
+        if not target.contains(position):
+            return None
+        return (
+            (position.x() - target.left()) / target.width() * (self.atlas.shape[1] - 1),
+            (position.y() - target.top()) / target.height() * (self.atlas.shape[0] - 1),
+        )
+
+    def _widget_point(self, point: np.ndarray | tuple[float, float]) -> QtCore.QPointF:
+        target = self._image_rect()
+        return QtCore.QPointF(
+            target.left() + float(point[0]) / max(self.atlas.shape[1] - 1, 1) * target.width(),
+            target.top() + float(point[1]) / max(self.atlas.shape[0] - 1, 1) * target.height(),
+        )
+
+    def _volume_coordinate(self, x: float, y: float) -> np.ndarray:
+        fraction = x / max(self.atlas.shape[1] - 1, 1)
+        plane_x = float(self.section["x_min"]) + fraction * (
+            float(self.section["x_max"]) - float(self.section["x_min"])
+        )
+        coordinate = np.asarray(self.section["anchor"], dtype=np.float64) + np.asarray(
+            self.section["horizontal"], dtype=np.float64
+        ) * plane_x
+        coordinate[1] = y / max(self.atlas.shape[0] - 1, 1) * (self.atlas.shape[0] - 1)
+        return coordinate
+
+    def _region_description(self, region_id: int, coordinate: np.ndarray) -> str:
+        name, acronym = self.region_names.get(region_id, ("Outside labelled atlas", "Outside"))
+        stereotaxic = volume_to_stereotaxic_um(coordinate, self.bregma_voxel)
+        return (
+            f"{acronym or region_id} — {name or region_id}\n"
+            f"AP {stereotaxic[0]:+.0f} um | ML {stereotaxic[2]:+.0f} um | DV {stereotaxic[1]:+.0f} um"
+        )
+
+    def _active_region(self) -> int | None:
+        return self._hovered_region if self._hovered_region is not None else self._pinned_region
+
+    def _draw_region_highlight(self, painter: QtGui.QPainter, region_id: int) -> None:
+        if region_id <= 0:
+            return
+        if region_id not in self._contours:
+            contours, _ = cv2.findContours(
+                (self.annotation == region_id).astype(np.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            self._contours[region_id] = [cv2.approxPolyDP(contour, 0.8, True) for contour in contours]
+        color = ProbeAnatomyWidget._color(self.region_colors.get(region_id, "354453"), 55)
+        painter.setBrush(color)
+        painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 2.0))
+        for contour in self._contours[region_id]:
+            polygon = QtGui.QPolygonF(
+                [self._widget_point(point[0]) for point in contour]
+            )
+            painter.drawPolygon(polygon)
+
+    def paintEvent(self, _: QtGui.QPaintEvent) -> None:
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QtGui.QColor("#0f131a"))
+        target = self._image_rect()
+        painter.drawImage(target, self._image)
+        active_region = self._active_region()
+        if active_region is not None:
+            self._draw_region_highlight(painter, active_region)
+
+        path_points = [self._widget_point(point) for point in np.asarray(self.section["path_pixels"])]
+        probe = QtGui.QColor(*probe_color(self.probe_name))
+        if path_points:
+            path = QtGui.QPainterPath(path_points[0])
+            for point in path_points[1:]:
+                path.lineTo(point)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 5.0))
+            painter.drawPath(path)
+            painter.setPen(QtGui.QPen(probe, 2.5))
+            painter.drawPath(path)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(probe)
+            stride = max(1, len(path_points) // 48)
+            for point in path_points[::stride]:
+                painter.drawEllipse(point, 2.2, 2.2)
+        tip = self._widget_point(np.asarray(self.section["tip_pixel"]))
+        painter.setPen(QtGui.QPen(QtGui.QColor("#ffffff"), 1.2))
+        painter.setBrush(probe)
+        painter.drawEllipse(tip, 4.5, 4.5)
+        painter.setPen(QtGui.QColor("#ffffff"))
+        painter.drawText(QtCore.QPointF(tip.x() + 7.0, tip.y() + 4.0), "TIP")
+
+        painter.setFont(QtGui.QFont("Segoe UI", 8))
+        painter.setPen(QtGui.QColor("#9fb4c8"))
+        bearing = float(self.section["bearing_deg"])
+        footer = f"Probe-aligned vertical plane • horizontal AP–ML bearing {bearing:+.1f}° • {self._status}"
+        painter.drawText(
+            QtCore.QRectF(12.0, self.height() - 34.0, self.width() - 24.0, 28.0),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            footer,
+        )
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        point = self._source_point(event.position())
+        if point is None:
+            self._hovered_region = None
+            self.update()
+            return
+        x, y = point
+        region_id = int(self.annotation[int(round(y)), int(round(x))])
+        coordinate = self._volume_coordinate(x, y)
+        description = self._region_description(region_id, coordinate)
+        self._hovered_region = region_id
+        self._status = description.replace("\n", " • ")
+        QtWidgets.QToolTip.showText(event.globalPosition().toPoint(), description + "\nClick to pin", self)
+        self.update()
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        point = self._source_point(event.position())
+        if point is None:
+            return
+        x, y = point
+        self._pinned_region = int(self.annotation[int(round(y)), int(round(x))])
+        self.update()
+
+    def leaveEvent(self, _: QtCore.QEvent) -> None:
+        self._hovered_region = None
+        QtWidgets.QToolTip.hideText()
+        self.update()
+
+
 class ProbeAnatomyWidget(QtWidgets.QWidget):
     def __init__(self, sites: pd.DataFrame) -> None:
         super().__init__()
@@ -3918,23 +4235,70 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
 
 
 class ProbeAnatomyDialog(QtWidgets.QDialog):
-    def __init__(self, probe_name: str, sites: pd.DataFrame, summary: pd.DataFrame, parent=None) -> None:
+    def __init__(
+        self,
+        probe_name: str,
+        sites: pd.DataFrame,
+        summary: pd.DataFrame,
+        parent=None,
+        *,
+        atlas_volume: np.ndarray | None = None,
+        annotation_volume: np.ndarray | None = None,
+        region_names: dict[int, tuple[str, str]] | None = None,
+        region_colors: dict[int, str] | None = None,
+        bregma_voxel: np.ndarray | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{probe_name} — Allen anatomy along probe")
-        self.resize(900, 720)
+        self.resize(1480, 780)
         layout = QtWidgets.QVBoxLayout(self)
-        title = QtWidgets.QLabel(f"<b>{probe_name}</b> — mapped recording sites")
+        title = QtWidgets.QLabel(f"<b>{probe_name}</b> — mapped anatomy and probe-aligned atlas section")
         title.setStyleSheet("font-size:16px; color:#d7e7f5;")
         subtitle = QtWidgets.QLabel(
             "Each square is a physical recording site colored by its assigned Allen structure. "
-            "Hover a site for channel, structure, depth, and unit count."
+            "The atlas view is a vertical cut containing the fitted probe trajectory; hover structures "
+            "for stereotaxic coordinates and click to keep a region highlighted."
         )
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("color:#9fb4c8;")
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        splitter.addWidget(ProbeAnatomyWidget(sites))
+        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+
+        section_panel = QtWidgets.QWidget()
+        section_layout = QtWidgets.QVBoxLayout(section_panel)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_title = QtWidgets.QLabel("Probe-aligned Allen atlas plane")
+        section_title.setStyleSheet("font-weight:600; color:#d7e7f5;")
+        section_layout.addWidget(section_title)
+        self.atlas_section_widget: ProbeAtlasSectionWidget | None = None
+        if atlas_volume is not None and annotation_volume is not None and bregma_voxel is not None:
+            try:
+                self.atlas_section_widget = ProbeAtlasSectionWidget(
+                    probe_name,
+                    sites,
+                    atlas_volume,
+                    annotation_volume,
+                    region_names or {},
+                    region_colors or {},
+                    bregma_voxel,
+                )
+                section_layout.addWidget(self.atlas_section_widget, 1)
+            except ValueError as exc:
+                unavailable = QtWidgets.QLabel(f"Probe-aligned atlas plane unavailable:\n{exc}")
+                unavailable.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+                unavailable.setWordWrap(True)
+                unavailable.setStyleSheet("color:#9fb4c8;")
+                section_layout.addWidget(unavailable, 1)
+        else:
+            unavailable = QtWidgets.QLabel("Load the Allen atlas to display the probe-aligned section.")
+            unavailable.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            unavailable.setWordWrap(True)
+            unavailable.setStyleSheet("color:#9fb4c8;")
+            section_layout.addWidget(unavailable, 1)
+        self.splitter.addWidget(section_panel)
+        self.splitter.addWidget(ProbeAnatomyWidget(sites))
         table = QtWidgets.QTableWidget(len(summary), 5)
         table.setHorizontalHeaderLabels(["Region", "Name", "Channels", "Units", "Depth from tip"])
         table.verticalHeader().setVisible(False)
@@ -3959,9 +4323,12 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
         table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
         for column in (2, 3, 4):
             table.horizontalHeader().setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        splitter.addWidget(table)
-        splitter.setSizes([390, 500])
-        layout.addWidget(splitter, 1)
+        self.splitter.addWidget(table)
+        self.splitter.setStretchFactor(0, 5)
+        self.splitter.setStretchFactor(1, 3)
+        self.splitter.setStretchFactor(2, 4)
+        self.splitter.setSizes([650, 340, 450])
+        layout.addWidget(self.splitter, 1)
         totals = QtWidgets.QLabel(
             f"{len(sites)} channels • {int(summary['units'].sum())} units • "
             f"{int(summary['structure_id'].notna().sum())} labelled structures"
@@ -4748,7 +5115,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         previous = self._probe_anatomy_dialogs.pop(probe_name, None)
         if previous is not None:
             previous.close()
-        dialog = ProbeAnatomyDialog(probe_name, sites, summary, self)
+        dialog = ProbeAnatomyDialog(
+            probe_name,
+            sites,
+            summary,
+            self,
+            atlas_volume=self.atlas_volume,
+            annotation_volume=self.annotation_volume,
+            region_names=self.region_names,
+            region_colors=self.region_colors,
+            bregma_voxel=self.bregma_voxel,
+        )
         dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.destroyed.connect(
             lambda _=None, key=probe_name, target=dialog: (

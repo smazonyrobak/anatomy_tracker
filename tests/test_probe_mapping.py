@@ -188,6 +188,38 @@ def test_probe_anatomy_view_uses_physical_sites_atlas_colors_and_unit_counts():
     assert summary["depth_max_um"].tolist() == [240.0, 260.0]
 
 
+def test_probe_aligned_atlas_section_contains_fitted_trajectory_and_regions():
+    ap, dv, ml = np.indices((48, 32, 40))
+    atlas = (ap + 2 * dv + ml).astype(np.float32)
+    annotation = np.where(ml < 20, 101, 202).astype(np.uint16)
+    distances = np.asarray([0.0, 250.0, 500.0, 750.0])
+    sites = TRACKER.pd.DataFrame(
+        {
+            "trajectory_distance_um": distances,
+            "ccf_ap_index": 20.0 + 0.012 * distances,
+            "ccf_dv_index": 26.0 - 0.020 * distances,
+            "ccf_ml_index": 16.0 + 0.008 * distances,
+        }
+    )
+
+    section = TRACKER.probe_aligned_atlas_section(atlas, annotation, sites)
+
+    assert section["atlas"].shape == section["annotation"].shape
+    assert section["atlas"].shape[0] == atlas.shape[1]
+    assert {101, 202}.issubset(set(np.unique(section["annotation"])))
+    path = np.asarray(section["path_pixels"])
+    assert path.shape == (4, 2)
+    assert np.all((path[:, 0] >= 0) & (path[:, 0] < section["atlas"].shape[1]))
+    assert np.allclose(path[:, 1], sites["ccf_dv_index"])
+
+    bregma = np.asarray([24.0, 4.0, 20.0])
+    exact = sites[["ccf_ap_index", "ccf_dv_index", "ccf_ml_index"]].to_numpy(dtype=float) + 0.35
+    stereotaxic = (exact - bregma) * VOXEL_UM * TRACKER.STEREOTAXIC_AXIS_SIGN_AP_DV_ML
+    sites[["stereotaxic_ap_um", "stereotaxic_dv_um", "stereotaxic_ml_um"]] = stereotaxic
+    precise = TRACKER.probe_aligned_atlas_section(atlas, annotation, sites, bregma)
+    assert np.allclose(np.asarray(precise["path_pixels"])[:, 1], exact[:, 1])
+
+
 def test_probe_anatomy_dialog_renders_mapped_sites():
     app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
     channels = TRACKER.pd.DataFrame(
@@ -200,6 +232,9 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
             "structure_id": [101, 202],
             "structure_name": ["Region A", "Region B"],
             "structure_acronym": ["A", "B"],
+            "ccf_ap_index": [20.0, 20.5],
+            "ccf_dv_index": [25.0, 24.0],
+            "ccf_ml_index": [15.0, 15.5],
             "anatomy_mapped_at": ["2026-08-14"] * 2,
         }
     )
@@ -213,13 +248,27 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
     sites, summary = TRACKER.probe_anatomy_view_data(
         channels, units, "imec0", {101: "112233", 202: "AABBCC"}
     )
-    dialog = TRACKER.ProbeAnatomyDialog("imec0", sites, summary)
+    ap, dv, ml = np.indices((48, 32, 40))
+    atlas = (ap + dv + ml).astype(np.float32)
+    annotation = np.where(ml < 20, 101, 202).astype(np.uint16)
+    dialog = TRACKER.ProbeAnatomyDialog(
+        "imec0",
+        sites,
+        summary,
+        atlas_volume=atlas,
+        annotation_volume=annotation,
+        region_names={101: ("Region A", "A"), 202: ("Region B", "B")},
+        region_colors={101: "112233", 202: "AABBCC"},
+        bregma_voxel=np.asarray([24.0, 4.0, 20.0]),
+    )
     dialog.show()
     app.processEvents()
     image = dialog.grab().toImage()
-    assert image.width() >= 900
+    assert image.width() >= 1400
     assert image.height() >= 700
     assert "imec0" in dialog.windowTitle()
+    assert dialog.atlas_section_widget is not None
+    assert {101, 202}.issubset(set(np.unique(dialog.atlas_section_widget.annotation)))
     dialog.close()
     app.processEvents()
 
