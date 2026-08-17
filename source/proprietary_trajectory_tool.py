@@ -63,7 +63,7 @@ from probe_constraints import (
 )
 
 
-APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 RESOURCE_DIR = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else APP_DIR
 INSTALL_ROOT = APP_DIR.parent.parent if getattr(sys, "frozen", False) and APP_DIR.parent.name.lower() == "tools" else APP_DIR
 DEFAULT_ATLAS_FOLDER = INSTALL_ROOT / "data" / "Allen Brain Atlas 25um"
@@ -195,6 +195,52 @@ PROBE_TIP_TO_Y0_CONTACT_UM = {
     "Neuropixels 2.0 single-shank": 217.0,
     "Neuropixels 2.0 four-shank": 217.0,
 }
+PROBE_BANK_LAYOUT = {
+    # bank count, distance between bank starts, vertical site-row pitch
+    "Neuropixels 1.0": (3, 3840.0, 20.0),
+    "Neuropixels 2.0 single-shank": (4, 2880.0, 15.0),
+    "Neuropixels 2.0 four-shank": (4, 2880.0, 15.0),
+}
+PROBE_ELECTRODE_LAYOUT = {
+    # site count, row pitch, repeating x positions for each row
+    "Neuropixels 1.0": (960, 20.0, ((27.0, 59.0), (11.0, 43.0))),
+    "Neuropixels 2.0 single-shank": (1280, 15.0, ((0.0, 32.0),)),
+    "Neuropixels 2.0 four-shank": (1280, 15.0, ((0.0, 32.0),)),
+}
+
+
+def probe_bank_intervals_um(probe_type: str) -> list[tuple[str, float, float]]:
+    """Return physical-shank intervals separated at electrode-bank boundaries."""
+    count, bank_step_um, row_pitch_um = PROBE_BANK_LAYOUT[probe_type]
+    physical_length_um = PROBE_PHYSICAL_LENGTH_UM[probe_type]
+    first_site_um = PROBE_TIP_TO_Y0_CONTACT_UM[probe_type]
+    boundaries = [0.0]
+    boundaries.extend(
+        min(physical_length_um, first_site_um + index * bank_step_um - row_pitch_um / 2.0)
+        for index in range(1, count)
+    )
+    boundaries.append(physical_length_um)
+    return [
+        (f"Bank {index}", float(lower), float(upper))
+        for index, (lower, upper) in enumerate(zip(boundaries, boundaries[1:]))
+        if upper > lower
+    ]
+
+
+def probe_electrode_lattice(probe_type: str) -> np.ndarray:
+    """Return electrode ID, horizontal position, and physical-shank position."""
+    site_count, row_pitch_um, row_patterns = PROBE_ELECTRODE_LAYOUT[probe_type]
+    sites_per_row = len(row_patterns[0])
+    row_count = site_count // sites_per_row
+    x = np.concatenate([row_patterns[row % len(row_patterns)] for row in range(row_count)])
+    y = np.repeat(np.arange(row_count, dtype=np.float64) * row_pitch_um, sites_per_row)
+    return np.column_stack(
+        (
+            np.arange(site_count, dtype=np.float64),
+            x,
+            y + PROBE_TIP_TO_Y0_CONTACT_UM[probe_type],
+        )
+    )
 
 
 def probe_mapping_coordinates(
@@ -823,6 +869,11 @@ def probe_anatomy_view_data(
     sites["trajectory_distance_um"] = pd.to_numeric(
         sites["trajectory_distance_um"], errors="raise"
     )
+    used = np.ones(len(sites), dtype=bool)
+    for column in ("channel_connected", "used_for_sorting"):
+        if column in sites.columns:
+            used &= sites[column].fillna(False).astype(bool).to_numpy()
+    sites["site_is_used"] = used
     sites["structure_id"] = pd.to_numeric(
         sites.get("structure_id", pd.Series(np.nan, index=sites.index)), errors="coerce"
     )
@@ -4131,6 +4182,103 @@ class ProbeAtlasSectionWidget(QtWidgets.QWidget):
         self.update()
 
 
+class ProbeRangeSlider(QtWidgets.QWidget):
+    range_changed = QtCore.Signal(float, float)
+
+    def __init__(self, maximum_um: float) -> None:
+        super().__init__()
+        self.maximum_um = float(maximum_um)
+        self.lower_um = 0.0
+        self.upper_um = self.maximum_um
+        self._dragging: str | None = None
+        self.setFixedWidth(64)
+        self.setMinimumHeight(400)
+        self.setToolTip("Drag either handle to select the visible physical shank range. Double-click to reset.")
+
+    def set_selected_range(self, lower_um: float, upper_um: float) -> None:
+        lower = float(np.clip(min(lower_um, upper_um), 0.0, self.maximum_um))
+        upper = float(np.clip(max(lower_um, upper_um), 0.0, self.maximum_um))
+        if upper - lower < 200.0:
+            if self._dragging == "lower":
+                lower = max(0.0, upper - 200.0)
+            else:
+                upper = min(self.maximum_um, lower + 200.0)
+        if (lower, upper) == (self.lower_um, self.upper_um):
+            return
+        self.lower_um, self.upper_um = lower, upper
+        self.range_changed.emit(lower, upper)
+        self.update()
+
+    def _track(self) -> QtCore.QRectF:
+        return QtCore.QRectF(self.width() / 2.0 - 3.0, 34.0, 6.0, max(20.0, self.height() - 68.0))
+
+    def _value_y(self, value_um: float) -> float:
+        track = self._track()
+        return track.bottom() - value_um / max(self.maximum_um, 1.0) * track.height()
+
+    def _y_value(self, y: float) -> float:
+        track = self._track()
+        return float(np.clip((track.bottom() - y) / track.height(), 0.0, 1.0) * self.maximum_um)
+
+    def paintEvent(self, _: QtGui.QPaintEvent) -> None:
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QtGui.QColor("#0f131a"))
+        track = self._track()
+        lower_y = self._value_y(self.lower_um)
+        upper_y = self._value_y(self.upper_um)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor("#293746"))
+        painter.drawRoundedRect(track, 3, 3)
+        painter.setBrush(QtGui.QColor("#36a9e1"))
+        painter.drawRoundedRect(
+            QtCore.QRectF(track.left(), upper_y, track.width(), max(1.0, lower_y - upper_y)), 3, 3
+        )
+        painter.setPen(QtGui.QPen(QtGui.QColor("#bfeaff"), 1.2))
+        painter.setBrush(QtGui.QColor("#168bc5"))
+        for y in (lower_y, upper_y):
+            painter.drawRoundedRect(QtCore.QRectF(track.center().x() - 11, y - 5, 22, 10), 3, 3)
+        painter.setPen(QtGui.QColor("#b9d5e8"))
+        painter.setFont(QtGui.QFont("Segoe UI", 7))
+        painter.drawText(
+            QtCore.QRectF(0, 2, self.width(), 28),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            f"{self.upper_um / 1000.0:.1f} mm",
+        )
+        painter.drawText(
+            QtCore.QRectF(0, self.height() - 30, self.width(), 28),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            f"{self.lower_um / 1000.0:.1f} mm",
+        )
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return
+        y = event.position().y()
+        self._dragging = (
+            "lower"
+            if abs(y - self._value_y(self.lower_um)) <= abs(y - self._value_y(self.upper_um))
+            else "upper"
+        )
+        self.mouseMoveEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self._dragging is None:
+            return
+        value = self._y_value(event.position().y())
+        if self._dragging == "lower":
+            self.set_selected_range(min(value, self.upper_um - 200.0), self.upper_um)
+        else:
+            self.set_selected_range(self.lower_um, max(value, self.lower_um + 200.0))
+
+    def mouseReleaseEvent(self, _: QtGui.QMouseEvent) -> None:
+        self._dragging = None
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.set_selected_range(0.0, self.maximum_um)
+
+
 class ProbeAnatomyWidget(QtWidgets.QWidget):
     def __init__(
         self,
@@ -4146,9 +4294,34 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
         self.shank_region_ids = None if section is None else np.asarray(section["shank_region_ids"])
         self.region_names = region_names or {}
         self.region_colors = region_colors or {}
+        self.probe_type = str(sites["probe_type"].iloc[0])
+        self.electrodes = probe_electrode_lattice(self.probe_type)
+        used_sites = sites[sites["site_is_used"].astype(bool)]
+        self.used_region_ids = {
+            int(value)
+            for value in used_sites["structure_id"].to_numpy(dtype=float)
+            if np.isfinite(value)
+        }
+        self.shank_window_um: tuple[float, float] | None = None
         self._site_hits: list[tuple[QtCore.QPointF, pd.Series]] = []
         self.setMouseTracking(True)
         self.setMinimumSize(330, 560)
+
+    def set_shank_window(self, lower_um: float, upper_um: float) -> None:
+        lower = float(np.clip(min(lower_um, upper_um), 0.0, self.physical_length_um))
+        upper = float(np.clip(max(lower_um, upper_um), 0.0, self.physical_length_um))
+        self.shank_window_um = (
+            None if lower <= 0.0 and upper >= self.physical_length_um else (lower, upper)
+        )
+        self.update()
+
+    def _visible_sites_and_range(self) -> tuple[pd.DataFrame, float, float]:
+        if self.shank_window_um is None:
+            return self.sites, 0.0, self.physical_length_um
+        view_min, view_max = self.shank_window_um
+        distances = self.sites["trajectory_distance_um"].to_numpy(dtype=float)
+        visible = self.sites[(distances >= view_min) & (distances <= view_max)]
+        return visible, view_min, view_max
 
     @staticmethod
     def _color(value: str, alpha: int = 255) -> QtGui.QColor:
@@ -4161,21 +4334,27 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QtGui.QColor("#0f131a"))
-        graph = QtCore.QRectF(54, 72, max(120, self.width() - 165), max(200, self.height() - 111))
+        graph = QtCore.QRectF(70, 72, max(120, self.width() - 181), max(200, self.height() - 111))
+        visible_sites, view_min, view_max = self._visible_sites_and_range()
         x_values = self.sites["probe_horizontal_position"].to_numpy(dtype=float)
-        y_values = self.sites["trajectory_distance_um"].to_numpy(dtype=float)
         x_mid = float((x_values.min() + x_values.max()) / 2.0)
         x_span = max(float(np.ptp(x_values)) + 32.0, 64.0)
-        site_y_max = max(float(y_values.max()), 1.0)
-        y_max = max(self.physical_length_um, site_y_max)
         painter.setFont(QtGui.QFont("Segoe UI", 8))
         painter.setPen(QtGui.QColor("#b9d5e8"))
+        if self.shank_window_um is None:
+            description = (
+                f"{len(self.electrodes)} physical electrodes • "
+                f"{int(self.sites['site_is_used'].sum())} used channels"
+            )
+        else:
+            description = (
+                f"{int(visible_sites['site_is_used'].sum())} used channels • "
+                f"{view_min / 1000.0:.2f}–{view_max / 1000.0:.2f} mm physical span"
+            )
         painter.drawText(
             QtCore.QRectF(4, 4, self.width() - 8, 60),
             QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.TextFlag.TextWordWrap,
-            f"{self.physical_length_um / 1000.0:g} mm physical shank • {len(self.sites)} mapped channels span "
-            f"{y_values.min() / 1000.0:.2f}–{y_values.max() / 1000.0:.2f} mm\n"
-            "Squares are selected channels; white borders mark channels with units. Scale is mm from tip, not banks.",
+            description + "\nMuted sites are available electrodes; coloured sites were used; white borders mark units.",
         )
         body_width = min(130.0, graph.width() * 0.55)
         body_left = graph.center().x() - body_width / 2.0
@@ -4185,34 +4364,55 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
             return graph.center().x() + (value - x_mid) / x_span * body_width * 0.78
 
         def y_pos(value: float) -> float:
-            return graph.bottom() - value / y_max * graph.height()
+            return graph.bottom() - (value - view_min) / max(view_max - view_min, 1.0) * graph.height()
 
-        tick_step = 1000.0 if y_max >= 3000 else 500.0
-        for value in np.arange(0.0, y_max + tick_step, tick_step):
-            y = y_pos(float(value))
-            painter.setPen(QtGui.QPen(QtGui.QColor("#293847"), 1))
-            painter.drawLine(QtCore.QPointF(graph.left(), y), QtCore.QPointF(graph.right(), y))
+        for bank_name, lower, upper in probe_bank_intervals_um(self.probe_type):
+            shown_lower = max(lower, view_min)
+            shown_upper = min(upper, view_max)
+            if shown_upper <= shown_lower:
+                continue
+            top, bottom = y_pos(shown_upper), y_pos(shown_lower)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#33485b"), 1.2))
+            if lower >= view_min:
+                painter.drawLine(QtCore.QPointF(graph.left(), bottom), QtCore.QPointF(graph.right(), bottom))
             painter.setPen(QtGui.QColor("#9fb4c8"))
-            painter.drawText(QtCore.QRectF(0, y - 9, 48, 18), QtCore.Qt.AlignmentFlag.AlignRight, f"{value / 1000:g}")
-        painter.save()
-        painter.translate(14, graph.center().y())
-        painter.rotate(-90)
-        painter.setPen(QtGui.QColor("#9fb4c8"))
-        painter.drawText(QtCore.QRectF(-90, -9, 180, 18), QtCore.Qt.AlignmentFlag.AlignCenter, "mm from probe tip")
-        painter.restore()
+            if bottom - top >= 16:
+                painter.drawText(
+                    QtCore.QRectF(0, top, 64, bottom - top),
+                    QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                    bank_name,
+                )
 
-        shank = QtGui.QPolygonF(
-            [
-                QtCore.QPointF(body_left, graph.top() - 10),
-                QtCore.QPointF(body_right, graph.top() - 10),
-                QtCore.QPointF(body_right, graph.bottom()),
-                QtCore.QPointF(graph.center().x(), graph.bottom() + 24),
-                QtCore.QPointF(body_left, graph.bottom()),
-            ]
-        )
+        shank_points = [
+            QtCore.QPointF(body_left, graph.top() - 10),
+            QtCore.QPointF(body_right, graph.top() - 10),
+            QtCore.QPointF(body_right, graph.bottom()),
+        ]
+        if view_min == 0.0:
+            shank_points.append(QtCore.QPointF(graph.center().x(), graph.bottom() + 24))
+        shank_points.append(QtCore.QPointF(body_left, graph.bottom()))
+        shank = QtGui.QPolygonF(shank_points)
         painter.setPen(QtGui.QPen(QtGui.QColor("#718092"), 1.2))
         painter.setBrush(QtGui.QColor("#202b37"))
         painter.drawPolygon(shank)
+
+        visible_electrodes = self.electrodes[
+            (self.electrodes[:, 2] >= view_min) & (self.electrodes[:, 2] <= view_max)
+        ]
+        electrode_rows = max(1, np.unique(visible_electrodes[:, 2]).size)
+        electrode_size = float(np.clip(graph.height() / electrode_rows * 0.8, 1.2, 3.2))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(QtGui.QColor("#596674"))
+        for _, x, distance in visible_electrodes:
+            center = QtCore.QPointF(x_pos(float(x)), y_pos(float(distance)))
+            painter.drawRect(
+                QtCore.QRectF(
+                    center.x() - electrode_size / 2,
+                    center.y() - electrode_size / 2,
+                    electrode_size,
+                    electrode_size,
+                )
+            )
 
         if self.shank_region_ids is not None:
             starts = np.r_[0, np.flatnonzero(np.diff(self.shank_region_ids) != 0) + 1]
@@ -4226,16 +4426,24 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
                 for start, end in zip(starts, ends)
             ]
             for lower, upper, region_id in bands:
+                lower, upper = max(lower, view_min), min(upper, view_max)
+                if upper <= lower:
+                    continue
                 top, bottom = y_pos(upper), y_pos(lower)
                 band = QtCore.QRectF(body_right + 18, top, 18, max(1.0, bottom - top))
                 painter.setPen(QtCore.Qt.PenStyle.NoPen)
                 painter.setBrush(
-                    self._color(self.region_colors.get(region_id, "354453"), 210 if region_id else 70)
+                    self._color(
+                        self.region_colors.get(region_id, "354453"),
+                        220 if region_id in self.used_region_ids else 55,
+                    )
                 )
                 painter.drawRoundedRect(band, 2, 2)
                 if region_id and band.height() >= 13:
                     name, acronym = self.region_names.get(region_id, (str(region_id), str(region_id)))
-                    painter.setPen(QtGui.QColor("#d7e7f5"))
+                    painter.setPen(
+                        QtGui.QColor("#d7e7f5" if region_id in self.used_region_ids else "#71879a")
+                    )
                     painter.drawText(
                         QtCore.QRectF(band.right() + 6, top, max(30, self.width() - band.right() - 8), band.height()),
                         QtCore.Qt.AlignmentFlag.AlignVCenter,
@@ -4243,24 +4451,29 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
                     )
 
         self._site_hits.clear()
-        row_count = max(1, self.sites["trajectory_distance_um"].nunique())
+        row_count = max(1, visible_sites["trajectory_distance_um"].nunique())
         site_size = float(np.clip(graph.height() / row_count * 1.15, 3.0, 7.0))
-        for _, site in self.sites.iterrows():
+        for _, site in visible_sites.iterrows():
             center = QtCore.QPointF(
                 x_pos(float(site["probe_horizontal_position"])),
                 y_pos(float(site["trajectory_distance_um"])),
             )
             self._site_hits.append((center, site))
+            used = bool(site["site_is_used"])
+            has_units = int(site.get("unit_count", 0)) > 0
             painter.setPen(
                 QtGui.QPen(
-                    QtGui.QColor("#ffffff") if int(site.get("unit_count", 0)) else QtGui.QColor("#536678"),
-                    1.3 if int(site.get("unit_count", 0)) else 0.45,
+                    QtGui.QColor("#ffffff" if has_units else "#8aa0b3"),
+                    1.3 if has_units else 0.6,
                 )
             )
-            painter.setBrush(self._color(site["structure_color_hex"]))
+            painter.setBrush(
+                self._color(site["structure_color_hex"], 255 if used else 75)
+            )
             painter.drawRect(QtCore.QRectF(center.x() - site_size / 2, center.y() - site_size / 2, site_size, site_size))
-        painter.setPen(QtGui.QColor("#9fb4c8"))
-        painter.drawText(QtCore.QRectF(body_left, graph.bottom() + 28, body_width, 20), QtCore.Qt.AlignmentFlag.AlignCenter, "TIP")
+        if view_min == 0.0:
+            painter.setPen(QtGui.QColor("#9fb4c8"))
+            painter.drawText(QtCore.QRectF(body_left, graph.bottom() + 28, body_width, 20), QtCore.Qt.AlignmentFlag.AlignCenter, "TIP")
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         if not self._site_hits:
@@ -4277,7 +4490,8 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
         QtWidgets.QToolTip.showText(
             event.globalPosition().toPoint(),
             f"Channel {int(site['probe_channel_number'])}\n{acronym} — {name}\n"
-            f"{float(site['trajectory_distance_um']):.0f} um from tip\n{units} unit{'s' if units != 1 else ''} on this peak channel",
+            f"{float(site['trajectory_distance_um']):.0f} um along the physical shank\n"
+            f"{units} unit{'s' if units != 1 else ''} on this peak channel",
             self,
         )
 
@@ -4306,7 +4520,8 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
         subtitle = QtWidgets.QLabel(
             "The full physical shank is shown. Each square is a selected recording site colored by its assigned "
             "Allen structure; a white border marks a channel with mapped units. The continuous side band shows "
-            "structures traversed along the entire shank. "
+            "structures traversed along the entire shank. Drag the two blue vertical-range handles to zoom anywhere "
+            "along the physical shank; double-click the slider to reset. "
             "The atlas view is a vertical cut containing the fitted probe trajectory; hover structures "
             "for stereotaxic coordinates and click to keep a region highlighted."
         )
@@ -4356,16 +4571,26 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
             unavailable.setStyleSheet("color:#9fb4c8;")
             section_layout.addWidget(unavailable, 1)
         self.splitter.addWidget(section_panel)
-        self.splitter.addWidget(
-            ProbeAnatomyWidget(
-                sites,
-                None if self.atlas_section_widget is None else self.atlas_section_widget.section,
-                region_names,
-                region_colors,
-            )
+        probe_panel = QtWidgets.QWidget()
+        probe_layout = QtWidgets.QVBoxLayout(probe_panel)
+        probe_layout.setContentsMargins(0, 0, 0, 0)
+        self.probe_widget = ProbeAnatomyWidget(
+            sites,
+            None if self.atlas_section_widget is None else self.atlas_section_widget.section,
+            region_names,
+            region_colors,
         )
+        probe_view_layout = QtWidgets.QHBoxLayout()
+        probe_view_layout.setContentsMargins(0, 0, 0, 0)
+        probe_view_layout.setSpacing(2)
+        probe_view_layout.addWidget(self.probe_widget, 1)
+        self.shank_range = ProbeRangeSlider(self.probe_widget.physical_length_um)
+        self.shank_range.range_changed.connect(self.probe_widget.set_shank_window)
+        probe_view_layout.addWidget(self.shank_range)
+        probe_layout.addLayout(probe_view_layout, 1)
+        self.splitter.addWidget(probe_panel)
         table = QtWidgets.QTableWidget(len(summary), 5)
-        table.setHorizontalHeaderLabels(["Region", "Name", "Channels", "Units", "Depth from tip"])
+        table.setHorizontalHeaderLabels(["Region", "Name", "Channels", "Units", "Shank position"])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -4400,7 +4625,6 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
         )
         totals.setStyleSheet("color:#b9d5e8; font-weight:600;")
         layout.addWidget(totals)
-
 
 class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def __init__(
@@ -5016,7 +5240,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         slice_layout = QtWidgets.QVBoxLayout(slice_group)
         self.slice_panel = ImagePanel("Brain slice")
         self.curve_editor = CurveEditor()
-        self.curve_group = QtWidgets.QGroupBox("Contrast curve — display only")
+        self.curve_group = QtWidgets.QGroupBox("Brightness curve — display and smart brush")
         curve_group_layout = QtWidgets.QVBoxLayout(self.curve_group)
         curve_group_layout.addWidget(self.curve_editor)
         self.slice_workspace_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
@@ -7326,7 +7550,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_point_counts()
 
     def _alignment_tab_changed(self, index: int) -> None:
-        self.curve_group.setVisible(index == 0)
         if index == 0:
             self.landmark_mode.setChecked(True)
         else:

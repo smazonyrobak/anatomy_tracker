@@ -15,6 +15,23 @@ VOXEL_UM = TRACKER.VOXEL_UM
 probe_mapping_coordinates = TRACKER.probe_mapping_coordinates
 
 
+def test_neuropixels_bank_boundaries_replace_millimetre_sections():
+    assert TRACKER.probe_bank_intervals_um("Neuropixels 1.0") == [
+        ("Bank 0", 0.0, 4050.0),
+        ("Bank 1", 4050.0, 7890.0),
+        ("Bank 2", 7890.0, 10000.0),
+    ]
+    lattice = TRACKER.probe_electrode_lattice("Neuropixels 1.0")
+    assert lattice.shape == (960, 3)
+    assert lattice[:4].tolist() == [
+        [0.0, 27.0, 220.0],
+        [1.0, 59.0, 220.0],
+        [2.0, 11.0, 240.0],
+        [3.0, 43.0, 240.0],
+    ]
+    assert lattice[-1].tolist() == [959.0, 43.0, 9800.0]
+
+
 def test_deepest_mark_tip_places_contacts_toward_surface():
     entry = np.array([20.0, 10.0, 30.0])
     deepest = np.array([20.0, 50.0, 30.0])
@@ -163,6 +180,7 @@ def test_probe_anatomy_view_uses_physical_sites_atlas_colors_and_unit_counts():
             "structure_id": [101, 101, 202, 303],
             "structure_name": ["Region A", "Region A", "Region B", "Region C"],
             "structure_acronym": ["A", "A", "B", "C"],
+            "used_for_sorting": [True, False, True, True],
             "anatomy_mapped_at": ["2026-08-14"] * 4,
         }
     )
@@ -181,6 +199,7 @@ def test_probe_anatomy_view_uses_physical_sites_atlas_colors_and_unit_counts():
     assert sites["probe_channel_number"].tolist() == [0, 1, 2]
     assert sites["structure_color_hex"].tolist() == ["112233", "112233", "AABBCC"]
     assert sites["unit_count"].tolist() == [2, 0, 1]
+    assert sites["site_is_used"].tolist() == [True, False, True]
     assert summary["structure_acronym"].tolist() == ["A", "B"]
     assert summary["channels"].tolist() == [2, 1]
     assert summary["units"].tolist() == [2, 1]
@@ -275,9 +294,24 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
     assert dialog.atlas_section_widget is not None
     assert "AP -1311 um" in dialog.fit_summary_label.text()
     assert dialog.atlas_section_widget.section["path_pixels"][-1][1] < 0
-    probe_widget = dialog.splitter.widget(1)
+    probe_widget = dialog.probe_widget
     assert probe_widget.physical_length_um == 10000.0
+    assert probe_widget.electrodes.shape == (960, 3)
     assert len(probe_widget.shank_region_ids) == 401
+    assert probe_widget.shank_window_um is None
+    assert dialog.shank_range.maximum_um == 10000.0
+    dialog.shank_range.set_selected_range(4000.0, 6000.0)
+    app.processEvents()
+    assert probe_widget.shank_window_um == (4000.0, 6000.0)
+    visible, view_min, view_max = probe_widget._visible_sites_and_range()
+    assert visible.empty
+    assert (view_min, view_max) == (4000.0, 6000.0)
+    dialog.shank_range.set_selected_range(200.0, 300.0)
+    app.processEvents()
+    assert probe_widget._visible_sites_and_range()[0]["probe_channel_number"].tolist() == [0, 1]
+    dialog.shank_range.set_selected_range(0.0, 10000.0)
+    app.processEvents()
+    assert probe_widget.shank_window_um is None
     assert {101, 202}.issubset(set(np.unique(dialog.atlas_section_widget.annotation)))
     dialog.close()
     app.processEvents()

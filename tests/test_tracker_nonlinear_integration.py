@@ -190,6 +190,11 @@ def test_ui_separates_section_matching_from_landmark_registration(tmp_path):
         assert "Alternative to landmark registration" in window.automatic_warp_btn.toolTip()
         assert "selected atlas section" in window.automatic_warp_btn.toolTip()
         assert "Review the atlas overlay" in window.automatic_warp_btn.toolTip()
+        assert "smart brush" in window.curve_group.title().lower()
+        window.alignment_tabs.setCurrentIndex(1)
+        assert not window.curve_group.isHidden()
+        window.alignment_tabs.setCurrentIndex(0)
+        assert not window.curve_group.isHidden()
         assert not hasattr(window, "fit_anatomy_btn")
     finally:
         window.close()
