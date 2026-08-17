@@ -4015,11 +4015,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         atlas_setup_layout.setColumnStretch(2, 2)
 
         self.add_slice_btn = QtWidgets.QPushButton("Add slices")
-        self.remove_all_slices_btn = QtWidgets.QPushButton("Remove all slices")
-        self.remove_all_slices_btn.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Fixed,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
+        self.remove_selected_slice_btn = QtWidgets.QPushButton("Remove selected")
+        self.remove_selected_slice_btn.setToolTip("Remove the currently displayed slice and its unsaved annotations")
+        self.remove_selected_slice_btn.setEnabled(False)
+        self.remove_all_slices_btn = QtWidgets.QPushButton("Remove all")
         self.remove_all_slices_btn.setToolTip("Remove every loaded slice and its unsaved annotations")
         self.remove_all_slices_btn.setEnabled(False)
         self.previous_slice_btn = QtWidgets.QPushButton("‹")
@@ -4055,16 +4054,20 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "Flip the displayed histology vertically. The displayed A-to-P viewing orientation is authoritative."
         )
         slice_setup = QtWidgets.QGroupBox("Slices")
-        slice_setup_layout = QtWidgets.QGridLayout(slice_setup)
-        slice_setup_layout.addWidget(self.add_slice_btn, 0, 0)
-        slice_setup_layout.addWidget(self.remove_all_slices_btn, 0, 1)
-        slice_setup_layout.addWidget(slice_picker, 0, 2, 1, 3)
-        slice_setup_layout.addWidget(QtWidgets.QLabel("Rotation"), 1, 0)
-        slice_setup_layout.addWidget(self.rotation, 1, 1)
-        slice_setup_layout.addWidget(QtWidgets.QLabel("Flip"), 1, 2)
-        slice_setup_layout.addWidget(self.flip_horizontal, 1, 3)
-        slice_setup_layout.addWidget(self.flip_vertical, 1, 4)
-        slice_setup_layout.setColumnStretch(2, 1)
+        slice_setup_layout = QtWidgets.QVBoxLayout(slice_setup)
+        slice_file_row = QtWidgets.QHBoxLayout()
+        slice_file_row.addWidget(self.add_slice_btn)
+        slice_file_row.addWidget(self.remove_selected_slice_btn)
+        slice_file_row.addWidget(self.remove_all_slices_btn)
+        slice_file_row.addWidget(slice_picker, 1)
+        slice_setup_layout.addLayout(slice_file_row)
+        slice_geometry_row = QtWidgets.QHBoxLayout()
+        slice_geometry_row.addWidget(QtWidgets.QLabel("Rotation"))
+        slice_geometry_row.addWidget(self.rotation, 1)
+        slice_geometry_row.addWidget(QtWidgets.QLabel("Flip"))
+        slice_geometry_row.addWidget(self.flip_horizontal)
+        slice_geometry_row.addWidget(self.flip_vertical)
+        slice_setup_layout.addLayout(slice_geometry_row)
         self.setup_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.setup_splitter.setChildrenCollapsible(False)
         self.setup_splitter.setHandleWidth(8)
@@ -4566,6 +4569,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.atlas_tilt_dv.valueChanged.connect(self._atlas_tilt_changed)
         self.axis_position_um.valueChanged.connect(self._axis_um_changed)
         self.add_slice_btn.clicked.connect(self._load_slice_dialog)
+        self.remove_selected_slice_btn.clicked.connect(self._remove_selected_slice)
         self.remove_all_slices_btn.clicked.connect(self._remove_all_slices)
         self.slice_list.currentIndexChanged.connect(self._switch_slice)
         self.previous_slice_btn.clicked.connect(lambda: self._step_slice(-1))
@@ -5390,6 +5394,49 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._switch_slice(first_index)
         self.status.setText(f"Loaded {len(paths)} slices")
 
+    def _remove_selected_slice(self) -> None:
+        index = self.current_session_index
+        if self.auto_alignment_busy or not 0 <= index < len(self.sessions):
+            return
+        session = self.sessions[index]
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Remove selected slice?",
+            f"Remove {session.name} and its unsaved points and alignments?\n\n"
+            "The original image file will not be deleted.",
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.status.setText("Removing selected slice cancelled")
+            return
+
+        self.sessions.pop(index)
+        self._probe_fit_cache.clear()
+        self.slice_list.blockSignals(True)
+        self.slice_list.removeItem(index)
+        self.slice_list.blockSignals(False)
+        self.auto_slice_order.blockSignals(True)
+        for row in reversed(range(self.auto_slice_order.count())):
+            item = self.auto_slice_order.item(row)
+            session_index = int(item.data(QtCore.Qt.ItemDataRole.UserRole))
+            if session_index == index:
+                self.auto_slice_order.takeItem(row)
+            elif session_index > index:
+                item.setData(QtCore.Qt.ItemDataRole.UserRole, session_index - 1)
+        self.auto_slice_order.blockSignals(False)
+
+        self.current_session_index = -1
+        if self.sessions:
+            next_index = min(index, len(self.sessions) - 1)
+            self.slice_list.blockSignals(True)
+            self.slice_list.setCurrentIndex(next_index)
+            self.slice_list.blockSignals(False)
+            self._update_auto_order_labels()
+            self._switch_slice(next_index)
+            self._update_probe_fit_summary()
+        else:
+            self._clear_empty_slice_state()
+        self.status.setText(f"Removed {session.name}; {len(self.sessions)} slices remain")
+
     def _remove_all_slices(self) -> None:
         if not self.sessions or self.auto_alignment_busy:
             return
@@ -5405,6 +5452,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
         count = len(self.sessions)
         self.sessions.clear()
+        self._clear_empty_slice_state()
+        self.status.setText(f"Removed {count} slices; ready to load another brain")
+
+    def _clear_empty_slice_state(self) -> None:
         self.current_session_index = -1
         self._probe_fit_cache.clear()
         self.slice_list.blockSignals(True)
@@ -5427,7 +5478,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_points()
         self._refresh_3d()
         self._update_probe_fit_summary()
-        self.status.setText(f"Removed {count} slices; ready to load another brain")
 
     def load_slice(self, path: Path, *, select: bool = True) -> None:
         session = SliceSession(
@@ -5535,6 +5585,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.slice_position.setText(f"{index + 1 if index >= 0 else 0} / {count}")
         self.previous_slice_btn.setEnabled(index > 0)
         self.next_slice_btn.setEnabled(0 <= index < count - 1)
+        self.remove_selected_slice_btn.setEnabled(0 <= index < count and not self.auto_alignment_busy)
         self.remove_all_slices_btn.setEnabled(count > 0 and not self.auto_alignment_busy)
 
     def current_session(self) -> SliceSession | None:
@@ -6847,6 +6898,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
 
     def _refresh_point_counts(self) -> None:
+        self.remove_selected_slice_btn.setEnabled(
+            self.current_session() is not None and not self.auto_alignment_busy
+        )
         self.remove_all_slices_btn.setEnabled(bool(self.sessions) and not self.auto_alignment_busy)
         session = self.current_session()
         if session is None:

@@ -232,3 +232,40 @@ def test_remove_all_slices_can_cancel_clear_and_load_another_brain(tmp_path, mon
 
     window.close()
     app.processEvents()
+
+
+def test_remove_selected_slice_keeps_the_remaining_slice_set_consistent(tmp_path, monkeypatch):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    paths = [tmp_path / f"{index}.tif" for index in range(3)]
+    image = np.arange(1200, dtype=np.uint16).reshape(30, 40)
+    for index, path in enumerate(paths):
+        tifffile.imwrite(path, image + index)
+
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    for path in paths:
+        window.load_slice(path)
+    for session in window.sessions:
+        session.brain_outline_points = [(float(index), 2.0) for index in range(8)]
+    window._update_auto_order_labels()
+    window.slice_list.setCurrentIndex(1)
+    monkeypatch.setattr(
+        TRACKER.QtWidgets.QMessageBox,
+        "question",
+        lambda *args: TRACKER.QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+
+    window.remove_selected_slice_btn.click()
+
+    assert [session.name for session in window.sessions] == ["0.tif", "2.tif"]
+    assert [window.slice_list.itemText(index) for index in range(2)] == ["0.tif", "2.tif"]
+    assert window.current_session() is window.sessions[1]
+    assert window.slice_position.text() == "2 / 2"
+    assert [
+        window.auto_slice_order.item(row).data(TRACKER.QtCore.Qt.ItemDataRole.UserRole)
+        for row in range(window.auto_slice_order.count())
+    ] == [0, 1]
+    assert paths[1].exists()
+    assert window.remove_selected_slice_btn.isEnabled()
+
+    window.close()
+    app.processEvents()
