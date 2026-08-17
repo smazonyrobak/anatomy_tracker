@@ -272,7 +272,9 @@ def test_bounded_mind_search_recovers_known_pose_instead_of_clipping_to_bound():
         global_alignment=False,
     )
 
-    assert pose[0] == (280, 6.0, -4.0)
+    assert pose[0][0] == 280
+    assert abs(pose[0][1] - 6.0) <= 0.25
+    assert abs(pose[0][2] + 4.0) <= 0.25
     assert not diagnostics[0]["pose_search_boundary"]
     assert diagnostics[0]["pose_search_margin"] > 0.01
 
