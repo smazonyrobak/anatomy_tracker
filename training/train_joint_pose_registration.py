@@ -291,8 +291,7 @@ def _compact_refine(
     gradient_checkpointing: bool,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     def forward(fixed, moving, pose, pose_features):
-        outputs = model.refine_once(fixed, moving, pose, pose_features)
-        return outputs["pose"], outputs["compatibility_logit"]
+        return model.review_once(fixed, moving, pose, pose_features)
 
     if gradient_checkpointing and torch.is_grad_enabled():
         return checkpoint(
@@ -316,6 +315,7 @@ def recurrent_training_rollout(
     live_initializer_fraction: float,
     gradient_checkpointing: bool,
     prepare_moving=None,
+    compute_final_registration: bool = True,
 ) -> dict:
     """Unroll the shared reviewer with a newly rendered plane after every update."""
     if refinement_steps < 1:
@@ -358,7 +358,17 @@ def recurrent_training_rollout(
         poses.append(pose)
         logits.append(logit)
 
-    # Maps used by downstream anatomy are always recomputed at the settled pose.
+    result = {
+        "start_pose": torch.where(live_mask[:, None], live_pose, batch["initial_pose"]),
+        "live_initializer_mask": live_mask,
+        "pose_sequence": torch.stack(poses, dim=1),
+        "compatibility_logits": torch.stack(logits, dim=1),
+        "pose": pose,
+    }
+    if not compute_final_registration:
+        return result
+
+    # Validation and inference maps are always recomputed at the settled pose.
     with torch.no_grad():
         final_fixed, final_mask, final_labels = render_pose(pose.detach())
         final_alignment = {
@@ -387,14 +397,8 @@ def recurrent_training_rollout(
         )
         final["fixed_labels"] = final_labels
         final["fixed_mask"] = final_mask
-    return {
-        "start_pose": torch.where(live_mask[:, None], live_pose, batch["initial_pose"]),
-        "live_initializer_mask": live_mask,
-        "pose_sequence": torch.stack(poses, dim=1),
-        "compatibility_logits": torch.stack(logits, dim=1),
-        "pose": pose,
-        "final_registration": final,
-    }
+    result["final_registration"] = final
+    return result
 
 
 def teacher_forced_dense_batch(batch: dict) -> dict:
@@ -481,6 +485,7 @@ def pose_review_objective(
     candidate_chunk_size: int,
     gradient_checkpointing: bool,
     prepare_moving=None,
+    compute_final_registration: bool = True,
     weights: dict[str, float] | None = None,
 ) -> tuple[torch.Tensor, dict[str, float], dict]:
     weights = DEFAULT_LOSS_WEIGHTS if weights is None else weights
@@ -520,6 +525,7 @@ def pose_review_objective(
         live_initializer_fraction=live_initializer_fraction,
         gradient_checkpointing=gradient_checkpointing,
         prepare_moving=prepare_moving,
+        compute_final_registration=compute_final_registration,
     )
     refined_pose = 0.5 * (
         deep_pose_loss(candidates["refined_pose"], batch["true_pose"])
@@ -1317,6 +1323,7 @@ def _normalized_config(config: dict) -> dict:
     result["refinement_steps"] = int(config.get("refinement_steps", 3))
     result["candidate_chunk_size"] = int(config.get("candidate_chunk_size", 2))
     result["gradient_checkpointing"] = bool(config.get("gradient_checkpointing", True))
+    result["amp_initial_scale"] = float(config.get("amp_initial_scale", 65536.0))
     result["early_stopping_patience_validations"] = int(
         config.get("early_stopping_patience_validations", 0)
     )
@@ -1374,6 +1381,11 @@ def _normalized_config(config: dict) -> dict:
     )
     if result["refinement_steps"] < 1 or result["candidate_chunk_size"] < 1:
         raise ValueError("refinement steps and candidate chunk size must be positive")
+    if (
+        not math.isfinite(result["amp_initial_scale"])
+        or result["amp_initial_scale"] <= 0.0
+    ):
+        raise ValueError("AMP initial scale must be finite and positive")
     if result["early_stopping_patience_validations"] < 0:
         raise ValueError("early-stopping patience cannot be negative")
     if result["checkpoint_every_views"] < 1:
@@ -1628,7 +1640,11 @@ def train(
         lambda step: _cosine_multiplier(step, total_steps, warmup_steps),
     )
     amp_enabled = device.type == "cuda" and bool(config.get("amp", True))
-    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
+    scaler = torch.amp.GradScaler(
+        "cuda",
+        enabled=amp_enabled,
+        init_scale=normalized["amp_initial_scale"],
+    )
     data_rng = np.random.default_rng(int(config["data_seed"]))
     step = batch_ordinal = completed_views = 0
     best_score = -math.inf
@@ -1764,6 +1780,7 @@ def train(
                 "candidate_chunk_size": normalized["candidate_chunk_size"],
                 "gradient_checkpointing": normalized["gradient_checkpointing"],
                 "weights": normalized["loss_weights"],
+                "compute_final_registration": False,
             }
             if use_registered:
                 loss, terms, _ = registered_objective(
@@ -1999,6 +2016,7 @@ def micro_overfit(
             gradient_checkpointing=False,
             prepare_moving=(prepare_moving_for_fixed if normalize_outline else None),
             dense_loss_fn=dense_loss_fn,
+            compute_final_registration=False,
         )
         loss.backward()
         optimizer.step()

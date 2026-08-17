@@ -34,6 +34,12 @@ class TinyJointModel(nn.Module):
             "compatibility_logit": output[:, 3],
         }
 
+    def review_once(self, fixed_atlas, moving_slice, current_pose, pose_features):
+        output = self.refine_once(
+            fixed_atlas, moving_slice, current_pose, pose_features
+        )
+        return output["pose"], output["compatibility_logit"]
+
     def register_final_pose(
         self,
         fixed_atlas,
@@ -246,6 +252,28 @@ def test_review_training_skips_constant_dense_loss_without_changing_reviewer_gra
     assert evaluation_terms["dense"] == pytest.approx(4.25)
 
 
+def test_training_can_skip_discarded_final_registration_without_changing_gradients():
+    torch.manual_seed(733)
+    full_model = TinyJointModel()
+    skipped_model = copy.deepcopy(full_model)
+    batch = tiny_batch(seed=734)
+
+    full_loss, _, full_outputs = objective(full_model, batch)
+    skipped_loss, _, skipped_outputs = objective(
+        skipped_model,
+        batch,
+        compute_final_registration=False,
+    )
+    full_loss.backward()
+    skipped_loss.backward()
+
+    torch.testing.assert_close(full_loss, skipped_loss, rtol=0.0, atol=0.0)
+    assert "final_registration" in full_outputs["recurrent"]
+    assert "final_registration" not in skipped_outputs["recurrent"]
+    for full, skipped in zip(full_model.parameters(), skipped_model.parameters()):
+        torch.testing.assert_close(full.grad, skipped.grad, rtol=0.0, atol=0.0)
+
+
 def test_empty_final_overlap_is_never_rewarded_as_perfect_dice():
     model = TinyJointModel()
     batch = tiny_batch(batch_size=1, candidates=1)
@@ -404,6 +432,10 @@ def test_shared_refiner_learns_through_more_than_one_recurrent_step():
                 "pose": pose * (1.0 - self.gain),
                 "compatibility_logit": pose[:, 0] * 0.0,
             }
+
+        def review_once(self, fixed, moving, pose, features):
+            output = self.refine_once(fixed, moving, pose, features)
+            return output["pose"], output["compatibility_logit"]
 
         def register_final_pose(self, fixed, moving, pose, features, receipt):
             return {"pose": pose, "fixed_atlas": fixed}
@@ -717,6 +749,7 @@ def training_config(tmp_path, run_name):
         "gradient_clip": 10.0,
         "ema_decay": 0.9,
         "amp": False,
+        "amp_initial_scale": 1024.0,
         "validation_every_views": 4,
         "validation_count_per_stratum": 1,
         "validation_batch_size": 1,
@@ -745,6 +778,15 @@ def training_config(tmp_path, run_name):
         "stages": [{"name": "joint", "until_views": 4}],
         "resume": True,
     }
+
+
+def test_amp_initial_scale_is_normalized_and_validated(tmp_path):
+    config = training_config(tmp_path, "amp-scale")
+    assert trainer._normalized_config(config)["amp_initial_scale"] == 1024.0
+
+    config["amp_initial_scale"] = 0.0
+    with pytest.raises(ValueError, match="AMP initial scale"):
+        trainer._normalized_config(config)
 
 
 def test_interrupted_resume_reproduces_cpu_state_and_rng_continuation(tmp_path):

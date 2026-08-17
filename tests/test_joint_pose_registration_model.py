@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 import pytest
 import torch
 from torch import nn
@@ -144,6 +146,97 @@ def test_refinement_preserves_the_composed_dense_registrar_outputs_exactly():
             observed["pyramid_velocities"], expected["pyramid_velocities"]
         )
     )
+
+
+@pytest.mark.parametrize("autocast_enabled", (False, True))
+def test_compact_review_matches_full_refinement_outputs_and_gradients(
+    autocast_enabled,
+):
+    torch.manual_seed(409)
+    full_model = _tiny_model()
+    review_model = deepcopy(full_model)
+    full_fixed = torch.rand(1, 2, 15, 17, requires_grad=True)
+    full_moving = torch.rand(1, 2, 15, 17, requires_grad=True)
+    full_pose = torch.tensor([[-1400.0, 2.0, -1.0]], requires_grad=True)
+    full_features = torch.rand(1, 8, requires_grad=True)
+    review_fixed = full_fixed.detach().clone().requires_grad_(True)
+    review_moving = full_moving.detach().clone().requires_grad_(True)
+    review_pose = full_pose.detach().clone().requires_grad_(True)
+    review_features = full_features.detach().clone().requires_grad_(True)
+
+    def run(model, fixed, moving, pose, features, compact):
+        with torch.autocast(
+            device_type="cpu",
+            dtype=torch.bfloat16,
+            enabled=autocast_enabled,
+        ):
+            if compact:
+                refined_pose, logit = model.review_once(
+                    fixed, moving, pose, features
+                )
+            else:
+                details = model.refine_once(fixed, moving, pose, features)
+                refined_pose = details["pose"]
+                logit = details["compatibility_logit"]
+            loss = refined_pose.square().mean() + logit.square().mean()
+        loss.backward()
+        return refined_pose, logit
+
+    full_outputs = run(
+        full_model, full_fixed, full_moving, full_pose, full_features, False
+    )
+    review_outputs = run(
+        review_model,
+        review_fixed,
+        review_moving,
+        review_pose,
+        review_features,
+        True,
+    )
+    for observed, expected in zip(review_outputs, full_outputs):
+        torch.testing.assert_close(observed, expected, rtol=0.0, atol=0.0)
+    for observed, expected in (
+        (review_fixed.grad, full_fixed.grad),
+        (review_moving.grad, full_moving.grad),
+        (review_pose.grad, full_pose.grad),
+        (review_features.grad, full_features.grad),
+    ):
+        torch.testing.assert_close(observed, expected, rtol=0.0, atol=0.0)
+    for review_parameter, full_parameter in zip(
+        review_model.parameters(), full_model.parameters()
+    ):
+        assert (review_parameter.grad is None) == (full_parameter.grad is None)
+        if review_parameter.grad is not None:
+            torch.testing.assert_close(
+                review_parameter.grad, full_parameter.grad, rtol=0.0, atol=0.0
+            )
+
+
+def test_full_refinement_final_registration_and_export_remain_bidirectional():
+    torch.manual_seed(419)
+    model = _tiny_model().eval()
+    fixed = torch.rand(1, 2, 15, 17)
+    moving = torch.rand(1, 2, 15, 17)
+    pose = torch.tensor([[-1400.0, 2.0, -1.0]])
+    features = torch.rand(1, 8)
+
+    refined = model.refine_once(fixed, moving, pose, features)
+    assert "fixed_to_moving_map" in refined
+    assert "moving_to_fixed_map" in refined
+    exported = JointRefinerExport(model)(fixed, moving, pose, features)
+    assert torch.equal(exported[3], refined["fixed_to_moving_map"])
+    assert torch.equal(exported[4], refined["moving_to_fixed_map"])
+    final = model.register_final_pose(
+        fixed,
+        moving,
+        pose,
+        features,
+        _alignment_receipt(pose, source_shape=fixed.shape[-2:]),
+    )
+    assert "fixed_to_aligned_moving_map" in final
+    assert "aligned_moving_to_fixed_map" in final
+    assert "fixed_to_source_model_map" in final
+    assert "source_model_to_fixed_map" in final
 
 
 def test_recurrence_reuses_one_review_head_and_gradients_reach_all_three_branches():

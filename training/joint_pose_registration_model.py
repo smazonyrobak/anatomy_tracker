@@ -291,6 +291,50 @@ class JointPoseRegistrationModel(nn.Module):
         pose_features: torch.Tensor,
     ) -> dict[str, torch.Tensor | tuple[torch.Tensor, ...]]:
         registration = self.registrar.forward_with_details(fixed_atlas, moving_slice)
+        pose, pose_delta, compatibility_logit, warped_moving_slice = (
+            self._review_registration(
+                fixed_atlas,
+                moving_slice,
+                current_pose,
+                pose_features,
+                registration,
+            )
+        )
+        return {
+            "pose": pose,
+            "map_pose": current_pose,
+            "pose_delta": pose_delta,
+            "compatibility_logit": compatibility_logit,
+            "warped_moving_slice": warped_moving_slice,
+            **registration,
+        }
+
+    def review_once(
+        self,
+        fixed_atlas: torch.Tensor,
+        moving_slice: torch.Tensor,
+        current_pose: torch.Tensor,
+        pose_features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Score and update one candidate without computing an unused inverse map."""
+        registration = self.registrar.forward_for_review(fixed_atlas, moving_slice)
+        pose, _, compatibility_logit, _ = self._review_registration(
+            fixed_atlas,
+            moving_slice,
+            current_pose,
+            pose_features,
+            registration,
+        )
+        return pose, compatibility_logit
+
+    def _review_registration(
+        self,
+        fixed_atlas: torch.Tensor,
+        moving_slice: torch.Tensor,
+        current_pose: torch.Tensor,
+        pose_features: torch.Tensor,
+        registration: dict[str, torch.Tensor | tuple[torch.Tensor, ...]],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         warped_moving_slice = warp_tensor(
             moving_slice,
             registration["fixed_to_moving_map"],
@@ -304,14 +348,12 @@ class JointPoseRegistrationModel(nn.Module):
             registration["similarity_parameters"],
             registration["local_velocity"],
         )
-        return {
-            "pose": project_pose_to_domain(current_pose + pose_delta),
-            "map_pose": current_pose,
-            "pose_delta": pose_delta,
-            "compatibility_logit": compatibility_logit,
-            "warped_moving_slice": warped_moving_slice,
-            **registration,
-        }
+        return (
+            project_pose_to_domain(current_pose + pose_delta),
+            pose_delta,
+            compatibility_logit,
+            warped_moving_slice,
+        )
 
     def register_final_pose(
         self,

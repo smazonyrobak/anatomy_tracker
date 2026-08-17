@@ -1,9 +1,11 @@
+from copy import deepcopy
 from inspect import signature
 from io import BytesIO
 
 import pytest
 import torch
 
+from training import dense_registration_model as dense_model_module
 from training.dense_registration_model import (
     DenseRegistrationModel,
     _PreActivationResidualBlock,
@@ -272,6 +274,89 @@ def test_selected_model_returns_deep_supervision_maps_and_backpropagates():
         for block in stage.residual_blocks:
             assert block.conv1.weight.grad is not None
             assert block.conv2.weight.grad is not None
+
+
+@pytest.mark.parametrize("autocast_enabled", (False, True))
+def test_forward_only_review_details_match_full_outputs_and_gradients(
+    autocast_enabled,
+):
+    torch.manual_seed(401)
+    full_model = DenseRegistrationModel(
+        channels=(4, 8),
+        correlation_radii=(1, 1),
+        integration_steps=2,
+    )
+    review_model = deepcopy(full_model)
+    full_fixed = torch.rand(1, 2, 15, 17, requires_grad=True)
+    full_moving = torch.rand(1, 2, 15, 17, requires_grad=True)
+    review_fixed = full_fixed.detach().clone().requires_grad_(True)
+    review_moving = full_moving.detach().clone().requires_grad_(True)
+
+    def run(model, fixed, moving, forward_only):
+        with torch.autocast(
+            device_type="cpu",
+            dtype=torch.bfloat16,
+            enabled=autocast_enabled,
+        ):
+            details = (
+                model.forward_for_review(fixed, moving)
+                if forward_only
+                else model.forward_with_details(fixed, moving)
+            )
+            loss = (
+                details["fixed_to_moving_map"].square().mean()
+                + details["similarity_parameters"].square().mean()
+                + details["local_velocity"].square().mean()
+                + sum(level.square().mean() for level in details["pyramid_velocities"])
+            )
+        loss.backward()
+        return details
+
+    full = run(full_model, full_fixed, full_moving, False)
+    review = run(review_model, review_fixed, review_moving, True)
+    assert set(review) == {
+        "fixed_to_moving_map",
+        "similarity_parameters",
+        "local_velocity",
+        "pyramid_velocities",
+    }
+    for name in ("fixed_to_moving_map", "similarity_parameters", "local_velocity"):
+        torch.testing.assert_close(review[name], full[name], rtol=0.0, atol=0.0)
+    for observed, expected in zip(
+        review["pyramid_velocities"], full["pyramid_velocities"]
+    ):
+        torch.testing.assert_close(observed, expected, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(review_fixed.grad, full_fixed.grad, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(review_moving.grad, full_moving.grad, rtol=0.0, atol=0.0)
+    for review_parameter, full_parameter in zip(
+        review_model.parameters(), full_model.parameters()
+    ):
+        torch.testing.assert_close(
+            review_parameter.grad, full_parameter.grad, rtol=0.0, atol=0.0
+        )
+
+
+def test_forward_only_review_omits_exactly_the_inverse_integration(monkeypatch):
+    model = DenseRegistrationModel(
+        channels=(4, 8),
+        correlation_radii=(1, 1),
+        integration_steps=2,
+    ).eval()
+    fixed = torch.rand(1, 2, 15, 17)
+    moving = torch.rand(1, 2, 15, 17)
+    original = dense_model_module.scaling_and_squaring
+    calls = []
+
+    def counted(velocity, steps):
+        calls.append(velocity)
+        return original(velocity, steps)
+
+    monkeypatch.setattr(dense_model_module, "scaling_and_squaring", counted)
+    model.forward_for_review(fixed, moving)
+    review_calls = len(calls)
+    calls.clear()
+    model.forward_with_details(fixed, moving)
+    assert len(calls) == review_calls + 1
 
 
 def test_each_local_velocity_update_is_bounded_and_smoothed():

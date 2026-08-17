@@ -612,6 +612,23 @@ class DenseRegistrationModel(nn.Module):
             "pyramid_velocities": pyramid,
         }
 
+    def forward_for_review(
+        self,
+        fixed_atlas: torch.Tensor,
+        moving_slice: torch.Tensor,
+    ) -> dict[str, torch.Tensor | tuple[torch.Tensor, ...]]:
+        """Return reviewer inputs without integrating the unused inverse map."""
+        similarity, velocity, pyramid = self._predict(fixed_atlas, moving_slice)
+        local_forward = scaling_and_squaring(velocity, self.integration_steps)
+        return {
+            "fixed_to_moving_map": apply_similarity_transform(
+                local_forward, similarity
+            ),
+            "similarity_parameters": similarity,
+            "local_velocity": velocity,
+            "pyramid_velocities": pyramid,
+        }
+
     def forward(
         self,
         fixed_atlas: torch.Tensor,
