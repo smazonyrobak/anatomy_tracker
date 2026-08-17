@@ -1,23 +1,75 @@
 # Anatomy Tracker
 
-Standalone PySide6 application for registering histological slices to the Allen CCF, tracing Neuropixels probe trajectories, and assigning atlas structures to `channels.csv` and `units.csv`.
+Windows PySide6 application for registering histological slices to the Allen CCF, tracing Neuropixels probe trajectories, and assigning atlas structures to `channels.csv` and `units.csv`.
 
-## Installation
+## Requirements
+
+- 64-bit Windows 10 or 11. Run the application in native Windows, not WSL.
+- 64-bit Python 3.13. The pinned package set is validated with Python 3.13.
+- A current graphics driver with ONNX Runtime DirectML support. DeepSlice can fall back to CPU, but the automatic dense-registration warp requires `DmlExecutionProvider`.
+- Internet access during setup to download approximately 349 MB of checksum-pinned models and atlas data from the GitHub release.
+- Histology images in TIFF, PNG, JPEG, or BMP format. Channel/unit mapping additionally requires `channels.csv` and `units.csv` from the preprocessing pipeline.
+
+Git is convenient but not mandatory: either clone the repository or use **Code > Download ZIP** on GitHub and extract it before continuing.
+
+## Clean installation
+
+Open PowerShell in the folder where the repository should be stored:
 
 ```powershell
-python -m pip install -r requirements.txt
-python setup_runtime.py
+git clone https://github.com/smazonyrobak/anatomy_tracker.git
+cd anatomy_tracker
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe setup_runtime.py
 ```
 
-The setup command downloads and checksum-verifies all three model families and the required Allen 25 µm atlas files. See `RUNTIME_ASSETS.md` for asset provenance and terms.
+If you downloaded the ZIP, skip the `git clone` and `cd` lines, open PowerShell inside the extracted `anatomy_tracker-main` folder, and run the remaining commands there.
 
-## Run
+If the `py` command is unavailable, install 64-bit Python 3.13 from Python.org or replace `py -3.13` with the full path to a Python 3.13 executable. Activation of the virtual environment is optional because every command above addresses its Python executable directly.
+
+`setup_runtime.py` installs and verifies exactly the runtime assets used by the validated desktop copy:
+
+- DeepSlice 1.2.8 primary and secondary ONNX networks;
+- the evaluated AtlasPose ONNX network;
+- the dense-registration ONNX network;
+- the Allen CCFv3 25 µm template, annotation, structure lookup, and 3-D mesh.
+
+The command is safe to rerun. A valid existing file is retained; a missing or incorrect file is downloaded again and accepted only when its SHA-256 checksum matches. See [`RUNTIME_ASSETS.md`](RUNTIME_ASSETS.md) for provenance, licensing, and citations.
+
+## Verify and run
+
+Run the setup command once more. A complete installation prints eight `ready:` lines followed by the verification message:
 
 ```powershell
-python source/proprietary_trajectory_tool.py
+.\.venv\Scripts\python.exe setup_runtime.py
 ```
 
-Select a preprocessing output folder containing `channels.csv` and `units.csv`, either directly or inside its `preprocessed_data` subfolder.
+Check that DirectML is available:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+
+The output should include both `DmlExecutionProvider` and `CPUExecutionProvider`. Then start the application from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe source\proprietary_trajectory_tool.py
+```
+
+On first use, choose the bundled `data\Allen Brain Atlas 25um` directory if an atlas-folder dialog appears. Add one or more histology images with **Add slices**. For channel/unit mapping, select a preprocessing output folder containing `channels.csv` and `units.csv`, either directly or inside its `preprocessed_data` subfolder.
+
+## Troubleshooting setup
+
+- **`No matching distribution found`**: confirm that the environment uses 64-bit Python 3.13 with `.\.venv\Scripts\python.exe --version`.
+- **A model or atlas file is reported missing**: run `.\.venv\Scripts\python.exe setup_runtime.py` from the repository root. Do not download or rename the files manually.
+- **`DmlExecutionProvider` is absent**: update the Windows graphics driver and confirm that the app is running in native Windows. Manual alignment remains available, but the automatic dense-registration warp cannot run without DirectML.
+- **A download was interrupted**: rerun `setup_runtime.py`. Partial `.part` files are not accepted as runtime assets.
+- **GitHub downloads are blocked**: allow access to `github.com` and `release-assets.githubusercontent.com`, then rerun the setup command.
+- **The GUI starts but automatic matching fails**: confirm all eight assets print as `ready:` and that the complete histological brain section has a trusted surface outline with at least eight points.
+
+Do not copy a virtual environment from another computer. Recreate `.venv` with the commands above; only the repository and the release assets are portable.
 
 Atlas positions and exported coordinates use a bregma-centred stereotaxic convention: AP 0 is bregma, anterior AP is positive, and posterior AP is negative.
 
@@ -61,8 +113,11 @@ The historical local ConvNeXt-Tiny v6 artifact reached sealed synthetic-test MAE
 
 ## Build the bundled tracker
 
+This optional section is for creating a distributable Windows executable; it is not required to run the application from Python. Install PyInstaller into the same environment first:
+
 ```powershell
-python -m PyInstaller --noconfirm --clean TrajectoryTracker.spec
+.\.venv\Scripts\python.exe -m pip install PyInstaller
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean TrajectoryTracker.spec
 ```
 
 Deploy the complete generated `dist/TrajectoryTracker` folder. Do not combine a newly built executable with an older `_internal` runtime; the executable and runtime must come from the same build.
