@@ -7333,7 +7333,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self._refresh_point_counts()
             return
         manual_active = self.alignment_tabs.currentIndex() == 0
-        automatic_active = self.alignment_tabs.currentIndex() == 1
         self.atlas_panel.set_points(
             session.atlas_landmarks if manual_active else [],
             self._probe_spots(session, atlas=True),
@@ -7344,7 +7343,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         self.atlas_panel.set_outline([])
         self.slice_panel.set_outline(
-            self._slice_raw_to_display_points(session, session.brain_outline_points) if automatic_active else [],
+            self._slice_raw_to_display_points(session, session.brain_outline_points),
             session.brain_outline_segment_starts,
             session.brain_outline_closed,
         )

@@ -102,6 +102,8 @@ def test_complete_session_round_trip_embeds_images_and_state(tmp_path):
     assert restored.atlas_opacity.value() == 37
     assert restored.brain_opacity.value() == 58
     assert len(restored._auto_order_constraint_session_indices()) == 2
+    assert restored.alignment_tabs.currentIndex() == 0
+    assert len(restored.slice_panel.outline_points) == 8
 
     restored.close()
     window.close()
