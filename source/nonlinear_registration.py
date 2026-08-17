@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 
+# Canonical map chain: display pixels -> affine atlas pixels -> nonlinear atlas pixels, at pixel centres.
 FORMAT_VERSION = 4
 LEGACY_FORMAT_VERSION = 3
 COORDINATE_CONVENTION = "display_xy->affine_atlas_xy->atlas_xy;pixel_centers"
@@ -114,6 +115,7 @@ def _jacobian_determinant(pixel_map: np.ndarray) -> np.ndarray:
     return d_dx[..., 0] * d_dy[..., 1] - d_dx[..., 1] * d_dy[..., 0]
 
 
+# Persisted coordinate boundary shared by rendering, point mapping, and probe reconstruction.
 @dataclass(frozen=True)
 class SliceAtlasTransform2D:
     """Display-to-atlas transform with an optional residual dense warp.
@@ -319,6 +321,7 @@ class SliceAtlasTransform2D:
                 raise ValueError("dense registration forward/inverse cycle error is too large")
         return diagnostics
 
+    # Both map directions are saved so a session reload preserves the exact coordinate transform.
     def save_npz(self, path: str | Path) -> None:
         self.check_invariants()
         values = {

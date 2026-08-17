@@ -12,6 +12,7 @@ import onnxruntime as ort
 import pandas as pd
 
 
+# Historical DeepSlice ground-truth evaluation; inspected results are development evidence, not sealed evidence.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "source"))
 import atlas_pose_runtime
@@ -72,6 +73,7 @@ def filename_key(value: str) -> str:
     return Path(str(value).replace("\\", "/")).name.casefold()
 
 
+# Convert consensus QuickNII O/U/V into bregma-centred AP/L-R/D-V reporting coordinates.
 def quicknii_to_tracker_pose(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=np.float64)
     origin = values[:, :3]

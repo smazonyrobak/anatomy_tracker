@@ -44,6 +44,7 @@ from proprietary_trajectory_tool import (
 )
 
 
+# Frozen-session QA measures dense mapping conditional on saved pose, not independent pose accuracy.
 ARCHIVE_SHA256 = "c40f98e113e7d216f95b7152ccf55132cdaafa5f7401aebe6dee7062f1d0a64b"
 SESSION_LANDMARK_COUNTS = {0: 32, 1: 35, 4: 25, 5: 25, 6: 29, 7: 34, 8: 25, 9: 25}
 EXPECTED_LANDMARK_COUNT = 230
@@ -246,6 +247,7 @@ def _error_summary(errors: np.ndarray) -> dict:
     }
 
 
+# Score after the same affine-plus-nonlinear coordinate chain used by the GUI.
 def score_landmarks(
     case: dict,
     transform: SliceAtlasTransform2D,

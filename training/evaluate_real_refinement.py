@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "source"))
 import proprietary_trajectory_tool as tracker
 
 
+# Development diagnostic on an already inspected benchmark subset; it is not a release gate.
 BENCHMARK_ROOT = Path("G:/DeepSlice_GroundTruth_Evaluation")
 MODEL = ROOT / "models/AtlasPose/atlas_pose.onnx"
 MODEL_DIGEST = hashlib.sha256(MODEL.read_bytes()).hexdigest()
@@ -66,6 +67,7 @@ def summarize(table: pd.DataFrame, prefix: str) -> dict:
     }
 
 
+# Results explain deterministic refinement behaviour but cannot select an AtlasPose candidate.
 def main() -> None:
     table = representative_subset(pd.read_csv(PREDICTIONS))
     atlas = nrrd.read(str(ATLAS))[0]

@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 
+# Frozen third-party adapter: model hashes, QuickNII geometry conversion, preprocessing, then ONNX inference.
 RESOURCE_DIR = (
     Path(sys._MEIPASS)
     if getattr(sys, "frozen", False)
@@ -31,6 +32,7 @@ def _file_sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+# DeepSlice O/U/V uses QuickNII RAS voxels; this is the sole conversion into tracker pose/display geometry.
 def quicknii_to_tracker_alignment(
     prediction: dict,
     atlas_shape: tuple[int, int, int],
@@ -131,6 +133,7 @@ def load_deepslice_onnx_sessions(force_cpu: bool = False):
     return sessions, model_hashes, provider, fallback_reason
 
 
+# Keep the publication-model image contract isolated from AtlasPose preprocessing.
 def preprocess_deepslice_images(
     image_paths: list[str],
 ) -> tuple[np.ndarray, list[int], list[int]]:

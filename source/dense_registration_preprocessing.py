@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 
+# Shared verbatim by training, release export, and packaged inference.
 NATIVE_SHAPE = (320, 456)
 MODEL_SHAPE = (320, 464)
 PAD_X = 4
@@ -23,6 +24,7 @@ MASK_CONTRACT = (
 MASK_CONTRACT_SHA256 = hashlib.sha256(MASK_CONTRACT.encode("utf-8")).hexdigest()
 
 
+# Feather only the mask boundary; image normalization is a separate contract.
 def cosine_mask_feather(mask, *, dilate, zeros_like, where):
     """Return a backend-neutral three-ring outward cosine feather."""
     support = mask

@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 
 
+# Runtime boundary: canonical preprocessing, coordinate conversion, bundle verification, then ONNX inference.
+# Public poses are AP micrometres from bregma (+ anterior), L-R tilt degrees, and D-V tilt degrees.
 POSE_IMAGE_SIZE = 299
 POSE_INPUT_NAME = "images"
 POSE_OUTPUT_NAME = "pose_ap_um_lr_deg_dv_deg"
@@ -62,6 +64,7 @@ ATLAS_POSE_SEALED_SOURCE_FILES = (
 )
 
 
+# Brain masks define scale and orientation for the immutable v7 preprocessing contract.
 def _brain_mask_from_distance(distance: np.ndarray, threshold: float) -> np.ndarray | None:
     height, width = distance.shape
     mask = (distance > threshold).astype(np.uint8)
@@ -282,6 +285,7 @@ def plane_normal_from_tilts(tilt_lr_deg: float, tilt_dv_deg: float) -> np.ndarra
     return normal / np.linalg.norm(normal)
 
 
+# This is the geometry boundary between UI tilt values and atlas-plane normals.
 def tilts_from_plane_normal(normal: np.ndarray) -> tuple[float, float]:
     normal = np.asarray(normal, dtype=np.float64)
     if normal[1] < 0.0:
@@ -392,6 +396,7 @@ def atlas_pose_release_quality_gate_valid(quality: dict) -> bool:
     )
 
 
+# Sealed evidence is rejected before a model can cross the evaluated or approved release boundary.
 def verify_atlas_pose_sealed_predictions(path: str | Path) -> dict:
     required = {
         "sealed",
@@ -782,6 +787,7 @@ def verify_atlas_pose_release_bundle(
     return model_sha256, metadata_sha256, evidence_sha256, metadata, evidence
 
 
+# Candidate, evaluated, and approved bundles cross progressively stricter verification boundaries.
 def verify_atlas_pose_model_bundle(model_path: str | Path) -> tuple[str, str, str, dict, dict]:
     pins = (
         APPROVED_ATLAS_POSE_MODEL_SHA256,
@@ -874,6 +880,7 @@ def _load_atlas_pose_session(model_path: str, modified_ns: int, force_cpu: bool)
     return session, fallback_reason
 
 
+# ONNX returns verified pose outputs; UI constraints and multi-slice reasoning remain outside the model.
 def _run_atlas_pose_onnx(
     images: list[np.ndarray],
     masks: list[np.ndarray],

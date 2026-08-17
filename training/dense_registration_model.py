@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 
 
+# Canonical dense v2 utilities use absolute (x, y) pixel maps with align_corners=True sampling.
 def identity_pixel_map(
     batch_size: int,
     height: int,
@@ -226,6 +227,7 @@ def resize_similarity_parameters(
     )
 
 
+# Similarity and integrated stationary velocity compose explicitly into forward and inverse maps.
 def registration_maps(
     similarity_parameters: torch.Tensor,
     local_velocity: torch.Tensor,
@@ -433,6 +435,7 @@ class _ResidualSimilarityHead(nn.Module):
         )
 
 
+# Siamese multiscale features drive global similarity and diffeomorphic residual refinement.
 class DenseRegistrationModel(nn.Module):
     """Selected coarse-to-fine Siamese deformable registration network.
 

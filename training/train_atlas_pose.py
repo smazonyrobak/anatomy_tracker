@@ -18,6 +18,7 @@ from atlas_pose_models import MODEL_SPECS, AtlasPoseRegressor, PhysicalPoseOutpu
 from synthetic_atlas import IMAGE_SIZE, TARGET_CENTER, TARGET_SCALE, SyntheticAtlas, load_manifest, make_manifest, save_manifest
 
 
+# Historical v6 trainer retained to reproduce prior evidence; it is not the canonical v7 or release workflow.
 ROOT = Path(__file__).resolve().parents[1]
 ATLAS = ROOT / "data" / "Allen Brain Atlas 25um"
 WORKSPACE = Path(os.environ.get("ATLAS_POSE_WORKSPACE", "G:/AtlasPoseTraining"))
@@ -446,6 +447,7 @@ def export_model(
     return model_path
 
 
+# Historical export path only; v7 candidates must use train_atlas_pose_v7.py and its release contract.
 def train_final(architecture: str | None = None) -> dict:
     manifests = ensure_manifests()
     train_manifest, validation_manifest, test_manifest = manifests

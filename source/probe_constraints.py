@@ -7,6 +7,7 @@ import numpy as np
 from scipy.optimize import brentq, least_squares
 
 
+# Atlas arrays are AP-DV-ML; stereotaxic AP and DV reverse sign while ML retains its sign.
 AXIS_SIGN_AP_DV_ML = np.asarray((-1.0, -1.0, 1.0), dtype=np.float64)
 
 
@@ -75,6 +76,7 @@ def direction_from_attack_angle(angle_deg: float, azimuth_deg: float) -> np.ndar
     )
 
 
+# Fast feasibility prunes impossible slice poses before fitting a ray through observed electrode points.
 def insertion_plan_plane_feasibility(
     constraint: ProbeInsertionConstraint,
     plane: SlicePlane,
@@ -257,6 +259,7 @@ def fit_observed_probe_ray(
     )
 
 
+# Candidate scoring maps 2-D observations into atlas space, then evaluates the physical surgical plan.
 def probe_plan_mismatch_score(
     observations_by_slice: Mapping[Hashable, np.ndarray],
     constraint: ProbeInsertionConstraint,
@@ -546,6 +549,7 @@ def fit_probe_ray(
     )
 
 
+# Public bridge from candidate slice-plane pixels to deterministic stereotaxic constraint costs.
 def atlas_points_to_stereotaxic_um(
     atlas_points_xy: np.ndarray,
     plane: SlicePlane,

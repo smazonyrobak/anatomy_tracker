@@ -51,6 +51,7 @@ from training.atlas_pose_release_contract import (
 )
 
 
+# Final-only v7 comparison against frozen DeepSlice modes on specimen-separated registered sections.
 ROOT = Path(__file__).resolve().parents[1]
 ACQUISITION_ROOT = Path(
     os.environ.get(
@@ -616,6 +617,7 @@ def require_complete_sealed_images(
     return paths
 
 
+# Duplicated deliberately so final coordinate conversion does not depend on trainer helpers.
 def quicknii_to_tracker_pose(ouv: np.ndarray) -> np.ndarray:
     values = np.atleast_2d(np.asarray(ouv, dtype=np.float64))
     if values.shape[1] != 9:
@@ -1065,6 +1067,7 @@ def sealed_release_report(
     return payload
 
 
+# Consumes the sealed cohort once; outputs cannot select or tune a candidate.
 def run_evaluation(
     acquisition_root: Path = ACQUISITION_ROOT,
     atlas_pose_model: Path | None = Path(ATLAS_POSE_MODEL) if ATLAS_POSE_MODEL else None,

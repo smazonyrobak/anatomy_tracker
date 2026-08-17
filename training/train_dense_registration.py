@@ -34,6 +34,7 @@ from training.synthetic_registration import (
 )
 
 
+# Canonical dense v2 trainer; qualification and release remain in dense_registration_release.py.
 DEFAULT_WORKSPACE = Path.home() / "AtlasWarpTraining"
 DEFAULT_ATLAS = Path(__file__).resolve().parents[1] / "data" / "Allen Brain Atlas 25um"
 FORMAT_VERSION = 1
@@ -190,6 +191,7 @@ def build_model(config: dict, device: str | torch.device) -> DenseRegistrationMo
     ).to(device)
 
 
+# EMA weights are the validation and release candidate; optimizer weights exist for exact resume.
 class ExponentialMovingAverage:
     def __init__(self, model: torch.nn.Module, decay: float = 0.999):
         self.decay = float(decay)
@@ -832,6 +834,7 @@ def _evaluate_records(
 
 
 @torch.inference_mode()
+# Development evaluation consumes fixed validation manifests and never selects on sealed-test samples.
 def evaluate_model(
     model: DenseRegistrationModel,
     generator: SyntheticRegistrationGenerator,
@@ -983,6 +986,7 @@ def _cosine_multiplier(step: int, total_steps: int, warmup_steps: int) -> float:
     return 0.05 + 0.95 * 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
 
 
+# Resume captures every state that can change the next sample or optimizer update.
 def _checkpoint_state(
     *,
     config: dict,
@@ -1038,6 +1042,7 @@ def _progress_line(progress: dict) -> str:
     )
 
 
+# Early stopping is validation-only; best-validation.pt is the handoff to qualification.
 def train(config: dict) -> Path:
     """Train/resume one development run; checkpoint selection uses validation only."""
     device = torch.device(config.get("device", "cuda"))
@@ -1337,6 +1342,7 @@ def load_ema_initialization(
     model.load_state_dict(shadow)
 
 
+# Standalone validation is diagnostic and cannot promote or release a checkpoint.
 def validate_checkpoint(
     checkpoint_path: str | Path,
     *,

@@ -6,6 +6,7 @@ import pandas as pd
 from source.atlas_pose_runtime import ATLAS_POSE_RELEASE_GATE_THRESHOLDS
 
 
+# Final AtlasPose comparisons are paired at section level and resampled at the independent animal level.
 POSE_AXES = ("ap_um", "lr_deg", "dv_deg")
 RELEASE_GATE_THRESHOLDS = ATLAS_POSE_RELEASE_GATE_THRESHOLDS
 RELEASE_REFERENCE = "deepslice_mens_ai_ci"
@@ -63,6 +64,7 @@ def evaluation_domains(table: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     return in_domain, table[~table["in_training_ap_domain"].astype(bool)]
 
 
+# Bootstrap draws animals, never treating correlated slices as independent replicates.
 def paired_animal_bootstrap(
     rows: pd.DataFrame,
     candidate: str,
@@ -208,6 +210,7 @@ def _group_component_p90(frame: pd.DataFrame) -> tuple[dict, np.ndarray]:
     return report, np.max(np.asarray(tails), axis=0)
 
 
+# This is a release decision only; training and checkpoint selection must not call it on sealed data.
 def release_quality_gate(rows: pd.DataFrame) -> dict:
     frame = rows[rows["in_training_ap_domain"].astype(bool)].copy()
     if frame.empty or set(frame["method"]) != {"atlas_pose"}:

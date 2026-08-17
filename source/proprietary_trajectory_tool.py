@@ -1,3 +1,5 @@
+# Standalone Qt tracker: histology pixels are oriented, matched to an Allen CCF plane,
+# registered into that plane, lifted to CCF voxels, then fitted/exported as probe anatomy.
 from __future__ import annotations
 
 import hashlib
@@ -183,6 +185,8 @@ PROBE_COLORS = (
     (255, 91, 137),
     (240, 209, 70),
 )
+# Physical probe geometry is kept independent of the recording map: a run may use
+# only some sites, but visualization and channel coordinates refer to the full shank.
 PROBE_PHYSICAL_LENGTH_UM = {
     "Neuropixels 1.0": 10000.0,
     "Neuropixels 2.0 single-shank": 10000.0,
@@ -289,6 +293,8 @@ def probe_mapping_coordinates(
 pg.setConfigOptions(imageAxisOrder="row-major", background="#0f131a", foreground="#d7e7f5")
 
 
+# These helpers make model/session provenance serializable and bind derived results
+# to the exact source images, atlas files, and released model artifacts that made them.
 def probe_color(probe_name: str) -> tuple[int, int, int]:
     digits = "".join(character for character in probe_name if character.isdigit())
     index = int(digits) if digits else sum(probe_name.encode("utf-8"))
@@ -373,6 +379,8 @@ def registration_brain_mask(
     return np.ascontiguousarray(automatic_brain_mask(image), dtype=bool)
 
 
+# Dense registration always runs in atlas-plane pixels. The base affine first puts
+# the oriented display slice and its trusted tissue mask onto the fixed model canvas.
 def dense_registration_canvases(
     raw_slice_image: np.ndarray,
     slice_mask: np.ndarray,
@@ -412,6 +420,8 @@ def prepare_pose_inputs(
     progress_messages: queue.SimpleQueue,
     cancel_event: threading.Event,
 ) -> tuple[list[str], dict[str, dict], dict[str, dict[str, np.ndarray]]]:
+    # Model inputs and their crop/orientation provenance are built together so a
+    # returned pose can later be rejected if the source or display geometry changed.
     image_paths = []
     input_crops = {}
     prepared_inputs = {}
@@ -719,6 +729,8 @@ def prepare_and_run_pose_predictions(
     return records, disagreement, runtime_info, prepared_inputs
 
 
+# Mapping/export uses (probe_name, probe_channel_number) as the stable identity;
+# unit anatomy is inherited from each unit's peak recording channel.
 def _integer_series(values: pd.Series, label: str) -> pd.Series:
     numeric = pd.to_numeric(values, errors="raise")
     rounded = np.rint(numeric.to_numpy(dtype=float)).astype(np.int64)
@@ -938,6 +950,8 @@ def write_csv_atomic(table: pd.DataFrame, path: Path) -> None:
     os.replace(temporary, path)
 
 
+# Primary CSVs, compact anatomy sidecars, transforms, and the manifest are staged
+# and verified as one recoverable mapping transaction before becoming visible.
 def write_anatomy_sidecars(data_folder: Path, channels: pd.DataFrame, units: pd.DataFrame) -> None:
     anatomy_dir = data_folder / "anatomy"
     anatomy_dir.mkdir(exist_ok=True)
@@ -1084,6 +1098,8 @@ def promote_staged_mapping_outputs(
         raise
 
 
+# Display geometry has two pixel frames: raw_display is the downsampled source;
+# slice_transform maps it into the user-oriented (rotation/flip) display canvas.
 def as_gray(image: np.ndarray) -> np.ndarray:
     image = np.asarray(image)
     image = np.squeeze(image)
@@ -1225,6 +1241,8 @@ def resample_closed_contour(contour: np.ndarray, point_count: int) -> np.ndarray
     return contour_points[segments] + segment_vectors[segments] * fractions[:, None]
 
 
+# Smart brush converts sparse foreground/background strokes into a persistent tissue
+# mask and a uniformly sampled editable surface; the brightness curve affects its input.
 def smart_brain_surface_selection(
     image: np.ndarray,
     foreground_points: list[tuple[float, float]],
@@ -1327,6 +1345,8 @@ def smart_brain_surface_selection(
     return [(float(x), float(y)) for x, y in surface], selection
 
 
+# MIND supplies a contrast-robust structural score for the deterministic atlas search;
+# the learned pose is a prior/starting point rather than the final section assignment.
 def canonical_mind_input(
     image: np.ndarray,
     brain_mask: np.ndarray,
@@ -1952,6 +1972,7 @@ def refine_pose_search(
     trusted_surface_points: dict[int, list[tuple[float, float]]] | None = None,
     cortical_region_ids: frozenset[int] | None = None,
 ) -> tuple[dict[int, tuple[int, float, float]], dict[int, dict], tuple[float, float] | None]:
+    # Stage 1: canonicalize each selected tissue region and cache its MIND descriptor.
     sources = {}
     filenames = {}
     for session_index, record in records_by_session.items():
@@ -2266,6 +2287,8 @@ def refine_pose_search(
         progress_start: int,
         progress_end: int,
     ) -> tuple[dict[int, tuple[int, float, float]], dict[int, dict], tuple[float, float]]:
+        # Stage 2: search a sparse AP/tilt lattice around model predictions, solving
+        # slice order and surgical feasibility jointly instead of after selection.
         predicted_tilt = np.mean(
             np.asarray([(converted[index][1], converted[index][2]) for index in session_indices]),
             axis=0,
@@ -2444,6 +2467,8 @@ def refine_pose_search(
             ]
             for index in session_indices
         }
+        # Stage 3: refine AP at atlas-voxel spacing and tilt first at 1 degree, then
+        # at 0.25 degree; global alignment evaluates one shared tilt for the group.
         fine_tilts = [
             (float(coarse_lr + lr_offset), float(coarse_dv + dv_offset))
             for lr_offset in range(-3, 4)
@@ -2898,6 +2923,8 @@ def prepare_run_and_solve_alignment(
     return engine, runtime_info["component_provenance"], disagreement, runtime_info, prepared, shared_tilt
 
 
+# Atlas arrays use (AP, DV, ML) voxel order. Coronal display pixels are (ML, DV),
+# and stereotaxic micrometres are bregma-centred with posterior AP values negative.
 def atlas_slice(volume: np.ndarray, plane: str, index: int) -> np.ndarray:
     if plane == "coronal":
         return volume[index, :, :]
@@ -3180,6 +3207,8 @@ class ProbeTrace:
 
 @dataclass
 class SliceSession:
+    # Source/display state. Point lists on the slice are stored in raw_display pixels
+    # so rotation and flips can be changed without accumulating coordinate error.
     name: str
     path: str = ""
     display_scale: float = 1.0
@@ -3192,6 +3221,7 @@ class SliceSession:
     flip_vertical: bool = False
     slice_transform: np.ndarray = field(default_factory=lambda: np.eye(3, dtype=np.float64))
     curve_points: list[tuple[float, float]] = field(default_factory=lambda: [(0.0, 0.0), (255.0, 255.0)])
+    # Atlas pose and atlas_landmarks use selected atlas-plane pixels (ML, DV in coronal view).
     atlas_plane: str = "coronal"
     atlas_index: int = 0
     atlas_tilt_ml_deg: float = 0.0
@@ -3204,6 +3234,8 @@ class SliceSession:
     brain_brush_strokes: list[tuple[bool, list[tuple[float, float]]]] = field(default_factory=list)
     brain_brush_selection_mask: np.ndarray | None = None
     brain_outline_undo_stack: list[tuple] = field(default_factory=list, repr=False)
+    # ProbeTrace slice_points remain in raw_display pixels; atlas_points are plane
+    # pixels and volume_points are Allen array voxels in (AP, DV, ML) order.
     probe_traces: dict[str, ProbeTrace] = field(default_factory=dict)
     point_history: list[str] = field(default_factory=list)
     auto_alignment_score: float | None = None
@@ -3226,6 +3258,8 @@ class SliceSession:
     atlas_to_slice_tps: RBFInterpolator | None = None
 
 
+# Registration accessors hide whether coordinates came from the released dense field
+# or a manual landmark TPS, keeping probe remapping and overlay rendering consistent.
 def fit_landmark_tps(
     slice_points: np.ndarray,
     atlas_points: np.ndarray,
@@ -3294,6 +3328,8 @@ def render_session_slice_in_atlas(
     )
 
 
+# Reusable widgets own interaction/rendering only; scientific state stays in SliceSession
+# and orchestration stays in TrajectoryTrackerWindow.
 class ImagePanel(QtWidgets.QWidget):
     clicked = QtCore.Signal(float, float)
     brush_stroke = QtCore.Signal(list, bool)
@@ -3979,6 +4015,8 @@ def probe_aligned_atlas_section(
     }
 
 
+# Probe anatomy widgets render already-mapped sites and atlas regions; they do not
+# recompute trajectories or mutate mapping metadata.
 class ProbeAtlasSectionWidget(QtWidgets.QWidget):
     def __init__(
         self,
@@ -4626,6 +4664,8 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
         totals.setStyleSheet("color:#b9d5e8; font-weight:600;")
         layout.addWidget(totals)
 
+# Main workflow controller: owns atlas/session state, connects widgets, schedules model
+# work off the UI thread, and is the sole writer of derived registration/mapping state.
 class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def __init__(
         self,
@@ -5526,6 +5566,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             },
             "sessions": [],
         }
+        # A session archive is self-contained: source images, masks, transforms, UI
+        # choices, provenance, and probe observations are written before atomic replace.
         try:
             with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 with tempfile.TemporaryDirectory() as transform_folder:
@@ -6735,6 +6777,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_atlas()
         self._refresh_points()
 
+    # Invalidation rule: pose, geometry, surface, or landmark edits may preserve a
+    # valid affine plane, but must discard stale nonlinear maps and derived probe voxels.
     def _clear_derived_probe_coordinates(self, session: SliceSession) -> None:
         for trace in session.probe_traces.values():
             trace.atlas_points.clear()
@@ -8064,6 +8108,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         image_sha256 = array_sha256(raw_slice)
         mask_sha256 = array_sha256(slice_mask.astype(np.uint8))
+        # Background work receives immutable values plus this snapshot. Installation
+        # is allowed only when the live session still matches every captured dependency.
         snapshot = {
             "session_id": id(session),
             "slice_image": (image_sha256, raw_slice.shape, raw_slice.dtype.str),
@@ -8417,6 +8463,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         tissue_mask_sha256: str,
         result: dict,
     ) -> dict:
+        # Construct and validate every transform, overlay, and probe-coordinate update
+        # without mutating sessions; batch results are committed only after all succeed.
         runtime_metadata = dict(result["metadata"])
         registration = {
             "kind": "automatic",
@@ -8645,6 +8693,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 "Choose DeepSlice until the evaluated model is installed."
             )
         alignment_run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
+        # Atlas, constraint, source, geometry, surface, landmark, and probe snapshots
+        # prevent a late worker result from overwriting edits made while it was running.
         atlas_snapshot = (
             id(self.atlas_volume),
             id(self.annotation_volume),
@@ -8903,6 +8953,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             for index in prepared[0][6]["alignment_batch_session_indices"]
         ]
         order_names = [self.sessions[index].name for index in order_snapshot]
+        # Prepare the complete pose/transform/probe update first. No session is changed
+        # until every result has passed source binding and coordinate checks.
         staged = []
         for (
             session_index,

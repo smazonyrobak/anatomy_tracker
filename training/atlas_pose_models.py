@@ -5,6 +5,7 @@ import torch
 from torch import nn
 
 
+# Historical AtlasPose v6 architecture retained for reproducibility only; new work belongs in *_v7.py.
 MODEL_SPECS = {
     "xception": ("legacy_xception.tf_in1k", nn.ReLU),
     "efficientnetv2": ("tf_efficientnetv2_s.in21k_ft_in1k", nn.SiLU),

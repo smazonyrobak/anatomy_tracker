@@ -34,6 +34,7 @@ else:
     from nonlinear_registration import SliceAtlasTransform2D
 
 
+# Dense v2 runtime boundary: verify immutable evidence, preprocess, then execute the frozen ONNX graph.
 INPUT_NAMES = ("fixed_atlas_and_mask", "moving_slice_and_mask")
 OUTPUT_NAMES = ("fixed_to_moving_map", "moving_to_fixed_map")
 PRODUCTION_PROVIDER = "DmlExecutionProvider"
@@ -221,6 +222,7 @@ DENSE_REGISTRATION_V2_RELEASE_PROTOCOL_SHA256 = hashlib.sha256(
 ).hexdigest()
 
 
+# Hash and metric checks enforce release provenance; they do not estimate case quality at inference time.
 def sha256_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -572,6 +574,7 @@ def verify_dense_registration_bundle(
     return verified
 
 
+# Preprocessing preserves native 320x456 coordinates while padding only the model tensor width.
 def _native_mask(mask: np.ndarray) -> np.ndarray:
     values = np.asarray(mask)
     if values.shape != NATIVE_SHAPE or not np.all((values == 0) | (values == 1)):
@@ -636,6 +639,7 @@ def native_absolute_map(model_output: np.ndarray) -> np.ndarray:
     return native
 
 
+# Provider and tensor contracts are checked before maps enter the coordinate-transform layer.
 def _check_session_contract(session) -> None:
     inputs = session.get_inputs()
     outputs = session.get_outputs()

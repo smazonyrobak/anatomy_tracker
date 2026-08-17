@@ -62,6 +62,7 @@ from source.atlas_pose_runtime import (
 )
 
 
+# Canonical AtlasPose v7 trainer. Historical v6 training lives in train_atlas_pose.py and is not a release path.
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = Path(os.environ.get("ATLAS_POSE_V7_WORKSPACE", "J:/AtlasPoseTraining_v7"))
 ATLAS_FOLDER = Path(os.environ.get("ATLAS_POSE_ATLAS", ROOT / "data" / "Allen Brain Atlas 25um"))
@@ -137,6 +138,7 @@ DEFAULTS = {
 }
 
 
+# Provenance binds source, environment, pretrained weights, atlas files, and registered acquisitions.
 def file_sha256(path: Path) -> str:
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -329,6 +331,7 @@ def manifest_sha256(manifest: dict[str, np.ndarray]) -> str:
     return digest.hexdigest()
 
 
+# Fixed manifests make every geometry/appearance cohort reproducible across resumes and model families.
 def ensure_fixed_manifest(workspace: Path, split: str, count: int, seed: int) -> tuple[dict[str, np.ndarray], Path]:
     folder = Path(workspace) / "manifests"
     path = folder / f"{split}_{count}_{seed}.npz"
@@ -564,6 +567,7 @@ def anatomy_loss(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     return cross_entropy + dice
 
 
+# Synthetic geometry and trusted registered histology contribute to one physical-pose objective.
 def training_objective(
     model: torch.nn.Module,
     images: torch.Tensor,
@@ -616,6 +620,7 @@ def training_objective(
     }
 
 
+# EMA is the evaluated/exported candidate; raw optimizer weights remain resume state only.
 def ema_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {name: value.detach().clone() for name, value in model.state_dict().items()}
 
@@ -989,6 +994,7 @@ def _selection_summary_from_component_mae(component_mae: np.ndarray) -> dict:
     }
 
 
+# Validation-only summaries select checkpoints; test and sealed cohorts never influence selection.
 def validation_selection_summary(rows: list[dict]) -> dict:
     _, errors = balanced_animal_component_errors(rows)
     return _selection_summary_from_component_mae(errors.mean(0))
@@ -1306,6 +1312,7 @@ def _swap_to_ema(model: torch.nn.Module, ema: dict[str, torch.Tensor]) -> dict[s
     return current
 
 
+# Resume restores model, optimizer, EMA, RNG, manifest position, and history as one deterministic state.
 def train_experiment(
     model: torch.nn.Module,
     renderer: SyntheticAtlas,
@@ -1594,6 +1601,7 @@ def _onnx_verification_session(model_path: Path, provider: str):
     return session
 
 
+# Export verifies numerical parity on representative inputs before an artifact can be promoted.
 def export_onnx(
     model: torch.nn.Module,
     output_folder: Path,
@@ -2019,6 +2027,7 @@ def bootstrap_seed_group_comparison(
     return result
 
 
+# Family selection uses only prespecified validation evidence across independent training seeds.
 def select_model_family(
     groups: dict[str, list[dict]],
     label: str,

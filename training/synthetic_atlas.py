@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 
 
+# Shared synthetic AtlasPose generator: manifests fix geometry separately from stochastic appearance variants.
 IMAGE_SIZE = 299
 CANVAS_SIZE = 448
 VOXEL_UM = 25.0
@@ -120,6 +121,7 @@ def _coarse_anatomy_volume(annotation: np.ndarray, structure_table: Path) -> np.
     return coarse
 
 
+# Manifests contain labels and augmentation parameters, making each view reproducible without storing images.
 def make_manifest(count: int, split: str, seed: int) -> dict[str, np.ndarray]:
     rng = np.random.default_rng(seed)
     if split not in {"train", "validation", "test"}:
@@ -240,6 +242,7 @@ def load_manifest(path: Path) -> dict[str, np.ndarray]:
         return {name: values[name] for name in values.files}
 
 
+# Renderer samples oblique CCF planes, then applies geometry, tissue damage, and grayscale acquisition artifacts.
 class SyntheticAtlas:
     def __init__(self, atlas_folder: Path, device: str = "cuda"):
         self.atlas_folder = Path(atlas_folder).resolve()
@@ -691,6 +694,7 @@ class SyntheticAtlas:
         image = (image + 0.65 * light - 0.45 * dark).clamp(0.0, 1.0)
         return image, visible_mask
 
+    # Batches return the image together with exact pose/orientation and optional coarse anatomy supervision.
     def batch(
         self,
         manifest: dict[str, np.ndarray],

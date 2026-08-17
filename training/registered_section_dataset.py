@@ -34,6 +34,7 @@ from source.registered_image_quality import (
 )
 
 
+# Canonical v7 real-data path: Allen sections remain specimen-split and sealed experiments stay inaccessible.
 DOWNSAMPLE = 5
 DOWNSAMPLE_FACTOR = 2**DOWNSAMPLE
 VOXEL_UM = 25.0
@@ -102,6 +103,7 @@ def _contract_sha256(contract: dict) -> str:
     ).hexdigest()
 
 
+# Cache keys bind acquisition hashes, preprocessing versions, atlas labels, and spatial target construction.
 def registered_static_cache_contract(
     root: str | Path,
     atlas_folder: str | Path,
@@ -258,6 +260,7 @@ def preprocess_anatomy_target(anatomy: np.ndarray, mask: np.ndarray) -> np.ndarr
     return target.astype(np.int64)
 
 
+# Real images provide pose/domain supervision; projected coarse anatomy is auxiliary, not dense warp truth.
 class RegisteredSectionDataset(Dataset):
     def __init__(
         self,

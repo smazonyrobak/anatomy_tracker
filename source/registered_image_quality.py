@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 
 
+# Excludes unreadable or uninformative downloads before registered histology reaches v7 training.
 REGISTERED_IMAGE_QUALITY_MANIFEST = "registered_image_quality.json"
 REGISTERED_IMAGE_QUALITY_VERSION = "gray-p0.01-p99.99-span8-std1-v1"
 REGISTERED_IMAGE_QUALITY_SPLITS = (
@@ -119,6 +120,7 @@ def build_registered_image_quality_manifest(root: str | Path, workers: int = 16)
     return payload
 
 
+# Reloading rechecks provenance hashes so changed acquisitions cannot inherit an old quality decision.
 def load_registered_image_quality_manifest(
     root: str | Path,
 ) -> tuple[dict, frozenset[int], dict[int, dict]]:

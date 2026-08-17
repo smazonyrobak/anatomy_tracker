@@ -40,6 +40,7 @@ from source.dense_registration_runtime import (
 )
 
 
+# Dense v2 release chain: locked qualification -> frozen candidate -> sealed test -> parity -> export.
 FORMAT_VERSION = V2_RELEASE_PROTOCOL["protocol_version"]
 GENERATOR_PROFILE = V2_RELEASE_PROTOCOL["generator_profile"]
 BENCHMARK_ID = V2_RELEASE_PROTOCOL["benchmark_id"]
@@ -174,6 +175,7 @@ def _state_sha256(state: dict[str, torch.Tensor]) -> str:
     return digest.hexdigest()
 
 
+# Candidate identity binds EMA weights, immutable config, generator contract, and source hashes.
 def checkpoint_identity(checkpoint_path: str | Path) -> tuple[dict, dict]:
     _enable_strict_determinism()
     path = Path(checkpoint_path).resolve()
@@ -406,6 +408,7 @@ def _load_release_components(checkpoint_path: str | Path, atlas: str | Path, dev
     return identity, checkpoint, model.eval(), generator
 
 
+# Qualification uses only the fixed validation and mask-stress cohorts.
 def qualify_checkpoint(
     checkpoint_path: str | Path,
     evidence_root: str | Path,
@@ -520,6 +523,7 @@ def verify_qualification(
     return receipt
 
 
+# Freezing binds passing qualification evidence before the final holdout is revealed.
 def freeze_qualified_candidate(
     checkpoint_path: str | Path,
     receipt_path: str | Path,
@@ -749,6 +753,7 @@ def _verify_sample_evidence(report: dict, descriptors: list[dict]) -> None:
         raise ValueError("per-sample evidence differs from the locked cohort")
 
 
+# Final-only: sealed results must never feed training, early stopping, or candidate selection.
 def run_sealed_benchmark(
     candidate_path: str | Path,
     *,
@@ -954,6 +959,7 @@ def _parity_manifests(generator) -> list[dict]:
     return cases
 
 
+# Parity covers the production DirectML provider and the explicit CPU diagnostic path.
 def run_onnx_parity(
     onnx_path: str | Path,
     model,
@@ -1137,6 +1143,7 @@ def build_v2_release_metadata(
     }
 
 
+# Atomic publication requires sealed evidence and provider parity for this exact candidate.
 def export_onnx_release(
     candidate_path: str | Path,
     output_folder: str | Path,

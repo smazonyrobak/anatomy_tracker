@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch import nn
 
 
+# Canonical AtlasPose v7 architecture: shared spatial encoder with binned, OUV, and direct physical heads.
 BACKBONES = {
     "convnext_tiny": "convnext_tiny.fb_in22k_ft_in1k",
     "maxvit_tiny": "maxvit_tiny_rw_224.sw_in1k",
@@ -64,6 +65,7 @@ def tilt_bin_edges(dtype: torch.dtype = torch.float32) -> torch.Tensor:
     )
 
 
+# Binned targets preserve coarse probability mass while continuous heads refine physical coordinates.
 def encode_binned_target(
     target: torch.Tensor,
     centers: torch.Tensor,
@@ -301,6 +303,7 @@ class CoarseAnatomyHead(nn.Module):
         )
 
 
+# Production training model; export below exposes only physical pose and orientation outputs.
 class AtlasPoseV7(nn.Module):
     def __init__(
         self,
@@ -452,6 +455,7 @@ def physical_tilt_loss(prediction: torch.Tensor, target: torch.Tensor) -> torch.
     return F.smooth_l1_loss(error, torch.zeros_like(error), beta=1.0)
 
 
+# One objective ties all heads to the same physical AP/L-R/D-V target and image orientation.
 def atlas_pose_v7_loss(
     outputs: dict[str, torch.Tensor],
     physical_pose_target: torch.Tensor,

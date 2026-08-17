@@ -17,6 +17,7 @@ from source.atlas_pose_runtime import QUICKNII_COORDINATE_CONTRACT_VERSION
 from source.registered_image_quality import build_registered_image_quality_manifest
 
 
+# Acquisition/provenance entry point for v7 Allen Product 5/8 registered histology and the sealed S2P cohort.
 API_ROOT = "https://api.brain-map.org"
 PRODUCT_IDS = (5, 8)
 DEEPSLICE_S2P_EXPERIMENT_IDS = (
@@ -98,6 +99,7 @@ def fetch_dataset(dataset_id: int, get=requests.get) -> dict:
     return dataset
 
 
+# Split assignment is specimen-level; sealed experiment identities cannot leak into training or selection.
 def split_for_specimen(specimen_id: int, sealed_specimens: set[int]) -> str:
     specimen_id = int(specimen_id)
     if specimen_id in sealed_specimens:
@@ -158,6 +160,7 @@ def select_pilot_datasets(index: dict[int, dict], sealed_specimens: set[int], da
     return sorted(selected)
 
 
+# Allen transforms are converted once into the QuickNII/CCF coordinate contract used throughout v7.
 def image_to_reference(dataset: dict, section: dict, x: float, y: float) -> np.ndarray:
     alignment2d = section["alignment2d"]
     alignment3d = dataset["alignment3d"]
@@ -294,6 +297,7 @@ def _jsonl_bytes(records: list[dict]) -> bytes:
     return "".join(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n" for record in records).encode()
 
 
+# Manifests are write-once and content-hashed so later downloads cannot silently change a training cohort.
 def _immutable_write(path: Path, content: bytes) -> None:
     if path.exists():
         if path.read_bytes() != content:
