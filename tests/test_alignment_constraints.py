@@ -639,6 +639,45 @@ def test_pose_search_reaches_feasible_tilt_and_ap_when_model_initial_pose_is_wro
     assert any(lr == 8.0 and dv == -4.0 and len(candidates) > 1 for lr, dv, candidates, _ in calls)
 
 
+def test_pose_search_refines_tilt_to_quarter_degree(monkeypatch):
+    atlas = np.zeros((160, 20, 20), dtype=np.float32)
+    annotation = np.ones_like(atlas, dtype=np.uint8)
+    image = np.zeros((20, 20), dtype=np.float32)
+    target_lr, target_dv = 5.25, -3.5
+
+    def oblique(volume, _ap, tilt_lr, tilt_dv, order):
+        if volume is annotation:
+            return np.ones((20, 20), dtype=np.uint8)
+        cost = (tilt_lr - target_lr) ** 2 + (tilt_dv - target_dv) ** 2
+        return np.full((20, 20), cost, dtype=np.float32)
+
+    monkeypatch.setattr(TRACKER, "coronal_oblique_slice_resampled", oblique)
+    monkeypatch.setattr(TRACKER, "canonical_mind_input", lambda values, mask: (values, mask))
+    monkeypatch.setattr(TRACKER, "mind_descriptor", lambda values: values)
+    monkeypatch.setattr(
+        TRACKER,
+        "mind_distance",
+        lambda _source, _source_mask, target, _target_mask: (float(np.mean(target)), 0.0),
+    )
+
+    pose, diagnostics, _ = TRACKER.refine_pose_search(
+        {0: (100.0, 4.0, -4.0, np.eye(3))},
+        {0: {"Filenames": "slice.png", "model_uncertainty": {}}},
+        atlas,
+        annotation,
+        {"slice.png": {"image": image, "brain_mask": np.ones_like(image, dtype=bool)}},
+        {"slice.png": {"ap_um": 800.0, "lr_deg": 8.0, "dv_deg": 8.0}},
+        None,
+        [],
+        None,
+        None,
+        global_alignment=False,
+    )
+
+    assert pose[0] == pytest.approx((100, target_lr, target_dv))
+    assert diagnostics[0]["pose_search_tilt_resolution_deg"] == 0.25
+
+
 def _ellipse_case(missing_arc: bool = False):
     center = np.array([140.0, 110.0])
     axes = np.array([55.0, 38.0])

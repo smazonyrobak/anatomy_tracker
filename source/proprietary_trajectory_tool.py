@@ -2497,6 +2497,76 @@ def refine_pose_search(
             fine_assignments = None
             probe_geometry = None
 
+        precision_offsets = np.arange(-0.5, 0.5001, 0.25)
+        precision_tilts = [
+            (float(best_lr + lr_offset), float(best_dv + dv_offset))
+            for lr_offset in precision_offsets
+            for dv_offset in precision_offsets
+        ]
+        precision_results = []
+        for sequence, (tilt_lr, tilt_dv) in enumerate(precision_tilts, start=1):
+            if progress_messages is not None:
+                progress_messages.put(
+                    (
+                        progress_start
+                        + round(
+                            (progress_end - progress_start)
+                            * (0.80 + 0.15 * sequence / len(precision_tilts))
+                        ),
+                        f"Refining atlas tilt to 0.25° {sequence} / {len(precision_tilts)}...",
+                    )
+                )
+            values = lattice(tilt_lr, tilt_dv, fine_candidates)
+            if active_probe_constraints:
+                try:
+                    assignments, total, geometry = solve_candidates(
+                        values,
+                        ordered_indices,
+                        tilt_lr,
+                        tilt_dv,
+                        quick=True,
+                        approximate_only=True,
+                    )
+                except InfeasibleProbeConstraint:
+                    continue
+            else:
+                assignments, total = solve_ordered_lattice(values, ordered_indices)
+                geometry = None
+            precision_results.append(
+                (total, tilt_lr, tilt_dv, assignments, geometry, values)
+            )
+        if not precision_results:
+            raise InfeasibleProbeConstraint(
+                "No sub-degree atlas tilt satisfies the surgical probe constraints"
+            )
+        if active_probe_constraints:
+            exact_results = []
+            exact_failures = []
+            for _, tilt_lr, tilt_dv, _, _, values in sorted(
+                precision_results, key=lambda item: item[0]
+            ):
+                try:
+                    assignments, total, geometry = solve_candidates(
+                        values, ordered_indices, tilt_lr, tilt_dv, quick=True
+                    )
+                except InfeasibleProbeConstraint as exc:
+                    exact_failures.append(str(exc))
+                    continue
+                exact_results.append(
+                    (total, tilt_lr, tilt_dv, assignments, geometry)
+                )
+                break
+            if not exact_results:
+                raise InfeasibleProbeConstraint(
+                    "No sub-degree atlas tilt satisfies the surgical probe constraints: "
+                    + exact_failures[0]
+                )
+            _, best_lr, best_dv, fine_assignments, probe_geometry = exact_results[0]
+        else:
+            _, best_lr, best_dv, fine_assignments, probe_geometry, _ = min(
+                precision_results, key=lambda item: item[0]
+            )
+
         final_candidates = {
             index: candidates_for(index, 1)
             for index in session_indices
@@ -2531,6 +2601,7 @@ def refine_pose_search(
                 **components,
                 "pose_search_final_ap_candidate_count": int(len(values)),
                 "pose_search_evaluated_pose_count": int(evaluated_poses[index]),
+                "pose_search_tilt_resolution_deg": 0.25,
                 "pose_search_boundary": bool(ap in (minimum, maximum)),
                 "pose_search_explicit_bounds": ap_bounds is not None,
                 "pose_search_method": (
@@ -6506,6 +6577,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.brain_outline_segment_starts,
             session.brain_outline_closed,
         )
+        self.slice_panel.set_selection_mask(self._surface_highlight_mask(session))
         self.status.setText(f"Moved surface point {index + 1}; run auto-alignment again")
 
     def _surface_point_deleted(self, index: int) -> None:
@@ -6854,6 +6926,25 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             )
         return spots
 
+    def _surface_highlight_mask(self, session: SliceSession) -> np.ndarray | None:
+        selection = session.brain_brush_selection_mask
+        if selection is None:
+            return None
+        if (
+            session.rotated is not None
+            and session.brain_outline_closed
+            and len(session.brain_outline_segment_starts) == 1
+            and len(session.brain_outline_points) >= 3
+        ):
+            highlight = np.zeros(session.rotated.shape[:2], dtype=np.uint8)
+            points = np.rint(
+                self._slice_raw_to_display_points(session, session.brain_outline_points)
+            ).astype(np.int32)
+            cv2.fillPoly(highlight, [points], 1)
+            if np.any(highlight):
+                return highlight.astype(bool)
+        return selection
+
     def _refresh_points(self) -> None:
         session = self.current_session()
         if session is None:
@@ -6880,9 +6971,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.brain_outline_segment_starts,
             session.brain_outline_closed,
         )
-        self.slice_panel.set_selection_mask(
-            session.brain_brush_selection_mask if automatic_active else None
-        )
+        self.slice_panel.set_selection_mask(self._surface_highlight_mask(session))
         self._refresh_point_counts()
 
     def _automatic_warp_sessions(self) -> list[tuple[int, SliceSession]]:
