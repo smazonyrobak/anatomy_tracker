@@ -1322,6 +1322,9 @@ def _normalized_config(config: dict) -> dict:
     }
     result["refinement_steps"] = int(config.get("refinement_steps", 3))
     result["candidate_chunk_size"] = int(config.get("candidate_chunk_size", 2))
+    result["validation_negatives_per_sample"] = int(
+        config.get("validation_negatives_per_sample", config["negatives_per_sample"])
+    )
     result["gradient_checkpointing"] = bool(config.get("gradient_checkpointing", True))
     result["amp_initial_scale"] = float(config.get("amp_initial_scale", 65536.0))
     result["early_stopping_patience_validations"] = int(
@@ -1379,8 +1382,15 @@ def _normalized_config(config: dict) -> dict:
     result["registered_validation_weight"] = float(
         config.get("registered_validation_weight", 0.5)
     )
-    if result["refinement_steps"] < 1 or result["candidate_chunk_size"] < 1:
-        raise ValueError("refinement steps and candidate chunk size must be positive")
+    if (
+        result["refinement_steps"] < 1
+        or result["candidate_chunk_size"] < 1
+        or result["validation_negatives_per_sample"] < 1
+    ):
+        raise ValueError(
+            "refinement steps, candidate chunk size, and validation negatives "
+            "must be positive"
+        )
     if (
         not math.isfinite(result["amp_initial_scale"])
         or result["amp_initial_scale"] <= 0.0
@@ -1849,7 +1859,9 @@ def train(
                     count=int(config["validation_count_per_stratum"]),
                     batch_size=int(config["validation_batch_size"]),
                     seed=int(config["validation_seed"]),
-                    negatives_per_sample=int(config["negatives_per_sample"]),
+                    negatives_per_sample=normalized[
+                        "validation_negatives_per_sample"
+                    ],
                     refinement_steps=normalized["refinement_steps"],
                     candidate_chunk_size=normalized["candidate_chunk_size"],
                     weights=normalized["loss_weights"],
@@ -1869,7 +1881,9 @@ def train(
                         count=normalized["registered_validation_count"],
                         batch_size=normalized["registered_validation_batch_size"],
                         seed=normalized["registered_validation_seed"],
-                        negatives_per_sample=int(config["negatives_per_sample"]),
+                        negatives_per_sample=normalized[
+                            "validation_negatives_per_sample"
+                        ],
                         refinement_steps=normalized["refinement_steps"],
                         candidate_chunk_size=normalized["candidate_chunk_size"],
                         weights=normalized["loss_weights"],

@@ -789,6 +789,35 @@ def test_amp_initial_scale_is_normalized_and_validated(tmp_path):
         trainer._normalized_config(config)
 
 
+def test_training_and_validation_negative_counts_are_independent(tmp_path):
+    config = training_config(tmp_path, "validation-negatives")
+    config["negatives_per_sample"] = 3
+    config["validation_negatives_per_sample"] = 6
+    normalized = trainer._normalized_config(config)
+    assert normalized["validation_negatives_per_sample"] == 6
+    assert config["negatives_per_sample"] == 3
+
+
+def test_train_passes_the_frozen_negative_count_to_validation(tmp_path):
+    config = training_config(tmp_path, "validation-negative-handoff")
+    config["negatives_per_sample"] = 3
+    config["validation_negatives_per_sample"] = 6
+    observed = []
+
+    def evaluation(model, data, **kwargs):
+        observed.append(kwargs["negatives_per_sample"])
+        return tiny_evaluation(model, data, **kwargs)
+
+    trainer.train(
+        config,
+        model=TinyJointModel(),
+        data=TinyData(),
+        dense_loss_fn=tiny_dense_loss,
+        evaluation_fn=evaluation,
+    )
+    assert observed == [6]
+
+
 def test_interrupted_resume_reproduces_cpu_state_and_rng_continuation(tmp_path):
     initial = TinyJointModel().state_dict()
     direct = TinyJointModel()
