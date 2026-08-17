@@ -429,27 +429,34 @@ class JointPoseRegistrationModel(nn.Module):
         }
 
     def set_training_stage(self, stage: str) -> None:
+        if stage not in {"review", "geometry", "joint"}:
+            raise ValueError(f"Unknown joint-training stage: {stage}")
+        self.train()
         for parameter in self.parameters():
             parameter.requires_grad_(stage == "joint")
         if stage == "joint":
             return
-        if stage not in {"review", "geometry"}:
-            raise ValueError(f"Unknown joint-training stage: {stage}")
+
+        self.pose_initializer.eval()
+        self.registrar.eval()
+        self.review_head.train()
         for parameter in self.review_head.parameters():
             parameter.requires_grad_(True)
         if stage == "geometry":
             for module_name in ("feature_head", "pose_head", "orientation_head"):
-                for parameter in getattr(self.pose_initializer, module_name).parameters():
+                module = getattr(self.pose_initializer, module_name)
+                module.train()
+                for parameter in module.parameters():
                     parameter.requires_grad_(True)
-            for parameter in self.registrar.similarity_head.parameters():
-                parameter.requires_grad_(True)
-            for modules in (
-                self.registrar.registration_stages,
-                self.registrar.velocity_heads,
-            ):
-                for module in modules[-2:]:
-                    for parameter in module.parameters():
-                        parameter.requires_grad_(True)
+            registrar_heads = (
+                self.registrar.similarity_head,
+                *self.registrar.registration_stages[-2:],
+                *self.registrar.velocity_heads[-2:],
+            )
+            for module in registrar_heads:
+                module.train()
+                for parameter in module.parameters():
+                    parameter.requires_grad_(True)
 
 
 class JointInitializerExport(nn.Module):

@@ -315,18 +315,65 @@ def test_zero_step_rollout_still_scores_and_registers_the_initial_pose_once():
 def test_training_stage_boundaries_are_explicit():
     model = _tiny_model()
     model.set_training_stage("review")
+    assert model.training
+    assert not model.pose_initializer.training
+    assert not model.registrar.training
+    assert model.review_head.training
     assert all(parameter.requires_grad for parameter in model.review_head.parameters())
     assert not any(parameter.requires_grad for parameter in model.pose_initializer.parameters())
     assert not any(parameter.requires_grad for parameter in model.registrar.parameters())
 
     model.set_training_stage("geometry")
+    assert not model.pose_initializer.encoder.training
+    assert model.pose_initializer.feature_head.training
+    assert model.pose_initializer.pose_head.training
+    assert model.pose_initializer.orientation_head.training
     assert not any(parameter.requires_grad for parameter in model.pose_initializer.encoder.parameters())
     assert all(parameter.requires_grad for parameter in model.pose_initializer.pose_head.parameters())
+    assert not model.registrar.encoder.training
+    assert model.registrar.similarity_head.training
+    assert all(module.training for module in model.registrar.registration_stages[-2:])
+    assert all(module.training for module in model.registrar.velocity_heads[-2:])
     assert not any(parameter.requires_grad for parameter in model.registrar.encoder.parameters())
     assert all(parameter.requires_grad for parameter in model.registrar.velocity_heads.parameters())
 
     model.set_training_stage("joint")
     assert all(parameter.requires_grad for parameter in model.parameters())
+    assert all(module.training for module in model.modules())
+
+
+@torch.no_grad()
+def test_review_stage_keeps_frozen_initializer_and_registrar_bit_exact():
+    torch.manual_seed(149)
+    model = _tiny_model()
+    model.pose_initializer.feature_head = nn.Sequential(
+        nn.Dropout(0.75), model.pose_initializer.feature_head
+    )
+    model.registrar.encoder = nn.Sequential(
+        nn.Dropout2d(0.75), model.registrar.encoder
+    )
+    model.train()
+    model.set_training_stage("review")
+
+    pose_image = torch.rand(2, 3, 24, 28)
+    fixed = torch.rand(2, 2, 16, 20)
+    moving = torch.rand(2, 2, 16, 20)
+    first_initializer = model.initialize(pose_image)
+    second_initializer = model.initialize(pose_image)
+    first_registration = model.registrar.forward_with_details(fixed, moving)
+    second_registration = model.registrar.forward_with_details(fixed, moving)
+
+    for key in ("pose", "orientation_inverted_logit", "pose_features"):
+        assert torch.equal(first_initializer[key], second_initializer[key])
+    for key in (
+        "fixed_to_moving_map",
+        "moving_to_fixed_map",
+        "similarity_parameters",
+        "local_velocity",
+    ):
+        assert torch.equal(first_registration[key], second_registration[key])
+    assert model.review_head.training
+    assert all(parameter.requires_grad for parameter in model.review_head.parameters())
 
 
 def test_aligned_maps_compose_into_raw_source_coordinates():

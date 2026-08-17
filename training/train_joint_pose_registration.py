@@ -1964,6 +1964,7 @@ def micro_overfit(
     batch: dict,
     *,
     render_pose,
+    stage: str = "review",
     refinement_steps: int = 2,
     candidate_chunk_size: int = 2,
     steps: int = 20,
@@ -1973,7 +1974,7 @@ def micro_overfit(
 ) -> list[float]:
     """Small preflight hook: one fixed batch should be learnable before a long run."""
     model.train()
-    model.set_training_stage("joint")
+    model.set_training_stage(stage)
     if normalize_outline:
         batch = normalize_synthetic_dense_contract(batch)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)

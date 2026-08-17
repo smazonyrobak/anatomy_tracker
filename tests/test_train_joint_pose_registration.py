@@ -850,6 +850,24 @@ def test_micro_overfit_hook_reduces_a_fixed_batch_objective():
     assert min(history[-3:]) < history[0]
 
 
+def test_micro_overfit_supports_review_stage():
+    model = TinyJointModel()
+    history = trainer.micro_overfit(
+        model,
+        tiny_batch(batch_size=1, candidates=1),
+        render_pose=tiny_render_pose,
+        stage="review",
+        steps=4,
+        learning_rate=5e-3,
+        dense_loss_fn=tiny_dense_loss,
+        normalize_outline=False,
+    )
+    assert len(history) == 4
+    assert all(parameter.requires_grad for parameter in model.review_head.parameters())
+    assert not any(parameter.requires_grad for parameter in model.pose_initializer.parameters())
+    assert not any(parameter.requires_grad for parameter in model.registrar.parameters())
+
+
 def test_validation_score_uses_only_validation_report():
     report = {
         "ap_mae_um": 60.0,
