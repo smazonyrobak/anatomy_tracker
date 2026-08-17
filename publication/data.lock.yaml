@@ -1,0 +1,65 @@
+schema_version: "1.0"
+created_date: "2026-08-17"
+baseline_commit: "c6681039e0b7acf35c9cdbee43040a3dca29cdab"
+status: "development_sources_locked_external_real_holdout_not_collected"
+coordinate_contract:
+  atlas: "Allen CCFv3 25 um"
+  orientation: "Allen PIR"
+  ap: "um from bregma; positive anterior"
+  registered_transform: "quicknii-ras-to-allen-pir-v2"
+atlas_core:
+  average_template_25.nrrd: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+  annotation_25.nrrd: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+  atlas_labels.pkl: "9f8bc9f952a251a8f07be11c9536ff0fbf28f802892cfc39ee45e66c99a8fe3a"
+  query.csv: "5347daf90e02ac1d1cfcbf9c8af86ff23a2fb32cd7e7a2ba2881951931286dbd"
+registered_allen_snapshot:
+  acquisition_products: [5, 8]
+  jpeg_downsample: 5
+  split_unit: "specimen_id"
+  split_salt: "atlaspose-allen-s2p-specimen-v1"
+  manifests:
+    datasets.jsonl: "e8ecb30857c6137845a3a62f72b6cc619e65e6212d2d6fd2d299bd7f55625eb8"
+    sections.jsonl: "4caad9aa47dd44a30be6071a675dc6b3318af8ec2ec06ec667fd76bf5d61f117"
+    downloads.jsonl: "963abd10fd904bff08ecd222c8dabb2fa7af550c2e561bf786301da53d405622"
+    quality_manifest: "4d791ce89b38c14956a0250727fbf9690d4d3d2c0a3f5e96ff4238cb80596bfd"
+    provenance: "868cfb895ff7bba242b67a4961e522e00add1fff4fd92a0887319646aed47c72"
+  inventory:
+    train: {sections: 132442, specimens: 2441, role: "joint training"}
+    validation: {sections: 6513, specimens: 122, role: "development; previously consumed"}
+    test: {sections: 7214, specimens: 133, role: "historical regression; previously consumed"}
+    deepslice_comparison: {sections: 1400, specimens: 10, role: "historical comparison; previously consumed"}
+  product_roles:
+    product_5: "trusted pose supervision and real appearance"
+    product_8: "diagnostic/domain-adaptation only unless separately qualified"
+existing_synthetic_manifests:
+  atlaspose_train_100000: "d97270806a459fdd164cda4fbe216b4310d1045a98b3e0e7e694bac80c40901b"
+  atlaspose_paired_train: "35354426129bec65a4a6001df5b9e4bf30c665fce8c4d614efe68c1f1152856a"
+  atlaspose_validation: "439ec1de270a449d5ec19a9f353858469a096ee14a2dd037087b2d89b2998b67"
+  atlaspose_paired_validation: "fc67c10ee31db5a17cf7bf792b4a8bdf88ccbc8458b4e2bebe006a70d0b5f507"
+  use: "development and generator provenance; not a new hidden test"
+sealed_tests:
+  legacy_dense_v2:
+    status: "unconsumed"
+    permitted_use: "one warp-only evaluation after freezing, with byte-identical generator/evaluator"
+  joint_v1_exact_synthetic:
+    status: "contract_pending_before_training"
+    requirements:
+      - "independent transform and artifact implementation"
+      - "disjoint AP blocks and deformation/artifact seeds"
+      - "hidden seed created only after candidate freezing"
+      - "single recorded evaluation tied to checkpoint hash"
+  external_real_joint:
+    status: "not collected"
+    requirement: "new specimen-level, preferably multi-laboratory and independently held"
+consumed_diagnostics:
+  - "AtlasPose validation and test"
+  - "AtlasPose 8192-case synthetic test"
+  - "DeepSlice public and internal comparison cohorts"
+  - "local session 722 landmark QA"
+training_workspace:
+  active_root: "F:/AtlasJointTraining"
+  cache_policy: "procedural synthetic data; compact versioned real-data cache; no rasterized 500k image pile"
+  environment_cache_roots:
+    torch: "F:/AtlasJointTraining/cache/torch"
+    huggingface: "F:/AtlasJointTraining/cache/hf"
+    temp: "F:/AtlasJointTraining/temp"

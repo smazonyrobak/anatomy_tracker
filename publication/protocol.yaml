@@ -1,0 +1,208 @@
+schema_version: "1.0"
+protocol_version: "0.1.0"
+status: "preregistered_plan_not_started"
+created_date: "2026-08-17"
+baseline:
+  repository_commit: "c6681039e0b7acf35c9cdbee43040a3dca29cdab"
+  short_commit: "c668103"
+  branch: "codex/joint-registration"
+  immutable_ledger: "docs/publication/BASELINE_LEDGER.md"
+study:
+  title: "Joint recurrent atlas-plane localization and nonlinear registration of coronal mouse-brain histology"
+  objective: >-
+    Determine whether one jointly trained recurrent model improves global CCF plane pose,
+    local anatomical correspondence, calibrated failure detection, and downstream probe mapping
+    over frozen internal and published alternatives while remaining practical in the desktop GUI.
+  model_status: "planned"
+  intended_scope:
+    species: "Mus musculus"
+    anatomy: "whole adult brain"
+    section_plane: "coronal"
+    image_channels: "grayscale"
+    atlas: "Allen CCFv3 25 um"
+  excluded_claims:
+    - "clinical or diagnostic use"
+    - "non-coronal or partial-field generalization without new qualification"
+    - "market-wide superiority before every applicable locked comparator passes reproduction"
+model:
+  unit: "single jointly trained checkpoint"
+  components:
+    geometry_appropriate_pose_and_registration_encoders: true
+    shared_recurrent_review_core: true
+    explicit_global_pose_head: true
+    explicit_similarity_head: true
+    stationary_velocity_dense_head: true
+    forward_and_inverse_maps: true
+    trained_compatibility_energy: true
+    recurrent_shared_refinement: true
+  deployment:
+    checkpoint_count: 1
+    onnx_entry_graphs: 2
+    host_atlas_renderer_between_iterations: true
+    rationale: "Preserve the large 3-D atlas outside ONNX while exporting both entry graphs from one jointly trained checkpoint."
+  initial_iterations: 3
+  iteration_selection: "development accuracy-latency ablation"
+  public_pose_outputs:
+    - "ap_um_from_bregma_anterior_positive"
+    - "lr_tilt_deg"
+    - "dv_tilt_deg"
+  dense_outputs:
+    - "fixed_atlas_to_moving_histology_absolute_xy_px"
+    - "moving_histology_to_fixed_atlas_absolute_xy_px"
+  safeguards:
+    - "local field constrained against absorbing bulk affine pose"
+    - "wrong-plane hard-negative ranking"
+    - "pose scored before nonlinear deformation"
+    - "inverse consistency and topology monitoring"
+analysis_modes:
+  - id: "automatic"
+    information: "raw image only; automatic mask allowed and disclosed"
+  - id: "outline_assisted"
+    information: "user visible-tissue/surface mask"
+  - id: "constraint_assisted"
+    information: "optional AP/order/common-tilt/surgical information"
+  - id: "expert_assisted"
+    information: "manual QuickNII/VisuAlign or equivalent"
+data:
+  split_unit: "animal_or_experiment"
+  descendant_split_inheritance: true
+  sources:
+    - id: "allen_ccfv3_25um"
+      role: ["synthetic_pose", "synthetic_flow", "template", "labels"]
+    - id: "allen_product5_s2p"
+      role: ["real_pose_supervision", "real_appearance", "development_selection"]
+    - id: "allen_product8_slide_mounted"
+      role: ["diagnostic_only"]
+    - id: "deepslice_public_ground_truth"
+      role: ["public_comparator_benchmark"]
+      leakage_status: "previously_inspected_not_pristine"
+    - id: "local_session_722"
+      role: ["workflow_diagnostic"]
+      leakage_status: "previously_inspected_not_pristine"
+  planned_hidden_real_pose:
+    status: "not_collected"
+    target_animals: "30-50"
+    target_laboratories_minimum: 3
+    target_sections: "500-1000"
+    final_n_rule: "pilot-based power calculation frozen before final collection"
+  planned_hidden_real_dense:
+    status: "not_collected"
+    target_animals_minimum: 20
+    target_sections: "150-250"
+    landmarks_per_section: "15-30 when identifiable"
+synthetic_generator:
+  generation: "on_demand_from_hashed_manifests"
+  pose_domain:
+    ap_um: [-4500, 500]
+    lr_deg: [-35, 35]
+    dv_deg: [-35, 35]
+  nuisance:
+    in_plane_rotation: "arbitrary"
+    scale: [0.5, 1.5]
+    translation: "bounded"
+  deformation:
+    representation: "positive-Jacobian stationary velocity with compound local components"
+    missing_tissue_is_invalid_correspondence: true
+  appearance:
+    channels: 1
+    proposed_severity_mix:
+      clean: 0.10
+      mild: 0.45
+      moderate: 0.35
+      severe: 0.10
+    families:
+      - "gain_offset_gamma_and_nonlinear_tone"
+      - "nonblack_background_and_uneven_illumination"
+      - "local_clipping_and_blowout"
+      - "tiling_seams_and_vignette"
+      - "noise_blur_streaks_scratches_and_specks"
+      - "bubbles_tears_missing_tissue_and_occlusion"
+  negative_pose_training:
+    required: true
+    includes_adjacent_25um_planes: true
+  locked_synthetic_test:
+    independent_implementation_required: true
+    new_seeds_alone_sufficient: false
+training:
+  phases:
+    - id: "freeze_and_generator_audit"
+      views: 20000
+      purpose: "contracts and premise tests; no performance claim"
+    - id: "controlled_architecture_screen"
+      views: "20000-50000"
+      purpose: "recurrence, feedback, hard-negative, and field-control ablations"
+    - id: "multiseed_qualification"
+      views: 100000
+      seeds_minimum: 3
+    - id: "evidence_based_scaling"
+      views_maximum: 500000
+      condition: "scale only while frozen validation endpoints improve"
+  curriculum:
+    - "exact or near-exact plane with mild warp"
+    - "scheduled predicted poses and nearby hard negatives"
+    - "fully closed-loop recurrent inference with full artifact mix"
+  model_selection_order:
+    - "eligible_only_after_all_hard_gates"
+    - "real_validation_plane_distance"
+    - "real_validation_landmark_tre"
+    - "exact_synthetic_tail_and_correspondence"
+    - "confidence_calibration"
+    - "runtime_and_simplicity_within_equivalence_margin"
+constraints:
+  implemented_outside_model_weights: true
+  families:
+    ap_range: "hard candidate mask"
+    partial_order: "joint constrained MAP over checked slices only"
+    common_tilt: "one exact LR/DV pair; separate AP per slice"
+    surgical: "feasible pose and trajectory set from entry, angle, depth, probe geometry, observations"
+  hard_constraint_satisfaction_required: 1.0
+  infeasible_behavior: "return conflicts and minimum violation; never silently relax"
+evaluation:
+  tracks:
+    - "published_deepslice_reproduction"
+    - "new_hidden_multilab_real_pose"
+    - "new_hidden_real_dense_registration"
+    - "exact_out_of_generator_synthetic"
+    - "downstream_probe_mapping"
+  comparison_modes:
+    - "pose_only_before_warp"
+    - "warp_only_at_common_exact_plane"
+    - "complete_end_to_end"
+  primary_endpoints:
+    - "brain_level_mean_physical_plane_distance_um"
+    - "brain_level_median_landmark_tre_um"
+    - "visible_tissue_allen_id_correspondence_with_macro_dice_and_topology"
+    - "recording_site_3d_ccf_error_and_hierarchy_region_accuracy"
+statistics:
+  inferential_unit: "animal_or_experiment"
+  paired: true
+  confidence_level: 0.95
+  primary_method: "hierarchical_bootstrap_animals_then_slices"
+  sensitivity_method: "mixed_effects_with_animal_and_laboratory_random_effects"
+  secondary_multiplicity: "Holm within metric families"
+  final_training_seeds_minimum: 3
+  missing_and_failure_policy: "all attempted cases remain in denominator"
+runtime:
+  reference_hardware:
+    os: "Windows 10 Pro 10.0.19045"
+    cpu: "AMD Ryzen Threadripper 1900X, 8 cores / 16 threads"
+    ram_gib: 63.9
+    gpu: "NVIDIA GeForce RTX 2080 Ti"
+    gpu_memory_mib: 11264
+    nvidia_driver: "560.94"
+  ten_slice_end_to_end_p95_seconds_maximum: 180
+  cold_and_warm_reported: true
+hidden_test:
+  use_count: 1
+  labels_held_by_third_party_preferred: true
+  retraining_after_access_for_same_claim: false
+documentation:
+  narrative_protocol: "docs/publication/STUDY_PROTOCOL.md"
+  architecture: "docs/publication/ARCHITECTURE.md"
+  data_card: "DATA_CARD.md"
+  model_card: "MODEL_CARD.md"
+  reproducibility: "REPRODUCIBILITY.md"
+  citations: "CITATIONS.bib"
+  gates: "publication/gates.yaml"
+  comparators: "publication/comparators.lock.yaml"
+  data_lock: "publication/data.lock.yaml"

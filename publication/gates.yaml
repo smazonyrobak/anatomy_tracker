@@ -1,0 +1,78 @@
+schema_version: "1.0"
+status: "planned_not_evaluated"
+baseline_commit: "c6681039e0b7acf35c9cdbee43040a3dca29cdab"
+rule: >-
+  Every required gate must pass for release. A comparator superiority gate is applicable only
+  after its locked implementation runs successfully. Missing evidence is a failure to establish
+  the claim, not a pass.
+hard_integrity:
+  coordinate_contract_fixtures_pass: true
+  forward_inverse_direction_fixtures_pass: true
+  all_attempted_cases_accounted_for: true
+  no_train_validation_test_animal_overlap: true
+  no_augmented_descendant_cross_split: true
+  hidden_test_access_count_maximum: 1
+  model_data_evaluator_hashes_present: true
+  nonfinite_output_count_maximum: 0
+pose_absolute_development:
+  ap_mae_um_maximum: 60.0
+  lr_mae_deg_maximum: 0.90
+  dv_mae_deg_maximum: 1.75
+  absolute_ap_bias_um_maximum: 25.0
+  ap_p95_um_maximum: 150.0
+  catastrophic_failure_rate_threshold_and_limit: "freeze_after_real_pilot_before_hidden_test"
+dense_exact_synthetic:
+  visible_foreground_correspondence_minimum: 0.98
+  macro_region_dice_minimum: 0.95
+  endpoint_p95_px_maximum: "freeze_after_independent_generator_pilot"
+  negative_jacobian_fraction_maximum: 0.0
+  forward_inverse_cycle_p95_px_maximum: "freeze_after_independent_generator_pilot"
+real_primary:
+  pose_vs_frozen_atlaspose:
+    requirement: "paired brain-level 95% CI excludes no improvement"
+  pose_vs_deepslice:
+    requirement: "paired brain-level 95% CI excludes no improvement"
+  dense_vs_frozen_atlaswarp:
+    requirement: "paired brain-level 95% CI excludes no improvement"
+  dense_vs_primary_reproducible_comparator:
+    requirement: "paired brain-level 95% CI excludes no improvement"
+  expert_noninferiority:
+    margin: "derive from leave-one-rater-out pilot and freeze before hidden test"
+  safety_condition: "no prespecified topology, tail-error, failure-rate, or subgroup regression"
+joint_feedback:
+  full_model_vs_feedforward_cascade:
+    requirement: "improves end-to-end primary endpoint with paired 95% CI"
+  true_plane_ranking:
+    requirement: "true plane ranked above frozen near-negative set at preregistered rate"
+  deformation_cannot_hide_pose:
+    requirement: "wrong-pose stress test passes frozen compatibility and field-magnitude checks"
+confidence:
+  thresholds: "freeze from validation before hidden test"
+  required_reports:
+    - "risk_coverage_and_aurc"
+    - "error_threshold_detection_auroc_and_auprc"
+    - "false_safe_rate"
+    - "reliability_calibration"
+constraints:
+  hard_satisfaction_rate_minimum: 1.0
+  disabled_constraint_invariance_required: true
+  feasible_and_infeasible_synthetic_suites_pass: true
+  silent_relaxation_count_maximum: 0
+probe_mapping:
+  phantom_vs_frozen_pipeline:
+    requirement: "paired 95% CI improvement in per-site 3D CCF error"
+  region_accuracy:
+    requirement: "noninferior exact and hierarchy-aware accuracy with boundary stratification"
+runtime:
+  ten_slice_end_to_end_p95_seconds_maximum: 180
+  reference_hardware_frozen: true
+  crash_rate_maximum: 0.0
+  invalid_map_rate_maximum: 0.0
+export:
+  pytorch_onnx_cpu_parity_pass: true
+  pytorch_directml_parity_pass: true
+  full_gui_end_to_end_receipt_pass: true
+promotion:
+  all_required_gates_pass: true
+  manual_and_legacy_fallbacks_retained_until_pass: true
+  market_superiority_wording_allowed_only_if_all_applicable_comparators_passed: true

@@ -1,0 +1,107 @@
+# Preregistered study protocol
+
+## Status and scope
+
+This document specifies the study before the proposed unified model is trained. It does not claim that the architecture, datasets, benchmarks or results described as planned already exist. The implementation baseline is commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` (`c668103`). Existing evidence is transcribed in [`BASELINE_LEDGER.md`](BASELINE_LEDGER.md); future values must be appended with immutable run and artifact hashes.
+
+The study asks whether one jointly trained recurrent model can estimate a coronal section's 3-D Allen CCF pose and its 2-D nonlinear anatomical correspondence more accurately and robustly than the present two-stage pipeline and published alternatives, while remaining practical in the desktop application.
+
+## Prespecified claims
+
+1. **Pose:** the joint model improves atlas-plane localization over the frozen AtlasPose pipeline and leading automatic comparators.
+2. **Dense correspondence:** given the same plane, it improves visible-tissue anatomical correspondence over the frozen dense model and registered classical/learned baselines without increasing folding.
+3. **Joint feedback:** recurrent pose--warp feedback improves the full pipeline beyond a feed-forward cascade; deformation does not merely conceal pose error.
+4. **Sequence inference:** optional common-tilt and partial-order evidence improves series alignment while satisfying every declared hard constraint.
+5. **Scientific utility:** improved registration reduces 3-D probe-trajectory and recording-site region-assignment error.
+6. **Usability:** ten ordinary whole-brain sections complete within 180 seconds on the reference workstation. This is a ballpark usability ceiling, not permission to trade away accuracy.
+
+Claims 1--5 require locked evidence. Attractive overlays, development cohorts and synthetic results alone cannot establish them.
+
+## Analysis modes
+
+Results are reported separately for:
+
+- **automatic:** image input only, including an automatic visible-tissue mask if used;
+- **outline-assisted:** a user-supplied visible-tissue/brain-surface mask, with interaction disclosed;
+- **constraint-assisted:** optional AP range, partial ordering, shared tilt or surgical constraints, with each information source disclosed;
+- **expert-assisted:** manual QuickNII/VisuAlign or equivalent workflow.
+
+An assisted result may not be presented as a fully automatic comparison. The primary automatic benchmark gives every method the same raw image and no information unavailable to its comparator.
+
+## Evaluation tracks
+
+### A. Published DeepSlice reproduction
+
+Use the published seven-brain human-consensus dataset and its original brain-level development/test assignment. Run the frozen publication DeepSlice implementation and the official recommended model-ensemble/angle-integration/cutting-index workflow. Report raw single-section and series-assisted outputs separately. Use DeepSlice's physical plane-distance calculation: average Euclidean separation between corresponding predicted and reference CCF points over pixels whose reference coordinates lie inside brain.
+
+This public dataset is an external reference but is not a pristine final holdout for this project because it has already informed development. It cannot be used for hyperparameter selection.
+
+### B. New hidden real pose benchmark
+
+Target 30--50 brains, at least three laboratories, several acquisition/staining conditions and approximately 500--1,000 whole coronal sections. The final sample size is set by a preregistered pilot-based power calculation. Split by animal/experiment and laboratory, never by slice. Three or more blinded neuroanatomists create QuickNII-compatible alignments. The consensus and uncertainty protocol is frozen before model evaluation. A third party should retain final labels when feasible.
+
+### C. New real dense-registration benchmark
+
+Target 150--250 sections from at least 20 animals. Multiple blinded experts identify 15--30 homologous landmarks and a prespecified set of reliable boundaries/regions per section. Points may be marked unidentifiable; missing tissue is never treated as a correspondence target. Point consensus uses a robust geometric estimator with adjudication defined before evaluation; mask consensus uses the frozen annotation rule. Leave-one-rater-out human error defines the expert variability envelope.
+
+### D. Exact synthetic out-of-generator benchmark
+
+Use exact pose, forward/inverse maps, labels and validity masks. Test transformations and artifact implementations must be independent of the training generator, not merely use new random seeds. Stratify clean, mild, moderate and severe cases and include difficult neighbouring-plane negatives. This track tests correctness and controlled robustness, not real-histology validity.
+
+### E. Downstream probe mapping
+
+Create exact CCF digital probe phantoms covering pose, tissue deformation, missing observations and channel geometry. Evaluate an independent real Neuropixels cohort using blinded expert reconstruction and, where obtainable, block-face or cleared-brain reference. Surgical plans are priors, not ground truth.
+
+## Data separation and benchmark custody
+
+- Every split unit is an animal/experiment. All images, augmented descendants and serial neighbours remain within that unit's split.
+- Development uses training and validation only. Test data are evaluated after architecture and thresholds are frozen.
+- The new hidden real benchmark is consumed once for the release decision. Any subsequent access is labelled post hoc.
+- Public DeepSlice data and previously viewed session 722 are development/diagnostic evidence only.
+- Each manifest, image tree, annotation file, comparator container, checkpoint, evaluator and result table receives SHA-256 provenance.
+- A benchmark-custody record identifies who could see hidden labels and when.
+
+## Primary endpoints
+
+The co-primary endpoints are:
+
+1. brain-level mean DeepSlice physical plane distance on the hidden real pose benchmark;
+2. brain-level median landmark target-registration error in micrometres on the hidden real dense benchmark;
+3. exact synthetic visible-tissue Allen-label correspondence accompanied by macro regional Dice and topology constraints;
+4. per-recording-site 3-D CCF error and hierarchy-aware region accuracy on exact probe phantoms.
+
+Superiority to a comparator requires a paired brain-level confidence interval excluding no improvement on the declared endpoint and no prespecified safety/robustness regression. A model is not declared best on the market unless it beats every locked primary automatic comparator on its applicable primary endpoint. Missing or irreproducible comparators are reported as such, not treated as defeated.
+
+## Secondary endpoints
+
+- AP, L--R and D--V MAE, median, signed bias and p95;
+- plane-anchor/corner error and catastrophic-error rates;
+- landmark p95 error, macro Dice, bottom-30% Dice, boundary F1, ASSD and HD95;
+- forward/reverse endpoint error, cycle error, negative-Jacobian fraction, minimum determinant and SD log-Jacobian;
+- risk--coverage, failure-detection AUROC, calibration error and false-safe rate;
+- trajectory entry, angular, roll, depth and region-sequence errors;
+- latency, peak memory, failure rate and manual interaction time.
+
+All endpoints are stratified by AP band, tilt, artifact severity, laboratory, stain/acquisition, damage, and distance to an Allen boundary where sample size permits.
+
+## Statistical analysis
+
+- The animal/experiment is the inferential unit. Slice-level pooling is descriptive only.
+- Comparisons are paired. Confidence intervals use hierarchical bootstrap resampling animals first and slices within animal second.
+- A mixed-effects sensitivity analysis includes method as a fixed effect and animal/laboratory as random effects.
+- Primary endpoints use two-sided 95% confidence intervals. Secondary multiplicity is controlled with Holm correction within metric families.
+- Report absolute effects, relative effects, confidence intervals and raw per-case outputs; do not rely on p-values alone.
+- Human noninferiority margins are defined from leave-one-rater-out variability before the hidden model evaluation.
+- At least three independent training seeds are evaluated; the model-selection rule is fixed before test access.
+
+## Missingness and failure
+
+Every attempted case remains in the denominator. Crashes, invalid transforms, timeouts, empty masks and non-finite outputs are failures. Unidentifiable expert landmarks are excluded only under the frozen annotation rule. Abstention is allowed only when reported through risk--coverage analysis; an abstained difficult case is not silently removed.
+
+## Stopping and model selection
+
+Training may stop for a frozen early-stopping rule, numerical failure, exhausted compute budget or a futility decision based only on development data. Candidate choice must not inspect hidden test results. The release decision follows [`../../publication/gates.yaml`](../../publication/gates.yaml); failed candidates and negative results remain in the run ledger.
+
+## Reporting
+
+The final report includes architecture/configuration, parameter count, training views, seeds, compute, energy/runtime where available, all data provenance, inclusion/exclusion flow, per-case predictions, confidence intervals, failure gallery, ablations, constraint audit, export parity and limitations. Manuscript text must distinguish measured results from hypotheses and must not convert a passed internal threshold into an unsupported clinical or market-wide claim.
