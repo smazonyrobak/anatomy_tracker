@@ -1,0 +1,39 @@
+schema_version: "1.0"
+created_date: "2026-08-17"
+baseline_commit: "c6681039e0b7acf35c9cdbee43040a3dca29cdab"
+purpose: "Warm-start provenance for the first joint-model experiments"
+weights:
+  atlaspose_v7:
+    run_id: "v7_100k_convnext_quicknii_v2_maskv6_trustedp5_rf50_cons005"
+    development_path: "F:/AtlasPoseTraining_v7/runs/v7_100k_convnext_quicknii_v2_maskv6_trustedp5_rf50_cons005/best.pt"
+    sha256: "c168d6b595492ad1ef48091db22f4093c4bcd8ce8612a827ae9e96f2228aecee"
+    state_key: "model"
+    architecture: "AtlasPoseV7 ConvNeXt-Tiny"
+    pose_representation: "physical bins with continuous residuals"
+    input: "canonical grayscale repeated to 3 x 299 x 299"
+    inherited_evidence_status: "all existing pose validation/test/comparison cohorts consumed"
+  dense_registration_v2:
+    run_id: "final-v2-v13-100k-r4322"
+    development_path: "F:/AtlasWarpTraining/runs/final-v2-v13-100k-r4322/best-validation.pt"
+    sha256: "8463296f0a0846f0cd0463b4bc958edd1cf24a0957098b787abd388aca28c635"
+    state_key: "ema.shadow"
+    architecture: "coarse-to-fine Siamese residual-5 diffeomorphic registrar"
+    channels: [16, 24, 32, 48]
+    correlation_radii: [4, 3, 2, 2]
+    integration_steps: 7
+    input: "atlas and histology [grayscale, mask] pairs at 320 x 464"
+    inherited_evidence_status: "development/qualification consumed; legacy sealed warp-only test unconsumed"
+loading_contract:
+  strict_state_dict: true
+  reset_modules:
+    - "joint recurrent pose-review head"
+    - "joint compatibility head"
+  zero_initialized_modules:
+    - "final residual-pose layer"
+  parity_before_training:
+    - "initializer physical pose and orientation equal frozen AtlasPose"
+    - "registrar forward/inverse maps equal frozen dense checkpoint"
+  checkpoint_metadata_must_include:
+    - "both source checkpoint SHA-256 values"
+    - "transferred and reset parameter names"
+    - "repository commit and resolved configuration"
