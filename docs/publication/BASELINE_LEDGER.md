@@ -78,3 +78,48 @@ The corresponding summary-file hashes are
 `5b6e821b79a1e3b5602f33a116a1fdb2ca5b34411ca888be66578b73d5fff77b`,
 `1d6d7924bcaf8c452c3c9f22f292977b6120c0b57628c6e81833626689f3746a`,
 and `eea89952f4cfeb53a86e23e61e0d344f5b4227cb70cae04471bb42afea2cdd52`.
+
+## Joint-training systems preflight
+
+Two 200-view development runs tested the complete review, geometry and joint
+training state machine on the RTX 2080 Ti. The optimized run trained with the
+three mandatory adjacent negatives (25 um AP and 0.25 degree L--R/D--V), while
+both runs were evaluated against the same six-negative panels. Forward-only
+review inference and omission of a discarded terminal training registration
+were verified independently to preserve the relevant outputs and gradients.
+
+| Run | Overall views/s | AMP overflows | Synthetic AP/L--R/D--V MAE | Product-5 AP/L--R/D--V MAE | Six-negative rank |
+|---|---:|---:|---:|---:|---:|
+| Original behavior | 0.057994 | 7 | 71.92 um / 0.886 deg / 1.788 deg | 18.70 um / 0.321 deg / 0.695 deg | 0.0833 |
+| K=3 optimized | 0.292458 | 0 | 69.68 um / 0.907 deg / 1.806 deg | 18.55 um / 0.303 deg / 0.734 deg | 0.0833 |
+
+The optimized preflight was 5.04 times faster end to end. A separate matched
+40-view full-joint timing window measured 0.030909 views/s for the original
+K=6/chunk-2/65,536-scale behavior and 0.160966 views/s for the optimized
+K=3/chunk-4/512-scale behavior, a 5.21-fold improvement. The control incurred
+seven skipped overflow updates; the optimized window incurred none.
+
+These cohorts are deliberately too small for a quality claim: the review head
+remained near chance after only 100 optimizer updates. Their role is to prove
+pipeline stability, unchanged six-negative validation difficulty, and a
+meaningful throughput improvement before a longer development run.
+
+Original preflight hashes: config
+`fe58d780e0f638d39619aac54fc1d7a45d9e9107a4a13b838ea0b9b2fb92e1ed`,
+validation
+`33993443ce0976fe8d121ae81e8d4434beeb7bc0f592636e7636d20a04f4d4b6`,
+best checkpoint
+`10cee3d282e44eb80712d5fd5decf3af563bbe0fadc2cf2e9c8cfb764c43bc88`.
+Optimized preflight hashes: config
+`f4c0496be8c26cd3a3fd1caebc50d6208b4f5034f68b1c1344da0f2bc6d3b183`,
+validation
+`f162f2c3154c94bc80f92e587317387ed7bb3bb3ea66e59ed093453970ac2d63`,
+best checkpoint
+`8bc7f2a285ac7935d6437c79b17906c40be5f2f3aaa54201d64e903a5671d575`.
+Matched timing config/log hashes were
+`70265b97df094a04ccb2cdc9bad96a11b9920eb60426245e34a32bee6f6c1902` /
+`fbdd646947378a632425cdacbe4dd0e1047778a5491636d9c3c9d93be03a8fd3`
+for the control and
+`4ea7b430c7e0d741cdb60cccbdf222997c85b93a3cc41294d0076a3afafe2532` /
+`700ec25b0c3c57da63a7a27fc674fb4def47da408cb853888fa5aa3e121feced`
+for the optimized window.
