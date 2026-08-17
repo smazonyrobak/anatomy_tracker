@@ -212,6 +212,8 @@ def test_probe_aligned_atlas_section_contains_fitted_trajectory_and_regions():
     assert path.shape == (5, 2)
     assert np.allclose(path[:4, 1], sites["ccf_dv_index"])
     assert path[-1, 1] < 0
+    assert section["shank_distances_um"][[0, -1]].tolist() == [0.0, 10000.0]
+    assert len(section["shank_region_ids"]) == 401
 
     bregma = np.asarray([24.0, 4.0, 20.0])
     exact = sites[["ccf_ap_index", "ccf_dv_index", "ccf_ml_index"]].to_numpy(dtype=float) + 0.35
@@ -275,6 +277,7 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
     assert dialog.atlas_section_widget.section["path_pixels"][-1][1] < 0
     probe_widget = dialog.splitter.widget(1)
     assert probe_widget.physical_length_um == 10000.0
+    assert len(probe_widget.shank_region_ids) == 401
     assert {101, 202}.issubset(set(np.unique(dialog.atlas_section_widget.annotation)))
     dialog.close()
     app.processEvents()

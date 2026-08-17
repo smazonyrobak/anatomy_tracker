@@ -3892,11 +3892,23 @@ def probe_aligned_atlas_section(
     low, high = np.percentile(intensity_values, (1.0, 99.0))
     atlas_u8 = np.clip((atlas - low) * 255.0 / max(float(high - low), 1e-6), 0.0, 255.0).astype(np.uint8)
 
+    physical_length_um = mapped_probe_physical_length_um(sites)
     unique_distances = np.unique(
-        np.r_[0.0, distances[np.isfinite(distances)], mapped_probe_physical_length_um(sites)]
+        np.r_[0.0, distances[np.isfinite(distances)], physical_length_um]
     )
     path_coordinates = unique_distances[:, None] * slope + intercept
     path_pixels = np.column_stack(((path_coordinates - anchor) @ horizontal - x_min, path_coordinates[:, 1]))
+    shank_distances_um = np.unique(
+        np.r_[np.arange(0.0, physical_length_um, VOXEL_UM), physical_length_um]
+    )
+    shank_coordinates = shank_distances_um[:, None] * slope + intercept
+    shank_indices = np.rint(shank_coordinates).astype(int)
+    inside_shank = np.all(
+        (shank_indices >= 0) & (shank_indices < np.asarray(annotation_volume.shape)),
+        axis=1,
+    )
+    shank_region_ids = np.zeros(len(shank_indices), dtype=annotation_volume.dtype)
+    shank_region_ids[inside_shank] = annotation_volume[tuple(shank_indices[inside_shank].T)]
     tip_coordinate = intercept
     tip_pixel = np.asarray([(tip_coordinate - anchor) @ horizontal - x_min, tip_coordinate[1]])
     horizontal_stereotaxic = horizontal * STEREOTAXIC_AXIS_SIGN_AP_DV_ML
@@ -3909,6 +3921,8 @@ def probe_aligned_atlas_section(
         "x_min": x_min,
         "x_max": x_max,
         "path_pixels": path_pixels,
+        "shank_distances_um": shank_distances_um,
+        "shank_region_ids": shank_region_ids,
         "tip_pixel": tip_pixel,
         "bearing_deg": bearing_deg,
     }
@@ -4118,10 +4132,20 @@ class ProbeAtlasSectionWidget(QtWidgets.QWidget):
 
 
 class ProbeAnatomyWidget(QtWidgets.QWidget):
-    def __init__(self, sites: pd.DataFrame) -> None:
+    def __init__(
+        self,
+        sites: pd.DataFrame,
+        section: dict[str, object] | None = None,
+        region_names: dict[int, tuple[str, str]] | None = None,
+        region_colors: dict[int, str] | None = None,
+    ) -> None:
         super().__init__()
         self.sites = sites
         self.physical_length_um = mapped_probe_physical_length_um(sites)
+        self.shank_distances_um = None if section is None else np.asarray(section["shank_distances_um"])
+        self.shank_region_ids = None if section is None else np.asarray(section["shank_region_ids"])
+        self.region_names = region_names or {}
+        self.region_colors = region_colors or {}
         self._site_hits: list[tuple[QtCore.QPointF, pd.Series]] = []
         self.setMouseTracking(True)
         self.setMinimumSize(330, 560)
@@ -4137,7 +4161,7 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QtGui.QColor("#0f131a"))
-        graph = QtCore.QRectF(54, 58, max(120, self.width() - 165), max(200, self.height() - 97))
+        graph = QtCore.QRectF(54, 72, max(120, self.width() - 165), max(200, self.height() - 111))
         x_values = self.sites["probe_horizontal_position"].to_numpy(dtype=float)
         y_values = self.sites["trajectory_distance_um"].to_numpy(dtype=float)
         x_mid = float((x_values.min() + x_values.max()) / 2.0)
@@ -4147,11 +4171,11 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
         painter.setFont(QtGui.QFont("Segoe UI", 8))
         painter.setPen(QtGui.QColor("#b9d5e8"))
         painter.drawText(
-            QtCore.QRectF(4, 4, self.width() - 8, 44),
+            QtCore.QRectF(4, 4, self.width() - 8, 60),
             QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.TextFlag.TextWordWrap,
             f"{self.physical_length_um / 1000.0:g} mm physical shank • {len(self.sites)} mapped channels span "
             f"{y_values.min() / 1000.0:.2f}–{y_values.max() / 1000.0:.2f} mm\n"
-            "Vertical scale is distance from the physical tip, not bank number.",
+            "Squares are selected channels; white borders mark channels with units. Scale is mm from tip, not banks.",
         )
         body_width = min(130.0, graph.width() * 0.55)
         body_left = graph.center().x() - body_width / 2.0
@@ -4190,33 +4214,33 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor("#202b37"))
         painter.drawPolygon(shank)
 
-        rows = []
-        for depth, frame in self.sites.groupby("trajectory_distance_um", sort=True):
-            key = frame["region_key"].mode().iloc[0]
-            row = frame[frame["region_key"].eq(key)].iloc[0]
-            rows.append((float(depth), str(key), row))
-        if rows:
-            row_depths = np.asarray([row[0] for row in rows], dtype=float)
-            edges = np.r_[0.0, (row_depths[:-1] + row_depths[1:]) / 2.0, site_y_max]
-            start = 0
-            for index in range(1, len(rows) + 1):
-                if index < len(rows) and rows[index][1] == rows[start][1]:
-                    continue
-                lower, upper = float(edges[start]), float(edges[index])
-                record = rows[start][2]
+        if self.shank_region_ids is not None:
+            starts = np.r_[0, np.flatnonzero(np.diff(self.shank_region_ids) != 0) + 1]
+            ends = np.r_[starts[1:], len(self.shank_region_ids)]
+            bands = [
+                (
+                    float(self.shank_distances_um[start]),
+                    min(self.physical_length_um, float(self.shank_distances_um[end - 1] + VOXEL_UM)),
+                    int(self.shank_region_ids[start]),
+                )
+                for start, end in zip(starts, ends)
+            ]
+            for lower, upper, region_id in bands:
                 top, bottom = y_pos(upper), y_pos(lower)
                 band = QtCore.QRectF(body_right + 18, top, 18, max(1.0, bottom - top))
                 painter.setPen(QtCore.Qt.PenStyle.NoPen)
-                painter.setBrush(self._color(record["structure_color_hex"]))
+                painter.setBrush(
+                    self._color(self.region_colors.get(region_id, "354453"), 210 if region_id else 70)
+                )
                 painter.drawRoundedRect(band, 2, 2)
-                if band.height() >= 13:
+                if region_id and band.height() >= 13:
+                    name, acronym = self.region_names.get(region_id, (str(region_id), str(region_id)))
                     painter.setPen(QtGui.QColor("#d7e7f5"))
                     painter.drawText(
                         QtCore.QRectF(band.right() + 6, top, max(30, self.width() - band.right() - 8), band.height()),
                         QtCore.Qt.AlignmentFlag.AlignVCenter,
-                        str(record["structure_acronym"]) or "Outside",
+                        acronym or name,
                     )
-                start = index
 
         self._site_hits.clear()
         row_count = max(1, self.sites["trajectory_distance_um"].nunique())
@@ -4227,7 +4251,12 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
                 y_pos(float(site["trajectory_distance_um"])),
             )
             self._site_hits.append((center, site))
-            painter.setPen(QtGui.QPen(QtGui.QColor("#d7e7f5"), 0.45))
+            painter.setPen(
+                QtGui.QPen(
+                    QtGui.QColor("#ffffff") if int(site.get("unit_count", 0)) else QtGui.QColor("#536678"),
+                    1.3 if int(site.get("unit_count", 0)) else 0.45,
+                )
+            )
             painter.setBrush(self._color(site["structure_color_hex"]))
             painter.drawRect(QtCore.QRectF(center.x() - site_size / 2, center.y() - site_size / 2, site_size, site_size))
         painter.setPen(QtGui.QColor("#9fb4c8"))
@@ -4275,7 +4304,9 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
         title = QtWidgets.QLabel(f"<b>{probe_name}</b> — mapped anatomy and probe-aligned atlas section")
         title.setStyleSheet("font-size:16px; color:#d7e7f5;")
         subtitle = QtWidgets.QLabel(
-            "Each square is a physical recording site colored by its assigned Allen structure. "
+            "The full physical shank is shown. Each square is a selected recording site colored by its assigned "
+            "Allen structure; a white border marks a channel with mapped units. The continuous side band shows "
+            "structures traversed along the entire shank. "
             "The atlas view is a vertical cut containing the fitted probe trajectory; hover structures "
             "for stereotaxic coordinates and click to keep a region highlighted."
         )
@@ -4325,7 +4356,14 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
             unavailable.setStyleSheet("color:#9fb4c8;")
             section_layout.addWidget(unavailable, 1)
         self.splitter.addWidget(section_panel)
-        self.splitter.addWidget(ProbeAnatomyWidget(sites))
+        self.splitter.addWidget(
+            ProbeAnatomyWidget(
+                sites,
+                None if self.atlas_section_widget is None else self.atlas_section_widget.section,
+                region_names,
+                region_colors,
+            )
+        )
         table = QtWidgets.QTableWidget(len(summary), 5)
         table.setHorizontalHeaderLabels(["Region", "Name", "Channels", "Units", "Depth from tip"])
         table.verticalHeader().setVisible(False)
