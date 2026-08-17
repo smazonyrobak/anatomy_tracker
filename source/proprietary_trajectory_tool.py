@@ -4016,6 +4016,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
         self.add_slice_btn = QtWidgets.QPushButton("Add slices")
         self.remove_all_slices_btn = QtWidgets.QPushButton("Remove all slices")
+        self.remove_all_slices_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         self.remove_all_slices_btn.setToolTip("Remove every loaded slice and its unsaved annotations")
         self.remove_all_slices_btn.setEnabled(False)
         self.previous_slice_btn = QtWidgets.QPushButton("‹")
@@ -4060,7 +4064,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         slice_setup_layout.addWidget(QtWidgets.QLabel("Flip"), 1, 2)
         slice_setup_layout.addWidget(self.flip_horizontal, 1, 3)
         slice_setup_layout.addWidget(self.flip_vertical, 1, 4)
-        slice_setup_layout.setColumnStretch(1, 1)
+        slice_setup_layout.setColumnStretch(2, 1)
         self.setup_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.setup_splitter.setChildrenCollapsible(False)
         self.setup_splitter.setHandleWidth(8)
