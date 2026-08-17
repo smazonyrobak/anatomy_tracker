@@ -196,6 +196,7 @@ def test_probe_aligned_atlas_section_contains_fitted_trajectory_and_regions():
     sites = TRACKER.pd.DataFrame(
         {
             "trajectory_distance_um": distances,
+            "probe_type": ["Neuropixels 1.0"] * len(distances),
             "ccf_ap_index": 20.0 + 0.012 * distances,
             "ccf_dv_index": 26.0 - 0.020 * distances,
             "ccf_ml_index": 16.0 + 0.008 * distances,
@@ -208,16 +209,16 @@ def test_probe_aligned_atlas_section_contains_fitted_trajectory_and_regions():
     assert section["atlas"].shape[0] == atlas.shape[1]
     assert {101, 202}.issubset(set(np.unique(section["annotation"])))
     path = np.asarray(section["path_pixels"])
-    assert path.shape == (4, 2)
-    assert np.all((path[:, 0] >= 0) & (path[:, 0] < section["atlas"].shape[1]))
-    assert np.allclose(path[:, 1], sites["ccf_dv_index"])
+    assert path.shape == (5, 2)
+    assert np.allclose(path[:4, 1], sites["ccf_dv_index"])
+    assert path[-1, 1] < 0
 
     bregma = np.asarray([24.0, 4.0, 20.0])
     exact = sites[["ccf_ap_index", "ccf_dv_index", "ccf_ml_index"]].to_numpy(dtype=float) + 0.35
     stereotaxic = (exact - bregma) * VOXEL_UM * TRACKER.STEREOTAXIC_AXIS_SIGN_AP_DV_ML
     sites[["stereotaxic_ap_um", "stereotaxic_dv_um", "stereotaxic_ml_um"]] = stereotaxic
     precise = TRACKER.probe_aligned_atlas_section(atlas, annotation, sites, bregma)
-    assert np.allclose(np.asarray(precise["path_pixels"])[:, 1], exact[:, 1])
+    assert np.allclose(np.asarray(precise["path_pixels"])[:4, 1], exact[:, 1])
 
 
 def test_probe_anatomy_dialog_renders_mapped_sites():
@@ -229,6 +230,7 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
             "probe_horizontal_position": [11.0, 59.0],
             "probe_vertical_position": [0.0, 20.0],
             "trajectory_distance_um": [220.0, 240.0],
+            "probe_type": ["Neuropixels 1.0", "Neuropixels 1.0"],
             "structure_id": [101, 202],
             "structure_name": ["Region A", "Region B"],
             "structure_acronym": ["A", "B"],
@@ -260,6 +262,7 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
         region_names={101: ("Region A", "A"), 202: ("Region B", "B")},
         region_colors={101: "112233", 202: "AABBCC"},
         bregma_voxel=np.asarray([24.0, 4.0, 20.0]),
+        fit_summary="Observed fit: AP -1311 um | ML +1422 um | angle 53.2 deg",
     )
     dialog.show()
     app.processEvents()
@@ -268,6 +271,10 @@ def test_probe_anatomy_dialog_renders_mapped_sites():
     assert image.height() >= 700
     assert "imec0" in dialog.windowTitle()
     assert dialog.atlas_section_widget is not None
+    assert "AP -1311 um" in dialog.fit_summary_label.text()
+    assert dialog.atlas_section_widget.section["path_pixels"][-1][1] < 0
+    probe_widget = dialog.splitter.widget(1)
+    assert probe_widget.physical_length_um == 10000.0
     assert {101, 202}.issubset(set(np.unique(dialog.atlas_section_widget.annotation)))
     dialog.close()
     app.processEvents()

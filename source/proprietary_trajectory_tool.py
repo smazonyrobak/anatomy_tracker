@@ -3791,6 +3791,13 @@ class CurveEditor(QtWidgets.QWidget):
         self.canvas.set_points(self.points)
 
 
+def mapped_probe_physical_length_um(sites: pd.DataFrame) -> float:
+    probe_types = sites.get("probe_type", pd.Series(dtype=object)).dropna().astype(str)
+    if len(probe_types) and probe_types.iloc[0] in PROBE_PHYSICAL_LENGTH_UM:
+        return PROBE_PHYSICAL_LENGTH_UM[probe_types.iloc[0]]
+    return float(pd.to_numeric(sites["trajectory_distance_um"], errors="raise").max())
+
+
 def probe_aligned_atlas_section(
     atlas_volume: np.ndarray,
     annotation_volume: np.ndarray,
@@ -3885,7 +3892,9 @@ def probe_aligned_atlas_section(
     low, high = np.percentile(intensity_values, (1.0, 99.0))
     atlas_u8 = np.clip((atlas - low) * 255.0 / max(float(high - low), 1e-6), 0.0, 255.0).astype(np.uint8)
 
-    unique_distances = np.unique(distances[np.isfinite(distances)])
+    unique_distances = np.unique(
+        np.r_[0.0, distances[np.isfinite(distances)], mapped_probe_physical_length_um(sites)]
+    )
     path_coordinates = unique_distances[:, None] * slope + intercept
     path_pixels = np.column_stack(((path_coordinates - anchor) @ horizontal - x_min, path_coordinates[:, 1]))
     tip_coordinate = intercept
@@ -4112,6 +4121,7 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
     def __init__(self, sites: pd.DataFrame) -> None:
         super().__init__()
         self.sites = sites
+        self.physical_length_um = mapped_probe_physical_length_um(sites)
         self._site_hits: list[tuple[QtCore.QPointF, pd.Series]] = []
         self.setMouseTracking(True)
         self.setMinimumSize(330, 560)
@@ -4127,12 +4137,22 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QtGui.QColor("#0f131a"))
-        graph = QtCore.QRectF(54, 25, max(120, self.width() - 165), max(200, self.height() - 64))
+        graph = QtCore.QRectF(54, 58, max(120, self.width() - 165), max(200, self.height() - 97))
         x_values = self.sites["probe_horizontal_position"].to_numpy(dtype=float)
         y_values = self.sites["trajectory_distance_um"].to_numpy(dtype=float)
         x_mid = float((x_values.min() + x_values.max()) / 2.0)
         x_span = max(float(np.ptp(x_values)) + 32.0, 64.0)
-        y_max = max(float(y_values.max()), 1.0)
+        site_y_max = max(float(y_values.max()), 1.0)
+        y_max = max(self.physical_length_um, site_y_max)
+        painter.setFont(QtGui.QFont("Segoe UI", 8))
+        painter.setPen(QtGui.QColor("#b9d5e8"))
+        painter.drawText(
+            QtCore.QRectF(4, 4, self.width() - 8, 44),
+            QtCore.Qt.AlignmentFlag.AlignCenter | QtCore.Qt.TextFlag.TextWordWrap,
+            f"{self.physical_length_um / 1000.0:g} mm physical shank • {len(self.sites)} mapped channels span "
+            f"{y_values.min() / 1000.0:.2f}–{y_values.max() / 1000.0:.2f} mm\n"
+            "Vertical scale is distance from the physical tip, not bank number.",
+        )
         body_width = min(130.0, graph.width() * 0.55)
         body_left = graph.center().x() - body_width / 2.0
         body_right = graph.center().x() + body_width / 2.0
@@ -4144,7 +4164,6 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
             return graph.bottom() - value / y_max * graph.height()
 
         tick_step = 1000.0 if y_max >= 3000 else 500.0
-        painter.setFont(QtGui.QFont("Segoe UI", 8))
         for value in np.arange(0.0, y_max + tick_step, tick_step):
             y = y_pos(float(value))
             painter.setPen(QtGui.QPen(QtGui.QColor("#293847"), 1))
@@ -4178,7 +4197,7 @@ class ProbeAnatomyWidget(QtWidgets.QWidget):
             rows.append((float(depth), str(key), row))
         if rows:
             row_depths = np.asarray([row[0] for row in rows], dtype=float)
-            edges = np.r_[0.0, (row_depths[:-1] + row_depths[1:]) / 2.0, y_max]
+            edges = np.r_[0.0, (row_depths[:-1] + row_depths[1:]) / 2.0, site_y_max]
             start = 0
             for index in range(1, len(rows) + 1):
                 if index < len(rows) and rows[index][1] == rows[start][1]:
@@ -4247,6 +4266,7 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
         region_names: dict[int, tuple[str, str]] | None = None,
         region_colors: dict[int, str] | None = None,
         bregma_voxel: np.ndarray | None = None,
+        fit_summary: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{probe_name} — Allen anatomy along probe")
@@ -4263,6 +4283,13 @@ class ProbeAnatomyDialog(QtWidgets.QDialog):
         subtitle.setStyleSheet("color:#9fb4c8;")
         layout.addWidget(title)
         layout.addWidget(subtitle)
+        self.fit_summary_label = QtWidgets.QLabel(fit_summary)
+        self.fit_summary_label.setWordWrap(True)
+        self.fit_summary_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.fit_summary_label.setStyleSheet("color:#d7e7f5; font-weight:600;")
+        layout.addWidget(self.fit_summary_label)
         self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
 
@@ -5115,6 +5142,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         previous = self._probe_anatomy_dialogs.pop(probe_name, None)
         if previous is not None:
             previous.close()
+        self._update_probe_fit_summary()
         dialog = ProbeAnatomyDialog(
             probe_name,
             sites,
@@ -5125,6 +5153,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             region_names=self.region_names,
             region_colors=self.region_colors,
             bregma_voxel=self.bregma_voxel,
+            fit_summary=self.probe_fit_summary.text(),
         )
         dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.destroyed.connect(
