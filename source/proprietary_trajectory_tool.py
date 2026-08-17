@@ -6303,7 +6303,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if session.slice_atlas_transform is not None or session.atlas_to_slice_tps is not None:
             self._refresh_transformed_overlay(session)
             self._refresh_atlas()
-        self.status.setText("Brightness curve updated; alignment coordinates unchanged.")
+        self.status.setText("Brightness curve updated; smart brush uses the visible contrast, while alignment is unchanged.")
 
     def _rotation_changed(self, value: float) -> None:
         session = self.current_session()
@@ -6891,7 +6891,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _smart_surface_stroke(self, display_points: list[tuple[float, float]], exclude: bool) -> None:
         session = self.current_session()
-        if session is None or session.weight_image is None or not display_points:
+        if session is None or session.rotated is None or not display_points:
             return
         if self.erase_surface_mode.isChecked():
             self._erase_surface_points(session, display_points)
@@ -7092,7 +7092,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if not foreground_points:
             return [], None
         surface, selection_mask = smart_brain_surface_selection(
-            session.weight_image,
+            session.rotated,
             foreground_points,
             background_points,
             self.brush_radius.value(),

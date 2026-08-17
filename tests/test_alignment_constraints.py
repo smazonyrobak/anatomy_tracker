@@ -1340,3 +1340,39 @@ def test_smart_brush_highlight_persists_and_tracks_outline_edits(tmp_path):
     finally:
         window.close()
         app.processEvents()
+
+
+def test_smart_brush_uses_current_contrast_adjusted_image(tmp_path, monkeypatch):
+    app = TRACKER.QtWidgets.QApplication.instance() or TRACKER.QtWidgets.QApplication([])
+    window = TRACKER.TrajectoryTrackerWindow(default_atlas_folder=tmp_path / "missing-atlas")
+    try:
+        raw = np.arange(48, dtype=np.uint8).reshape(6, 8)
+        adjusted = 255 - raw
+        session = TRACKER.SliceSession(
+            name="contrast-brush",
+            raw_display=raw,
+            adjusted=adjusted,
+            rotated=adjusted.copy(),
+            weight_image=raw.copy(),
+            slice_transform=np.eye(3),
+        )
+        window.sessions = [session]
+        window.slice_list.addItem(session.name)
+        window.current_session_index = 0
+        session.adjusted = adjusted
+        session.rotated = adjusted.copy()
+        session.weight_image = raw.copy()
+        captured = {}
+
+        def capture_image(image, *_args):
+            captured["image"] = image
+            return [(1.0, 1.0), (6.0, 1.0), (6.0, 4.0)], np.ones(image.shape, dtype=np.uint8)
+
+        monkeypatch.setattr(TRACKER, "smart_brain_surface_selection", capture_image)
+        window._compute_smart_surface_selection(session, [(False, [(3.0, 2.0)])])
+
+        assert np.array_equal(captured["image"], session.rotated)
+        assert not np.array_equal(captured["image"], session.weight_image)
+    finally:
+        window.close()
+        app.processEvents()
