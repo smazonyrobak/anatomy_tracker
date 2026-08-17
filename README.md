@@ -6,15 +6,10 @@ Standalone PySide6 application for registering histological slices to the Allen 
 
 ```powershell
 python -m pip install -r requirements.txt
+python setup_runtime.py
 ```
 
-Place the Allen 25 µm atlas files in:
-
-```text
-data/Allen Brain Atlas 25um/
-```
-
-The folder must contain `average_template_25.nrrd` and `annotation_25.nrrd`. `query.csv` and `atlas_meshdata.pkl` add region names and the 3D brain mesh.
+The setup command downloads and checksum-verifies all three model families and the required Allen 25 µm atlas files. See `RUNTIME_ASSETS.md` for asset provenance and terms.
 
 ## Run
 
@@ -56,9 +51,9 @@ Use **File > Save session** (`Ctrl+S`) to create one portable `.attracker` file.
 
 Optional surgical constraints are stored independently for each probe. Before alignment, select **Mark probe on slice** and place at least two observations directly on the raw histology; atlas and 3-D coordinates deliberately remain absent until a pose is solved. Enter the planned bregma-centred AP/ML coordinate and uncertainty radius, plus attack angle and tolerance; **0 degrees is horizontal and 90 degrees is vertical**. Then run **Auto-align current** or **Auto-align all**. The solver jointly evaluates image correspondence and only those poses satisfying the raw probe observations, optional AP bounds, optional partial anterior-to-posterior order, and—for Auto-align all—the exact shared cutting tilt. Once atlas coordinates exist, the displayed and exported trajectory is itself the robust best fit constrained to enter inside the selected cortical disk and remain inside the angle and physical-depth bounds; disagreement among marked dots changes the best fit but never relaxes those hard bounds. The UI also reports signed horizontal roll relative to the bregma-to-lambda axis (parallel is 0°, perpendicular is ±90°). Changing a constraint immediately refits the displayed trajectory and marks automatic slice matching for rerun so the same information can update slice pose. When constraints are disabled, alignment and trajectory fitting follow their unconstrained paths.
 
-The dedicated desktop source folder and bundled desktop build include checksum-locked ONNX conversions of the official DeepSlice 1.2.8 primary and secondary mouse models. The optional AtlasPose model is also checksum-pinned: it passed every absolute-quality gate on the sealed benchmark and beat DeepSlice on AP and L-R, while the D-V difference was statistically inconclusive, so DeepSlice remains the default and AtlasPose is not described as globally superior. ONNX Runtime uses the first supported GPU provider by default and falls back to CPU; export checks compare CPU with every available application accelerator provider. DeepSlice should be cited as Carey et al., *Nature Communications* 14, 5884 (2023). Its repository LICENSE is included in `licenses/DeepSlice-LICENSE.txt`; current repository and PyPI license metadata are contradictory, so maintainer clarification is required before redistributing it in a closed-source bundle. AtlasPose uses Allen-derived data and permissively licensed pretrained timm weights, but this project does not grant redistribution or commercial-use clearance for Allen data or derived weights.
+The runtime release includes checksum-locked ONNX conversions of the official DeepSlice 1.2.8 primary and secondary mouse models. The optional AtlasPose model is also checksum-pinned: it passed every absolute-quality gate on the sealed benchmark and beat DeepSlice on AP and L-R, while the D-V difference was statistically inconclusive, so DeepSlice remains the default and AtlasPose is not described as globally superior. ONNX Runtime uses the first supported GPU provider by default and falls back to CPU; export checks compare CPU with every available application accelerator provider. DeepSlice should be cited as Carey et al., *Nature Communications* 14, 5884 (2023). Its MIT license is included in `licenses/DeepSlice-LICENSE.txt`. AtlasPose and the dense-registration model use Allen-derived data and are distributed for noncommercial research subject to the upstream Allen Institute terms described in `RUNTIME_ASSETS.md`.
 
-Generated executables, bundled runtimes, atlas data, the two approximately 93 MB DeepSlice ONNX binaries, the approximately 119 MB AtlasPose ONNX model, and raw sealed rows are intentionally excluded from Git. Tracked metadata retain model hashes and the sealed summary; the complete immutable evidence remains beside the local model and in the `F:` training workspace. Local builds include the optional AtlasPose candidate only when its source-pinned model, metadata, provenance, and integrity-checked evaluation report agree. The desktop shortcut targets the bundled executable directly, and the application resolves the atlas from this dedicated desktop folder without a wrapper process.
+Generated executables, Python environments, bundled runtimes, training workspaces, and raw sealed rows remain excluded from Git. Large inference and atlas files are published as versioned GitHub release assets and installed by `setup_runtime.py`; tracked metadata retain their hashes and validation summaries. Local builds include the optional AtlasPose candidate only when its source-pinned model, metadata, provenance, and integrity-checked evaluation report agree.
 
 ## AtlasPose validation status
 
