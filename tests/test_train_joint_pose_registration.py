@@ -198,6 +198,54 @@ def test_joint_objective_never_exposes_wrong_plane_to_dense_supervision():
     assert metrics["end_to_end_macro_region_dice"] == 1.0
 
 
+def test_review_training_skips_constant_dense_loss_without_changing_reviewer_gradients():
+    torch.manual_seed(731)
+    skipped_model = TinyJointModel()
+    reference_model = copy.deepcopy(skipped_model)
+    trainer.apply_training_stage(skipped_model, "review")
+    trainer.apply_training_stage(reference_model, "review")
+    batch = tiny_batch(seed=732)
+    calls = []
+
+    def constant_dense_loss(registrar, teacher_batch):
+        calls.append(teacher_batch)
+        constant = teacher_batch["fixed"].new_tensor(4.25)
+        return constant, {"constant": constant}, {"constant": constant}
+
+    skipped_loss, skipped_terms, _ = objective(
+        skipped_model, batch, dense_loss_fn=constant_dense_loss
+    )
+    reference_loss, _, _ = trainer.pose_review_objective(
+        reference_model,
+        batch,
+        render_pose=tiny_render_pose,
+        refinement_steps=2,
+        live_initializer_fraction=1.0,
+        candidate_chunk_size=2,
+        gradient_checkpointing=False,
+    )
+    reference_loss = reference_loss + reference_loss.new_tensor(4.25)
+    skipped_loss.backward()
+    reference_loss.backward()
+
+    assert calls == []
+    assert skipped_terms["dense_skipped"] == 1.0
+    assert "dense" not in skipped_terms
+    for skipped, reference in zip(
+        skipped_model.review_head.parameters(), reference_model.review_head.parameters()
+    ):
+        torch.testing.assert_close(skipped.grad, reference.grad, rtol=0.0, atol=0.0)
+
+    skipped_model.eval()
+    with torch.no_grad():
+        _, evaluation_terms, _ = objective(
+            skipped_model, batch, dense_loss_fn=constant_dense_loss
+        )
+    assert len(calls) == 1
+    assert evaluation_terms["dense_skipped"] == 0.0
+    assert evaluation_terms["dense"] == pytest.approx(4.25)
+
+
 def test_empty_final_overlap_is_never_rewarded_as_perfect_dice():
     model = TinyJointModel()
     batch = tiny_batch(batch_size=1, candidates=1)

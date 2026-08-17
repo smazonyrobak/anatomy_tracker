@@ -51,3 +51,30 @@ The tracked receipt status is `rejected`, `release_approved=false`, and the seal
 - ten-slice end-to-end latency for the proposed model is not measured.
 
 Future results must be appended with run, source, data, checkpoint and evaluator hashes. Existing rows are never overwritten.
+
+## Joint-model development evidence after baseline
+
+At joint-pipeline commit `31d9441`, the corrected Stage-1 premise evaluator
+tested whether the frozen dense-registration EMA supplied enough structural
+evidence to rank the true plane without learning the new review head. Each
+development-only stratum contained 24 sections and eight candidates per section
+(true, initializer and six hard negatives). Dense-flow truth was not read.
+
+| Stratum | True plane top-1 | Mean reciprocal rank | Mean true rank | Candidate failures |
+|---|---:|---:|---:|---:|
+| Clean | 0.5833 | 0.7813 | 1.5000 | 0 / 192 |
+| Mild | 0.5000 | 0.7083 | 1.8750 | 0 / 192 |
+| Hard | 0.4583 | 0.6771 | 1.9167 | 0 / 192 |
+
+The frozen heuristic is therefore useful but insufficient. These results support
+training an explicit wrong-plane compatibility/review head; they are not model
+accuracy, confidence or release claims. The dense checkpoint SHA-256 was
+`8463296f0a0846f0cd0463b4bc958edd1cf24a0957098b787abd388aca28c635`.
+The clean/mild/hard manifest SHA-256 values were respectively
+`e17d77dd90d47b8617789b14d02f32df6658144424b0e49313e90b5ec72d9e3f`,
+`ab735d3d9d52c434afb20c453ff5d51792d68b5dce28af88e41b09398f21e6ba`,
+and `458e7f33e21d64e2f7a31834b38cfdd6e8d3d2857edaf4c7c34df50545b67284`.
+The corresponding summary-file hashes are
+`5b6e821b79a1e3b5602f33a116a1fdb2ca5b34411ca888be66578b73d5fff77b`,
+`1d6d7924bcaf8c452c3c9f22f292977b6120c0b57628c6e81833626689f3746a`,
+and `eea89952f4cfeb53a86e23e61e0d344f5b4227cb70cae04471bb42afea2cdd52`.

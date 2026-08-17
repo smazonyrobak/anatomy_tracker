@@ -688,6 +688,13 @@ def joint_objective(
     if not bool(batch["true_dense_target_valid"].all()):
         raise ValueError("the teacher-forced synthetic plane must have exact dense targets")
     total, scalars, outputs = pose_review_objective(model, batch, **kwargs)
+    if model.training and not any(
+        parameter.requires_grad for parameter in model.registrar.parameters()
+    ):
+        scalars["dense_skipped"] = 1.0
+        scalars["total"] = float(total.detach())
+        return total, scalars, outputs
+
     weights = DEFAULT_LOSS_WEIGHTS if kwargs.get("weights") is None else kwargs["weights"]
     dense, dense_terms, dense_details = dense_loss_fn(
         model.registrar,
@@ -695,6 +702,7 @@ def joint_objective(
     )
     total = total + float(weights["dense"]) * dense
     scalars["dense"] = float(dense.detach())
+    scalars["dense_skipped"] = 0.0
     scalars["total"] = float(total.detach())
     scalars.update({f"dense_{name}": float(value) for name, value in dense_terms.items()})
     outputs["dense"] = dense_details
