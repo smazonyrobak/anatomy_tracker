@@ -24,7 +24,7 @@ Outputs:
 - residual 2-D similarity transform for nuisance rotation, scale and translation;
 - stationary velocity field integrated into forward and inverse dense maps;
 - visible/matchable-tissue estimate if justified by development evidence;
-- calibrated slice--plane compatibility energy and uncertainty;
+- slice--plane compatibility energy and its monotone risk score;
 - intermediate outputs at every refinement iteration for deep supervision and audit.
 
 ## Recurrent render--compare--correct loop
@@ -83,7 +83,7 @@ The dense branch predicts a stationary velocity field on a coarse-to-fine pyrami
 
 ## Compatibility and feedback
 
-Compatibility is a trained ranking/energy signal, not raw overlay correlation and not an uncalibrated confidence percentage. Each positive pair is contrasted with nearby and anatomically confusing wrong planes. At inference, low warp residual cannot excuse a low-compatibility plane. Calibration and risk--coverage are evaluated on held-out cases.
+Compatibility is a trained ranking/energy signal, not raw overlay correlation and not a confidence percentage. Each positive pair is contrasted with nearby and anatomically confusing wrong planes. At inference, low warp residual cannot excuse a low-compatibility plane. Risk--coverage and threshold-error ranking are evaluated on held-out cases; probability calibration is outside the version-1 claim.
 
 ## Multi-slice inference
 

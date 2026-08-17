@@ -2,7 +2,7 @@
 
 ## Status
 
-**Planned research model; not yet implemented, trained, qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. Their measured status is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
+**Research implementation complete; not yet trained, qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. Their measured status is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
 
 ## Intended use
 
@@ -12,7 +12,7 @@ Intended users are neuroscience researchers who review every result. The model i
 
 ## Model design
 
-One jointly trained recurrent system is stored in one PyTorch checkpoint. It retains geometry-appropriate pose and pair-registration encoders, then uses one shared-weight render--compare--correct refiner at every iteration. Explicit heads predict global plane pose, residual in-plane similarity, a stationary velocity field integrated into forward/inverse maps, and calibrated slice--plane compatibility. Global pose and local deformation remain separate so nonlinear warping cannot freely hide a wrong atlas section. Deployment exports an initializer graph and a recurrent-refiner graph from that same checkpoint; a deterministic atlas renderer connects them. See [`docs/publication/ARCHITECTURE.md`](docs/publication/ARCHITECTURE.md).
+One jointly trained recurrent system is stored in one PyTorch checkpoint. It retains geometry-appropriate pose and pair-registration encoders, then uses one shared-weight render--compare--correct refiner at every iteration. Explicit heads predict global plane pose, residual in-plane similarity, a stationary velocity field integrated into forward/inverse maps, and slice--plane compatibility. Global pose and local deformation remain separate so nonlinear warping cannot freely hide a wrong atlas section. Deployment exports an initializer graph and a recurrent-refiner graph from that same checkpoint; a deterministic atlas renderer connects them. See [`docs/publication/ARCHITECTURE.md`](docs/publication/ARCHITECTURE.md).
 
 ## Inputs
 
@@ -28,7 +28,7 @@ The initial public coordinate contract is documented in [`docs/publication/COORD
 - AP in µm from bregma, anterior positive;
 - L--R and D--V tilt in degrees;
 - forward atlas-to-histology and inverse histology-to-atlas maps;
-- matchability/validity and calibrated compatibility if qualified;
+- compatibility and a monotone risk score for ranking/abstention analysis;
 - intermediate recurrent states and audit metadata.
 
 ## Training plan
@@ -45,7 +45,7 @@ The model must pass separate pose-only, correct-plane warp-only and end-to-end t
 - Missing or pathological tissue may lack a valid atlas correspondence.
 - Synthetic accuracy cannot establish real-histology performance.
 - Human consensus is uncertain and not an absolute geometric truth.
-- Confidence is meaningful only after calibration on independent real data.
+- The version-1 risk score is not a calibrated probability.
 - The model is scoped to whole coronal adult mouse-brain sections and must not be assumed valid for partial fields, other species, sagittal/horizontal sections or clinical decisions.
 - A passed internal gate is not evidence of market-wide superiority. That language requires successful locked comparison with all applicable primary comparators.
 

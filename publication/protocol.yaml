@@ -1,6 +1,6 @@
 schema_version: "1.0"
 protocol_version: "0.1.0"
-status: "preregistered_plan_not_started"
+status: "implementation_complete_training_not_started"
 created_date: "2026-08-17"
 baseline:
   repository_commit: "c6681039e0b7acf35c9cdbee43040a3dca29cdab"
@@ -11,9 +11,9 @@ study:
   title: "Joint recurrent atlas-plane localization and nonlinear registration of coronal mouse-brain histology"
   objective: >-
     Determine whether one jointly trained recurrent model improves global CCF plane pose,
-    local anatomical correspondence, calibrated failure detection, and downstream probe mapping
+    local anatomical correspondence, compatibility-derived failure ranking, and downstream probe mapping
     over frozen internal and published alternatives while remaining practical in the desktop GUI.
-  model_status: "planned"
+  model_status: "implemented_untrained"
   intended_scope:
     species: "Mus musculus"
     anatomy: "whole adult brain"
@@ -146,7 +146,7 @@ training:
     - "real_validation_plane_distance"
     - "real_validation_landmark_tre"
     - "exact_synthetic_tail_and_correspondence"
-    - "confidence_calibration"
+    - "compatibility_risk_ranking"
     - "runtime_and_simplicity_within_equivalence_margin"
 constraints:
   implemented_outside_model_weights: true

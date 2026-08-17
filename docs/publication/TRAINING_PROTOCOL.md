@@ -2,7 +2,7 @@
 
 ## Objective
 
-Train one recurrent pose-and-registration network end to end. The model must learn exact global plane geometry, bounded local correspondence, wrong-plane rejection and calibrated uncertainty. Model scale and iteration count are selected on development data under the runtime budget; no architecture is promoted merely because it is newer or larger.
+Train one recurrent pose-and-registration network end to end. The model must learn exact global plane geometry, bounded local correspondence and wrong-plane rejection. Its compatibility head supplies a monotone risk score for ranking and abstention analysis; version 1 does not claim that this score is a calibrated probability. Model scale and iteration count are selected on development data under the runtime budget; no architecture is promoted merely because it is newer or larger.
 
 ## Stage 0: freeze the experiment
 
@@ -34,7 +34,7 @@ The development rule selects the smallest model within the prespecified practica
 
 ## Stage 3: 100k multi-seed qualification
 
-Train the selected family with at least three independent seeds. Report each seed, mean and variability. Early stopping uses the frozen joint validation endpoints, not training loss alone. A candidate failing numerical, topology or calibration requirements is ineligible even if its mean overlap is high.
+Train the selected family with at least three independent seeds. Report each seed, mean and variability. Early stopping uses the frozen joint validation endpoints, not training loss alone. A candidate failing numerical, topology or risk-ranking requirements is ineligible even if its mean overlap is high.
 
 ## Stage 4: scale only with evidence
 
@@ -74,7 +74,7 @@ Every run records:
 - best/last checkpoints and exact early-stopping reason;
 - non-finite gradients, rejected batches and process interruptions.
 
-Training runs detached and resumable on the designated fast workspace. A progress JSON and plain terminal log update throughout. Monitoring is periodic and must not interrupt a healthy process. Checkpoints are written atomically and resume equivalence is verified on a short deterministic run.
+Training runs detached and resumable on the designated fast workspace. A progress JSON and plain terminal log update throughout. Monitoring is periodic and must not interrupt a healthy process. Checkpoints are written atomically; a short CPU run verifies exact model/optimizer/scheduler/RNG/data-stream continuation. CUDA resume restores the same state, but bitwise equivalence is not claimed because `grid_sample` backward can be nondeterministic on CUDA.
 
 ## Candidate selection
 
@@ -83,12 +83,12 @@ There is no undisclosed composite score. Candidate eligibility first requires al
 1. hidden-from-training real validation plane distance;
 2. real validation landmark TRE;
 3. exact synthetic correspondence and tail error;
-4. risk--coverage/calibration;
+4. risk--coverage and error-ranking performance;
 5. runtime and model size, choosing the simpler candidate inside the practical-equivalence margin.
 
 ## Export
 
-The selected PyTorch checkpoint is exported as an initializer ONNX graph and a recurrent-refiner ONNX graph. Both are projections of the same jointly trained checkpoint; the deterministic host atlas renderer connects them between refinement iterations. CPU and DirectML outputs are compared with frozen tolerances on normal, severe, boundary and flip cases, using dynamic batches of one and ten. The bundle includes model metadata, preprocessing and coordinate contract versions, source/checkpoint hashes, supported providers and known limitations. Export parity is necessary but is not evidence of anatomical validity.
+The canonical release loader selects `ema.shadow` from the validation-selected PyTorch checkpoint and records the checkpoint hash and state selector in an export receipt. That one selected state is exported as an initializer ONNX graph and a recurrent-refiner ONNX graph; the deterministic host atlas renderer connects them between refinement iterations. CPU and DirectML outputs are compared with frozen tolerances on normal, severe, boundary and flip cases, using dynamic batches of one and ten. The bundle includes model metadata, preprocessing and coordinate contract versions, source/checkpoint hashes, supported providers and known limitations. Export parity is necessary but is not evidence of anatomical validity.
 
 ## Hidden qualification
 
