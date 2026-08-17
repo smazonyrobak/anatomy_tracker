@@ -12,3 +12,5 @@ The frozen software baseline is Git commit `c6681039e0b7acf35c9cdbee43040a3dca29
 - [`CONSTRAINTS.md`](CONSTRAINTS.md): deterministic AP, order, common-tilt and surgical constraints.
 - [`BENCHMARKS.md`](BENCHMARKS.md): comparators, metrics, statistics, ablations and runtime.
 - [`BASELINE_LEDGER.md`](BASELINE_LEDGER.md): immutable statement of evidence available at the baseline commit.
+
+Machine-readable study, data, comparator, release-gate and exact synthetic-test contracts live in [`../../publication`](../../publication).

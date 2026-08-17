@@ -42,7 +42,8 @@ sealed_tests:
     status: "unconsumed"
     permitted_use: "one warp-only evaluation after freezing, with byte-identical generator/evaluator"
   joint_v1_exact_synthetic:
-    status: "contract_pending_before_training"
+    status: "protocol_frozen_implementation_and_hidden_seed_pending"
+    contract: "publication/joint_test_contract.yaml"
     requirements:
       - "independent transform and artifact implementation"
       - "disjoint AP blocks and deformation/artifact seeds"

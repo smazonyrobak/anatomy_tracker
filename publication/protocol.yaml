@@ -206,3 +206,4 @@ documentation:
   gates: "publication/gates.yaml"
   comparators: "publication/comparators.lock.yaml"
   data_lock: "publication/data.lock.yaml"
+  exact_joint_test_contract: "publication/joint_test_contract.yaml"

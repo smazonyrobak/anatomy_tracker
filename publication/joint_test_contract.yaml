@@ -1,0 +1,71 @@
+schema_version: "1.0"
+contract_version: "joint-exact-v1"
+created_date: "2026-08-17"
+status: "protocol_frozen_implementation_and_hidden_seed_pending"
+purpose: >-
+  One-shot exact end-to-end measurement of pose localization, bounded nonlinear
+  correspondence, confidence, and recurrent improvement after the candidate is frozen.
+scope:
+  species: "Mus musculus"
+  plane: "whole coronal section"
+  atlas: "Allen CCFv3 25 um"
+  anatomy_source_independence: false
+  claim_boundary: "exact synthetic transformation recovery, not biological generalization"
+cases:
+  count: 8192
+  ap_um: [-4500, 500]
+  ap_stratification_um: 500
+  lr_deg: [-35, 35]
+  dv_deg: [-35, 35]
+  severity_strata: [clean, mild, moderate, severe]
+  paired_clean_corrupted_views: true
+  include_adjacent_wrong_planes: true
+independence:
+  required:
+    - "No import from the training joint generator."
+    - "Disjoint AP-index blocks from development cases."
+    - "Independent deformation and artifact implementation, not merely new random seeds."
+    - "Evaluator source and dependencies hashed before hidden-seed creation."
+    - "Hidden seed created after checkpoint freeze and unavailable to model selection."
+  deformation_families:
+    - "independent cubic B-spline or alternative smooth diffeomorphic fields"
+    - "independent local radial, anisotropic and shear compositions"
+    - "independent in-plane similarity and arbitrary rotation"
+  damage_families:
+    - "independent tears and missing edge tissue"
+    - "polygon and edge-to-edge occlusion"
+  appearance_families:
+    - "independent grayscale tone and illumination curves"
+    - "independent tiling, vignette, seam and sensor artifacts"
+    - "independent specks, scratches, blowout, bubbles, noise and blur"
+outputs_required:
+  - "initial pose and every recurrent pose"
+  - "final forward and inverse absolute pixel maps"
+  - "compatibility score and declared uncertainty"
+  - "valid/missing tissue masks"
+  - "wall time, provider and peak memory"
+metrics:
+  pose:
+    - "physical corresponding-plane distance"
+    - "AP/LR/DV MAE, bias and p95"
+    - "plane anchor and corner TRE"
+  dense:
+    - "visible-tissue Allen-ID correspondence"
+    - "macro and bottom-30-percent region Dice"
+    - "boundary F1, ASSD and HD95"
+    - "forward/inverse endpoint and cycle error"
+    - "negative Jacobian fraction and log-Jacobian dispersion"
+  joint:
+    - "end-to-end region correspondence from predicted pose and warp"
+    - "iteration-wise pose and correspondence monotonicity"
+    - "true-plane rank among frozen near negatives"
+  confidence:
+    - "risk-coverage and AURC"
+    - "error-threshold AUROC/AUPRC"
+    - "false-safe rate"
+execution:
+  checkpoint_frozen_before_seed: true
+  maximum_recorded_runs: 1
+  failures_remain_in_denominator: true
+  raw_predictions_and_receipt_required: true
+  retraining_against_results_for_same_claim: false
