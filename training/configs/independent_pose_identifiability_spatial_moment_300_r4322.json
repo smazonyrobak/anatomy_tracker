@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "frozen": true,
-  "name": "independent-pose-identifiability-300-r4322-v1",
+  "name": "independent-spatial-moment-pose-identifiability-300-r4322-v1",
   "purpose": "development-only-cold-start-pose-identifiability-diagnostic",
   "role": "diagnostic-not-model-selection",
   "product5_access": false,
@@ -15,8 +15,8 @@
     "run_root_env": "ATLAS_JOINT_RUN_ROOT"
   },
   "model": {
-    "class": "training.independent_joint_model.IndependentJointModel",
-    "expected_parameter_count": 1369070,
+    "class": "training.independent_joint_variants.IndependentJointSpatialMomentModel",
+    "expected_parameter_count": 1373338,
     "kwargs": {
       "pyramid_channels": [24, 40, 64, 96],
       "pose_context_features": 192,
@@ -110,8 +110,9 @@
       "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
       "training/run_independent_initializer_foundation.py": "c25341c749ca61140569d9eac6e4b9e315ebfc302d9644a6d35dd89854f90e6f",
       "training/run_independent_pose_identifiability.py": "2239ad87f95c036bcbd1794b0772fa7c6842129b795b42e3666ac2bdc366dc62",
-      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60",
+      "training/independent_joint_variants.py": "4ff59349b4fa131f2f1227878c5a0b88807b8d8688d727178b8542ffbd120e1f"
     }
   },
-  "contract_sha256": "de97e4152b4feb4bd0270e7f7f0d30e4af42312b44262d308d0e6ae469d254be"
+  "contract_sha256": "85b50df71447ce8c7340672b388a3b0896dc0cf66f3ace4246fa2c863de7e746"
 }

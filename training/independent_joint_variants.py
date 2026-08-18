@@ -11,6 +11,7 @@ from training.independent_joint_model import (
     IndependentCandidateScorerExport,
     IndependentInitializerExport,
     IndependentJointModel,
+    ProbabilisticPoseHead,
     _ResidualBlock,
     _group_count,
     project_pose_to_domain,
@@ -45,6 +46,111 @@ def _projection(input_channels: int, output_channels: int, blocks: int) -> nn.Se
         nn.GELU(),
         *[_ResidualBlock(output_channels) for _ in range(blocks)],
     )
+
+
+class SpatialMomentProbabilisticPoseHead(ProbabilisticPoseHead):
+    """Add DSNT-style spatial moments to the existing multilevel GAP pose context.
+
+    Four learned heatmaps are normalized over space and summarized by their first
+    and second moments.  This is the parameter-light spatial-softmax construction
+    of Finn et al. (arXiv:1509.06113), extended with differentiable variance and
+    covariance statistics; the normalized coordinate expectation follows DSNT
+    (Nibali et al., arXiv:1801.07372).
+    """
+
+    attention_map_count = 4
+    moments_per_map = 5
+
+    def __init__(
+        self,
+        feature_channels: tuple[int, ...],
+        context_features: int = 128,
+        ap_bins: int = 41,
+        tilt_bins: int = 29,
+    ):
+        moment_features = self.attention_map_count * self.moments_per_map
+        super().__init__(
+            (*feature_channels, moment_features),
+            context_features=context_features,
+            ap_bins=ap_bins,
+            tilt_bins=tilt_bins,
+        )
+        self.spatial_attention_logits = nn.Conv2d(
+            feature_channels[-1], self.attention_map_count, 1
+        )
+        nn.init.normal_(self.spatial_attention_logits.weight, std=1e-3)
+        nn.init.zeros_(self.spatial_attention_logits.bias)
+
+    @staticmethod
+    def moments_from_logits(
+        logits: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return normalized maps and flattened ``(mux,muy,varx,vary,covxy)``."""
+        batch, maps, height, width = logits.shape
+        weights = torch.softmax(logits.flatten(2), dim=2).reshape(
+            batch, maps, height, width
+        )
+        x = torch.linspace(-1.0, 1.0, width, device=logits.device, dtype=logits.dtype)
+        y = torch.linspace(-1.0, 1.0, height, device=logits.device, dtype=logits.dtype)
+        x = x[None, None, None, :]
+        y = y[None, None, :, None]
+        mean_x = (weights * x).sum(dim=(-2, -1))
+        mean_y = (weights * y).sum(dim=(-2, -1))
+        centered_x = x - mean_x[:, :, None, None]
+        centered_y = y - mean_y[:, :, None, None]
+        variance_x = (weights * centered_x.square()).sum(dim=(-2, -1))
+        variance_y = (weights * centered_y.square()).sum(dim=(-2, -1))
+        covariance_xy = (weights * centered_x * centered_y).sum(dim=(-2, -1))
+        moments = torch.stack(
+            (mean_x, mean_y, variance_x, variance_y, covariance_xy), dim=2
+        ).flatten(1)
+        return weights, moments
+
+    def spatial_attention_moments(
+        self, final_feature: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.moments_from_logits(self.spatial_attention_logits(final_feature))
+
+    def forward(self, features: tuple[torch.Tensor, ...]) -> dict[str, torch.Tensor]:
+        _, moments = self.spatial_attention_moments(features[-1])
+        return super().forward((*features, moments[:, :, None, None]))
+
+
+class IndependentJointSpatialMomentModel(IndependentJointModel):
+    """Leader model with a spatially aware pose initializer and unchanged refiner."""
+
+    architecture_family = "recurrent_spatial_moment_initializer"
+    uses_recurrent_state = True
+    comparison_refinement_steps = 3
+
+    def __init__(
+        self,
+        pyramid_channels: tuple[int, ...] = (24, 40, 64, 96),
+        pose_context_features: int = 192,
+        pair_features: int = 96,
+        hidden_channels: int = 96,
+        integration_steps: int = 6,
+        maximum_pose_delta: tuple[float, float, float] = (750.0, 7.5, 7.5),
+        maximum_translation_pixels: float = 32.0,
+        minimum_scale: float = 0.40,
+        maximum_scale: float = 2.00,
+        maximum_velocity_fraction: float = 0.12,
+    ):
+        super().__init__(
+            pyramid_channels=pyramid_channels,
+            pose_context_features=pose_context_features,
+            pair_features=pair_features,
+            hidden_channels=hidden_channels,
+            integration_steps=integration_steps,
+            maximum_pose_delta=maximum_pose_delta,
+            maximum_translation_pixels=maximum_translation_pixels,
+            minimum_scale=minimum_scale,
+            maximum_scale=maximum_scale,
+            maximum_velocity_fraction=maximum_velocity_fraction,
+        )
+        self.pose_head = SpatialMomentProbabilisticPoseHead(
+            pyramid_channels, context_features=pose_context_features
+        )
 
 
 class FactorizedCNNControl(IndependentJointModel):
@@ -354,6 +460,7 @@ class VariantCachedRefinerExport(IndependentCachedRefinerExport):
 
 LEADER_PARAMETER_REFERENCE = 1_369_070
 DEFAULT_VARIANT_PARAMETERS = {
+    IndependentJointSpatialMomentModel.architecture_family: 1_373_338,
     FactorizedCNNControl.architecture_family: 1_387_342,
     RecurrentAttentionVariant.architecture_family: 1_393_454,
 }

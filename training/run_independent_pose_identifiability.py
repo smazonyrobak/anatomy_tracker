@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import training.independent_joint_data as independent_data
 import training.run_independent_initializer_foundation as foundation
 from training.independent_joint_model import IndependentJointModel, project_pose_to_domain
+from training.independent_joint_variants import IndependentJointSpatialMomentModel
 from training.quicknii_plane_metric import (
     QUICKNII_PIXEL_GRID_SHAPE,
     QUICKNII_PLANE_DISTANCE_CONTRACT,
@@ -41,6 +42,43 @@ SOURCE_FILES = (
     "training/run_independent_pose_identifiability.py",
     "source/dense_registration_preprocessing.py",
 )
+MODEL_KWARGS = {
+    "pyramid_channels": [24, 40, 64, 96],
+    "pose_context_features": 192,
+    "pair_features": 96,
+    "hidden_channels": 96,
+    "integration_steps": 6,
+    "maximum_pose_delta": [750.0, 7.5, 7.5],
+    "maximum_translation_pixels": 32.0,
+    "minimum_scale": 0.4,
+    "maximum_scale": 2.0,
+    "maximum_velocity_fraction": 0.12,
+}
+MODEL_CONTRACTS = {
+    "training.independent_joint_model.IndependentJointModel": {
+        "factory": IndependentJointModel,
+        "name": "independent-pose-identifiability-300-r4322-v1",
+        "expected_parameter_count": 1_369_070,
+        "extra_source_files": (),
+    },
+    "training.independent_joint_variants.IndependentJointSpatialMomentModel": {
+        "factory": IndependentJointSpatialMomentModel,
+        "name": "independent-spatial-moment-pose-identifiability-300-r4322-v1",
+        "expected_parameter_count": 1_373_338,
+        "extra_source_files": ("training/independent_joint_variants.py",),
+    },
+}
+
+
+def _model_contract(config: dict) -> dict:
+    class_name = config.get("model", {}).get("class")
+    if class_name not in MODEL_CONTRACTS:
+        raise ValueError("pose-identifiability model class is not allowlisted")
+    return MODEL_CONTRACTS[class_name]
+
+
+def _source_files(config: dict) -> tuple[str, ...]:
+    return SOURCE_FILES + tuple(_model_contract(config)["extra_source_files"])
 
 
 def latent_pose_table(config: dict) -> np.ndarray:
@@ -118,21 +156,11 @@ def load_pose_identifiability_config(path: str | Path) -> dict:
     atlas_relative = Path(raw["paths"]["atlas_repo_relative"])
     if atlas_relative.is_absolute() or ".." in atlas_relative.parts:
         raise ValueError("atlas path must remain repository-relative")
-    if raw.get("model") != {
-        "class": "training.independent_joint_model.IndependentJointModel",
-        "expected_parameter_count": 1369070,
-        "kwargs": {
-            "pyramid_channels": [24, 40, 64, 96],
-            "pose_context_features": 192,
-            "pair_features": 96,
-            "hidden_channels": 96,
-            "integration_steps": 6,
-            "maximum_pose_delta": [750.0, 7.5, 7.5],
-            "maximum_translation_pixels": 32.0,
-            "minimum_scale": 0.4,
-            "maximum_scale": 2.0,
-            "maximum_velocity_fraction": 0.12,
-        },
+    model_contract = _model_contract(raw)
+    if raw.get("name") != model_contract["name"] or raw.get("model") != {
+        "class": raw["model"]["class"],
+        "expected_parameter_count": model_contract["expected_parameter_count"],
+        "kwargs": MODEL_KWARGS,
     }:
         raise ValueError("pose-identifiability model payload changed")
 
@@ -252,7 +280,7 @@ def load_pose_identifiability_config(path: str | Path) -> dict:
     }:
         raise ValueError("pose-identifiability gates changed")
     expected_sources = raw["lineage"]["source_sha256"]
-    if set(expected_sources) != set(SOURCE_FILES):
+    if set(expected_sources) != set(_source_files(raw)):
         raise ValueError("pose-identifiability source lineage is incomplete")
     for relative, expected in expected_sources.items():
         if foundation._source_sha256(REPOSITORY_ROOT / relative) != expected:
@@ -388,7 +416,7 @@ def _prepare_fixed_panels(config: dict, synthetic, generator):
 def _pose_parameter_group(model: IndependentJointModel) -> list[torch.nn.Parameter]:
     for parameter in model.parameters():
         parameter.requires_grad_(False)
-    modules = (
+    modules = [
         model.pyramid.slice_stem,
         model.pyramid.levels,
         model.pose_head.context,
@@ -396,7 +424,9 @@ def _pose_parameter_group(model: IndependentJointModel) -> list[torch.nn.Paramet
         model.pose_head.lr_logits,
         model.pose_head.dv_logits,
         model.pose_head.residual,
-    )
+    ]
+    if hasattr(model.pose_head, "spatial_attention_logits"):
+        modules.append(model.pose_head.spatial_attention_logits)
     parameters = [parameter for module in modules for parameter in module.parameters()]
     for parameter in parameters:
         parameter.requires_grad_(True)
@@ -676,7 +706,8 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
     device = torch.device(device)
     training = config["training"]
     amp_enabled = bool(training["amp"] and device.type == "cuda")
-    model = IndependentJointModel(**config["model"]["kwargs"]).to(device)
+    model_class = _model_contract(config)["factory"]
+    model = model_class(**config["model"]["kwargs"]).to(device)
     if sum(value.numel() for value in model.parameters()) != int(config["model"]["expected_parameter_count"]):
         raise RuntimeError("pose-identifiability model parameter count changed")
     initial_state_sha256 = foundation._state_sha256(model)
@@ -694,7 +725,7 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
     evaluation_path = output_folder / "fixed_panel_predictions.json"
     source_hashes = {
         relative: foundation._source_sha256(REPOSITORY_ROOT / relative)
-        for relative in SOURCE_FILES
+        for relative in _source_files(config)
     }
     gpu = None
     if device.type == "cuda":
