@@ -20,9 +20,9 @@ Architecture/configuration: ConvNeXt-Tiny with binned physical pose head; 100,00
 | Product-5 validation final gate | 20.038 µm | 0.344° | 0.655° | absolute validation gates passed |
 | Product-5 locked test final gate | 20.542 µm | 0.305° | 0.632° | absolute test gates passed |
 | Synthetic locked test, 8,192 cases | 35.628 µm | 0.803° | 1.105° | synthetic gates passed |
-| Sealed DeepSlice comparison | 27.748 µm | 0.429° | 0.595° | absolute gates passed; comparator superiority gate failed |
+| Consumed DeepSlice comparison cohort | 27.748 µm | 0.429° | 0.595° | historical candidate metrics only; comparator result invalidated by orientation mismatch |
 
-On the sealed comparison, AtlasPose had lower paired absolute error than the DeepSlice MEns-AI-CI reference for AP and L--R. D--V superiority was inconclusive: the one-sided 95% upper confidence bound for the candidate-minus-reference D--V error was `+0.1891°`, and the joint probability of lower error on all three components was `0.6417`, below the frozen `0.95` requirement. Consequently `release_approved=false` and `promotion_ready=false`. It must not be described as globally superior to DeepSlice.
+The tracked DeepSlice comparison cannot support a paired superiority conclusion. Audit found that the Allen rasters were supplied in the opposite horizontal view from DeepSlice's intended A-to-P convention. A physical atlas-axis reflection made aggregate numbers appear plausible but reverses laterality and is not a valid repair. The correct rerun preserves raw bytes and raw ground truth, applies one deterministic horizontal image reparameterization before DeepSlice, back-transforms the final O/U/V plane to the raw frame, and then scores it. Until that harmonized rerun is complete, the old DeepSlice AP/L--R/D--V deltas, confidence intervals and joint probability are invalid. The tracked `release_approved=false` and `promotion_ready=false` conclusions remain conservative.
 
 The broad all-product diagnostic test was not a release endpoint and performed poorly because Product 8 carried known registration offsets: AP/L--R/D--V MAE `79.862 µm / 0.536° / 1.284°`, with worst-product AP MAE `486.050 µm`. This negative evidence is retained.
 

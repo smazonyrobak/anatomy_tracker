@@ -1,6 +1,6 @@
 schema_version: "1.0"
 protocol_version: "0.1.0"
-status: "implementation_complete_training_not_started"
+status: "implementation_complete_development_training_in_progress"
 created_date: "2026-08-17"
 baseline:
   repository_commit: "c6681039e0b7acf35c9cdbee43040a3dca29cdab"
@@ -13,7 +13,7 @@ study:
     Determine whether one jointly trained recurrent model improves global CCF plane pose,
     local anatomical correspondence, compatibility-derived failure ranking, and downstream probe mapping
     over frozen internal and published alternatives while remaining practical in the desktop GUI.
-  model_status: "implemented_untrained"
+  model_status: "implemented_development_training_active_not_qualified"
   intended_scope:
     species: "Mus musculus"
     anatomy: "whole adult brain"

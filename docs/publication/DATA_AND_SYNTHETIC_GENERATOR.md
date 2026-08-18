@@ -14,7 +14,7 @@ Product 5 contributes realistic appearance and registered plane labels. It does 
 
 ### DeepSlice public benchmark
 
-The published human-aligned dataset and published predictions are comparator evidence only. They have already been inspected during this project's development and are not a pristine hidden test. Their original development/test brain assignment is preserved.
+The published human-aligned dataset, the 1,400-section local comparison cohort and their prior predictions are comparator evidence only. They have already been inspected during this project's development and are not a pristine hidden test. Their original development/test brain assignment and raw bytes/ground truth are preserved. Audit invalidated the prior local DeepSlice comparison because the raw raster view did not match DeepSlice's intended A-to-P input convention. The corrected reproduction uses the single hash-bound horizontal image-frame adapter defined in the coordinate contract; it never reflects the physical atlas mediolateral axis.
 
 ### Local real sessions
 

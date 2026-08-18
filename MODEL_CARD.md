@@ -2,7 +2,7 @@
 
 ## Status
 
-**Research implementation complete; not yet trained, qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. Their measured status is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
+**Research implementation complete; development training is active; not qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. The joint checkpoint remains a development candidate until multiseed qualification, harmonized comparators, export parity and GUI validation pass. Measured evidence is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
 
 ## Intended use
 

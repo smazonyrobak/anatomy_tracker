@@ -12,7 +12,7 @@ Two diagnostic swaps isolate causality: feed each pose output into one frozen re
 
 ## Primary comparators
 
-- **DeepSlice publication release:** frozen official weights/code and its recommended model ensemble, angle integration and cutting-index processing. Compare both raw single-slice and series-assisted modes.
+- **DeepSlice publication release:** frozen official weights/code and its recommended model ensemble, angle integration and cutting-index processing. Compare both raw single-slice and series-assisted modes. Raw case bytes and recorded raw-frame ground truth remain immutable. Its frozen intended-preprocessing adapter performs exactly one horizontal raster flip into the expected A-to-P view; after all DeepSlice processing, the final plane is returned to the raw frame with `H(O,U,V)=(O+U,-U,V)` before scoring. A physical atlas-axis reflection is prohibited.
 - **AMBIA:** automatic localization plus its documented deformable registration, containerized if reproducible.
 - **Xiong et al.:** sequence plane mapping and nonrigid registration when the published implementation can be reproduced on the benchmark contract.
 - **Frozen AtlasPose + AtlasWarp:** baseline implementation at commit `c668103` with checksum-pinned models.
@@ -113,3 +113,5 @@ Ablations are evaluated on development data and the frozen final selected set; a
 - independent-laboratory replication as the strongest optional confirmation.
 
 No claim of market-wide superiority is made until all applicable primary comparators run successfully and the frozen superiority rules pass.
+
+The previously tracked DeepSlice comparison is consumed and orientation-invalid. It is retained as negative audit evidence only. A corrected historical rerun is a regression/comparator reproduction, not an untouched real-generalization test.

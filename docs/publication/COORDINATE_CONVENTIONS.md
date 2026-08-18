@@ -21,6 +21,12 @@ Equivalently, `source/atlas_pose_runtime.py` uses the normal proportional to `[-
 
 QuickNII represents a plane by origin `O` and in-plane vectors `U` and `V`. The joint model may use O/U/V internally, but conversion to and from public AP/L--R/D--V values must use one tested implementation. Evaluation of DeepSlice uses the official corresponding-pixel plane-distance definition and coordinate convention.
 
+A horizontal raster flip is an image-coordinate reparameterization, not a physical atlas reflection. For normalized horizontal pixel coordinate `s`, the same physical plane is represented after a flip by
+
+`H(O, U, V) = (O + U, -U, V)`, so `P(H(E), s, t) = P(E, 1 - s, t)`.
+
+`H` is its own inverse. The corrected DeepSlice comparator therefore preserves raw images and raw-frame ground truth, applies one deterministic raster flip into DeepSlice's expected A-to-P view, runs all official angle/order processing in that view, and applies `H` to the final O/U/V result before raw-frame scoring. Reflecting the atlas mediolateral axis is forbidden: it changes physical hemisphere and reverses L--R tilt. An asymmetric unilateral-landmark fixture must prove laterality, exactly-one-flip behavior and raw/canonical plane-distance parity.
+
 ## Image coordinates
 
 - Pixel coordinates are `(x, y)` with origin at the upper-left of the stored/displayed image unless a file format explicitly states otherwise.

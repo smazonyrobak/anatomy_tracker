@@ -32,9 +32,9 @@ An assisted result may not be presented as a fully automatic comparison. The pri
 
 ### A. Published DeepSlice reproduction
 
-Use the published seven-brain human-consensus dataset and its original brain-level development/test assignment. Run the frozen publication DeepSlice implementation and the official recommended model-ensemble/angle-integration/cutting-index workflow. Report raw single-section and series-assisted outputs separately. Use DeepSlice's physical plane-distance calculation: average Euclidean separation between corresponding predicted and reference CCF points over pixels whose reference coordinates lie inside brain.
+Use the published human-consensus dataset and its original brain-level development/test assignment; the final public test component contains only four brains and is therefore comparator reproduction evidence, not a broad biological holdout. Run the frozen publication DeepSlice implementation and the official recommended model-ensemble/angle-integration/cutting-index workflow. Report raw single-section and series-assisted outputs separately. Preserve raw raster bytes and raw-frame ground truth. The frozen DeepSlice adapter applies exactly one horizontal image reparameterization into its expected A-to-P view and applies the inverse O/U/V transform only after all official postprocessing. Use DeepSlice's physical plane-distance calculation: average Euclidean separation between corresponding predicted and reference CCF points over pixels whose reference coordinates lie inside brain.
 
-This public dataset is an external reference but is not a pristine final holdout for this project because it has already informed development. It cannot be used for hyperparameter selection.
+This public dataset and the local 1,400-section comparison cohort are consumed. They may reproduce a named comparator and diagnose regressions, but cannot be used for hyperparameter selection or a new final-generalization claim. The previously tracked local comparison used the wrong horizontal view for DeepSlice and is invalid until the frozen adapter is rerun.
 
 ### B. New hidden real pose benchmark
 
