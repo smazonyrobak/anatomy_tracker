@@ -95,6 +95,7 @@ def test_frozen_foundation_config_is_source_bound_synthetic_only_and_not_selecti
     assert not config["product5_access"]
     assert not config["calibration_access"]
     assert not config["final_test_access"]
+    assert config["training"]["amp_initial_scale"] == 512.0
     assert config["development"]["evaluation_views"] == [0, 500, 1000, 1500, 2000, 2500]
     source = (Path(__file__).parents[1] / "training" / "run_independent_initializer_foundation.py").read_text()
     assert "IndependentProduct5Data" not in source
@@ -118,6 +119,12 @@ def test_frozen_foundation_config_is_source_bound_synthetic_only_and_not_selecti
     raw["training"]["amp"] = False
     changed.write_text(json.dumps(_rehash_config(raw)))
     with pytest.raises(ValueError, match="loss, AMP, checkpoint, or resume contract changed"):
+        foundation.load_foundation_config(changed)
+
+    raw = json.loads(CONFIG.read_text())
+    raw["training"]["amp_initial_scale"] = 65536.0
+    changed.write_text(json.dumps(_rehash_config(raw)))
+    with pytest.raises(ValueError, match="optimizer, loss, clipping, or EMA contract changed"):
         foundation.load_foundation_config(changed)
 
 

@@ -75,6 +75,7 @@
     "learning_rate": 0.0002,
     "weight_decay": 0.0001,
     "amp": true,
+    "amp_initial_scale": 512.0,
     "warmup_views": 500,
     "learning_rate_after_warmup": "hold",
     "gaussian_nll_weight_start": 0.01,
@@ -121,9 +122,9 @@
       "training/train_independent_joint.py": "b5f873c12d8a50d82c3972d90f4f9866662c47424e349d4d0104b7e02e7957b1",
       "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde",
       "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
-      "training/run_independent_initializer_foundation.py": "e9663a917cfb181cb2c2fc31ef56c3d8f69dedfdd17ae46592d9c6eda9da5865",
+      "training/run_independent_initializer_foundation.py": "c25341c749ca61140569d9eac6e4b9e315ebfc302d9644a6d35dd89854f90e6f",
       "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
     }
   },
-  "contract_sha256": "597c237997819d38ef508caa93e0300aea022e3032c921aa65a8f503909aa0fd"
+  "contract_sha256": "718ce78c706e79d5ac571cc5b92ed2c5f313d0fab0563ac93f67e210d781214d"
 }

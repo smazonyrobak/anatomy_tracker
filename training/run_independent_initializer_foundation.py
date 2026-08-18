@@ -266,6 +266,7 @@ def load_foundation_config(path: str | Path) -> dict:
         "optimizer": "AdamW",
         "learning_rate": 0.0002,
         "weight_decay": 0.0001,
+        "amp_initial_scale": 512.0,
         "warmup_views": 500,
         "learning_rate_after_warmup": "hold",
         "gaussian_nll_weight_start": 0.01,
@@ -1141,7 +1142,11 @@ def run_initializer_foundation(
         weight_decay=float(training["weight_decay"]),
     )
     _validate_optimizer_contract(optimizer, encoder, head, config)
-    scaler = torch.amp.GradScaler(str(device).split(":")[0], enabled=amp_enabled)
+    scaler = torch.amp.GradScaler(
+        str(device).split(":")[0],
+        enabled=amp_enabled,
+        init_scale=float(training["amp_initial_scale"]),
+    )
     ema = {name: value.detach().clone() for name, value in model.state_dict().items()}
     update = views = nonfinite_training_count = 0
     gradient_records: list[dict] = []
