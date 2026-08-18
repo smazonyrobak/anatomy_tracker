@@ -352,3 +352,17 @@ nonzero gradient through the first recurrent pose, and used 1.613 GiB peak
 allocated CUDA memory. Its cold wall time (17.45 s, including unoptimized
 training graph execution) is a plumbing check only and is not a throughput or
 model-quality benchmark.
+
+The subsequently frozen equal-workload preflight used three source images,
+three candidates per source, three updates and one dense decode at 320x464,
+with one warm-up and three measured iterations. It performed zero optimizer
+steps. On the RTX 2080 Ti, the recurrent-correlation, factorized-stateless and
+recurrent-attention families respectively measured 1.369/1.387/1.393 million
+parameters, 36.24/42.92/37.27 billion scoped MAC proxies, 1.86/2.14/2.05 GiB
+peak allocated memory, 91/88/100 ms median forward time and 154/117/221 ms
+median backward time. All three candidate-scorer ONNX graphs passed checking
+and executed through DirectML; maximum absolute PyTorch/ORT differences were
+`1.26e-6`, `1.60e-5` and `1.28e-6`. The MAC proxy counts convolution, linear
+and explicit local-attention work but excludes elementwise operations and grid
+sampling. These measurements establish comparable feasibility only and do not
+rank accuracy.
