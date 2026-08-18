@@ -344,3 +344,11 @@ back-propagation through time, synthetic-only truth-plane dense supervision,
 map-direction/validity contracts, animal-disjoint EMA selection and atomic
 resume. These are implementation tests, not accuracy evidence. No long
 architecture-screen run or final benchmark has been launched.
+
+One non-comparative RTX 2080 Ti integration step used a real CCF-backed hard
+synthetic sample at batch size 1 with FP16 autocast. The complete three-update
+path plus the one exact dense teacher pass produced a finite loss, a finite
+nonzero gradient through the first recurrent pose, and used 1.613 GiB peak
+allocated CUDA memory. Its cold wall time (17.45 s, including unoptimized
+training graph execution) is a plumbing check only and is not a throughput or
+model-quality benchmark.

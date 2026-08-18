@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "frozen": true,
+  "name": "independent-leader-correlation-convgru-t3",
+  "architecture": {
+    "class": "training.independent_joint_model.IndependentJointModel",
+    "family": "recurrent-correlation-pyramid",
+    "recurrent_steps": 3,
+    "uses_recurrent_state": true,
+    "expected_parameter_count": 1369070,
+    "initial_state_sha256": "370934a18d8d873c3ced7a0ed17a963b929c9ceb452190e64c92047f7f1136a6",
+    "kwargs": {
+      "pyramid_channels": [24, 40, 64, 96],
+      "pose_context_features": 192,
+      "pair_features": 96,
+      "hidden_channels": 96,
+      "integration_steps": 6,
+      "maximum_pose_delta": [750.0, 7.5, 7.5],
+      "maximum_translation_pixels": 32.0,
+      "minimum_scale": 0.4,
+      "maximum_scale": 2.0,
+      "maximum_velocity_fraction": 0.12
+    }
+  },
+  "workload": {
+    "seed": 4322,
+    "source_batch": 3,
+    "candidates_per_source": 3,
+    "height": 320,
+    "width": 464,
+    "recurrent_steps": 3,
+    "warmup_iterations": 1,
+    "measured_iterations": 3,
+    "amp": true,
+    "onnx_provider": "DmlExecutionProvider"
+  },
+  "mask_curriculum": {
+    "mode_probabilities": {
+      "accurate": 0.35,
+      "imperfect": 0.35,
+      "absent": 0.3
+    },
+    "preflight_modes": ["accurate", "imperfect", "absent"],
+    "contract_sha256": "3c7d8b3f5d9cb7ebb600dddf766035f58df27078b8c6a6e17e62c73106b1c751"
+  },
+  "training_protocol": {
+    "purpose": "resource-and-export-preflight-only",
+    "optimizer_steps": 0,
+    "cold_start": true,
+    "learned_checkpoint_dependencies": []
+  },
+  "lineage": {
+    "source_sha256": {
+      "training/independent_joint_model.py": "a044c735977da01b5499fa53aae9a1bbe99c4bf586647d5277a6260a8fa43156",
+      "training/independent_joint_variants.py": "8f1f28ff0b0289094c560fab2c91067125648882e90b6f3292d773021ea80e59",
+      "training/independent_joint_data.py": "e3a52eb88ddc857f1132ac2bfb8f5e2d08aca58cb0f199ab9329ec87b7891e5d",
+      "training/train_independent_joint.py": "2d6ffaf5c751b3d9ac443e8cf53ca43773f1ac860ac1e683bde8736d72633bee",
+      "training/preflight_independent_architectures.py": "c990cc0024f689ebbe9e926305d653511ddfdae27f0b3fc4f406fd6487643415"
+    }
+  },
+  "contract_sha256": "8842e61e0c7173286030d4beb00fbbaa9c49cfedbbf8eb83e4d94d9498f28f82"
+}
