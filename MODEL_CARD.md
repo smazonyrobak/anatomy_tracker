@@ -12,7 +12,7 @@ Intended users are neuroscience researchers who review every result. The model i
 
 ## Model design
 
-The leading candidate is one randomly initialized recurrent correlation-pyramid system stored in one PyTorch checkpoint. A coarse probabilistic pose head, differentiable atlas renderer, multiscale structural correlations and a shared ConvGRU state jointly refine global plane pose, in-plane similarity and an integrated stationary velocity field. Global pose and local deformation remain separate so nonlinear warping cannot freely hide a wrong atlas section. A factorized CNN and a windowed cross-attention pyramid are matched cold-start alternatives; no family is selected before the prespecified screen. Deployment will export entry graphs from the same selected checkpoint, connected by the deterministic atlas renderer. See [`docs/publication/ARCHITECTURE.md`](docs/publication/ARCHITECTURE.md).
+The leading candidate is one randomly initialized recurrent correlation-pyramid system stored in one PyTorch checkpoint. A coarse probabilistic pose head, differentiable atlas renderer, multiscale structural correlations and a shared ConvGRU state jointly refine global plane pose, in-plane similarity and an integrated stationary velocity field. Global pose and local deformation remain separate so nonlinear warping cannot freely hide a wrong atlas section. A factorized CNN and a windowed cross-attention pyramid are matched cold-start alternatives; no family is selected before the prespecified screen. Deployment will export cached initializer, candidate-scorer and final-refiner entry graphs from the same selected checkpoint, connected by the deterministic atlas renderer. See [`docs/publication/ARCHITECTURE.md`](docs/publication/ARCHITECTURE.md).
 
 ## Inputs
 

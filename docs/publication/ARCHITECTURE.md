@@ -19,7 +19,15 @@ mask and residual stationary velocity field. Updating the pose causes a fresh
 atlas render before the next iteration. Global plane pose and bounded local
 deformation remain explicit even though they are optimized jointly.
 
-Deployment uses two ONNX entry graphs exported from that same checkpoint: an initializer graph and a recurrent-refiner graph. A deterministic host-side CCF renderer runs between them. This is an implementation boundary forced by the large 3-D atlas and current ONNX/DirectML volumetric-sampling constraints, not two separately trained models.
+Deployment uses three ONNX entry graphs exported from that same checkpoint: a
+source initializer/encoder, a cached coarse candidate scorer, and a final dense
+refiner. The first graph computes the source pyramid once; the scorer reuses
+its coarse levels across pose candidates and recurrent updates without
+constructing dense maps; the final graph decodes one pose-bound deformation.
+A deterministic host-side CCF renderer runs between calls. These are entry
+points into one learned model, not separately trained models. The split avoids
+re-encoding the same section or integrating unused deformation fields for every
+wrong-plane candidate.
 
 The design is provisional until the matched cold-start architecture screen is
 complete. This document defines the leading hypothesis, not a completed or
@@ -114,6 +122,13 @@ visible/damaged/missing-tissue masks used to gate registration losses. This
 prevents a brush mistake or a real tear from being treated as deformation
 ground truth. Automatic/no-user-mask and smart-brush-assisted performance are
 reported as separate operating modes.
+
+Supplying grayscale tissue and a brain mask as separate registration channels
+has direct whole-brain serial-histology precedent in Lee et al. (2018), whose
+objective also excludes unavailable tissue. The mixed mask/no-mask curriculum
+is our robustness requirement: it preserves that useful assisted signal
+without assuming an infallible segmentation or making preprocessing mandatory,
+consistent with SynthMorph's broader acquisition-agnostic design principle.
 
 ## Deformation representation
 
