@@ -1,0 +1,196 @@
+schema_version: "1.0"
+status: "completed_development_diagnostics_no_qualified_foundation"
+recorded_date: "2026-08-18"
+purpose: "Immutable evidence record for two cold-start initializer-foundation attempts; not a benchmark, accuracy claim, or architecture decision."
+
+shared_contract:
+  role: "diagnostic-not-architecture-selection"
+  model_execution_path: "encode_source-plus-probabilistic-pose-head-only"
+  data_source: "synthetic CCF only"
+  planned_unique_views: 2500
+  batch_size: 2
+  interim_gate:
+    unique_views: 1000
+    minimum_overall_physical_error_reduction: 0.15
+    stop_on_failure: true
+  initial_state_sha256: "370934a18d8d873c3ced7a0ed17a963b929c9ceb452190e64c92047f7f1136a6"
+  development_panel_contract_sha256: "787b617b5f6b7f1a4fc23002d421bc8511f41cad18766edff25d9c7be576f2d7"
+  development_panel_samples: 24
+  development_panel_samples_per_outline_mode: 8
+  global_outline_plan_sha256: "6ae907d6022765c23475d9b70ce3133359989ddf41f5583b7ccaff5c42087e07"
+  global_outline_mode_counts:
+    accurate: 875
+    imperfect: 875
+    absent: 750
+  learned_checkpoint_dependencies: []
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+
+attempts:
+  default_amp_scale:
+    source_commit: "51357bf8e5a451c93fcc33d1331e891ea260bca7"
+    config:
+      repo_path: "training/configs/independent_initializer_foundation_2500_r4322.json"
+      file_sha256: "2e1c076ffee8cf83d1ac1ed45724ae7b6cec691090bfe3e1d5847352f64c7620"
+      contract_sha256: "597c237997819d38ef508caa93e0300aea022e3032c921aa65a8f503909aa0fd"
+      amp_enabled: true
+      amp_initial_scale: 65536.0
+      amp_initial_scale_provenance: "Default torch.amp.GradScaler value; this config did not yet contain an explicit scale field."
+    run_root: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322\independent-initializer-foundation-2500-r4322-v1'
+    setup_sha256: "beaea8764475aeeaf0804ba0d05ec652daa103e7475505d5e5326fa2831871cf"
+    progress:
+      optimizer_updates: 93
+      unique_views: 186
+    outcome:
+      status: "stop"
+      nonfinite_training_count: 1
+      postwarm_update_count: 0
+      diagnosed_failure: "AP-logit scaled-gradient overflow at GradScaler initial scale 65536"
+      receipt_diagnostic_scope: "The receipt records one non-finite gradient-norm stop; it does not store the offending tensor name."
+      disposition: "Numerically incomplete; no endpoint comparison and no qualification."
+    initial_development_panel:
+      views: 0
+      sample_count: 24
+      ap_mae_um: 1162.525634765625
+      lr_mae_deg: 5.552766799926758
+      dv_mae_deg: 2.9851138591766357
+      physical_corresponding_plane_error_um: 1168.9459228515625
+      nonfinite_output_count: 0
+      panel_manifest_sha256: "a93f9204b79b94a20c65d80ef366442e249f1cead687a01f42167102a5f5b66d"
+    artifacts:
+      qualification_receipt:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322\independent-initializer-foundation-2500-r4322-v1\qualification_receipt.json'
+        bytes: 283227
+        sha256: "1e927ccdc94c1d434b312dda460c1ba4092ee072c75b3855b07525b1306dc944"
+      final_checkpoint:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322\independent-initializer-foundation-2500-r4322-v1\final.pt'
+        bytes: 13624382
+        sha256: "bccf1d3dc535c9fab5915c2dce846cfd986091da69631b5a3e916acfa6401f84"
+      latest_checkpoint:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322\independent-initializer-foundation-2500-r4322-v1\latest.pt'
+        bytes: 13625113
+        sha256: "60b70723dc2ddf4e65aa550e403413b488850a906cf733832e5bfed866100d1d"
+      development_panel_0000:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322\independent-initializer-foundation-2500-r4322-v1\development_views_0000.json'
+        bytes: 38215
+        sha256: "39522cf9b7de6fb0be8369309d69ef65be58938c5bba593d74040ab5bd0e6250"
+      stdout:
+        path: 'F:\AtlasJointTraining\logs\independent-initializer-foundation-r4322\stdout.log'
+        bytes: 966
+        sha256: "5b976ee8d44e61dd81ef6e33640bcfb98077867b0c060becebd819a89fb2c5c7"
+      stderr:
+        path: 'F:\AtlasJointTraining\logs\independent-initializer-foundation-r4322\stderr.log'
+        bytes: 0
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+  explicit_amp_scale_512:
+    source_commit: "7679e03cf3a4afd1939dfb845748b4f6935377d6"
+    numerical_fix_from_attempt: "default_amp_scale"
+    numerical_fix_scope: "Set the frozen GradScaler initial scale to 512; model architecture unchanged."
+    config:
+      repo_path: "training/configs/independent_initializer_foundation_2500_r4322.json"
+      file_sha256: "8d1e19155f29261a6d79b47b36601e1eea06ef31a003fa69c2ddba0874cae14b"
+      contract_sha256: "718ce78c706e79d5ac571cc5b92ed2c5f313d0fab0563ac93f67e210d781214d"
+      amp_enabled: true
+      amp_initial_scale: 512.0
+    run_root: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322-718ce78c\independent-initializer-foundation-2500-r4322-v1'
+    setup_sha256: "9313c357f6e3902df4b45f760fd90ee45f3174b20e3540d77acd0365c9c9202e"
+    progress:
+      optimizer_updates: 500
+      unique_views: 1000
+    outcome:
+      status: "stop"
+      nonfinite_training_count: 0
+      observed_overall_physical_error_reduction: 0.0023983905605730158
+      required_overall_physical_error_reduction: 0.15
+      interim_gate_passed: false
+      postwarm_update_count: 250
+      head_clipped_fraction: 1.0
+      head_median_clip_factor: 0.2336307245404901
+      encoder_clipped_fraction: 0.0
+      encoder_median_clip_factor: 1.0
+      disposition: "Stopped cleanly at the failed prespecified interim gate; no qualification."
+    development_panels:
+      views_0000:
+        sample_count: 24
+        ap_mae_um: 1162.525634765625
+        lr_mae_deg: 5.552766799926758
+        dv_mae_deg: 2.9851138591766357
+        physical_corresponding_plane_error_um: 1168.9459228515625
+        nonfinite_output_count: 0
+        panel_manifest_sha256: "a93f9204b79b94a20c65d80ef366442e249f1cead687a01f42167102a5f5b66d"
+      views_0500:
+        sample_count: 24
+        ap_mae_um: 1172.8775634765625
+        lr_mae_deg: 5.513000965118408
+        dv_mae_deg: 2.985445022583008
+        physical_corresponding_plane_error_um: 1172.5533447265625
+        nonfinite_output_count: 0
+        panel_manifest_sha256: "40b44fb3277593149820b7ad5f7baf03f1ed95f6dd6810b88eafd211564b82f0"
+      views_1000:
+        sample_count: 24
+        ap_mae_um: 1152.1451416015625
+        lr_mae_deg: 5.593603134155273
+        dv_mae_deg: 2.9859371185302734
+        physical_corresponding_plane_error_um: 1166.142333984375
+        nonfinite_output_count: 0
+        panel_manifest_sha256: "844a4b185bb5d56052016ba1c71862b0dcf2502b5ac5cbe8d22ae5d42a961a1b"
+    artifacts:
+      qualification_receipt:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322-718ce78c\independent-initializer-foundation-2500-r4322-v1\qualification_receipt.json'
+        bytes: 1309265
+        sha256: "eac95d98ba4c3ee6319588a103a999e3a68aa3dae4a4b372e0920f225fe6965a"
+      final_checkpoint:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322-718ce78c\independent-initializer-foundation-2500-r4322-v1\final.pt'
+        bytes: 14191358
+        sha256: "b35e9271dbe3e5db7ee3586a7412bb2a28286ae1cb29468a46cfcd321f89f8c7"
+      latest_checkpoint:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322-718ce78c\independent-initializer-foundation-2500-r4322-v1\latest.pt'
+        bytes: 14192281
+        sha256: "59447253ce52c508df1703b05b517745d6b41df81e2c40d14e36bfe5ef98c131"
+      development_panel_0000:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322-718ce78c\independent-initializer-foundation-2500-r4322-v1\development_views_0000.json'
+        bytes: 38215
+        sha256: "39522cf9b7de6fb0be8369309d69ef65be58938c5bba593d74040ab5bd0e6250"
+      development_panel_0500:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322-718ce78c\independent-initializer-foundation-2500-r4322-v1\development_views_0500.json'
+        bytes: 37993
+        sha256: "a4932eb878c328bf464e17c7ef622e009733125c19a91c1e762c87e219f5b605"
+      development_panel_1000:
+        path: 'F:\AtlasJointTraining\runs\independent-initializer-foundation-r4322-718ce78c\independent-initializer-foundation-2500-r4322-v1\development_views_1000.json'
+        bytes: 37837
+        sha256: "028636a12c5d9bac5ec5c78f8fbd8a65cf3f8f414eb0486f92299d1cdbcab6a2"
+      stdout:
+        path: 'F:\AtlasJointTraining\logs\independent-initializer-foundation-r4322-718ce78c\stdout.log'
+        bytes: 1172
+        sha256: "7f6b03ec70a7f9d3c5508bc87e9d4b7efc2a043edec719363357ba6e72626eea"
+      stderr:
+        path: 'F:\AtlasJointTraining\logs\independent-initializer-foundation-r4322-718ce78c\stderr.log'
+        bytes: 0
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+integrity_audit:
+  artifact_sha256_recomputed_from_f_drive: true
+  receipt_checkpoint_hashes_match_recomputed_files: true
+  initial_state_matches_between_attempts: true
+  development_panel_contract_matches_between_attempts: true
+  initial_development_panel_file_byte_identical: true
+  initial_development_panel_nonfinite_output_count: 0
+  corrected_attempt_training_nonfinite_count: 0
+  corrected_attempt_panel_nonfinite_output_count: 0
+  stderr_bytes_each_attempt: 0
+  original_artifacts_rewritten: false
+  development_panel_consumed: true
+  calibration_access: false
+  final_test_access: false
+
+decision:
+  qualified_foundation: false
+  architecture_winner: null
+  accuracy_claim: false
+  promotion_authorized: false
+  reasons:
+    - "The first attempt stopped on a non-finite gradient event before the warm-up boundary."
+    - "The corrected attempt improved physical plane error by only 0.239839 percent and failed the frozen 15 percent interim gate."
+    - "The pose head was clipped on every post-warm-up update in the corrected attempt."

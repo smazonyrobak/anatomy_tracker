@@ -445,3 +445,56 @@ AMP; this was not an architecture-specific failure. Commit
 covariance branch to float32 and adds an autocast/export regression test. The
 completed pilot artifacts retain their original source lineage and are not
 rewritten or promoted after that fix.
+
+### Cold-start initializer foundation attempts
+
+Two development-only attempts tested whether the randomly initialized shared
+encoder and probabilistic pose head could establish a usable pose foundation
+before closed-loop registration. Both used only synthetic CCF data, the
+initializer-only execution path, an empty learned-checkpoint dependency list,
+the same initial state (`370934a18d8d873c3ced7a0ed17a963b929c9ceb452190e64c92047f7f1136a6`)
+and the same fixed 24-case development-panel contract
+(`787b617b5f6b7f1a4fc23002d421bc8511f41cad18766edff25d9c7be576f2d7`).
+Product-5, calibration and final-test access were false. The planned run was
+2,500 unique views, with a prespecified stop at 1,000 if overall physical plane
+error had not fallen by at least 15 percent.
+
+The first attempt ran from commit
+`51357bf8e5a451c93fcc33d1331e891ea260bca7` under config contract
+`597c237997819d38ef508caa93e0300aea022e3032c921aa65a8f503909aa0fd`.
+It stopped after 93 optimizer updates and 186 unique views when the receipt
+recorded one non-finite training event. Run diagnosis localized the event to an
+AP-logit gradient overflow under the default AMP `GradScaler` initial scale of
+65,536; the receipt records the non-finite gradient-norm stop but does not
+store the offending tensor name. Because the run stopped before the 500-view
+warm-up boundary, it supplied no post-warm-up gradient summary and no endpoint
+comparison. Commit `7679e03cf3a4afd1939dfb845748b4f6935377d6`
+made the initial scale an explicit frozen config value of 512 without changing
+the model architecture.
+
+The corrected attempt ran from that commit in a separate artifact root under
+config contract
+`718ce78c706e79d5ac571cc5b92ed2c5f313d0fab0563ac93f67e210d781214d`.
+It reached the prespecified 1,000-view interim decision with zero non-finite
+training or panel outputs. On the fixed 24-case panel, overall physical plane
+error changed from `1168.9459228515625 um` at initialization to
+`1166.142333984375 um` at 1,000 views, a reduction of
+`0.0023983905605730158` (0.239839 percent). This failed the frozen 15 percent
+gate, so the runner stopped cleanly rather than continuing to 2,500 views.
+Across 250 post-warm-up updates, the pose head was clipped on 100 percent of
+updates (median clip factor `0.2336307245404901`), while the encoder was
+clipped on zero percent (median factor `1.0`).
+
+| Attempt | Views | Overall AP / L--R / D--V MAE | Physical plane error | Non-finite training count | Decision |
+| --- | ---: | ---: | ---: | ---: | --- |
+| default AMP scale | 186 | initialization only: 1162.526 um / 5.553 deg / 2.985 deg | initialization only: 1168.946 um | 1 | numerical stop |
+| explicit scale 512 | 1,000 | 1152.145 um / 5.594 deg / 2.986 deg | 1166.142 um | 0 | failed 15 percent interim gate |
+
+These attempts are optimization diagnostics, not benchmarks or accuracy
+evidence. The first is numerically incomplete and the second failed its
+prespecified qualification gate; neither selects an architecture or authorizes
+promotion. The development panel is consumed for development, while calibration
+and final-test data remain untouched. Exact paths and independently recomputed
+artifact hashes are recorded in
+`publication/initializer_foundation_attempts.yaml`; the original run artifacts
+were not rewritten.
