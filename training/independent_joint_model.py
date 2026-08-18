@@ -415,24 +415,28 @@ class ProbabilisticPoseHead(nn.Module):
             dim=1,
         )
         continuous_residual = torch.tanh(self.residual(context)) * self.maximum_residual
-        raw_cholesky = self.local_cholesky(context)
-        diagonal = F.softplus(raw_cholesky[:, :3]) + 1e-4
-        off_diagonal = 0.25 * torch.tanh(raw_cholesky[:, 3:])
-        zeros = torch.zeros_like(diagonal[:, 0])
-        normalized_cholesky = torch.stack(
-            (
-                torch.stack((diagonal[:, 0], zeros, zeros), dim=1),
-                torch.stack((off_diagonal[:, 0], diagonal[:, 1], zeros), dim=1),
-                torch.stack(
-                    (off_diagonal[:, 1], off_diagonal[:, 2], diagonal[:, 2]),
-                    dim=1,
+        # AP uncertainty is measured in micrometres, so its variance routinely
+        # exceeds float16's finite range.  Keep this probabilistic branch in
+        # float32 even when the image encoder and point heads run under AMP.
+        with torch.amp.autocast(device_type=context.device.type, enabled=False):
+            raw_cholesky = self.local_cholesky(context.float())
+            diagonal = F.softplus(raw_cholesky[:, :3]) + 1e-4
+            off_diagonal = 0.25 * torch.tanh(raw_cholesky[:, 3:])
+            zeros = torch.zeros_like(diagonal[:, 0])
+            normalized_cholesky = torch.stack(
+                (
+                    torch.stack((diagonal[:, 0], zeros, zeros), dim=1),
+                    torch.stack((off_diagonal[:, 0], diagonal[:, 1], zeros), dim=1),
+                    torch.stack(
+                        (off_diagonal[:, 1], off_diagonal[:, 2], diagonal[:, 2]),
+                        dim=1,
+                    ),
                 ),
-            ),
-            dim=1,
-        )
-        physical_scale = self.physical_pose_scale[None, :, None]
-        pose_cholesky = normalized_cholesky * physical_scale
-        pose_covariance = pose_cholesky @ pose_cholesky.transpose(1, 2)
+                dim=1,
+            )
+            physical_scale = self.physical_pose_scale.float()[None, :, None]
+            pose_cholesky = normalized_cholesky * physical_scale
+            pose_covariance = pose_cholesky @ pose_cholesky.transpose(1, 2)
         return {
             "pose": project_pose_to_domain(coarse_pose + continuous_residual),
             "coarse_pose": coarse_pose,

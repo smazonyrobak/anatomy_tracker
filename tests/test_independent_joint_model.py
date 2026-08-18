@@ -168,6 +168,63 @@ def test_initializer_exposes_calibratable_pose_distribution_and_point_estimate()
     assert all(torch.equal(a, b) for a, b in zip(exported[6:], cached))
 
 
+def test_pose_covariance_stays_finite_above_float16_range_under_autocast_and_onnx():
+    onnx = __import__("onnx")
+    ort = __import__("onnxruntime")
+    model = _model().train()
+    with torch.no_grad():
+        model.pose_head.local_cholesky.bias[0] = 0.0
+    image, outline, available, _, _, _ = _inputs(batch=1)
+
+    with torch.autocast(device_type="cpu", dtype=torch.float16):
+        outputs = model.initialize(image, outline, available)
+        loss = outputs["pose_covariance"][:, 0, 0].log().mean()
+
+    assert outputs["pose_cholesky"].dtype == torch.float32
+    assert outputs["pose_covariance"].dtype == torch.float32
+    assert outputs["pose_covariance"][0, 0, 0] > torch.finfo(torch.float16).max
+    assert all(torch.isfinite(value).all() for value in outputs.values())
+    loss.backward()
+    gradient = model.pose_head.local_cholesky.bias.grad
+    assert gradient is not None
+    assert torch.isfinite(gradient).all()
+    assert gradient[0] != 0
+
+    initializer = IndependentInitializerExport(model.eval())
+    output_names = [
+        "pose", "pose_context", "ap_logits", "lr_logits", "dv_logits",
+        "pose_cholesky", "source_feature_0", "source_feature_1",
+        "source_feature_2", "source_feature_3",
+    ]
+    buffer = io.BytesIO()
+    torch.onnx.export(
+        initializer,
+        (image, outline, available),
+        buffer,
+        input_names=["source_image", "source_mask", "mask_available"],
+        output_names=output_names,
+        opset_version=17,
+        dynamo=False,
+    )
+    graph = onnx.load_from_string(buffer.getvalue())
+    onnx.checker.check_model(graph)
+    assert [value.name for value in graph.graph.output] == output_names
+    assert graph.graph.output[5].type.tensor_type.elem_type == onnx.TensorProto.FLOAT
+    exported = ort.InferenceSession(
+        buffer.getvalue(), providers=["CPUExecutionProvider"]
+    ).run(
+        None,
+        {
+            "source_image": image.numpy(),
+            "source_mask": outline.numpy(),
+            "mask_available": available.numpy(),
+        },
+    )
+    exported_cholesky = torch.from_numpy(exported[5])
+    assert torch.isfinite(exported_cholesky).all()
+    assert exported_cholesky[0, 0, 0].square() > torch.finfo(torch.float16).max
+
+
 def test_pose_domain_projection_is_exact_and_differentiable_inside_domain():
     pose = torch.tensor(
         [[-9000.0, -100.0, 100.0], [-1200.0, -2.0, 3.0], [4000.0, 80.0, -80.0]],
