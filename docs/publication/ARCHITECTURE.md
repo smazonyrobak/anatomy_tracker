@@ -2,11 +2,28 @@
 
 ## Design decision
 
-The proposed system is one jointly trained model with one optimizer and one checkpoint. It is not two independently optimized models joined by a heuristic vote. The pose initializer and paired-image registrar retain geometry-appropriate encoders because their input contracts differ: the initializer consumes a canonicalized `3 x 299 x 299` view, while registration consumes metrically meaningful `2 x 320 x 464` atlas/histology pairs. One pose-review core is reused at every render--compare--correct iteration, and gradients couple pose correction, compatibility and dense registration during training. Explicit output heads retain the distinction between global atlas-plane pose and local in-plane deformation.
+The release candidate is trained from random initialization as one model with
+one optimizer and one checkpoint. It has no learned dependency on AtlasPose,
+AtlasWarp, DeepSlice, ImageNet weights or any earlier project checkpoint.
+Those systems remain frozen comparators only. The first warm-start joint
+implementation is retained as a systems prototype and development baseline;
+it is ineligible for final architecture selection.
+
+The leading hypothesis is a compact recurrent correlation pyramid. A shallow
+histology stem produces reusable multiscale structural features and a coarse
+probabilistic AP/L--R/D--V pose. The current CCF plane is rendered, encoded in
+the same learned structural space, and compared with the slice through local
+multiscale cost volumes. A real shared-weight ConvGRU state then emits a pose
+increment, in-plane similarity increment, compatibility energy, matchability
+mask and residual stationary velocity field. Updating the pose causes a fresh
+atlas render before the next iteration. Global plane pose and bounded local
+deformation remain explicit even though they are optimized jointly.
 
 Deployment uses two ONNX entry graphs exported from that same checkpoint: an initializer graph and a recurrent-refiner graph. A deterministic host-side CCF renderer runs between them. This is an implementation boundary forced by the large 3-D atlas and current ONNX/DirectML volumetric-sampling constraints, not two separately trained models.
 
-The design is provisional until the preregistered development ablations are complete. This document defines the initial hypothesis, not a completed implementation.
+The design is provisional until the matched cold-start architecture screen is
+complete. This document defines the leading hypothesis, not a completed or
+selected model.
 
 ## Inputs and outputs
 
@@ -66,16 +83,19 @@ Loss is evaluated in physical plane geometry as well as component coordinates. T
 
 Direct grayscale equality is inappropriate for atlas template versus real fluorescence/brightfield appearance. The model learns compatible anatomical representations using:
 
-- the proven ConvNeXt pose encoder for canonical whole-section localization;
-- the proven tied Siamese registration encoder for metrically preserved atlas/histology pairs;
-- a shared recurrent review head that sees the fixed plane, warped moving slice, masks, structural residuals, current pose and registration summaries;
-- multiscale correlation/cost volumes;
+- shallow modality-specific grayscale/mask stems followed by a shared structural feature pyramid;
+- a coarse whole-section pose distribution with continuous physical residuals;
+- local multiscale correlation/cost volumes between the rendered atlas and slice;
+- a genuine recurrent hidden state that receives registration evidence at every refinement;
 - structural/label supervision available from exact synthetic pairs;
 - aggressive grayscale appearance randomization inspired by SynthMorph's acquisition-agnostic training principle.
 
 An intensity-only loss is never the sole registration objective.
 
-Literal encoder-weight sharing is a controlled ablation, not a premise. Forcing unlike geometric inputs through one encoder would discard useful pretrained representations and could weaken both tasks. The publishable coupling is joint optimization and recurrent feedback through the shared review state, not cosmetic reuse of every convolution.
+Literal stem-weight sharing is a controlled ablation, not a premise. The
+publishable coupling is joint optimization and recurrent feedback through the
+shared state and structural feature space, not cosmetic reuse of every
+convolution.
 
 ## Deformation representation
 
@@ -89,13 +109,30 @@ Compatibility is a trained ranking/energy signal, not raw overlay correlation an
 
 The first release uses the same per-slice network plus a transparent joint optimizer over per-slice pose energies. Common tilt, partial order and user constraints are explicit latent/hard constraints. A learned set/sequence module is deferred unless an ablation shows that it improves over this interpretable solver without weakening exact constraint satisfaction.
 
-## Alternatives retained for ablation
+## Matched cold-start architecture screen
 
-- frozen AtlasPose followed by frozen AtlasWarp;
-- single-pass joint model without recurrence;
-- recurrent model with registration-to-pose gradient stopped;
-- recurrent model without wrong-plane ranking;
-- unrestricted dense field;
-- pose-only and correct-plane warp-only variants.
+Three models are trained from scratch on identical manifests, seeds, losses,
+candidate lattices and view budgets. Widths are chosen before training so
+parameters, MACs and peak memory are comparable.
 
-The selected architecture must earn its complexity against these controls.
+1. **Factorized CNN control:** separate compact global-pose and pair-registration
+   encoders with no recurrent hidden state.
+2. **Recurrent correlation pyramid:** the leading design above, using a
+   ConvGRU and local PWC/RAFT-style correlations.
+3. **Windowed cross-attention pyramid:** the same outputs, recurrence and
+   deformation decoder, replacing only the two coarsest correlation-fusion
+   stages with local bidirectional cross-attention. It must first pass
+   ONNX/DirectML feasibility.
+
+Frozen AtlasPose, AtlasWarp and DeepSlice are comparators, never initializers.
+The winning cold-start family then undergoes one-pass versus recurrent,
+hidden-state versus stateless, stopped-feedback, no-ranking, raw-displacement
+versus integrated-SVF, and validity-head ablations. Architecture complexity
+must be earned by physical pose, correspondence, topology, error ranking and
+runtime rather than by novelty.
+
+The recurrent-correlation hypothesis is supported independently by iterative
+slice-to-volume rendering in SVoRT, joint global/deformable registration in
+SynthMorph and NICE-Trans, and efficient recurrent local-correlation updates
+in recent medical-registration work. These precedents motivate the family;
+none determines the final architecture without the matched screen.

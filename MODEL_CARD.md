@@ -2,7 +2,7 @@
 
 ## Status
 
-**Research implementation complete; development training is active; not qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. The joint checkpoint remains a development candidate until multiseed qualification, harmonized comparators, export parity and GUI validation pass. Measured evidence is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
+**Research scaffold complete; independent architecture selection is active; not qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. The first joint implementation inherited both architectures and weights and is retained only as legacy-seeded diagnostic evidence. The release candidate will be trained from random initialization and remains unselected until matched architecture screening, multiseed qualification, harmonized comparators, export parity and GUI validation pass. Measured evidence is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
 
 ## Intended use
 
@@ -12,7 +12,7 @@ Intended users are neuroscience researchers who review every result. The model i
 
 ## Model design
 
-One jointly trained recurrent system is stored in one PyTorch checkpoint. It retains geometry-appropriate pose and pair-registration encoders, then uses one shared-weight render--compare--correct refiner at every iteration. Explicit heads predict global plane pose, residual in-plane similarity, a stationary velocity field integrated into forward/inverse maps, and slice--plane compatibility. Global pose and local deformation remain separate so nonlinear warping cannot freely hide a wrong atlas section. Deployment exports an initializer graph and a recurrent-refiner graph from that same checkpoint; a deterministic atlas renderer connects them. See [`docs/publication/ARCHITECTURE.md`](docs/publication/ARCHITECTURE.md).
+The leading candidate is one randomly initialized recurrent correlation-pyramid system stored in one PyTorch checkpoint. A coarse probabilistic pose head, differentiable atlas renderer, multiscale structural correlations and a shared ConvGRU state jointly refine global plane pose, in-plane similarity and an integrated stationary velocity field. Global pose and local deformation remain separate so nonlinear warping cannot freely hide a wrong atlas section. A factorized CNN and a windowed cross-attention pyramid are matched cold-start alternatives; no family is selected before the prespecified screen. Deployment will export entry graphs from the same selected checkpoint, connected by the deterministic atlas renderer. See [`docs/publication/ARCHITECTURE.md`](docs/publication/ARCHITECTURE.md).
 
 ## Inputs
 

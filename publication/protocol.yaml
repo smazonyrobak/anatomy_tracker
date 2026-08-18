@@ -130,7 +130,13 @@ training:
       purpose: "contracts and premise tests; no performance claim"
     - id: "controlled_architecture_screen"
       views: "20000-50000"
-      purpose: "recurrence, feedback, hard-negative, and field-control ablations"
+      initialization: "random; no prior project or external vision weights"
+      candidates:
+        - "factorized_cnn_control"
+        - "recurrent_local_correlation_convgru"
+        - "windowed_cross_attention_after_export_preflight"
+      matching: "same manifests, seeds, losses and recurrence; within 10 percent parameters, MACs and peak memory"
+      purpose: "select a self-contained architecture before recurrence, feedback, hard-negative, and field-control ablations"
     - id: "multiseed_qualification"
       views: 100000
       seeds_minimum: 3
@@ -141,6 +147,9 @@ training:
     - "exact or near-exact plane with mild warp"
     - "scheduled predicted poses and nearby hard negatives"
     - "fully closed-loop recurrent inference with full artifact mix"
+  learned_checkpoint_dependencies:
+    release_candidate: []
+    legacy_seeded_runs: "development diagnostics only; never promotion eligible"
   model_selection_order:
     - "eligible_only_after_all_hard_gates"
     - "real_validation_plane_distance"

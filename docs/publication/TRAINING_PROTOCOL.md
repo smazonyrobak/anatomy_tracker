@@ -13,7 +13,8 @@ Before model code is trained:
 3. freeze coordinate, preprocessing, mask and output contracts;
 4. freeze primary endpoints, statistical plan, comparator revisions and release gates;
 5. capture the baseline software at `c6681039e0b7acf35c9cdbee43040a3dca29cdab`;
-6. record environment, GPU, dependency and pretrained-weight provenance.
+6. record environment, GPU and dependency provenance, with an explicitly
+   empty learned-checkpoint dependency list for every release-eligible run.
 
 ## Stage 1: generator and premise tests
 
@@ -23,12 +24,16 @@ Use a small audit set, not a performance claim. Validate exact geometry, artifac
 
 Train under matched views, seeds and compute:
 
-- frozen AtlasPose followed by frozen AtlasWarp;
-- single-pass joint pose/warp model;
-- recurrent model with one, two and three refinement steps;
-- recurrent model with registration-to-pose gradient stopped;
-- recurrent model without wrong-plane ranking;
-- recurrent model with bounded affine-free versus unrestricted local field.
+- a from-scratch factorized CNN pose/registration control;
+- a from-scratch recurrent correlation-pyramid model;
+- a from-scratch windowed cross-attention pyramid after export preflight;
+- the selected family with one, four and eight shared-weight refinement steps;
+- the selected family with registration-to-pose gradient stopped;
+- the selected family without wrong-plane ranking;
+- the selected family with bounded integrated SVF versus raw displacement.
+
+Frozen AtlasPose followed by AtlasWarp is evaluated as a historical comparator
+but cannot enter training or initialize any release-eligible candidate.
 
 The development rule selects the smallest model within the prespecified practical-equivalence margin of the best candidate. Three iterations are the initial deployment hypothesis; more iterations require measured accuracy gain and remain within runtime limits.
 
@@ -42,17 +47,25 @@ Increase to 200k and up to 500k unique synthetic views only if learning and vali
 
 ## Curriculum
 
-1. **Warm start:** exact/near-exact atlas planes, mild deformation, supervised pose and flow.
+1. **Foundational exact supervision:** train every randomly initialized branch
+   on exact/near-exact atlas planes, mild deformation, supervised pose and flow.
 2. **Scheduled closed loop:** a growing fraction of model-predicted poses and nearby hard negatives.
 3. **Full closed loop:** recurrent predictions, full artifact distribution, difficult anatomical negatives and mixed real/synthetic batches.
 
-If existing AtlasPose/dense weights are reused, the source checkpoint hash, transferred layers and reset layers are documented. An initialization ablation distinguishes architecture improvement from inherited weights.
+No prior project or external vision weights are used by the primary release
+screen. Legacy-seeded runs remain clearly labelled exploratory diagnostics and
+cannot be promoted. A later transfer-learning sensitivity analysis may be
+reported separately, but it cannot determine the shipped weights.
 
 ## Loss families
 
 - physical plane-anchor loss and component pose likelihood;
 - coarse-bin/residual loss where used;
-- positive-versus-hard-negative compatibility ranking;
+- singleton positive-versus-hard-negative compatibility ranking on exact
+  synthetic pairs;
+- Product-5 acceptable-set listwise cross-entropy over the frozen
+  sub-resolution set (AP 25/50 um and L--R/D--V 0.25/0.5 degrees), with
+  balanced signed resolvable negatives in every real list;
 - forward and inverse visible-pixel endpoint error on exact synthetic pairs;
 - label/hierarchy and boundary correspondence;
 - inverse and gradient-inverse consistency;
@@ -67,7 +80,7 @@ Loss weights are chosen on development data within a logged search budget. They 
 Every run records:
 
 - full resolved configuration and git commit;
-- all source/data/manifest/pretrained hashes;
+- all source/data/manifest hashes and the empty learned-checkpoint dependency receipt;
 - seed, optimizer, learning-rate schedule, batch size and precision;
 - training/validation curves by component and artifact stratum;
 - throughput, wall time, GPU utilization, peak memory and checkpoint times;

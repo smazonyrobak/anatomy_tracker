@@ -250,3 +250,70 @@ truth-win does not, the failure is reviewer domain transfer. If neither passes,
 the limitation is the real-image registration evidence rather than the review
 head alone. Architecture size, recurrence count and loss weights remain fixed
 until this causal classification is complete.
+
+### Product-5 offset audit result
+
+The corrected v2 diagnostic completed on the fixed 96-section panel without
+changing any model weights. Version 1 is invalidated only because one
+unit-inappropriate `1e-5` scalar tolerance rejected an AP metadata round-trip
+residual of `0.0001945 um`. Version 2 uses prespecified component tolerances of
+`0.01 um` AP and `0.0001 deg` L--R/D--V. Its pair CSV and orientation CSV are
+byte-identical to v1, and all pose, evidence, ranking and top-1 results are
+unchanged.
+
+Frame integrity passed. The asymmetric positive-determinant self-render chose
+the unreflected zero-offset plane under frozen registration evidence. H, V and
+H+V reflections all worsened both registration evidence and reviewer margin,
+with paired intervals below zero. O/U/V rederivation passed all three physical
+components. A frame or reflection bug therefore does not explain the
+Product-5 ranking failure.
+
+The prespecified taxonomy gives a mixed result and no gate is moved to force a
+cleaner label. Resolvable offsets were ranked correctly by frozen registration
+with specimen-cluster truth-win `0.894` and 95 percent interval
+`[0.878, 0.909]`; the reviewer reached `0.765 [0.732, 0.795]`. Removing nearest
+candidates raised current-list top-1 from `14/96` to `58/96` for registration
+and from `8/96` to `32/96` for the reviewer. However nearest-neighbour
+registration remained weakly above the null (`0.566 [0.524, 0.608]`) and its
+margin interval did not contain zero, so the formal symmetric
+sub-resolution-ambiguity criterion did not pass. Because reviewer performance
+on resolvable pairs was also above chance, the pure reviewer-domain-transfer
+criterion did not pass either. Exhaustive resolvable-only top-1 remained low
+(`16/96` registration; `2/96` reviewer), demonstrating severe multi-candidate
+crowding and direction-specific transfer rather than a single frame failure.
+
+For future cold-start experiments, this evidence changes Product-5 ranking
+supervision but does not relax evaluation. Real Product-5 lists use a
+prespecified acceptable-set cross-entropy
+`logsumexp(all logits) - logsumexp(logits[A])`, where `A` contains the metadata
+plane and sub-resolution candidates at AP 25/50 um and L--R/D--V 0.25/0.5
+degrees. Every real list must also contain balanced signed resolvable
+negatives. Exact synthetic pairs retain singleton hard-label cross-entropy and
+all fine offsets. Exact Product-5 top-1 remains reported descriptively; the
+loss policy is not a claim that the audit proved symmetric label noise.
+
+The v2 report, pair CSV and orientation CSV SHA-256 values are respectively
+`d61e2ec6077639111ed59d1d0909f7ca6f1043d3138dc074d1580df6f464ee00`,
+`8b08f647a580ae80344865adfd7d24727a663a36602d4ca8e4561e338dd2bbc6`,
+and `b06a756d05c6aa8dbcb577d8e54519392e2a875cf9a741fcb44411f63574d0ab`.
+There were 3,456 requested pairs, 3,393 scored pairs and 63 declared
+out-of-domain pairs.
+
+### Independent architecture decision
+
+The warm-start joint implementation is now classified as a legacy-seeded
+systems prototype and development diagnostic. It contains 30.91 million
+parameters, of which 96.7 percent belong to the inherited AtlasPose branch,
+2.5 percent to the inherited dense registrar and only 0.8 percent to the new
+reviewer. It has no recurrent hidden state and its high-resolution candidate
+path is too slow to be presumed suitable for the final task. None of its
+weights or inherited architectural constants is promotion eligible.
+
+Release-eligible models start from random initialization with an empty learned
+checkpoint dependency list. The matched screen compares a compact factorized
+CNN control, a recurrent local-correlation/ConvGRU pyramid, and a windowed
+cross-attention pyramid after export preflight. AtlasPose, AtlasWarp and
+DeepSlice remain frozen comparators only. The deterministic CCF renderer,
+coordinate contracts, data generators, constraint solver and benchmark
+infrastructure are retained because they are neutral task machinery rather
+than learned legacy components.
