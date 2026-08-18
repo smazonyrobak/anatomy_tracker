@@ -1,4 +1,40 @@
-# AtlasPose development and release protocol
+# Training and release protocol
+
+## Independent joint model (current development track)
+
+The current candidate is trained from random initialization as one recurrent
+pose-and-deformation model. It has no learned dependency on AtlasPose,
+AtlasWarp, DeepSlice or an ImageNet backbone; those systems remain comparators
+only. The implementation is split into the hash-bound data contract
+(`independent_joint_data.py`), model families (`independent_joint_model.py` and
+`independent_joint_variants.py`) and audited trainer
+(`train_independent_joint.py`). No long architecture-screen result or accuracy
+claim is recorded yet.
+
+The source input is grayscale plus an optional tissue-outline channel and an
+explicit outline-availability flag. Training mixes 35% accurate outlines on a
+black exterior, 35% deliberately imperfect outlines on a black exterior and
+30% absent outlines with the acquired background retained. Tissue damage and
+dense-validity masks are separate supervision and can never be inferred from
+the model-input outline. Accordingly, later evaluation reports automatic
+no-user-outline, common automatic-outline and smart-brush-assisted tracks
+separately.
+
+Synthetic samples provide exact AP/L--R/D--V pose, similarity, affine-free SVF,
+forward/inverse maps and Allen labels. Product 5 provides pose and candidate
+ranking supervision only—never invented dense correspondence. Candidate order
+is shuffled, recurrence starts from the model initializer rather than the
+truth-centred candidate set, and only the true synthetic plane receives the
+single dense-registration loss. Checkpoints bind the random initial state,
+model graph, all three data streams, atlas assets, optimizer/schedule, animal
+IDs, EMA state and raw per-animal predictions.
+
+The pose head emits both point estimates and an uncalibrated full covariance.
+Calibration is deliberately deferred until the architecture is frozen, using
+animal-disjoint calibration-fit and calibration-check cohorts; until then these
+values are distributions produced by the model, not calibrated confidence.
+
+## Historical AtlasPose protocol
 
 AtlasPose predicts `[AP from bregma (um, anterior positive), L-R tilt (degrees), D-V tilt (degrees)]` from a coronal mouse-brain section. The auxiliary orientation logit resolves the 180-degree ambiguity left after smart-mask roll canonicalization; it is not another anatomical coordinate.
 

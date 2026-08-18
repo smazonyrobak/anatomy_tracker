@@ -321,3 +321,26 @@ DeepSlice remain frozen comparators only. The deterministic CCF renderer,
 coordinate contracts, data generators, constraint solver and benchmark
 infrastructure are retained because they are neutral task machinery rather
 than learned legacy components.
+
+### Cold-start implementation checkpoint
+
+Commits `9470464`, `addb64b` and `0517bce` implement the standalone recurrent
+model, matched factorized/attention controls, hash-bound synthetic and Product
+5 data adapters, and the audited cold-start trainer. Every learned parameter is
+randomly initialized; the checkpoint lineage rejects learned dependencies and
+binds the exact initial state, architecture graph, source/data/atlas hashes,
+training-animal IDs, optimizer schedule, EMA state and development-panel raw
+predictions.
+
+The input contract implements the optional-outline decision directly: 35%
+accurate outline with black exterior, 35% independently perturbed outline with
+black exterior and 30% no outline with acquired background. An explicit
+availability scalar distinguishes absence from an empty mask. Tissue damage,
+missing tissue and correspondence validity remain independent targets.
+
+At this checkpoint, 56 focused model/data/variant/trainer tests pass, including
+dynamic-batch ONNX Runtime execution, candidate-order randomization, three-step
+back-propagation through time, synthetic-only truth-plane dense supervision,
+map-direction/validity contracts, animal-disjoint EMA selection and atomic
+resume. These are implementation tests, not accuracy evidence. No long
+architecture-screen run or final benchmark has been launched.
