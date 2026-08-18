@@ -123,3 +123,38 @@ for the control and
 `4ea7b430c7e0d741cdb60cccbdf222997c85b93a3cc41294d0076a3afafe2532` /
 `700ec25b0c3c57da63a7a27fc674fb4def47da408cb853888fa5aa3e121feced`
 for the optimized window.
+
+## Staged 2,000-view development run
+
+Run `joint-development-5000-r4322` stopped at its prespecified 2,000-view
+decision point after 600 review-only, 1,000 geometry and 400 full-joint views.
+The same fixed validation panels were evaluated every 500 views: 48 synthetic,
+24 high-tilt synthetic and 96 specimen-disjoint Product-5 sections. This was a
+development experiment, not a release qualification.
+
+At 2,000 views, normal synthetic AP/L--R/D--V MAE was
+`30.64 um / 0.576 deg / 1.021 deg`, AP p95 was `73.04 um`, exact-region
+correspondence was `0.8817`, and macro Dice was `0.7522`. High-tilt AP/L--R/D--V
+MAE was `65.47 um / 1.282 deg / 1.418 deg`, with AP p95 `237.15 um`.
+Product-5 AP/L--R/D--V MAE was `22.80 um / 0.358 deg / 0.736 deg`.
+No invalid endpoints, coverage failures or skipped dense batches occurred.
+
+The wrong-plane reviewer learned on synthetic data: top-1 rank improved from
+`0.417` at 500 views to `0.583` at 2,000 views and hard-stratum rank reached
+`0.250`. Product-5 ranking cross-entropy improved monotonically, but its final
+top-1 rate was `0.062`, below the six-negative chance rate of `0.125`.
+High-tilt tails also remained outside the development guardrail. The run was
+therefore not resumed to 5,000 views. The next matched experiment keeps both
+pretrained components frozen and trains only the reviewer on mixed synthetic,
+high-tilt and Product-5 batches, isolating reviewer learning from warm-start
+forgetting before any lower-rate unfreezing experiment.
+
+The configuration SHA-256 was
+`14ea5221c10d8b189a0b1dcf7593cd77c021c877c48cf763eb0ac62178e524dd`.
+The 500/1,000/1,500/2,000 validation-report hashes were respectively
+`fd4c5d0684a8527ff6b317f6155349dcd2615b44e31bd749e4b256d90d7ce8f6`,
+`5aabf3d4f98de5c4277b967e2b7684183571f71215ce9306babcad1ca970ef63`,
+`d9411e74462b0ac7d51378c50ef165425d5e20420c361349be9d839a504837f4`,
+and `ea41b5e75f37e32fc97b5e32a664d414aaaab2a19a6a333262dd4b02350b4883`.
+The selected development checkpoint SHA-256 was
+`afcd2592419cd65b288965fdab38ed92d93095341e31f7e8a87361f60b91fe84`.
