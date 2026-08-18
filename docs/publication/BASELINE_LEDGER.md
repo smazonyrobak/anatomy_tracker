@@ -184,3 +184,40 @@ unfreeze is allowed only if every freeze, ranking, pose and retention gate
 passes. If Product-5 ranking fails while synthetic/high-tilt retention passes,
 the next experiment diagnoses the Product-5 negative lattice instead of
 unfreezing or enlarging the model.
+
+### Reviewer-only control result
+
+Run `joint-review-mixed-2000-r4322` used the same 5,000-view cosine schedule
+and a prespecified stop at 2,000 views, while keeping the AtlasPose initializer
+and dense registrar frozen throughout. Product-5 and high-tilt batches made up
+25 and 20 percent of training draws. At the endpoint, all 205 initializer
+tensors and all 180 registrar tensors were bit-for-bit equal to their warm
+starts. Fixed-panel initializer and teacher-pair dense metrics were exactly
+unchanged from the 500-view anchor. There were no invalid endpoints, skipped
+dense batches or coverage failures.
+
+| Panel | AP / L--R / D--V MAE | E | Top-1 | Ranking CE | Correspondence / Dice |
+|---|---|---:|---:|---:|---:|
+| Synthetic | 31.05 um / 0.711 deg / 1.046 deg | 1.905 | 0.583 | 1.152 | 0.8818 / 0.7623 |
+| High tilt | 70.21 um / 1.052 deg / 1.447 deg | 3.166 | 0.625 | 1.184 | 0.8291 / 0.6776 |
+| Product 5 | 22.25 um / 0.359 deg / 0.644 deg | 1.137 | 0.083 | 1.939 | not densely supervised |
+
+The Product-5 frozen-initializer `E` was `1.090`, so reviewer correction made
+it worse. Hard-synthetic top-1 was `0.188`. The control therefore failed the
+prespecified Product-5 top-1 and cross-entropy gates, hard-synthetic retention,
+synthetic `E` retention, and the requirement to improve Product-5 over its own
+initializer. Conservative backbone unfreezing is not authorized by this
+result. The next development step is a deterministic rank-by-offset audit of
+the Product-5 candidate lattice and label precision; model capacity and loss
+weights remain unchanged.
+
+The control configuration SHA-256 was
+`dfb4714d2cfc4e369e5d9ca3aab0ad81841dfe36ca20ac0953938c9500f9057b`.
+The 500/1,000/1,500/2,000 validation-report hashes were respectively
+`5683569d829ea0fd89a12c3e729a058ed1cb4b1f56cc401874bdad292e3d6120`,
+`0866c138502bed55f3ce84d783c0787807315764cfdda9b4d666288a4a47d4d1`,
+`c191b53427b93684b424588cff2bc81f9d2212c1244c598ff52063075169cebe`,
+and `aa3bd4ff5ba017a633931eecb35d292a1d8527709f49609b22b7d5c97da7cb09`.
+The final latest and validation-selected checkpoint hashes were
+`0b7a940ee586cf4f91a9dc72895b50136804c9b8164490f4ad37eda28aa52790`
+and `09ef228b2c97766cb284ed7b9b94a2fa833d4c5c503d037b8ab7d380c3ea406f`.
