@@ -366,3 +366,82 @@ and executed through DirectML; maximum absolute PyTorch/ORT differences were
 and explicit local-attention work but excludes elementwise operations and grid
 sampling. These measurements establish comparable feasibility only and do not
 rank accuracy.
+
+### Completed 2,000-step cold-start architecture pilot
+
+The development-only pilot defined by
+`training/configs/independent_architecture_development_screen.json` completed
+on 2026-08-18. It ran from source commit
+`750bc723241e8e1626ca197a4af517a897f72b88`; its protocol and shared panel
+contract SHA-256 values were respectively
+`6a04a27888a8293b3ffecaa5a08044ec8e12f252313b26c3d971d2a73057c882` and
+`b78af91f5022f49dd5d890faf33e42d9f6259e6f76b9d28148e5ed110a18f4c7`.
+All three runs reached 2,000 optimizer steps without a stderr record. The run
+root was
+`F:\AtlasJointTraining\runs\independent-architecture-screen-r4322\independent-joint-development-screen-v1`.
+The exact artifact paths and hashes are recorded in
+`publication/architecture_screen_pilot.yaml`.
+
+The audit reproduced each screen-setup, source, architecture, initial-state,
+panel-manifest, trainer-lineage and best-checkpoint hash. Every model and EMA
+checkpoint tensor inspected was finite. The three runs used empty learned
+checkpoint dependency lists; 2,098 Product-5 training animals and 112
+validation animals were disjoint; and calibration and final-test access were
+both false. Each best checkpoint was selected from the EMA state and contained
+the raw predictions from the freshly evaluated panel that selected it.
+
+| Family | Parameters | Best step | Best internal metric | Step-2,000 metric | Product-5 no-outline AP MAE / bias / p95 (um) | L--R / D--V MAE (deg) | Ranking NLL / top-1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| recurrent correlation/ConvGRU | 1,369,070 | 500 | 13.30342795588076 | 14.788587550073862 | 813.3569 / 54.2878 / 1653.8094 | 0.7754 / 4.2166 | 1.9460069 / 1 of 9 |
+| factorized stateless CNN | 1,387,342 | 250 | 13.306698899902404 | 15.537300672382116 | 801.8859 / 90.3684 / 1687.3277 | 0.7734 / 4.1840 | 1.9462054 / 0 of 9 |
+| windowed attention/ConvGRU | 1,393,454 | 500 | 13.302073648571968 | 16.495703548192978 | 813.6517 / 53.8670 / 1653.9488 | 0.7754 / 4.2287 | 1.9460236 / 0 of 9 |
+
+These are development diagnostics, not benchmark results. The p95 values in
+the table use NumPy's linear percentile definition on nine raw per-animal
+errors. All seven candidates were valid for those cases, so uniform ranking
+NLL is `log(7) = 1.9459101490553132`. The internal composite used 0.50
+Product-5 absent-outline, 0.25 paired hard-synthetic absent-outline and 0.25
+hard high-tilt absent-outline panels. Only 9 of the 30 Product-5 panel animals
+were assigned to the primary absent-outline mode; 10 had accurate and 11 had
+imperfect outlines. That small repeatedly consumed primary subset is
+insufficient for an architecture claim. A future decision panel should run
+the full real panel without an outline and treat paired outline conditions as
+a separate sensitivity analysis.
+
+No winner was selected. The numerically lowest composite, from the attention
+model, was only 0.0102 percent below the smaller recurrent-correlation model;
+the largest best-score separation was 0.0348 percent. More importantly, all
+three missed the frozen AP-MAE, AP-bias, AP-tail and D--V eligibility limits,
+their wrong-plane ranking was indistinguishable from uniform at this panel
+size, and none of the declared correspondence, macro-Dice, Jacobian or
+end-to-end runtime gates was evaluated by the pilot runner. Each model's
+metric worsened after its early best checkpoint. These observations diagnose
+an inadequate early training regimen; they do not rank the fusion families.
+
+The run followed its own frozen 2,000-step development contract, but that
+contract did not implement the publication-level architecture-decision
+protocol. The latter specifies a 20,000--50,000-view comparison and a staged
+foundation-to-closed-loop curriculum. This pilot instead presented 4,000
+batch items, cycled clean, mild and hard synthetic cases from the start,
+introduced high-tilt and Product-5 batches immediately, and always used three
+updates. A post-run audit also found that applying the 35/35/30 outline
+allocation independently to every two-sample training batch rounded each
+batch to one accurate, one imperfect and zero absent-outline examples. The
+realized training mix was therefore 50/50/0, despite the correct declared
+global 35/35/30 contract; this directly invalidates the pilot as a test of
+no-outline generalization. Future runs precompute one global hash-bound
+outline plan before slicing it into batches. The runner also had no
+cross-family eligibility decision and the
+practical-equivalence margin had no frozen numeric value. The pilot must
+therefore remain a systems and regimen diagnostic. Its development panel is
+marked consumed and cannot become calibration or final-test evidence.
+
+Finally, each final training-batch receipt contained two non-finite AP
+covariance entries serialized as null, although the corresponding Cholesky
+factors, best-panel outputs and checkpoint tensors were finite. The shared
+cause was float16 overflow when forming a covariance in physical units under
+AMP; this was not an architecture-specific failure. Commit
+`f8547db78016a2b260572944459acc86247605d6` moves the probabilistic Cholesky and
+covariance branch to float32 and adds an autocast/export regression test. The
+completed pilot artifacts retain their original source lineage and are not
+rewritten or promoted after that fix.

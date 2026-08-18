@@ -1,0 +1,199 @@
+schema_version: "1.0"
+status: "completed_development_diagnostic_no_winner"
+recorded_date: "2026-08-18"
+purpose: "Machine-readable receipt for the completed 2,000-step cold-start architecture pilot; not a benchmark or architecture decision."
+
+lineage:
+  training_source_commit: "750bc723241e8e1626ca197a4af517a897f72b88"
+  protocol_file: "training/configs/independent_architecture_development_screen.json"
+  protocol_file_sha256: "584ee34eeb380f7c2acf3cf3e619451667ac6d4d11af0709db5238b2f9f81a9f"
+  protocol_contract_sha256: "6a04a27888a8293b3ffecaa5a08044ec8e12f252313b26c3d971d2a73057c882"
+  development_panel_contract_sha256: "b78af91f5022f49dd5d890faf33e42d9f6259e6f76b9d28148e5ed110a18f4c7"
+  development_panel_registry:
+    path: 'F:\AtlasJointTraining\runs\independent-architecture-screen-r4322\development_panel_6a04a27888a8293b3ffecaa5a08044ec8e12f252313b26c3d971d2a73057c882.json'
+    sha256: "2bf09c026f2cf883eda86fb74b948d776abc7cb891d6a410ada1e09eae03f183"
+  learned_checkpoint_dependencies: []
+
+storage:
+  run_root: 'F:\AtlasJointTraining\runs\independent-architecture-screen-r4322\independent-joint-development-screen-v1'
+  launcher_root: 'F:\AtlasJointTraining\runs\independent-architecture-screen-r4322\launcher'
+  per_run_artifact_files:
+    screen_receipt_sha256: "screen_receipt.json"
+    best_checkpoint_sha256: "best.pt"
+    latest_checkpoint_sha256: "latest.pt"
+    best_panel_sha256: "development_panel_best.json"
+    latest_panel_sha256: "development_panel_latest.json"
+  launcher_log_files:
+    recurrent_correlation_convgru: ["leader.stdout.log", "leader.stderr.log"]
+    factorized_stateless_cnn: ["factorized.stdout.log", "factorized.stderr.log"]
+    windowed_attention_convgru: ["attention.stdout.log", "attention.stderr.log"]
+
+data_and_access:
+  product5_training_animals: 2098
+  product5_validation_animals: 112
+  training_validation_animal_overlap: 0
+  training_product5_record_identities: 109148
+  optimizer_steps: 2000
+  batch_size: 2
+  source_presentations: 4000
+  development_product5_animals: 30
+  development_product5_outline_counts:
+    accurate: 10
+    imperfect: 11
+    absent_primary: 9
+  paired_hard_synthetic_per_outline_mode: 8
+  hard_high_tilt_absent: 8
+  development_panel_historically_consumed: true
+  calibration_access: false
+  final_test_access: false
+
+metric_contract:
+  direction: "minimize"
+  primary_endpoint: "absent/no-user-mask"
+  panel_weights:
+    product5_absent: 0.50
+    paired_outline_absent: 0.25
+    high_tilt_absent: 0.25
+  component_weights:
+    pose: 1.0
+    ranking: 0.25
+    dense_map: 0.50
+    dense_region: 0.25
+    dense_validity: 0.10
+  product5_absent_candidate_count: 7
+  uniform_ranking_nll: 1.9459101490553132
+  derived_physical_metric_note: "AP p95 uses numpy.percentile(..., 95) with the default linear method on the nine per-animal absent-outline errors."
+
+decision:
+  winner: null
+  eligible_architectures: []
+  performance_claim: false
+  reason:
+    - "All candidates missed declared AP MAE, absolute AP bias, AP p95 and D-V MAE gates."
+    - "Wrong-plane ranking remained at the uniform-candidate baseline."
+    - "Best internal scores differed by at most 0.0348 percent and all models deteriorated after an early best checkpoint."
+    - "The pilot did not evaluate all publication-level eligibility gates or implement a numeric practical-equivalence margin."
+
+protocol_scope_difference:
+  pilot: "2,000 optimizer steps, batch two, three recurrent applications throughout, and clean/mild/hard, high-tilt and Product-5 streams from the outset"
+  realized_training_outline_mix:
+    accurate: 0.50
+    imperfect: 0.50
+    absent: 0.00
+  outline_rounding_defect: "The declared 35/35/30 allocation was rounded independently inside each two-sample batch; future runs must slice a single global hash-bound outline plan."
+  publication_decision_protocol: "20,000-50,000 views with staged exact foundation, one-step/teacher transition and full closed-loop training"
+  disposition: "Retain as systems/regimen diagnostic; do not freeze an architecture from these results."
+
+known_issue:
+  name: "AMP physical-covariance overflow"
+  affected_raw_records_per_run: 2
+  affected_field: "last_training_raw_predictions[*].initializer_covariance[0][0]"
+  unaffected_evidence:
+    - "best development-panel prediction tensors"
+    - "model, EMA and optimizer checkpoint tensors"
+    - "stored Cholesky factors"
+  correction_commit: "f8547db78016a2b260572944459acc86247605d6"
+  correction: "Compute the probabilistic Cholesky and physical covariance branch in float32 under AMP and test autocast/ONNX finiteness."
+  artifacts_rewritten_after_fix: false
+
+runs:
+  recurrent_correlation_convgru:
+    architecture_name: "independent-leader-correlation-convgru-t3"
+    architecture_contract_sha256: "8a0014f14a50f2a9b9da6c57e7dc91521dccf35845c07918431fa9fb936efebd"
+    initial_state_sha256: "370934a18d8d873c3ced7a0ed17a963b929c9ceb452190e64c92047f7f1136a6"
+    screen_setup_sha256: "6b0167959044cdaebba41cc36d42710193703c20755b1467690404c84d96d8cf"
+    trainer_lineage_sha256: "3243036394ce3274ff1892c87849c916cc1407c53982a5bf54f504fcfddc8646"
+    parameter_count: 1369070
+    best_step: 500
+    best_internal_metric: 13.30342795588076
+    final_step: 2000
+    final_internal_metric: 14.788587550073862
+    product5_absent_n: 9
+    product5_absent:
+      ap_mae_um: 813.3569268120659
+      ap_bias_um: 54.28784857855903
+      ap_p95_um: 1653.8094482421873
+      lr_mae_deg: 0.775398394299878
+      dv_mae_deg: 4.2166079175141125
+      ranking_nll: 1.9460068846081127
+      ranking_top1_count: 1
+    run_path: 'F:\AtlasJointTraining\runs\independent-architecture-screen-r4322\independent-joint-development-screen-v1\independent-leader-correlation-convgru-t3'
+    artifacts:
+      screen_receipt_sha256: "9912db9cee5a94227b64881b664306a2a6f4ae795b4fe5b5fb565ee0edb7ecdc"
+      best_checkpoint_sha256: "87767c29079840b64035761a42bc3c0433b296b4ac171d16890c966e13936064"
+      latest_checkpoint_sha256: "0078f8062ee017cea7e3d6239c78ae35149face06444679ba7b141d9868f6f5d"
+      best_panel_sha256: "734da4fd7d7c86d15fe4c09bdb5e27265a93ce7862813d8316031e3b94890002"
+      latest_panel_sha256: "e8ac6ff8928f75b0af7a3709fbca4f9e68840f7b90d8e93c2d04072ebeb71014"
+      stdout_sha256: "f8e1401ecaa991a0d529931f210a8056fa39ddf229bda841a7d3f71740e7ec4b"
+      stderr_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+  factorized_stateless_cnn:
+    architecture_name: "independent-factorized-stateless-t3"
+    architecture_contract_sha256: "0208d0138d5b6ec7114ad38758269e10b029c7970a1545cc9ee7af7da2af4a2a"
+    initial_state_sha256: "738a384a65a22d296da0fd57a763f8ca74be1cfb43c8c173b4ff868aa66c73b0"
+    screen_setup_sha256: "2a1554913dfd4ac3057bd29945f7dfde590aaf79161042524ffdd750cf26298e"
+    trainer_lineage_sha256: "444314d4a00c8b29fe3828008261c6923a1eaa83cc82cbf94c2debbfb0d8d365"
+    parameter_count: 1387342
+    best_step: 250
+    best_internal_metric: 13.306698899902404
+    final_step: 2000
+    final_internal_metric: 15.537300672382116
+    product5_absent_n: 9
+    product5_absent:
+      ap_mae_um: 801.8858981662327
+      ap_bias_um: 90.36844211154514
+      ap_p95_um: 1687.3276855468748
+      lr_mae_deg: 0.7733542402792308
+      dv_mae_deg: 4.183969752656089
+      ranking_nll: 1.9462053698755217
+      ranking_top1_count: 0
+    run_path: 'F:\AtlasJointTraining\runs\independent-architecture-screen-r4322\independent-joint-development-screen-v1\independent-factorized-stateless-t3'
+    artifacts:
+      screen_receipt_sha256: "8e5a081497ea4c6014f0f865c5b090c881be9d726bf9ee814e9eb46d254a4893"
+      best_checkpoint_sha256: "b3f5514acea403068f3e9ce60f1177d52762e5fe264966be4c2123239817865c"
+      latest_checkpoint_sha256: "272f49461d0d6259f96dec319b7d3795b3217a3834292aeb80e030e1410b9cc2"
+      best_panel_sha256: "73fc723b66044f4819fbe52333ac5817733b6b9b1c4ea049bede196e00f31365"
+      latest_panel_sha256: "e0fa3b130fa14b3ce1bfe13d68ef0466c0119e270f45429a88c41e6e14a13564"
+      stdout_sha256: "ba11d96cffd52810d50bfdd04d4450417d58a074a8aa95cf5e8e7d85c3a47830"
+      stderr_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+  windowed_attention_convgru:
+    architecture_name: "independent-windowed-attention-convgru-t3"
+    architecture_contract_sha256: "80424eebba13a9f3f1f6e4c8de87c393b738364eae345ad04b940b7decd80ca1"
+    initial_state_sha256: "b9025708890c8e5470d1d91aaf268fb033860f72ee61e5a59b6f8c7d8851c24b"
+    screen_setup_sha256: "42e19e75a4542099b48c5da60496810750a23638988f09da92a2a7cc61fafe0e"
+    trainer_lineage_sha256: "53e687615d658ceff2bd06d1d266d44f87a5b518358134fad08295a0ae1c3d59"
+    parameter_count: 1393454
+    best_step: 500
+    best_internal_metric: 13.302073648571968
+    final_step: 2000
+    final_internal_metric: 16.495703548192978
+    product5_absent_n: 9
+    product5_absent:
+      ap_mae_um: 813.6516723632812
+      ap_bias_um: 53.86701795789931
+      ap_p95_um: 1653.9488037109372
+      lr_mae_deg: 0.7754278958050741
+      dv_mae_deg: 4.228679340746668
+      ranking_nll: 1.9460236493106686
+      ranking_top1_count: 0
+    run_path: 'F:\AtlasJointTraining\runs\independent-architecture-screen-r4322\independent-joint-development-screen-v1\independent-windowed-attention-convgru-t3'
+    artifacts:
+      screen_receipt_sha256: "f9e7ace9251fbd45c5a807b8e162a8e37aa4f09dabd90e0d09ed4d0ccb483fc7"
+      best_checkpoint_sha256: "88e8519a2effd5735f5aa95142ab48d58ebb9e44d1612ae6036fb2b155675a05"
+      latest_checkpoint_sha256: "13fe8fcb6c7923566c805e6ab41dec2d2cd88d58fc47bb72efe47514006096f6"
+      best_panel_sha256: "e143126875ece5444994fd77e707faee64e3e5fa0a298367072c1919d56d9b48"
+      latest_panel_sha256: "78cf3d9ecd0df88c788f6d965ce7a95b091a6dedabbaa739741bd3cc25f5b853"
+      stdout_sha256: "92c515b491e0ddefdd8d11a4ceaaaed35618d2c041b8a4ca30d646680055128a"
+      stderr_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+integrity_audit:
+  screen_setup_hashes_reproduced: true
+  source_and_architecture_hashes_reproduced_at_training_commit: true
+  shared_panel_registry_matches_all_receipts: true
+  best_panel_manifest_and_metric_recomputed: true
+  best_checkpoint_binary_hashes_match_receipts: true
+  best_checkpoints_use_ema: true
+  latest_steps_equal_2000: true
+  checkpoint_tensor_nonfinite_count: 0
+  stderr_bytes_each_run: 0
