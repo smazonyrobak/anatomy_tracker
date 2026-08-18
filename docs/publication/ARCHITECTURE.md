@@ -30,7 +30,8 @@ selected model.
 Inputs:
 
 - grayscale histology section in the orientation selected by the user;
-- visible-tissue mask, obtained automatically in automatic mode or supplied by the smart brush in assisted mode;
+- optional tissue outline, obtained automatically in automatic mode or supplied by the smart brush in assisted mode;
+- an explicit outline-availability indicator, so absence of a mask is not confused with a section that fills the canvas;
 - differentiably rendered Allen CCF template/annotation planes at the current pose;
 - recurrent state from the preceding refinement step.
 
@@ -96,6 +97,23 @@ Literal stem-weight sharing is a controlled ablation, not a premise. The
 publishable coupling is joint optimization and recurrent feedback through the
 shared state and structural feature space, not cosmetic reuse of every
 convolution.
+
+## Optional smart-brush conditioning
+
+The smart-brush outline is useful side information, not anatomical truth and
+not a mandatory dependency. When an outline is available, histology intensity
+outside it is set to black and the outline is supplied as its own channel. An
+availability channel distinguishes this assisted input from the automatic
+fallback, which retains the acquired background and supplies no outline.
+
+Training deliberately mixes accurate outlines, realistically perturbed
+outlines and absent outlines. Perturbations include independent boundary
+jitter, erosion/dilation, small false-positive islands and false-negative
+gaps. The model-input outline remains separate from the synthetic
+visible/damaged/missing-tissue masks used to gate registration losses. This
+prevents a brush mistake or a real tear from being treated as deformation
+ground truth. Automatic/no-user-mask and smart-brush-assisted performance are
+reported as separate operating modes.
 
 ## Deformation representation
 

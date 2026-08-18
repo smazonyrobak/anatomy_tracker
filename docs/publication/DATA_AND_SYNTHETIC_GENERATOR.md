@@ -35,7 +35,8 @@ Each generated sample records:
 - fixed template, fixed labels and brain mask;
 - moving grayscale section and pre-artifact image;
 - exact forward/inverse maps and stationary velocity when applicable;
-- visible, damaged, missing and model-input masks;
+- visible, damaged and missing-tissue masks;
+- model-input outline, outline-availability flag, outline perturbation and masking mode;
 - artifact types, parameters and severity;
 - positive plane and prespecified wrong-plane candidates.
 
@@ -70,6 +71,21 @@ All model inputs are grayscale. Include clean through severe combinations of:
 - label-conditioned synthetic appearance to break dependence on CCF template intensity.
 
 The proposed initial mixture is 10% clean, 45% mild, 35% moderate and 10% severe. Exact frequencies are frozen after a blinded visual generator audit and before large-scale training.
+
+## Outline and background curriculum
+
+The deployment model must not require a manually painted outline. Each source
+view is assigned one of three hash-bound input modes: accurate outline with a
+black exterior, realistically imperfect outline with a black exterior, or no
+outline with the acquired/synthetic background retained. An explicit
+availability input tells the model which contract applies. Outline errors are
+generated independently of tissue damage and dense-flow validity; they never
+alter the exact anatomical correspondence targets.
+
+Validation retains the same underlying cases across three separately named
+tracks: automatic with no user outline, a common frozen automatic-outline
+sensitivity analysis, and smart-brush-assisted registration. The public
+automatic comparison cannot silently use a hand-corrected mask.
 
 ## Generator QA
 

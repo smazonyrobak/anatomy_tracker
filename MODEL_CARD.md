@@ -17,7 +17,7 @@ The leading candidate is one randomly initialized recurrent correlation-pyramid 
 ## Inputs
 
 - grayscale whole coronal section;
-- visible-tissue mask, automatic or user assisted;
+- optional automatic or smart-brush tissue outline plus an explicit availability indicator;
 - Allen CCFv3 template/annotation volume rendered internally;
 - optional inference constraints, handled outside model weights.
 
@@ -48,6 +48,7 @@ The model must pass separate pose-only, correct-plane warp-only and end-to-end t
 - Synthetic accuracy cannot establish real-histology performance.
 - Human consensus is uncertain and not an absolute geometric truth.
 - Development compatibility/risk scores are not calibrated probabilities.
+- Smart-brush-assisted results depend on user outline quality and are reported separately from fully automatic results.
 - Pose credible regions and downstream trajectory/region probabilities may be
   shown as confidence only after animal-held-out calibration coverage passes.
 - The model is scoped to whole coronal adult mouse-brain sections and must not be assumed valid for partial fields, other species, sagittal/horizontal sections or clinical decisions.

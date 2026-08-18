@@ -1,4 +1,4 @@
-schema_version: "1.0"
+schema_version: "1.1"
 status: "frozen_before_cold_start_training"
 created_date: "2026-08-18"
 purpose: "Select the smallest self-contained joint pose/deformation architecture that survives matched development gates."
@@ -17,6 +17,19 @@ independence:
     - "deterministic atlas renderer"
     - "synthetic geometry and artifact generators"
     - "constraint solver and benchmark infrastructure"
+
+input_conditioning:
+  channels: ["grayscale", "tissue outline", "outline available"]
+  modes:
+    accurate_outline_black_background: 0.35
+    perturbed_outline_black_background: 0.35
+    no_outline_acquired_background: 0.30
+  perturbations: ["boundary jitter", "erosion", "dilation", "false-positive islands", "false-negative gaps"]
+  invariant: "Model-input outline is never the dense-validity, damaged-tissue or missing-tissue target."
+  validation_tracks:
+    primary: "automatic without a user outline"
+    sensitivity: "one frozen automatic outline procedure shared fairly where applicable"
+    assisted: "user smart-brush outline"
 
 candidates:
   factorized_cnn_control:

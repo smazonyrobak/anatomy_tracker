@@ -27,6 +27,10 @@ execute it, but must not repeatedly inspect final-test animals.
 - Compare identical raw cases against frozen DeepSlice modes, relevant
   expert-assisted tools and the frozen legacy pipeline under clearly separated
   automatic and assisted tracks.
+- Report the proposed method without a user mask as the primary automatic
+  track. Report one frozen automatic-outline sensitivity track and a separate
+  smart-brush-assisted track; never give only the proposed method a manually
+  corrected outline in an automatic comparator claim.
 - Predefine physical landmark registration error as the primary anatomical
   endpoint. Also report corresponding-plane distance, AP/L--R/D--V errors,
   regional overlap and boundaries, topology, failures, abstentions and human
