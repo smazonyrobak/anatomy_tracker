@@ -221,3 +221,32 @@ and `aa3bd4ff5ba017a633931eecb35d292a1d8527709f49609b22b7d5c97da7cb09`.
 The final latest and validation-selected checkpoint hashes were
 `0b7a940ee586cf4f91a9dc72895b50136804c9b8164490f4ad37eda28aa52790`
 and `09ef228b2c97766cb284ed7b9b94a2fa833d4c5c503d037b8ab7d380c3ea406f`.
+
+### Prespecified Product-5 offset audit
+
+Before consuming its result, the diagnostic cohort was fixed to the same 96
+validation sections and the control's final EMA state. Each metadata plane is
+paired independently with signed AP offsets of 25, 50, 100, 250, 500 and
+1,000 um and signed L--R/D--V offsets of 0.25, 0.5, 1, 2, 5 and 10 degrees.
+No weights are updated. Offsets of at least 100 um AP or 1 degree tilt are
+declared resolvable; 25 um and 0.25 degree offsets are the nearest-neighbor
+stratum. Product-5 sections are 100 um thick and their within-specimen adjacent
+AP spacing has 5th/median/95th percentiles of 91.88/96.24/99.84 um.
+
+Frame integrity requires metadata O/U/V rederivation to agree within float32
+tolerance, a known asymmetric atlas self-render to prefer zero offset without
+reflection, and no H, V or H+V reflected real-source variant to improve both
+frozen registration evidence and reviewer margin with a paired 95 percent
+interval excluding zero. A frame failure is repaired before any retraining.
+
+Sub-resolution ambiguity is diagnosed only if frame integrity passes,
+resolvable offsets have a pooled truth-win Wilson lower bound above 0.5, the
+nearest-neighbor truth-win interval contains 0.5 with a margin interval
+containing zero, and removing nearest neighbors improves reconstructed top-1
+by at least 0.10 absolute. In that case, real-section training uses an explicit
+tolerance/tie policy instead of unique hard labels at sub-resolution offsets.
+If frozen registration evidence passes on resolvable offsets but reviewer
+truth-win does not, the failure is reviewer domain transfer. If neither passes,
+the limitation is the real-image registration evidence rather than the review
+head alone. Architecture size, recurrence count and loss weights remain fixed
+until this causal classification is complete.
