@@ -541,3 +541,47 @@ does not authorize architecture promotion or calibration/final-test access.
 The sole state artifact is an atomic resume state, explicitly not a selected
 model checkpoint. Exact receipt, state, raw-prediction and log hashes are in
 `publication/pose_identifiability_diagnostic.yaml`.
+
+### Spatial-moment pose-readout diagnostic
+
+The authorized spatial-readout ablation ran from commit
+`c72439b62463573d8657d04dae0cc4a908b7b257` under config contract
+`85b50df71447ce8c7340672b388a3b0896dc0cf66f3ace4246fa2c863de7e746`.
+It added four learned spatial-softmax maps, each summarized by two means, two
+variances and one covariance, to the existing multilevel global-average pose
+context. This added 4,268 parameters (0.3117 percent) without changing the
+fixed absent-outline panel contract, latent poses, nuisance assignments,
+training schedule, losses, optimizer, seed or gates. It remained independently
+random-initialized with an empty learned-checkpoint dependency list; Product-5,
+calibration and final-test access were false.
+
+| Diagnostic | Parameters | Seen AP / L--R / D--V bin accuracy | Seen AP / L--R / D--V MAE | Seen physical error | Held AP / L--R / D--V MAE | Held physical error / improvement over prior |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Global-average base | 1,369,070 | 0.3125 / 0.6458 / 0.7917 | 1405.29 um / 9.406 deg / 7.684 deg | 1549.72 um | 1425.32 um / 12.711 deg / 15.263 deg | 1673.21 um / -0.1922 |
+| Spatial moments | 1,373,338 | 0.3750 / 0.8542 / 0.9167 | 1489.23 um / 3.989 deg / 3.247 deg | 1480.73 um | 1400.53 um / 13.817 deg / 10.060 deg | 1539.11 um / -0.0966 |
+
+The 300-update run completed with zero non-finite training or evaluation
+values. Its post-warm-up clipped fraction was `0.3814815`, below the frozen
+`0.50` limit. Spatial moments materially improved seen-transform tilt
+decoding: D--V bin accuracy passed its `0.90` gate, L--R reached `0.8542`, and
+their seen MAEs fell by `5.418` and `4.437` degrees. Seen physical error fell
+by `68.99 um`, and held physical error fell by `134.11 um` relative to the
+base diagnostic.
+
+The ablation did not solve the task. Seen AP accuracy was only `0.375` against
+the `0.95` gate and its AP MAE worsened by `83.94 um`. On held transforms,
+AP bin accuracy fell, L--R MAE worsened, every held MAE gate failed, and the
+physical error remained 9.66 percent worse than the constant-pose prior.
+Residual learning was worse than the zero-residual bin-centre baseline on all
+axes in both partitions. The terminal classification therefore remains
+`pose-representation-not-identifiable-on-seen-transforms`.
+
+This is immutable negative development evidence, not a benchmark, performance
+claim, architecture selection or promotion decision. It does not authorize a
+longer run or gate changes. The only authorized next experiment is a matched
+supervised source-view canonicalization ablation on this consumed construct:
+global-average base plus canonicalizer versus spatial moments plus the
+identical canonicalizer. Exact lineage, result, raw-record, state and artifact
+hashes are recorded in
+`publication/spatial_moment_pose_identifiability_diagnostic.yaml`; the original
+artifacts were not rewritten.

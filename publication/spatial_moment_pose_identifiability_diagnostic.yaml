@@ -1,0 +1,254 @@
+schema_version: "1.0"
+status: "completed_development_diagnostic_not_identifiable"
+recorded_date: "2026-08-18"
+purpose: "Immutable negative-evidence record for the spatial-moment pose-readout diagnostic; not a benchmark, accuracy claim, or model-selection result."
+
+lineage:
+  source_commit: "c72439b62463573d8657d04dae0cc4a908b7b257"
+  source_commit_binding: "Every frozen source hash in the config and receipt matches the tracked bytes at the source commit."
+  config_path: "training/configs/independent_pose_identifiability_spatial_moment_300_r4322.json"
+  config_file_sha256: "3ed757b9c9fef61e28bafbf5c669bb6edc8a6ee4ee29d2c565375c47a01b239d"
+  config_contract_sha256: "85b50df71447ce8c7340672b388a3b0896dc0cf66f3ace4246fa2c863de7e746"
+  setup_sha256: "0bfe14192fe06cf9e2fa5f3d8c0c729e34b318894f7dbc7bbd38fe6ee11432de"
+  initial_state_sha256: "2724c4ed333a01957601c54581e43c3a86affb93c7d35499d400abb53356c8a6"
+  final_model_state_sha256: "e7bdd707e8130c286d3c56b7b12dc7fb04c0cf9268e594ec39933bf441d25628"
+  frozen_parameter_initial_sha256: "e522cdb7d326fb139c18a7153bf00aea1845f7e6a2c3466f3fff24b8f4b127e8"
+  source_sha256:
+    source/dense_registration_preprocessing.py: "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+    training/independent_joint_data.py: "e3a52eb88ddc857f1132ac2bfb8f5e2d08aca58cb0f199ab9329ec87b7891e5d"
+    training/independent_joint_model.py: "8eab4b14a74899104258604cb3f74ef1e54704149bc748f1275a18e27d4b27b5"
+    training/independent_joint_variants.py: "4ff59349b4fa131f2f1227878c5a0b88807b8d8688d727178b8542ffbd120e1f"
+    training/quicknii_plane_metric.py: "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31"
+    training/run_independent_initializer_foundation.py: "c25341c749ca61140569d9eac6e4b9e315ebfc302d9644a6d35dd89854f90e6f"
+    training/run_independent_pose_identifiability.py: "2239ad87f95c036bcbd1794b0772fa7c6842129b795b42e3666ac2bdc366dc62"
+    training/synthetic_registration.py: "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde"
+    training/train_independent_joint.py: "b5f873c12d8a50d82c3972d90f4f9866662c47424e349d4d0104b7e02e7957b1"
+  learned_checkpoint_dependencies: []
+
+access:
+  data_source: "synthetic CCF only"
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+
+protocol:
+  role: "diagnostic-not-model-selection"
+  model_class: "training.independent_joint_variants.IndependentJointSpatialMomentModel"
+  architecture_family: "recurrent_spatial_moment_initializer"
+  parameter_count: 1373338
+  spatial_readout:
+    learned_attention_maps: 4
+    statistics_per_map: ["mean_x", "mean_y", "variance_x", "variance_y", "covariance_xy"]
+    appended_features: 20
+    description: "A learned 1x1 spatial-softmax readout on the final source feature map appends first and second spatial moments to the unchanged multilevel global-average context."
+  trainable_scope: "source-image pyramid, spatial-attention maps, and categorical plus sub-bin pose readout"
+  frozen_scope: "atlas-image stem, recurrent candidate reviewer, probabilistic covariance head, and dense-registration decoder"
+  optimizer: "AdamW"
+  learning_rate: 0.0002
+  amp_enabled: true
+  amp_initial_scale: 512.0
+  maximum_optimizer_updates: 300
+  terminal_optimizer_updates: 300
+  terminal_sample_presentations: 7200
+  fixed_panel:
+    contract_sha256: "2a33bae4328bca856a4b3ae2d5bfa4be3338f1b1ad834d16e4d8eee279645f1e"
+    brain_mask_sha256: "ece6797feeffd5285781c6f62c964175e2aebbf7f862e04b8ae3c43867a8e1b1"
+    outline_mode: "absent"
+    latent_pose_count: 24
+    seen_sample_count: 48
+    held_sample_count: 48
+    seen_panels: 2
+    held_panels: 2
+    held_generator_realization_disjoint_from_seen: true
+    held_nuisance_values_disjoint_from_seen: true
+    generator_realization_sha256:
+      seen: "b7520c0039fc0bd6dc90dbe52fe85b30b3c11a67f16e57b5cdf0841985f7870b"
+      held: "cbd53462be2d432742926b067fcebb2e78aa7d301fb2bac1ea8d0a87c317e5f7"
+  decode: "argmax-bin-center-plus-bounded-sub-bin-residual"
+  physical_metric: "deepslice-corresponding-pixel-plane-distance-v1"
+
+prespecified_gates:
+  seen_bin_accuracy_minimum:
+    ap: 0.95
+    lr: 0.90
+    dv: 0.90
+  held_mae_maximum:
+    ap_um: 250.0
+    lr_deg: 3.0
+    dv_deg: 3.0
+  held_physical_improvement_over_constant_prior_minimum: 0.50
+  residual_improvement_over_zero_minimum_each_axis: 0.20
+  postwarm_gradient_clipped_fraction_strict_maximum: 0.50
+  nonfinite_count_maximum: 0
+
+results:
+  terminal_status: "stop"
+  nonfinite_training_count: 0
+  nonfinite_evaluation_output_count: 0
+  postwarm_gradient_clipped_fraction: 0.3814814814814815
+  fixed_panel_result_sha256: "b80ce71a0648106ed72e68f971ffc23804f54f3d051040ed14355457d78a9a1c"
+  seen:
+    sample_count: 48
+    bin_accuracy:
+      ap: 0.375
+      lr: 0.8541666865348816
+      dv: 0.9166666865348816
+    mae:
+      ap_um: 1489.2264404296875
+      lr_deg: 3.9887778759002686
+      dv_deg: 3.247011184692383
+    physical_corresponding_plane_error_um: 1480.7283034936374
+    residual_improvement_over_zero:
+      ap: -38.712703704833984
+      lr: -4.318370342254639
+      dv: -3.329348087310791
+  held:
+    sample_count: 48
+    bin_accuracy:
+      ap: 0.1458333283662796
+      lr: 0.4791666567325592
+      dv: 0.7291666865348816
+    mae:
+      ap_um: 1400.5325927734375
+      lr_deg: 13.816973686218262
+      dv_deg: 10.059967994689941
+    physical_corresponding_plane_error_um: 1539.107512644299
+    constant_prior_pose: [-1720.8333740234375, 0.0, 0.0]
+    constant_prior_physical_error_um: 1403.519090756721
+    physical_improvement_over_constant_prior: -0.09660604033143172
+    prediction_to_truth_sd_ratio:
+      ap: 0.8111618757247925
+      lr: 0.8194358348846436
+      dv: 0.9742928147315979
+    residual_improvement_over_zero:
+      ap: -36.3475341796875
+      lr: -17.422632217407227
+      dv: -12.413290977478027
+
+matched_comparison_to_base:
+  baseline_record_path: "publication/pose_identifiability_diagnostic.yaml"
+  baseline_record_sha256: "0f54ff252be1b500e244bd1f0b0eec513c384654115ac81e6425da50d796a8cc"
+  baseline_source_commit: "966743a45efc4585dde03261dbbf09e0efcc3a6f"
+  baseline_config_contract_sha256: "c7a1ce8e2808cb14cc806075a397053e54eea7886b45ed105855a6da09073d26"
+  baseline_fixed_panel_result_sha256: "c013143e20bdeff9345e7d1a8842abbac9dbcc7db01ecc4e9c2d1061529a2a26"
+  comparison_controls:
+    same_fixed_panel_contract: true
+    same_latent_poses_and_nuisance_assignments: true
+    same_outline_mode: true
+    same_seed_schedule_losses_optimizer_and_gates: true
+    same_random_seed: true
+    identical_model_initial_state: false
+    note: "The architecture changes the state shape and initialization hash; this is a controlled development ablation across source commits, not a paired statistical benchmark."
+  parameter_count:
+    baseline: 1369070
+    spatial_moment: 1373338
+    delta: 4268
+    relative_increase: 0.003117444688730306
+  delta_convention: "spatial-moment minus baseline unless the field is explicitly named reduction"
+  seen:
+    bin_accuracy_delta:
+      ap: 0.0625
+      lr: 0.20833337306976318
+      dv: 0.125
+    mae_delta:
+      ap_um: 83.93701171875
+      lr_deg: -5.417661905288696
+      dv_deg: -4.436794757843018
+    physical_error_reduction_um: 68.98770475015681
+    physical_error_reduction_fraction: 0.044516352920904965
+  held:
+    bin_accuracy_delta:
+      ap: -0.1458333283662796
+      lr: -0.041666656732559204
+      dv: 0.14583337306976318
+    mae_delta:
+      ap_um: -24.7882080078125
+      lr_deg: 1.1061162948608398
+      dv_deg: -5.202754020690918
+    physical_error_reduction_um: 134.10655994946342
+    physical_error_reduction_fraction: 0.08014907485303166
+    physical_improvement_over_constant_prior_delta: 0.09555022146307857
+  interpretation:
+    - "The spatial moments materially improved seen-transform tilt decoding: the D-V bin gate passed and L-R approached its gate, while both seen tilt MAEs fell."
+    - "AP remained non-identifiable: seen AP accuracy was 0.375 against 0.95, seen AP MAE worsened, and held AP bin accuracy fell."
+    - "Held nuisance invariance was not established: every held MAE gate failed, held L-R worsened, and physical error remained 9.660604 percent worse than the constant prior."
+    - "The lower seen and held physical errors are development-diagnostic changes only and do not support promotion, a performance claim, or architecture selection."
+
+qualification:
+  decision: "stop"
+  classification: "pose-representation-not-identifiable-on-seen-transforms"
+  numerically_stable: true
+  seen_bin_accuracy_gates_passed: false
+  held_mae_gates_passed: false
+  held_physical_improvement_gate_passed: false
+  seen_residual_gates_passed: false
+  held_residual_gates_passed: false
+  prediction_spread_gate_passed: true
+  clipping_gate_passed: true
+
+storage:
+  run_root: 'F:\AtlasJointTraining\runs\independent-spatial-moment-identifiability-r4322-85b50df7\independent-spatial-moment-pose-identifiability-300-r4322-v1'
+  artifact_policy: "single-atomic-resume-state-not-a-selected-model-checkpoint"
+  artifacts:
+    diagnostic_receipt:
+      path: 'F:\AtlasJointTraining\runs\independent-spatial-moment-identifiability-r4322-85b50df7\independent-spatial-moment-pose-identifiability-300-r4322-v1\diagnostic_receipt.json'
+      bytes: 254105
+      sha256: "4ed8e0e27e252f8a1381b3b0a3ce5d5e13a908df9f4db0e5197247b5013816af"
+    resume_state:
+      path: 'F:\AtlasJointTraining\runs\independent-spatial-moment-identifiability-r4322-85b50df7\independent-spatial-moment-pose-identifiability-300-r4322-v1\resume_state.pt'
+      bytes: 8225579
+      sha256: "d3fd0c91f6fd62ab63b7a0d9f5f4ac847752efb281c0d84a97af13b7944131fe"
+    fixed_panel_predictions:
+      path: 'F:\AtlasJointTraining\runs\independent-spatial-moment-identifiability-r4322-85b50df7\independent-spatial-moment-pose-identifiability-300-r4322-v1\fixed_panel_predictions.json'
+      bytes: 118954
+      sha256: "fce39a6facfe4dc9ecd47d6a30a1c7b0430412267d65266bf409475d2449b0aa"
+    stdout:
+      path: 'F:\AtlasJointTraining\logs\independent-spatial-moment-identifiability-r4322-85b50df7\stdout.log'
+      bytes: 3043
+      sha256: "0e353d32d1f0fc182b28ca778a5b41a2a0e4eb351e9be386d5ba29dcdb2bc403"
+    stderr:
+      path: 'F:\AtlasJointTraining\logs\independent-spatial-moment-identifiability-r4322-85b50df7\stderr.log'
+      bytes: 0
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+integrity_audit:
+  artifact_sha256_recomputed_from_f_drive: true
+  config_file_hash_recomputed: true
+  config_contract_hash_recomputed_from_payload: true
+  fixed_panel_contract_hash_recomputed_from_payload: true
+  setup_hash_recomputed_from_receipt_payload: true
+  source_hashes_recomputed_from_source_commit: true
+  initial_state_reproduced_from_seed_and_source: true
+  frozen_parameter_initial_hash_reproduced: true
+  frozen_parameter_terminal_hash_matches_initial: true
+  resume_state_hash_matches_receipt: true
+  resume_state_setup_hash_matches_receipt: true
+  resume_state_evaluation_matches_receipt: true
+  resume_state_qualification_matches_receipt: true
+  resume_state_tensor_count: 909
+  all_resume_state_floating_tensors_finite: true
+  prediction_result_hash_recomputed_from_payload: true
+  prediction_result_hash_matches_receipt_and_state: true
+  raw_prediction_record_hashes_recomputed: 96
+  raw_prediction_record_hashes_matched: 96
+  summary_metrics_recomputed_from_raw_predictions: true
+  maximum_absolute_float_aggregate_difference_from_receipt: 0.00006262461351980164
+  physical_error_means_recomputed_exactly: true
+  brain_mask_hash_recomputed_from_annotation: true
+  constant_prior_physical_error_recomputed_exactly: true
+  terminal_progress_matches_stdout: true
+  stderr_bytes: 0
+  original_artifacts_rewritten: false
+  development_construct_consumed: true
+  calibration_access: false
+  final_test_access: false
+
+decision:
+  model_selected: false
+  architecture_winner: null
+  accuracy_claim: false
+  performance_claim: false
+  promotion_authorized: false
+  longer_training_authorized: false
+  gate_relaxation_authorized: false
+  authorized_next_step: "Only a matched supervised source-view canonicalization ablation on the same consumed development construct: base GAP plus canonicalizer versus spatial moments plus the identical canonicalizer, with protected-data access still false."
