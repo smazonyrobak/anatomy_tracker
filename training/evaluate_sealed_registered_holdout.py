@@ -54,6 +54,11 @@ from training.deepslice_benchmark_orientation import (
     horizontal_image_frame_ouv,
     horizontally_flipped_deepslice_inputs,
 )
+from training.quicknii_plane_metric import (
+    annotation_brain_mask,
+    brain_masked_plane_distance,
+    quicknii_pixel_points,
+)
 
 
 # Final-only v7 comparison against frozen DeepSlice modes on specimen-separated registered sections.
@@ -651,50 +656,6 @@ def quicknii_to_tracker_pose(ouv: np.ndarray) -> np.ndarray:
         )
     )
     return pose[0] if np.asarray(ouv).ndim == 1 else pose
-
-
-def quicknii_pixel_points(ouv: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
-    height, width = shape
-    x = (np.arange(width, dtype=np.float64) + 0.5) / width
-    y = (np.arange(height, dtype=np.float64) + 0.5) / height
-    grid_x, grid_y = np.meshgrid(x, y)
-    values = np.asarray(ouv, dtype=np.float64)
-    return values[:3] + grid_x[..., None] * values[3:6] + grid_y[..., None] * values[6:9]
-
-
-def brain_masked_plane_distance(
-    ground_truth_ouv: np.ndarray,
-    predicted_ouv: np.ndarray,
-    brain_mask: np.ndarray,
-) -> float:
-    mask = np.asarray(brain_mask, dtype=bool)
-    if mask.ndim != 2 or not mask.any():
-        raise ValueError("The plane-distance metric needs a non-empty 2-D brain mask")
-    ground_truth = quicknii_pixel_points(ground_truth_ouv, mask.shape)
-    predicted = quicknii_pixel_points(predicted_ouv, mask.shape)
-    return float(np.linalg.norm(predicted[mask] - ground_truth[mask], axis=1).mean())
-
-
-def annotation_brain_mask(
-    ground_truth_ouv: np.ndarray,
-    annotation_ap_dv_ml: np.ndarray,
-    shape: tuple[int, int] = (299, 299),
-) -> np.ndarray:
-    quicknii = quicknii_pixel_points(ground_truth_ouv, shape)
-    atlas = np.stack(
-        (
-            QUICKNII_SHAPE_ML_AP_DV[1] - quicknii[..., 1],
-            QUICKNII_SHAPE_ML_AP_DV[2] - quicknii[..., 2],
-            quicknii[..., 0],
-        ),
-        axis=-1,
-    )
-    indices = np.rint(atlas).astype(np.int64)
-    valid = np.all(indices >= 0, axis=-1) & np.all(indices < np.asarray(annotation_ap_dv_ml.shape), axis=-1)
-    mask = np.zeros(shape, dtype=bool)
-    inside = indices[valid]
-    mask[valid] = annotation_ap_dv_ml[inside[:, 0], inside[:, 1], inside[:, 2]] > 0
-    return mask
 
 
 def ap_band(ap_um: float) -> str:

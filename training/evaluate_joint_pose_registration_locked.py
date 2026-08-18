@@ -29,10 +29,17 @@ from source.atlas_pose_runtime import (
     preprocess_atlas_pose_image,
 )
 from training import joint_pose_registration_locked_data as locked
+from training.atlas_pose_models_v7 import pose_to_quicknii_ouv
 from training.joint_pose_registration_release import load_joint_release_state
+from training.quicknii_plane_metric import (
+    QUICKNII_PIXEL_GRID_SHAPE,
+    QUICKNII_PLANE_DISTANCE_CONTRACT,
+    torch_annotation_brain_mask,
+    torch_brain_masked_plane_distance,
+)
 
 
-EVALUATION_SCHEMA_VERSION = "joint-locked-evaluation-v1"
+EVALUATION_SCHEMA_VERSION = "joint-locked-evaluation-v2"
 MAP_SPACE = "source-model-canvas"
 DEFAULT_ERROR_THRESHOLD_UM = 150.0
 FAILURE_POSE_ERROR = (5000.0, 70.0, 70.0)
@@ -65,7 +72,15 @@ RISK_SCORE_CONTRACT = {
     "interpretation": "monotone ordering score only; not a calibrated probability",
 }
 RISK_SCORE_CONTRACT_SHA256 = locked._payload_sha256(RISK_SCORE_CONTRACT)
-PAIRED_METRIC_DOMAIN = "challenged_visible_common_support"
+PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256 = locked._payload_sha256(
+    QUICKNII_PLANE_DISTANCE_CONTRACT
+)
+PAIRED_POSE_METRIC_DOMAIN = "reference_ground_truth_brain_support"
+PAIRED_SPATIAL_METRIC_DOMAIN = "challenged_visible_common_support"
+PAIRED_METRIC_DOMAINS = {
+    "pose": PAIRED_POSE_METRIC_DOMAIN,
+    "spatial": PAIRED_SPATIAL_METRIC_DOMAIN,
+}
 
 
 def _risk_candidate_poses(center: torch.Tensor) -> torch.Tensor:
@@ -117,6 +132,12 @@ def evaluator_dependency_tree() -> dict:
         ),
         "joint_pose_registration_release.py": (
             repository / "training" / "joint_pose_registration_release.py"
+        ),
+        "atlas_pose_models_v7.py": (
+            repository / "training" / "atlas_pose_models_v7.py"
+        ),
+        "quicknii_plane_metric.py": (
+            repository / "training" / "quicknii_plane_metric.py"
         ),
     }
     return {
@@ -550,6 +571,35 @@ def _as_tensor(value, device: torch.device, dtype=torch.float32) -> torch.Tensor
     return torch.as_tensor(value, device=device, dtype=dtype)
 
 
+def _physical_plane_support(
+    benchmark: locked.LockedJointSyntheticBenchmark,
+    truth_pose: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    truth_ouv = pose_to_quicknii_ouv(
+        torch.as_tensor(truth_pose, device=benchmark.device, dtype=torch.float64)
+    )
+    reference_mask = torch_annotation_brain_mask(
+        truth_ouv,
+        benchmark.annotation,
+        QUICKNII_PIXEL_GRID_SHAPE,
+    )
+    return truth_ouv, reference_mask
+
+
+def _physical_plane_distance_um(
+    prediction: torch.Tensor,
+    truth_ouv: torch.Tensor,
+    reference_mask: torch.Tensor,
+) -> float:
+    predicted_ouv = pose_to_quicknii_ouv(
+        torch.as_tensor(prediction, device=truth_ouv.device, dtype=torch.float64)
+    )
+    distance_voxels = torch_brain_masked_plane_distance(
+        truth_ouv, predicted_ouv, reference_mask
+    )
+    return float(distance_voxels * locked.VOXEL_UM)
+
+
 def _pose_plane_errors(prediction: torch.Tensor, truth: torch.Tensor) -> dict[str, float]:
     ml = (CCF_ML_DV_SHAPE[0] - 1.0) / 2.0
     dv = (CCF_ML_DV_SHAPE[1] - 1.0) / 2.0
@@ -845,6 +895,13 @@ def _binary_average_precision(labels: np.ndarray, scores: np.ndarray) -> float:
     return float(precision[ordered].mean())
 
 
+def _pose_risk_um(result: dict) -> float:
+    return (
+        result["plane"]["physical_corresponding_plane_distance_um"]
+        if result["status"] == "success" else FAILURE_DISTANCE_UM
+    )
+
+
 def _aggregate(
     case_results: list[dict],
     error_threshold_um: float,
@@ -856,6 +913,9 @@ def _aggregate(
     pose_penalties = dict(zip(("ap", "lr", "dv"), FAILURE_POSE_ERROR))
     metrics = {
         "schema_version": EVALUATION_SCHEMA_VERSION,
+        "physical_plane_distance_contract_sha256": (
+            PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256
+        ),
         "attempted_count": attempted,
         "success_count": len(successful),
         "failure_count": failures,
@@ -928,6 +988,10 @@ def _aggregate(
         "five_anchor_plane_distance_um": (
             "five_anchor_plane_distance_mean_um",
             "five_anchor_plane_distance_p95_um",
+        ),
+        "physical_corresponding_plane_distance_um": (
+            "physical_corresponding_plane_distance_mean_um",
+            "physical_corresponding_plane_distance_p95_um",
         ),
     }
     for name, (mean_name, tail_name) in plane_aggregates.items():
@@ -1028,19 +1092,14 @@ def _aggregate(
             / attempted
         )
 
-    risks = np.asarray(
-        [
-            result["plane"]["five_anchor_plane_distance_um"]
-            if result["status"] == "success" else FAILURE_DISTANCE_UM
-            for result in case_results
-        ]
-    )
+    risks = np.asarray([_pose_risk_um(result) for result in case_results])
     risk_scores = np.asarray([result["risk_score"] for result in case_results])
     order = np.argsort(risk_scores, kind="stable")
     risk_curve = np.cumsum(risks[order]) / np.arange(1, attempted + 1)
     coverage = np.arange(1, attempted + 1) / attempted
     errors = risks > error_threshold_um
     metrics["risk_ranking"] = {
+        "error_endpoint": "physical_corresponding_plane_distance_um",
         "error_threshold_um": error_threshold_um,
         "coverage": coverage.tolist(),
         "risk_um": risk_curve.tolist(),
@@ -1072,12 +1131,6 @@ def _paired_degradation(
     if not (len(reference_results) == len(challenged_results) == len(strata)):
         raise ValueError("reference/challenge pair receipts are incomplete")
 
-    def pose_risk(result):
-        return (
-            result["plane"]["five_anchor_plane_distance_um"]
-            if result["status"] == "success" else FAILURE_DISTANCE_UM
-        )
-
     def correspondence(result):
         return (
             result["spatial"]["visible_region_correspondence"]
@@ -1087,7 +1140,8 @@ def _paired_degradation(
     def summarize(indices):
         pose_delta = np.asarray(
             [
-                pose_risk(challenged_results[item]) - pose_risk(reference_results[item])
+                _pose_risk_um(challenged_results[item])
+                - _pose_risk_um(reference_results[item])
                 for item in indices
             ]
         )
@@ -1111,7 +1165,8 @@ def _paired_degradation(
         }
 
     return {
-        "paired_metric_domain": PAIRED_METRIC_DOMAIN,
+        "pose_metric_domain": PAIRED_POSE_METRIC_DOMAIN,
+        "spatial_metric_domain": PAIRED_SPATIAL_METRIC_DOMAIN,
         "overall": summarize(range(len(strata))),
         "per_stratum": {
             name: summarize([item for item, label in enumerate(strata) if label == name])
@@ -1186,6 +1241,7 @@ def _evaluate_case(
     item: int,
     prediction: dict,
     expected_candidates: dict,
+    physical_support: tuple[torch.Tensor, torch.Tensor],
 ) -> dict:
     if prediction.get("candidate_protocol_violation"):
         raise ValueError("predictor attempted to supply evaluator-owned candidates")
@@ -1262,6 +1318,9 @@ def _evaluate_case(
 
     signed_error = final_pose - truth_pose
     plane = _pose_plane_errors(final_pose, truth_pose)
+    plane["physical_corresponding_plane_distance_um"] = _physical_plane_distance_um(
+        final_pose, *physical_support
+    )
     pose_risk = [value["five_anchor_plane_distance_um"] for value in iteration_plane]
     correspondence = [value["visible_region_correspondence"] for value in iteration_spatial]
     if prediction.get("candidate_set_sha256") != expected_candidates["candidate_set_sha256"]:
@@ -1341,9 +1400,15 @@ def _evaluate_cases(
     expected_candidates: list[dict],
     *,
     case_index_offset: int = 0,
+    physical_support: tuple[torch.Tensor, torch.Tensor] | None = None,
 ) -> list[dict]:
     if len(predictions) != len(batch["pose"]):
         raise ValueError("prediction count must equal the attempted case count")
+    if physical_support is None:
+        physical_support = _physical_plane_support(benchmark, batch["pose"])
+    truth_ouv, reference_mask = physical_support
+    if len(truth_ouv) != len(predictions) or len(reference_mask) != len(predictions):
+        raise ValueError("physical plane support does not match the attempted cases")
     results = []
     for item, (prediction, candidates) in enumerate(zip(predictions, expected_candidates)):
         try:
@@ -1357,7 +1422,14 @@ def _evaluate_cases(
             warp_status = "failed"
             warp_failure_reason = f"{type(error).__name__}: {error}"
         try:
-            result = _evaluate_case(benchmark, batch, item, prediction, candidates)
+            result = _evaluate_case(
+                benchmark,
+                batch,
+                item,
+                prediction,
+                candidates,
+                (truth_ouv[item], reference_mask[item]),
+            )
         except (KeyError, TypeError, ValueError, RuntimeError, IndexError) as error:
             result = _invalid_case_result(item, prediction, error)
         result["case_index"] = case_index_offset + item
@@ -1405,6 +1477,10 @@ def _evaluate_and_save(
         benchmark_contract_sha256=str(batch["contract"]["contract_sha256"]),
         evaluator_source_sha256=evaluator_source_sha256(),
         risk_score_contract_sha256=RISK_SCORE_CONTRACT_SHA256,
+        physical_plane_distance_contract=QUICKNII_PLANE_DISTANCE_CONTRACT,
+        physical_plane_distance_contract_sha256=(
+            PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256
+        ),
         evaluator_dependency_tree=evaluator_dependency_tree(),
         evaluator_dependency_tree_sha256=evaluator_dependency_tree_sha256(),
     )
@@ -1436,6 +1512,9 @@ def _evaluate_and_save(
         "aggregate_metrics_sha256": _file_sha256(metrics_path),
         "evaluator_source_sha256": evaluator_source_sha256(),
         "risk_score_contract_sha256": RISK_SCORE_CONTRACT_SHA256,
+        "physical_plane_distance_contract_sha256": (
+            PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256
+        ),
         "evaluator_dependency_tree_sha256": evaluator_dependency_tree_sha256(),
     }
     _atomic_json(receipt_path, receipt)
@@ -1637,6 +1716,7 @@ def run_locally_locked_once(
         + bytes.fromhex(evaluator_source_sha256())
         + bytes.fromhex(locked._source_sha256())
         + bytes.fromhex(RISK_SCORE_CONTRACT_SHA256)
+        + bytes.fromhex(PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256)
         + bytes.fromhex(evaluator_dependency_tree_sha256())
     )
     seed_commitment = hashlib.sha256(commitment_material).hexdigest()
@@ -1658,6 +1738,10 @@ def run_locally_locked_once(
             "generator_source_sha256": locked._source_sha256(),
             "benchmark_contract_sha256": benchmark.contract["contract_sha256"],
             "risk_score_contract_sha256": RISK_SCORE_CONTRACT_SHA256,
+            "physical_plane_distance_contract": QUICKNII_PLANE_DISTANCE_CONTRACT,
+            "physical_plane_distance_contract_sha256": (
+                PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256
+            ),
             "evaluator_dependency_tree": evaluator_dependency_tree(),
             "evaluator_dependency_tree_sha256": evaluator_dependency_tree_sha256(),
         },
@@ -1757,12 +1841,14 @@ def run_locally_locked_once(
                     "wall_time_seconds": 0.0,
                     "python_peak_memory_bytes": 0,
                 }
+            physical_support = _physical_plane_support(benchmark, batch["pose"])
             results = _evaluate_cases(
                 benchmark,
                 batch,
                 predictions,
                 expected,
                 case_index_offset=global_index,
+                physical_support=physical_support,
             )
             reference_results = _evaluate_cases(
                 benchmark,
@@ -1770,6 +1856,7 @@ def run_locally_locked_once(
                 reference_predictions,
                 reference_expected,
                 case_index_offset=global_index,
+                physical_support=physical_support,
             )
             chunk_path = raw_directory / f"{severity}-{start:04d}-{stop:04d}.pt"
             _atomic_torch_save(
@@ -1784,7 +1871,7 @@ def run_locally_locked_once(
                     "challenged_case_results": results,
                     "reference_predictions": reference_predictions,
                     "reference_case_results": reference_results,
-                    "paired_metric_domain": PAIRED_METRIC_DOMAIN,
+                    "paired_metric_domains": PAIRED_METRIC_DOMAINS,
                     "paired_support": _paired_support_records(batch),
                 },
             )
@@ -1823,7 +1910,7 @@ def run_locally_locked_once(
                 "same-case geometry; clean pre-appearance reference plus "
                 "severity-challenged view"
             ),
-            "paired_metric_domain": PAIRED_METRIC_DOMAIN,
+            "paired_metric_domains": PAIRED_METRIC_DOMAINS,
             "chunks": raw_chunks,
         },
     )
@@ -1839,7 +1926,7 @@ def run_locally_locked_once(
             )
             for severity in locked.SEVERITIES
         },
-        paired_metric_domain=PAIRED_METRIC_DOMAIN,
+        paired_metric_domains=PAIRED_METRIC_DOMAINS,
         reference_common_support_view=_aggregate(
             reference_case_results,
             error_threshold_um,
@@ -1854,6 +1941,10 @@ def run_locally_locked_once(
         release_state_receipt=frozen_receipt["release_state_receipt"],
         evaluator_source_sha256=evaluator_source_sha256(),
         risk_score_contract_sha256=RISK_SCORE_CONTRACT_SHA256,
+        physical_plane_distance_contract=QUICKNII_PLANE_DISTANCE_CONTRACT,
+        physical_plane_distance_contract_sha256=(
+            PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256
+        ),
         evaluator_dependency_tree=evaluator_dependency_tree(),
         evaluator_dependency_tree_sha256=evaluator_dependency_tree_sha256(),
         generator_source_sha256=locked._source_sha256(),
@@ -1879,7 +1970,10 @@ def run_locally_locked_once(
         "evaluator_source_sha256": evaluator_source_sha256(),
         "generator_source_sha256": locked._source_sha256(),
         "risk_score_contract_sha256": RISK_SCORE_CONTRACT_SHA256,
-        "paired_metric_domain": PAIRED_METRIC_DOMAIN,
+        "physical_plane_distance_contract_sha256": (
+            PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256
+        ),
+        "paired_metric_domains": PAIRED_METRIC_DOMAINS,
         "evaluator_dependency_tree_sha256": evaluator_dependency_tree_sha256(),
     }
     evaluation_receipt_path = destination / "evaluation_receipt.json"
@@ -1896,7 +1990,11 @@ def run_locally_locked_once(
         "evaluator_source_sha256": evaluator_source_sha256(),
         "generator_source_sha256": locked._source_sha256(),
         "risk_score_contract_sha256": RISK_SCORE_CONTRACT_SHA256,
-        "paired_metric_domain": PAIRED_METRIC_DOMAIN,
+        "physical_plane_distance_contract": QUICKNII_PLANE_DISTANCE_CONTRACT,
+        "physical_plane_distance_contract_sha256": (
+            PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256
+        ),
+        "paired_metric_domains": PAIRED_METRIC_DOMAINS,
         "evaluator_dependency_tree": evaluator_dependency_tree(),
         "evaluator_dependency_tree_sha256": evaluator_dependency_tree_sha256(),
         "benchmark_contract_sha256": benchmark.contract["contract_sha256"],

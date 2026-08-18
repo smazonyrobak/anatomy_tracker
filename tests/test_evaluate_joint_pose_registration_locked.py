@@ -13,6 +13,8 @@ from source.atlas_pose_runtime import POSE_IMAGE_SIZE
 from training import joint_pose_registration_locked_data as locked
 from training import evaluate_joint_pose_registration_locked as evaluator
 from training import joint_pose_registration_release as release
+from training import quicknii_plane_metric as plane_metric
+from training.atlas_pose_models_v7 import pose_to_quicknii_ouv
 from training import train_joint_pose_registration as trainer
 
 
@@ -29,7 +31,11 @@ def benchmark(tmp_path_factory):
     ).copy()
     nrrd.write(str(folder / "average_template_25.nrrd"), average.astype(np.float32))
     nrrd.write(str(folder / "annotation_25.nrrd"), labels.astype(np.int64))
-    return locked.LockedJointSyntheticBenchmark(folder, "cpu")
+    result = locked.LockedJointSyntheticBenchmark(folder, "cpu")
+    # The image renderer stays tiny, while the official 299-square QuickNII metric
+    # needs a production-frame annotation domain for every randomized tilt.
+    result.annotation = torch.ones((528, 320, 456), dtype=torch.uint8)
+    return result
 
 
 def _receipt(pose):
@@ -111,6 +117,64 @@ def _exact_predictor(batch, *, overrides=None, exact_override=None):
     return predictor
 
 
+def test_physical_plane_distance_matches_official_quicknii_ouv_metric(benchmark):
+    batch = benchmark.generate(1, "development", 4771, "clean", 3)
+    truth = batch["pose"][0].double()
+    truth_ouv, reference_mask = evaluator._physical_plane_support(
+        benchmark, truth[None]
+    )
+
+    ap_shift = truth + truth.new_tensor((75.0, 0.0, 0.0))
+    assert evaluator._physical_plane_distance_um(
+        ap_shift, truth_ouv[0], reference_mask[0]
+    ) == pytest.approx(75.0, abs=1e-9)
+
+    prediction = truth + truth.new_tensor((137.0, 4.25, -3.5))
+    predicted_ouv = pose_to_quicknii_ouv(prediction).numpy()
+    expected = plane_metric.brain_masked_plane_distance(
+        truth_ouv[0].numpy(), predicted_ouv, reference_mask[0].numpy()
+    ) * locked.VOXEL_UM
+    assert evaluator._physical_plane_distance_um(
+        prediction, truth_ouv[0], reference_mask[0]
+    ) == pytest.approx(expected, abs=1e-9)
+
+
+def test_physical_plane_support_uses_reference_annotation_not_slice_visibility(
+    benchmark,
+):
+    batch = benchmark.generate(1, "development", 4772, "severe", 3)
+    expected = evaluator._physical_plane_support(benchmark, batch["pose"])
+    batch["fixed_mask"].zero_()
+    batch["moving_visible_mask"].zero_()
+    observed = evaluator._physical_plane_support(benchmark, batch["pose"])
+    assert torch.equal(observed[0], expected[0])
+    assert torch.equal(observed[1], expected[1])
+
+
+def test_torch_reference_mask_preserves_asymmetric_quicknii_ml_frame():
+    annotation = np.zeros((5, 5, 456), dtype=np.uint8)
+    annotation[2, 2, 51] = 1
+    ouv = np.asarray(
+        [-126.0, 526.0, 318.0, 708.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    expected = plane_metric.annotation_brain_mask(ouv, annotation, shape=(1, 2))
+    observed = plane_metric.torch_annotation_brain_mask(
+        torch.from_numpy(ouv), torch.from_numpy(annotation), shape=(1, 2)
+    )
+    assert np.array_equal(observed.numpy(), expected)
+    assert np.array_equal(observed.numpy(), np.asarray([[True, False]]))
+
+
+def test_empty_reference_annotation_support_aborts_before_model_scoring(benchmark):
+    truth = torch.tensor([[0.0, 0.0, 0.0]])
+    empty_annotation = torch.zeros_like(benchmark.annotation)
+    truth_ouv = pose_to_quicknii_ouv(truth.double())
+    with pytest.raises(ValueError, match="non-empty 2-D brain mask"):
+        plane_metric.torch_annotation_brain_mask(
+            truth_ouv, empty_annotation, plane_metric.QUICKNII_PIXEL_GRID_SHAPE
+        )
+
+
 def test_public_evaluator_reports_complete_exact_metrics_and_atomic_outputs(
     benchmark, tmp_path
 ):
@@ -124,7 +188,14 @@ def test_public_evaluator_reports_complete_exact_metrics_and_atomic_outputs(
     assert result["ap_mae_um"] == result["lr_mae_deg"] == result["dv_mae_deg"] == 0.0
     assert result["plane_anchor_tre_mean_um"] == 0.0
     assert result["five_anchor_plane_distance_mean_um"] == 0.0
-    assert "physical_corresponding_plane_distance_mean_um" not in result
+    assert result["physical_corresponding_plane_distance_mean_um"] == 0.0
+    assert (
+        result["physical_plane_distance_contract_sha256"]
+        == evaluator.PHYSICAL_PLANE_DISTANCE_CONTRACT_SHA256
+    )
+    assert result["risk_ranking"]["error_endpoint"] == (
+        "physical_corresponding_plane_distance_um"
+    )
     assert result["end_to_end_visible_region_correspondence"] > 0.98
     assert result["end_to_end_interior_region_correspondence"] > 0.98
     assert result["end_to_end_macro_region_dice"] > 0.95
@@ -188,6 +259,9 @@ def test_failures_and_nonfinite_predictions_remain_in_every_denominator(
     assert result["failure_rate"] == pytest.approx(2 / 3)
     assert result["nonfinite_output_count"] == 1
     assert result["ap_mae_um"] == pytest.approx(10000.0 / 3.0)
+    assert result["physical_corresponding_plane_distance_mean_um"] == pytest.approx(
+        20000.0 / 3.0
+    )
     assert result["ap_bias_um"] == 0.0
     assert 0.32 < result["end_to_end_visible_region_correspondence"] < 0.34
     assert result["true_plane_rank_1_rate"] == pytest.approx(1 / 3)
@@ -658,14 +732,44 @@ def test_paired_support_reports_damage_separately_from_common_metric_domain(
     )
 
 
-def test_paired_degradation_declares_common_challenged_visible_domain():
-    reference = [{"status": "failed", "risk_score": 1e9}] * 4
-    challenged = [{"status": "failed", "risk_score": 1e9}] * 4
+def test_paired_degradation_declares_distinct_pose_and_spatial_domains():
+    reference_case = {
+        "status": "success",
+        "plane": {
+            "physical_corresponding_plane_distance_um": 10.0,
+            "five_anchor_plane_distance_um": 100.0,
+        },
+        "spatial": {"visible_region_correspondence": 0.9},
+    }
+    challenged_case = {
+        "status": "success",
+        "plane": {
+            "physical_corresponding_plane_distance_um": 30.0,
+            "five_anchor_plane_distance_um": 0.0,
+        },
+        "spatial": {"visible_region_correspondence": 0.8},
+    }
+    reference = [reference_case] * 4
+    challenged = [challenged_case] * 4
     result = evaluator._paired_degradation(
         reference, challenged, list(locked.SEVERITIES)
     )
-    assert result["paired_metric_domain"] == (
-        "challenged_visible_common_support"
+    assert result["pose_metric_domain"] == "reference_ground_truth_brain_support"
+    assert result["spatial_metric_domain"] == "challenged_visible_common_support"
+    assert result["overall"]["challenged_minus_reference_pose_risk_um_mean"] == 20.0
+
+
+def test_pose_risk_uses_physical_corresponding_distance_not_five_anchors():
+    result = {
+        "status": "success",
+        "plane": {
+            "physical_corresponding_plane_distance_um": 37.0,
+            "five_anchor_plane_distance_um": 999.0,
+        },
+    }
+    assert evaluator._pose_risk_um(result) == 37.0
+    assert evaluator._pose_risk_um({"status": "failed"}) == (
+        evaluator.FAILURE_DISTANCE_UM
     )
 
 
