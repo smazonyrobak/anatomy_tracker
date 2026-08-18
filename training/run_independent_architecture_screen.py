@@ -104,6 +104,19 @@ PANEL_INPUT_AND_RANKING_TENSORS = (
 HIGH_PANEL_TENSORS = PANEL_INPUT_AND_RANKING_TENSORS + tuple(
     name for name in PAIRED_INVARIANT_TENSORS if name not in PANEL_INPUT_AND_RANKING_TENSORS
 )
+METRIC_BATCH_TENSORS = (
+    "true_pose",
+    "listwise_target_index",
+    "input_outline_mode",
+    "truth_fixed_valid_mask",
+    "truth_source_valid_mask",
+    "truth_fixed_to_source_map",
+    "truth_source_to_fixed_map",
+    "truth_similarity_parameters",
+    "truth_svf",
+    "truth_fixed_labels",
+    "truth_source_labels",
+)
 
 
 def _canonical(value):
@@ -175,6 +188,83 @@ def _batch_to(batch: dict, device) -> dict:
     }
 
 
+def _sample_slice(batch: dict, start: int, stop: int) -> dict:
+    """Slice one contiguous group of sources while keeping each candidate set intact."""
+    count = len(batch["true_pose"])
+    sliced = {}
+    for name, value in batch.items():
+        if torch.is_tensor(value) and value.ndim and value.shape[0] == count:
+            sliced[name] = value[start:stop]
+        elif isinstance(value, np.ndarray) and value.ndim and value.shape[0] == count:
+            sliced[name] = value[start:stop]
+        elif isinstance(value, (list, tuple)) and len(value) == count:
+            sliced[name] = value[start:stop]
+        else:
+            sliced[name] = value
+    return sliced
+
+
+def _metric_output_to_cpu(output: dict, sample_offset: int) -> dict:
+    dense = output["dense"]
+    return {
+        "settled_pose": output["settled_pose"].detach().cpu(),
+        "ranking_logits_masked": output["ranking_logits_masked"].detach().cpu(),
+        "dense_sample_index": output["dense_sample_index"].detach().cpu()
+        + int(sample_offset),
+        "dense": None
+        if dense is None
+        else {
+            name: value.detach().cpu() if torch.is_tensor(value) else value
+            for name, value in dense.items()
+        },
+    }
+
+
+def _concatenate_metric_outputs(parts: list[dict]) -> dict:
+    dense_parts = [part["dense"] for part in parts if part["dense"] is not None]
+    dense = None
+    if dense_parts:
+        keys = set(dense_parts[0])
+        if any(set(part) != keys for part in dense_parts):
+            raise RuntimeError("development chunks returned different dense fields")
+        dense = {}
+        for name in keys:
+            values = [part[name] for part in dense_parts]
+            if not all(torch.is_tensor(value) and value.ndim for value in values):
+                raise RuntimeError("development dense fields must be batch-leading tensors")
+            dense[name] = torch.cat(values, dim=0)
+    return {
+        "settled_pose": torch.cat([part["settled_pose"] for part in parts], dim=0),
+        "ranking_logits_masked": torch.cat(
+            [part["ranking_logits_masked"] for part in parts], dim=0
+        ),
+        "dense_sample_index": torch.cat(
+            [part["dense_sample_index"] for part in parts], dim=0
+        ),
+        "dense": dense,
+    }
+
+
+def _metric_state_to_device(output: dict, batch: dict, device):
+    moved_output = {
+        "settled_pose": output["settled_pose"].to(device),
+        "ranking_logits_masked": output["ranking_logits_masked"].to(device),
+        "dense_sample_index": output["dense_sample_index"].to(device),
+        "dense": None
+        if output["dense"] is None
+        else {
+            name: value.to(device) if torch.is_tensor(value) else value
+            for name, value in output["dense"].items()
+        },
+    }
+    moved_batch = {
+        name: batch[name].to(device)
+        for name in METRIC_BATCH_TENSORS
+        if name in batch
+    }
+    return moved_output, moved_batch
+
+
 def _atomic_json(payload: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -238,6 +328,8 @@ def load_screen_protocol(path: str | Path) -> dict:
         raise ValueError("paired outline panel must use 8-32 common base samples")
     if not 8 <= int(development["high_tilt_count"]) <= 32:
         raise ValueError("all-absent high-tilt panel must use 8-32 samples")
+    if not 1 <= int(development["evaluation_sample_chunk_size"]) <= 4:
+        raise ValueError("development evaluation sample chunks must contain 1-4 sources")
     expected_sources = raw["lineage"]["source_sha256"]
     if set(expected_sources) != set(SOURCE_FILES):
         raise ValueError("architecture-screen source lineage is incomplete")
@@ -530,6 +622,11 @@ def _development_setup(protocol, synthetic, validation_product5):
         ),
         "high_tilt_outline_mode": "absent",
         "panel_storage": "cpu-resident;one-panel-at-a-time-device-transfer",
+        "evaluation_chunking": {
+            "sample_chunk_size": int(settings["evaluation_sample_chunk_size"]),
+            "candidate_policy": "all-candidates-for-each-source-preserved",
+            "sample_order": "contiguous-original-order",
+        },
         "metric": settings["metric"],
         "primary_endpoint": "absent/no-user-mask",
     }
@@ -547,51 +644,80 @@ def _development_evaluator(
     receipt_folder: Path | None = None,
 ):
     metric_config = panel_contract["metric"]
+    chunk_contract = panel_contract["evaluation_chunking"]
+    sample_chunk_size = int(chunk_contract["sample_chunk_size"])
 
     def evaluate(model, step):
         panels = {}
         real_raw = []
         synthetic_raw = []
+        chunk_receipts = {}
 
         def run(name, cpu_batch):
-            batch = _batch_to(cpu_batch, renderer.device)
-            output = independent_joint_forward(model, batch, renderer)
-            records = raw_prediction_records(output, batch)
-            for item, record in enumerate(records):
-                if record["source_type"] == "synthetic_ccf":
-                    record["synthetic_sample_index"] = item
-                    record["record_provenance_sha256"] = _canonical_sha256(
-                        {
-                            "source_type": record["source_type"],
-                            "data_contract_sha256": record["data_contract_sha256"],
-                            "sample_manifest_sha256": record["sample_manifest_sha256"],
-                            "sample_index": item,
-                        }
-                    )
-                    if name.startswith("paired_outline_"):
-                        record["paired_base_sample_provenance_sha256"] = _canonical_sha256(
+            count = len(cpu_batch["true_pose"])
+            if count <= 0:
+                raise RuntimeError("development panels cannot be empty")
+            candidate_count = int(cpu_batch["candidate_pose"].shape[1])
+            metric_parts = []
+            panel_records = []
+            observed_chunks = []
+            for start in range(0, count, sample_chunk_size):
+                stop = min(start + sample_chunk_size, count)
+                batch = _batch_to(_sample_slice(cpu_batch, start, stop), renderer.device)
+                if int(batch["candidate_pose"].shape[1]) != candidate_count:
+                    raise RuntimeError("development chunk changed a source candidate set")
+                output = independent_joint_forward(model, batch, renderer)
+                records = raw_prediction_records(output, batch)
+                for local_item, record in enumerate(records):
+                    item = start + local_item
+                    if record["source_type"] == "synthetic_ccf":
+                        record["synthetic_sample_index"] = item
+                        record["record_provenance_sha256"] = _canonical_sha256(
                             {
-                                "base_generator_manifest_sha256": panel_contract[
-                                    "paired_outline_base_generator_manifest_sha256"
-                                ],
+                                "source_type": record["source_type"],
+                                "data_contract_sha256": record["data_contract_sha256"],
+                                "sample_manifest_sha256": record["sample_manifest_sha256"],
                                 "sample_index": item,
                             }
                         )
-                record.update(
-                    {
-                        "panel_name": name,
-                        "panel_sample_index": item,
-                        "panel_contract_sha256": panel_contract["contract_sha256"],
-                        "architecture_contract_sha256": architecture_contract_sha256,
-                    }
-                )
-            if batch["source_type"] == "allen_registered_product5":
-                real_raw.extend(records)
+                        if name.startswith("paired_outline_"):
+                            record["paired_base_sample_provenance_sha256"] = _canonical_sha256(
+                                {
+                                    "base_generator_manifest_sha256": panel_contract[
+                                        "paired_outline_base_generator_manifest_sha256"
+                                    ],
+                                    "sample_index": item,
+                                }
+                            )
+                    record.update(
+                        {
+                            "panel_name": name,
+                            "panel_sample_index": item,
+                            "panel_contract_sha256": panel_contract["contract_sha256"],
+                            "architecture_contract_sha256": architecture_contract_sha256,
+                        }
+                    )
+                panel_records.extend(records)
+                metric_parts.append(_metric_output_to_cpu(output, start))
+                observed_chunks.append(stop - start)
+                del output, batch
+            if cpu_batch["source_type"] == "allen_registered_product5":
+                real_raw.extend(panel_records)
             else:
-                synthetic_raw.extend(records)
+                synthetic_raw.extend(panel_records)
+            metric_output, metric_batch = _metric_state_to_device(
+                _concatenate_metric_outputs(metric_parts), cpu_batch, renderer.device
+            )
+            selected = torch.arange(count, device=renderer.device)
             panels[name] = {
-                "all": _panel_metrics(output, batch, torch.arange(len(batch["true_pose"]), device=batch["true_pose"].device)),
-                "by_outline_mode": _mode_metrics(output, batch),
+                "all": _panel_metrics(metric_output, metric_batch, selected),
+                "by_outline_mode": _mode_metrics(metric_output, metric_batch),
+            }
+            chunk_receipts[name] = {
+                "sample_count": count,
+                "candidate_count_per_sample": candidate_count,
+                "observed_sample_chunks": observed_chunks,
+                "maximum_candidates_per_forward": sample_chunk_size * candidate_count,
             }
             return panels[name]
 
@@ -631,6 +757,10 @@ def _development_evaluator(
             "metric_components": panels,
             "paired_outline_metrics": paired,
             "paired_outline_deltas_vs_absent": paired_delta,
+            "evaluation_chunking": {
+                **chunk_contract,
+                "panels": chunk_receipts,
+            },
             "raw_predictions": real_raw,
             "synthetic_raw_predictions": synthetic_raw,
         }

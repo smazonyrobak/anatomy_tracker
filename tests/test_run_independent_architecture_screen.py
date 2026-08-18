@@ -231,6 +231,7 @@ def test_checked_protocol_is_portable_frozen_and_source_bound():
     assert protocol["calibration_access"] is protocol["final_test_access"] is False
     assert protocol["learned_checkpoint_dependencies"] == []
     assert protocol["training"]["steps"] == 2000
+    assert protocol["development"]["evaluation_sample_chunk_size"] == 2
     assert protocol["development"]["metric"]["primary_panel_weights"] == {
         "product5_absent": 0.5,
         "paired_outline_absent": 0.25,
@@ -294,6 +295,11 @@ def test_development_evaluator_uses_absent_primary_and_reports_paired_deltas(
     panel = {
         "contract_sha256": "b" * 64,
         "paired_outline_base_generator_manifest_sha256": "e" * 64,
+        "evaluation_chunking": {
+            "sample_chunk_size": 2,
+            "candidate_policy": "all-candidates-for-each-source-preserved",
+            "sample_order": "contiguous-original-order",
+        },
         "metric": {
             "component_weights": {
                 "pose": 1.0,
@@ -367,6 +373,109 @@ def test_development_evaluator_uses_absent_primary_and_reports_paired_deltas(
     metric, _ = _validate_development_panel(result, 11, [10], "b" * 64)
     assert metric == pytest.approx(result["selection_metric"])
     assert json.loads((tmp_path / "development_panel_latest.json").read_text())["raw_predictions"]
+
+
+def test_chunked_evaluation_matches_unchunked_metrics_records_order_and_hashes(
+    monkeypatch,
+):
+    product = _batch(5, source_type="allen_registered_product5")
+    paired = {name: _batch(5, mode=mode) for name, mode in screen.OUTLINE_MODES.items()}
+    high = _batch(5)
+    panel = {
+        "contract_sha256": "b" * 64,
+        "paired_outline_base_generator_manifest_sha256": "e" * 64,
+        "evaluation_chunking": {
+            "sample_chunk_size": 2,
+            "candidate_policy": "all-candidates-for-each-source-preserved",
+            "sample_order": "contiguous-original-order",
+        },
+        "metric": {
+            "component_weights": {
+                "pose": 1.0,
+                "ranking": 0.25,
+                "dense_map": 0.5,
+                "dense_region": 0.25,
+                "dense_validity": 0.1,
+            },
+            "primary_panel_weights": {
+                "product5_absent": 0.5,
+                "paired_outline_absent": 0.25,
+                "high_tilt_absent": 0.25,
+            },
+        },
+    }
+    calls = []
+
+    def forward(model, batch, renderer):
+        calls.append(len(batch["true_pose"]))
+        mode_error = batch["input_outline_mode"].float()[:, None]
+        dense_index = batch["dense_truth_valid"].nonzero(as_tuple=False).flatten()
+        return {
+            "settled_pose": batch["true_pose"]
+            + mode_error * torch.tensor([100.0, 2.0, 2.0]),
+            "ranking_logits_masked": batch["candidate_pose"][:, :, 0] / 1000.0,
+            "dense_sample_index": dense_index,
+            "dense": {"dummy": batch["true_pose"].index_select(0, dense_index)[:, :1]}
+            if len(dense_index)
+            else None,
+        }
+
+    def records(output, batch):
+        provenance = batch.get("record_provenance_sha256", [HASH] * len(batch["true_pose"]))
+        return [
+            {
+                "source_type": batch["source_type"],
+                "data_contract_sha256": batch["data_contract_sha256"],
+                "sample_manifest_sha256": batch.get("sample_manifest_sha256"),
+                "animal_id": int(batch["animal_id"][item]),
+                "record_provenance_sha256": provenance[item],
+                "candidate_score_softmax_uncalibrated": [1 / 7] * 7,
+                "initializer_covariance": [[1.0, 0.0, 0.0]] * 3,
+            }
+            for item in range(len(batch["true_pose"]))
+        ]
+
+    monkeypatch.setattr(screen, "independent_joint_forward", forward)
+    monkeypatch.setattr(screen, "raw_prediction_records", records)
+    monkeypatch.setattr(
+        screen,
+        "dense_registration_losses",
+        lambda output, batch, index: {
+            "dense_map_forward": output["dummy"].abs().mean() / 1000.0,
+            "dense_map_inverse": output["dummy"].abs().mean() / 2000.0,
+            "dense_region_dice": output["dummy"].abs().mean() / 3000.0,
+            "dense_region_boundary": output["dummy"].abs().mean() / 4000.0,
+            "dense_validity": output["dummy"].abs().mean() / 5000.0,
+        },
+    )
+    chunked = screen._development_evaluator(
+        FakeRenderer("atlas"), "c" * 64, panel, product, paired, high
+    )(object(), 11)
+    assert max(calls) == 2
+    assert [record["panel_sample_index"] for record in chunked["raw_predictions"]] == list(
+        range(5)
+    )
+    assert chunked["evaluation_chunking"]["panels"]["product5"][
+        "observed_sample_chunks"
+    ] == [2, 2, 1]
+
+    unchunked_panel = copy.deepcopy(panel)
+    unchunked_panel["evaluation_chunking"]["sample_chunk_size"] = 64
+    calls.clear()
+    unchunked = screen._development_evaluator(
+        FakeRenderer("atlas"), "c" * 64, unchunked_panel, product, paired, high
+    )(object(), 11)
+    assert min(calls) == max(calls) == 5
+    for name in (
+        "selection_metric",
+        "metric_components",
+        "paired_outline_metrics",
+        "paired_outline_deltas_vs_absent",
+        "raw_predictions",
+        "synthetic_raw_predictions",
+        "panel_manifest_sha256",
+    ):
+        assert chunked[name] == unchunked[name]
 
 
 def test_zero_step_driver_wires_scratch_providers_animal_custody_and_receipt(
@@ -471,6 +580,7 @@ def test_zero_step_driver_wires_scratch_providers_animal_custody_and_receipt(
     assert receipt["development_panel"]["purpose"] == "animal-disjoint-development-selection-only"
     assert receipt["development_panel"]["historically_consumed"] is True
     assert receipt["development_panel"]["untouched_final_test"] is False
+    assert receipt["development_panel"]["evaluation_chunking"]["sample_chunk_size"] == 2
     assert receipt["architecture_initial_state_sha256"] == screen._state_sha256(model)
     assert Path(receipt["development_panel_registry"]).is_file()
     assert receipt["best_development_panel"]["selection_metric"] == 1.25

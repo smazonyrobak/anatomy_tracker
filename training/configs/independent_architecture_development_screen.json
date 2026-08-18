@@ -63,6 +63,7 @@
   },
   "development": {
     "evaluate_every": 250,
+    "evaluation_sample_chunk_size": 2,
     "product5_count": 30,
     "product5_seed": 404322,
     "product5_candidate_schedule_step": 1,
@@ -103,11 +104,11 @@
       "training/preflight_independent_architectures.py": "c990cc0024f689ebbe9e926305d653511ddfdae27f0b3fc4f406fd6487643415",
       "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde",
       "training/registered_section_dataset.py": "4674112a9eec1ce943d6257520e2042f026872403db5a54d607ca2e78e89afbd",
-      "training/run_independent_architecture_screen.py": "8890900d7e8576d1b9b0b8045b3cacbed338ea1ed526cf3c650ced6c854d05ad",
+      "training/run_independent_architecture_screen.py": "19365ed2bcb415fa11b63be6b8f40767e3254dae09b134bba0b4014d91f3e3e3",
       "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60",
       "source/atlas_pose_runtime.py": "05ad88481a52f8fe533477c67d4639b9c50d9679f3e77282b6ac3bed6d31fc05",
       "source/registered_image_quality.py": "9921954903dbb3f9ba56db9975f9652c1316c7d411a9ec974dced1491d83abbf"
     }
   },
-  "contract_sha256": "1cb843cfc2ab612577855ee82e7a6682d84594d940b66466f5b444614a94e676"
+  "contract_sha256": "6a04a27888a8293b3ffecaa5a08044ec8e12f252313b26c3d971d2a73057c882"
 }
