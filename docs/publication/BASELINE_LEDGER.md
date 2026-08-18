@@ -158,3 +158,29 @@ The 500/1,000/1,500/2,000 validation-report hashes were respectively
 and `ea41b5e75f37e32fc97b5e32a664d414aaaab2a19a6a333262dd4b02350b4883`.
 The selected development checkpoint SHA-256 was
 `afcd2592419cd65b288965fdab38ed92d93095341e31f7e8a87361f60b91fe84`.
+
+### Prespecified reviewer-only control decision
+
+Before inspecting any control validation result, the 2,000-view endpoint was
+declared as the sole decision point; intermediate panels are trajectory
+diagnostics. The pose initializer and registrar must remain exactly equal to
+their warm starts, while fixed-panel initializer and teacher-pair dense metrics
+must remain invariant from the control's first anchor. Any nonfinite value,
+invalid endpoint, skipped dense batch or coverage failure stops the experiment.
+
+With eight validation candidates, the Product-5 primary ranking gate is at
+least `19 / 96 = 0.198` top-1 and cross-entropy at most `1.704`. Retention floors
+are synthetic top-1 at least `26 / 48 = 0.542` with cross-entropy at most
+`1.629`, hard-synthetic top-1 at least `4 / 16 = 0.250`, and high-tilt top-1 at
+least `14 / 24 = 0.583` with cross-entropy at most `1.641`.
+
+Pose correction uses
+`E = AP_MAE / 60 um + LR_MAE / 0.9 deg + DV_MAE / 1.75 deg`. Product-5 final
+`E` must be at most `1.138`, below its frozen initializer, with no component
+more than 10 percent worse than the staged-run endpoint. Synthetic and
+high-tilt `E` may be no more than 5 percent worse; correspondence and Dice may
+fall by no more than 0.01 absolute. A conservative 0.1-times pretrained-module
+unfreeze is allowed only if every freeze, ranking, pose and retention gate
+passes. If Product-5 ranking fails while synthetic/high-tilt retention passes,
+the next experiment diagnoses the Product-5 negative lattice instead of
+unfreezing or enlarging the model.
