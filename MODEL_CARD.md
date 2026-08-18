@@ -28,6 +28,8 @@ The initial public coordinate contract is documented in [`docs/publication/COORD
 - AP in µm from bregma, anterior positive;
 - L--R and D--V tilt in degrees;
 - forward atlas-to-histology and inverse histology-to-atlas maps;
+- a point pose plus candidate-posterior/local-covariance outputs for later
+  animal-held-out calibration;
 - compatibility and a monotone risk score for ranking/abstention analysis;
 - intermediate recurrent states and audit metadata.
 
@@ -45,7 +47,9 @@ The model must pass separate pose-only, correct-plane warp-only and end-to-end t
 - Missing or pathological tissue may lack a valid atlas correspondence.
 - Synthetic accuracy cannot establish real-histology performance.
 - Human consensus is uncertain and not an absolute geometric truth.
-- The version-1 risk score is not a calibrated probability.
+- Development compatibility/risk scores are not calibrated probabilities.
+- Pose credible regions and downstream trajectory/region probabilities may be
+  shown as confidence only after animal-held-out calibration coverage passes.
 - The model is scoped to whole coronal adult mouse-brain sections and must not be assumed valid for partial fields, other species, sagittal/horizontal sections or clinical decisions.
 - A passed internal gate is not evidence of market-wide superiority. That language requires successful locked comparison with all applicable primary comparators.
 

@@ -11,6 +11,9 @@ The frozen software baseline is Git commit `c6681039e0b7acf35c9cdbee43040a3dca29
 - [`TRAINING_PROTOCOL.md`](TRAINING_PROTOCOL.md): staged training and experiment controls.
 - [`CONSTRAINTS.md`](CONSTRAINTS.md): deterministic AP, order, common-tilt and surgical constraints.
 - [`BENCHMARKS.md`](BENCHMARKS.md): comparators, metrics, statistics, ablations and runtime.
+- [`FUTURE_VALIDATION_PLAN.md`](FUTURE_VALIDATION_PLAN.md): deferred animal-level external validation and calibrated uncertainty.
 - [`BASELINE_LEDGER.md`](BASELINE_LEDGER.md): immutable statement of evidence available at the baseline commit.
 
-Machine-readable study, data, comparator, release-gate and exact synthetic-test contracts live in [`../../publication`](../../publication).
+Machine-readable study, cold-start architecture-screen, data, comparator,
+release-gate and exact synthetic-test contracts live in
+[`../../publication`](../../publication).

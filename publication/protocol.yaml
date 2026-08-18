@@ -166,6 +166,16 @@ constraints:
     surgical: "feasible pose and trajectory set from entry, angle, depth, probe geometry, observations"
   hard_constraint_satisfaction_required: 1.0
   infeasible_behavior: "return conflicts and minimum violation; never silently relax"
+probabilistic_pose:
+  required_architecture_output: "candidate energy distribution plus compact local covariance"
+  calibration_data: "held-out animals only"
+  point_accuracy_noninferiority_required: true
+  required_reports:
+    - "proper scoring rule"
+    - "50/80/90/95 percent empirical coverage and interval width"
+    - "risk-coverage and failure detection"
+    - "probabilistic trajectory volume and brain-region assignment"
+  gui_wording: "uncalibrated development energy is risk/compatibility, not confidence"
 evaluation:
   tracks:
     - "published_deepslice_reproduction"
@@ -217,3 +227,5 @@ documentation:
   data_lock: "publication/data.lock.yaml"
   exact_joint_test_contract: "publication/joint_test_contract.yaml"
   pretrained_initialization_lock: "publication/pretrained.lock.yaml"
+  cold_start_architecture_screen: "publication/architecture_screen.yaml"
+  deferred_validation_plan: "docs/publication/FUTURE_VALIDATION_PLAN.md"

@@ -1,0 +1,103 @@
+schema_version: "1.0"
+status: "frozen_before_cold_start_training"
+created_date: "2026-08-18"
+purpose: "Select the smallest self-contained joint pose/deformation architecture that survives matched development gates."
+
+independence:
+  initialization: "random"
+  learned_checkpoint_dependencies: []
+  prohibited_initializers:
+    - "AtlasPose"
+    - "AtlasWarp"
+    - "DeepSlice"
+    - "ImageNet or other external vision weights"
+  neutral_reusable_assets:
+    - "Allen CCFv3 template, annotation and ontology"
+    - "coordinate and map conventions"
+    - "deterministic atlas renderer"
+    - "synthetic geometry and artifact generators"
+    - "constraint solver and benchmark infrastructure"
+
+candidates:
+  factorized_cnn_control:
+    role: "serious non-recurrent control"
+    global_pose_and_pair_encoders: "separate compact grayscale/mask CNN pyramids"
+    hidden_state: false
+    fusion: "concatenation and absolute feature difference"
+  recurrent_local_correlation_convgru:
+    role: "leading candidate"
+    encoder: "modality-specific stems followed by a shared structural pyramid"
+    fusion: "local multiscale PWC/RAFT-style correlations"
+    hidden_state: "shared-weight ConvGRU"
+    outputs: ["pose increment", "candidate pose energy", "compact local pose covariance", "similarity increment", "validity mask", "stationary velocity residual"]
+  windowed_cross_attention:
+    role: "long-range correspondence ablation"
+    difference_from_leading_candidate: "replace the two coarsest correlation-fusion stages with local bidirectional windowed cross-attention"
+    prerequisite: "PyTorch-to-ONNX CPU and DirectML B1/B10 preflight"
+
+matching:
+  shared:
+    - "train/validation manifests and seeds"
+    - "unique-view budget and artifact curriculum"
+    - "pose, dense, topology, compatibility and validity losses"
+    - "candidate lattice and scheduled sampling"
+    - "optimizer-search budget and recurrence count"
+    - "point-pose and probabilistic-head supervision/calibration protocol"
+  tolerances:
+    parameters_relative: 0.10
+    macs_relative: 0.10
+    peak_vram_relative: 0.10
+  note: "Match repeated pair-processing compute, not parameter count alone."
+
+screen:
+  systems_check_views: 512
+  first_comparison_views: 25000
+  extension_views_maximum: 50000
+  seeds_during_first_comparison: 1
+  confirmatory_seeds_for_winner: 3
+  hidden_test_access: false
+  curriculum:
+    first_10_percent: "all branches train on exact pose, exact-plane dense maps, labels, boundaries and candidate ranking"
+    next_20_percent: "one correction iteration; teacher poses anneal toward live predictions"
+    remainder: "full closed loop, hard negatives, complete artifacts and mixed synthetic/real data"
+  product5_candidates:
+    loss: "singleton listwise cross-entropy"
+    negatives_per_slice: 6
+    axes_and_signs: ["+AP", "-AP", "+LR", "-LR", "+DV", "-DV"]
+    scheduled_levels: ["nearest", "100 um AP or 1 degree tilt", "wider"]
+    validation: "fresh specimen-disjoint panel"
+
+eligibility_before_ranking:
+  ap_mae_um_maximum: 60.0
+  lr_mae_deg_maximum: 0.90
+  dv_mae_deg_maximum: 1.75
+  absolute_ap_bias_um_maximum: 25.0
+  ap_p95_um_maximum: 150.0
+  exact_visible_foreground_correspondence_minimum: 0.98
+  exact_macro_region_dice_minimum: 0.95
+  negative_jacobian_fraction_maximum: 0.0
+  invalid_map_count_maximum: 0
+  nonfinite_output_count_maximum: 0
+  crash_count_maximum: 0
+  ten_slice_p95_seconds_maximum: 180
+
+selection_order:
+  - "real validation physical corresponding-plane distance"
+  - "real validation landmark TRE when available"
+  - "exact synthetic correspondence, macro Dice and tail error"
+  - "wrong-plane error ranking and risk-coverage"
+  - "runtime and model size, choosing the simpler candidate inside the practical-equivalence margin"
+
+winner_ablations:
+  - "one pass versus four and eight recurrent updates"
+  - "hidden state versus stateless repeated update"
+  - "registration-to-pose gradient stopped"
+  - "compatibility ranking removed"
+  - "integrated stationary velocity versus raw displacement"
+  - "validity head removed"
+  - "single-slice versus lightweight slice-token attention"
+  - "point-only versus probabilistic pose head with point-accuracy noninferiority"
+
+legacy_evidence:
+  warm_start_joint_runs: "exploratory diagnostic only"
+  frozen_old_pipeline: "comparator only"
