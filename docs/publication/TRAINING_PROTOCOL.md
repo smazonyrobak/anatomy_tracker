@@ -61,11 +61,11 @@ reported separately, but it cannot determine the shipped weights.
 
 - physical plane-anchor loss and component pose likelihood;
 - coarse-bin/residual loss where used;
-- singleton positive-versus-hard-negative compatibility ranking on exact
-  synthetic pairs;
-- Product-5 acceptable-set listwise cross-entropy over the frozen
-  sub-resolution set (AP 25/50 um and L--R/D--V 0.25/0.5 degrees), with
-  balanced signed resolvable negatives in every real list;
+- singleton positive-versus-hard-negative listwise ranking on exact synthetic
+  and Product-5 pairs;
+- six sign-balanced one-axis Product-5 negatives (`+/- AP`, `+/- L--R`,
+  `+/- D--V`) whose scheduled levels cover nearest, `100 um / 1 deg`
+  resolvable and wider offsets;
 - forward and inverse visible-pixel endpoint error on exact synthetic pairs;
 - label/hierarchy and boundary correspondence;
 - inverse and gradient-inverse consistency;

@@ -282,15 +282,19 @@ criterion did not pass either. Exhaustive resolvable-only top-1 remained low
 (`16/96` registration; `2/96` reviewer), demonstrating severe multi-candidate
 crowding and direction-specific transfer rather than a single frame failure.
 
-For future cold-start experiments, this evidence changes Product-5 ranking
-supervision but does not relax evaluation. Real Product-5 lists use a
-prespecified acceptable-set cross-entropy
-`logsumexp(all logits) - logsumexp(logits[A])`, where `A` contains the metadata
-plane and sub-resolution candidates at AP 25/50 um and L--R/D--V 0.25/0.5
-degrees. Every real list must also contain balanced signed resolvable
-negatives. Exact synthetic pairs retain singleton hard-label cross-entropy and
-all fine offsets. Exact Product-5 top-1 remains reported descriptively; the
-loss policy is not a claim that the audit proved symmetric label noise.
+For future cold-start experiments, this evidence changes Product-5 candidate
+construction but does not relax labels or evaluation. Singleton listwise
+cross-entropy is retained because the conjunctive ambiguity rule failed. Each
+real Product-5 list instead contains six sign-balanced one-axis negatives
+(`+/- AP`, `+/- L--R`, `+/- D--V`), with levels scheduled across batches to
+cover nearest, the prespecified `100 um / 1 deg` resolvable boundary and wider
+offsets. The former K=3 construction supplied only one randomly signed nearest
+negative per axis and therefore never taught consistent signed resolvable
+ordering. Exact synthetic training remains unchanged. If this balanced
+cold-start experiment still fails exhaustive ranking on a fresh
+specimen-disjoint validation panel, a monotonic lattice-ranking term must be
+prespecified before it is tested; label tolerance cannot be inferred from this
+consumed audit.
 
 The v2 report, pair CSV and orientation CSV SHA-256 values are respectively
 `d61e2ec6077639111ed59d1d0909f7ca6f1043d3138dc074d1580df6f464ee00`,
