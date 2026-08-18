@@ -75,7 +75,7 @@ from training.train_joint_pose_registration import (
 )
 
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 CONTROL_RUN_NAME = "joint-review-mixed-2000-r4322"
 CONTROL_SOURCE_CONFIG = Path(__file__).parent / "configs" / "joint_review_mixed_2000_r4322.json"
 CONTROL_SOURCE_CONFIG_SHA256 = "dfb4714d2cfc4e369e5d9ca3aab0ad81841dfe36ca20ac0953938c9500f9057b"
@@ -114,6 +114,8 @@ REGISTRATION_COMPONENT_COLUMNS = {
 }
 BOOTSTRAP_REPLICATES = 10_000
 BOOTSTRAP_SEED = 930_731
+OUV_RESIDUAL_AXES = ("ap_um", "lr_deg", "dv_deg")
+OUV_FLOAT32_TOLERANCE = {"ap_um": 0.01, "lr_deg": 1e-4, "dv_deg": 1e-4}
 FRAME_CONTROL_POSE = (-1450.0, 7.0, -4.0)
 FRAME_CONTROL_TRANSFORM = {
     "rotation_deg": 8.0,
@@ -843,6 +845,27 @@ def _current_execution_contract() -> dict:
     }
 
 
+def _ouv_rederivation_receipt(rows: list[dict]) -> dict:
+    maxima = np.asarray([row["absolute_pose_residual"] for row in rows]).max(axis=0)
+    tolerances = np.asarray([OUV_FLOAT32_TOLERANCE[axis] for axis in OUV_RESIDUAL_AXES])
+    component_pass = maxima <= tolerances
+    return {
+        "metadata_ouv_rederivation_max_absolute_residual": dict(
+            zip(OUV_RESIDUAL_AXES, maxima.tolist())
+        ),
+        "metadata_ouv_rederivation_float32_tolerance": dict(OUV_FLOAT32_TOLERANCE),
+        "metadata_ouv_rederivation_tolerance_rationale": (
+            "Per-axis allowance for float32 metadata roundtrip only; 0.01 um and "
+            "0.0001 deg are far below the atlas sampling and evaluated pose resolution."
+        ),
+        "metadata_ouv_rederivation_component_pass": dict(
+            zip(OUV_RESIDUAL_AXES, component_pass.tolist())
+        ),
+        "metadata_ouv_rederivation_pass": bool(component_pass.all()),
+        "metadata_ouv_rederivation_rows": rows,
+    }
+
+
 def _bind_current_data_contract(checkpoint_receipt: dict, data: JointRegisteredData) -> None:
     checkpoint_contract = checkpoint_receipt.get("checkpoint_generator_contract")
     if not isinstance(checkpoint_contract, dict):
@@ -1395,7 +1418,6 @@ def evaluate_registered_candidate_offsets(
                 orientation_rows.extend(variant_values)
 
     valid_rows = [row for row in rows if row["candidate_in_domain"]]
-    ouv_residual = np.asarray([row["absolute_pose_residual"] for row in ouv_rows])
     atlas_self_render = _atlas_frame_control(model, data, chunk_size=chunk_size)
     report = {
         "format_version": FORMAT_VERSION,
@@ -1442,10 +1464,7 @@ def evaluate_registered_candidate_offsets(
             ),
         },
         "frame_receipt": {
-            "metadata_ouv_rederivation_max_absolute_residual": ouv_residual.max(0).tolist(),
-            "metadata_ouv_rederivation_float32_tolerance": 1e-5,
-            "metadata_ouv_rederivation_pass": bool(ouv_residual.max() <= 1e-5),
-            "metadata_ouv_rederivation_rows": ouv_rows,
+            **_ouv_rederivation_receipt(ouv_rows),
             "atlas_self_render": atlas_self_render,
         },
         "pair_count": len(rows),

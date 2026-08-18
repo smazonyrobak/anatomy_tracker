@@ -332,6 +332,27 @@ def test_frame_control_is_handedness_preserving_and_flags_evidence_independently
     assert report["reviewer_variant_flag"] is False
 
 
+def test_ouv_rederivation_uses_componentwise_float32_tolerances():
+    observed = evaluator._ouv_rederivation_receipt(
+        [{"absolute_pose_residual": [0.000194514, 1.13e-7, 3.90e-7]}]
+    )
+    assert evaluator.FORMAT_VERSION == 2
+    assert observed["metadata_ouv_rederivation_pass"] is True
+    assert all(observed["metadata_ouv_rederivation_component_pass"].values())
+    assert observed["metadata_ouv_rederivation_float32_tolerance"] == {
+        "ap_um": 0.01,
+        "lr_deg": 1e-4,
+        "dv_deg": 1e-4,
+    }
+    assert "far below" in observed["metadata_ouv_rederivation_tolerance_rationale"]
+
+    drifted = evaluator._ouv_rederivation_receipt(
+        [{"absolute_pose_residual": [0.1, 0.01, 0.01]}]
+    )
+    assert drifted["metadata_ouv_rederivation_pass"] is False
+    assert not any(drifted["metadata_ouv_rederivation_component_pass"].values())
+
+
 def test_physical_plane_distance_and_evidence_receipts_are_explicit(monkeypatch):
     data = SimpleNamespace(
         device=torch.device("cpu"),
