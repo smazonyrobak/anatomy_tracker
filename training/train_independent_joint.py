@@ -865,6 +865,35 @@ def _validate_development_panel(
     return metric, panel_hash
 
 
+def _checkpoint_matches_selected_best(
+    checkpoint: dict,
+    lineage: dict,
+    best_metric: float,
+    train_animal_ids,
+    panel_contract_sha256: str | None,
+) -> bool:
+    if (
+        checkpoint.get("format") != "independent-joint-cold-start-v1"
+        or checkpoint.get("lineage") != lineage
+        or checkpoint.get("learned_checkpoint_dependencies") != []
+        or checkpoint.get("checkpoint_selection_state") != "ema"
+        or checkpoint.get("development_panel") is None
+    ):
+        return False
+    try:
+        metric, _ = _validate_development_panel(
+            checkpoint["development_panel"],
+            int(checkpoint["step"]),
+            train_animal_ids,
+            panel_contract_sha256,
+        )
+        return math.isclose(metric, best_metric, rel_tol=0.0, abs_tol=1e-12) and math.isclose(
+            float(checkpoint["best_metric"]), best_metric, rel_tol=0.0, abs_tol=1e-12
+        )
+    except (KeyError, TypeError, ValueError, RuntimeError):
+        return False
+
+
 def train_independent_joint(
     model: IndependentJointModel,
     renderer,
@@ -992,6 +1021,30 @@ def train_independent_joint(
         best_metric = float(saved["best_metric"])
         evaluated_panels = list(saved["evaluated_panels"])
         _set_rng_state(saved["rng_state"])
+        if math.isfinite(best_metric):
+            existing_best = (
+                torch.load(best_path, map_location=device, weights_only=False)
+                if best_path.is_file()
+                else None
+            )
+            if existing_best is None or not _checkpoint_matches_selected_best(
+                existing_best,
+                lineage,
+                best_metric,
+                supplied_ids,
+                development_panel_contract_sha256,
+            ):
+                if not _checkpoint_matches_selected_best(
+                    saved,
+                    lineage,
+                    best_metric,
+                    supplied_ids,
+                    development_panel_contract_sha256,
+                ):
+                    raise RuntimeError(
+                        "best checkpoint is stale or missing and latest cannot repair it"
+                    )
+                _atomic_save(saved, best_path)
     else:
         random.seed(seed)
         np.random.seed(seed)

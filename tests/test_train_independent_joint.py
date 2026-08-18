@@ -537,6 +537,76 @@ def test_development_selection_runs_on_ema_and_records_selected_state(tmp_path):
     assert checkpoint["development_panel"]["raw_predictions"][0]["animal_id"] == 999
 
 
+def test_resume_repairs_best_checkpoint_from_validated_latest_kill_window(tmp_path):
+    renderer = TinyRenderer(height=16, width=24)
+    template = _batch(renderer, batch_size=1, dense=False)
+
+    def provider(step, counter):
+        return {
+            name: value.clone() if torch.is_tensor(value) else list(value)
+            if isinstance(value, list) else value
+            for name, value in template.items()
+        }
+
+    def evaluator(model, step):
+        return {
+            "partition": "validation",
+            "fresh_checkpoint_step": step,
+            "panel_manifest_sha256": "c" * 64,
+            "panel_contract_sha256": "d" * 64,
+            "animal_ids": [999],
+            "selection_metric": 0.25,
+            "raw_predictions": [{
+                "animal_id": 999,
+                "record_provenance_sha256": "e" * 64,
+                "candidate_score_softmax_uncalibrated": [1.0],
+                "initializer_covariance": [[1.0]],
+            }],
+        }
+
+    providers = {name: provider for name in ("regular_synthetic", "high_tilt", "product5")}
+    result = train_independent_joint(
+        _model(seed=44),
+        renderer,
+        providers,
+        STREAM_CONTRACTS,
+        tmp_path,
+        1,
+        seed=7,
+        amp=False,
+        checkpoint_interval=1,
+        evaluate_every=1,
+        development_evaluator=evaluator,
+        development_panel_contract_sha256="d" * 64,
+        train_animal_ids=[100],
+        resume=False,
+    )
+    latest = torch.load(result["latest_checkpoint"], weights_only=False)
+    result["best_checkpoint"].unlink()
+    assert not result["best_checkpoint"].exists()
+
+    repaired = train_independent_joint(
+        _model(seed=999),
+        renderer,
+        providers,
+        STREAM_CONTRACTS,
+        tmp_path,
+        1,
+        seed=7,
+        amp=False,
+        checkpoint_interval=1,
+        evaluate_every=1,
+        development_evaluator=evaluator,
+        development_panel_contract_sha256="d" * 64,
+        train_animal_ids=[100],
+        resume=True,
+    )
+    repaired_best = torch.load(repaired["best_checkpoint"], weights_only=False)
+    assert repaired_best["lineage"] == latest["lineage"]
+    assert repaired_best["best_metric"] == latest["best_metric"] == 0.25
+    assert repaired_best["development_panel"] == latest["development_panel"]
+
+
 def test_atomic_resume_is_deterministic_and_checkpoint_lineage_is_random(tmp_path):
     renderer_a = TinyRenderer(height=16, width=24)
     template = _batch(renderer_a, batch_size=1, dense=False)
