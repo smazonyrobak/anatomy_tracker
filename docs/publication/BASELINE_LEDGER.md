@@ -498,3 +498,46 @@ and final-test data remain untouched. Exact paths and independently recomputed
 artifact hashes are recorded in
 `publication/initializer_foundation_attempts.yaml`; the original run artifacts
 were not rewritten.
+
+### Pose-readout identifiability diagnostic
+
+The failed foundation attempts were followed by a narrower development-only
+diagnostic at commit `966743a45efc4585dde03261dbbf09e0efcc3a6f` and config
+contract `c7a1ce8e2808cb14cc806075a397053e54eea7886b45ed105855a6da09073d26`.
+It trained only the randomly initialized source-image pyramid and categorical
+plus sub-bin pose readout; atlas, recurrent and dense-registration parameters
+were frozen. The fixed absent-outline synthetic construct contained 24 latent
+poses spanning six AP levels and all sign combinations of 13.25-degree L--R
+and 18.25-degree D--V tilt. Two 24-case panels used the seen nuisance-transform
+set, while two 24-case panels used a disjoint generator realization and held
+rotation/scale values. Product-5, calibration and final-test access were false,
+and the learned-checkpoint dependency list was empty.
+
+The run reached its terminal 300 optimizer updates and 7,200 sample
+presentations without a non-finite training or evaluation value. Its
+post-warm-up gradient-clipped fraction was `0.30`, below the prespecified
+strict maximum of `0.50`. Nevertheless, accuracy on the 48 seen-transform
+cases was only `0.3125 / 0.6458333 / 0.7916667` for AP / L--R / D--V bins,
+against gates of `0.95 / 0.90 / 0.90`. Residual learning was worse than the
+zero-residual bin-centre baseline on every axis, with relative improvements of
+`-36.4744 / -11.5419 / -9.2451`.
+
+On the 48 held-transform cases, AP / L--R / D--V MAE was
+`1425.3208 um / 12.7109 deg / 15.2627 deg`, missing the respective
+`250 um / 3 deg / 3 deg` gates. The corresponding-plane error was
+`1673.2141 um`, compared with `1403.5191 um` for the constant-pose prior, so
+the defined physical improvement was `-0.1921563` rather than the required
+`0.50`. Held residual improvements were also negative on all axes
+(`-37.0086 / -15.9478 / -19.3503`). Prediction-to-truth standard-deviation
+ratios did pass, showing that the failure was not merely a constant-output
+collapse.
+
+The prespecified terminal classification is therefore
+`pose-representation-not-identifiable-on-seen-transforms`. This is not a
+benchmark, an accuracy claim or a model-selection result. It authorizes only a
+controlled spatially aware pose-readout diagnostic on consumed development
+data, with the comparison contract and protected-data boundary held fixed; it
+does not authorize architecture promotion or calibration/final-test access.
+The sole state artifact is an atomic resume state, explicitly not a selected
+model checkpoint. Exact receipt, state, raw-prediction and log hashes are in
+`publication/pose_identifiability_diagnostic.yaml`.

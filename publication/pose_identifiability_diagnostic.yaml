@@ -1,0 +1,159 @@
+schema_version: "1.0"
+status: "completed_development_diagnostic_not_identifiable"
+recorded_date: "2026-08-18"
+purpose: "Immutable evidence record for the cold-start pose-identifiability diagnostic; not a benchmark, accuracy claim, or model-selection result."
+
+lineage:
+  source_commit: "966743a45efc4585dde03261dbbf09e0efcc3a6f"
+  config_path: "training/configs/independent_pose_identifiability_300_r4322.json"
+  config_file_sha256: "efcd541ed9824ca286ff065a0cd7693091cac13bbb353459a8d7f289b2aada6b"
+  config_contract_sha256: "c7a1ce8e2808cb14cc806075a397053e54eea7886b45ed105855a6da09073d26"
+  setup_sha256: "8d6971a0df12da0b2f471cbddcb0cd41f933d26912076af772edeb8933d28219"
+  initial_state_sha256: "370934a18d8d873c3ced7a0ed17a963b929c9ceb452190e64c92047f7f1136a6"
+  frozen_parameter_initial_sha256: "8e2ff2cc8329f93e9cdf856f602c516d221b170a36290e2128f68be3b01e49c4"
+  learned_checkpoint_dependencies: []
+
+access:
+  data_source: "synthetic CCF only"
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+
+protocol:
+  role: "diagnostic-not-model-selection"
+  trainable_scope: "source-image pyramid and categorical plus sub-bin pose readout"
+  frozen_scope: "atlas-image stem, recurrent candidate reviewer, and dense-registration decoder"
+  optimizer: "AdamW"
+  learning_rate: 0.0002
+  amp_enabled: true
+  amp_initial_scale: 512.0
+  maximum_optimizer_updates: 300
+  terminal_optimizer_updates: 300
+  terminal_sample_presentations: 7200
+  fixed_panel:
+    contract_sha256: "2a33bae4328bca856a4b3ae2d5bfa4be3338f1b1ad834d16e4d8eee279645f1e"
+    outline_mode: "absent"
+    latent_pose_count: 24
+    seen_sample_count: 48
+    held_sample_count: 48
+    seen_panels: 2
+    held_panels: 2
+    held_generator_realization_disjoint_from_seen: true
+    held_nuisance_values_disjoint_from_seen: true
+    generator_realization_sha256:
+      seen: "b7520c0039fc0bd6dc90dbe52fe85b30b3c11a67f16e57b5cdf0841985f7870b"
+      held: "cbd53462be2d432742926b067fcebb2e78aa7d301fb2bac1ea8d0a87c317e5f7"
+  decode: "argmax-bin-center-plus-bounded-sub-bin-residual"
+  physical_metric: "deepslice-corresponding-pixel-plane-distance-v1"
+
+prespecified_gates:
+  seen_bin_accuracy_minimum:
+    ap: 0.95
+    lr: 0.90
+    dv: 0.90
+  held_mae_maximum:
+    ap_um: 250.0
+    lr_deg: 3.0
+    dv_deg: 3.0
+  held_physical_improvement_over_constant_prior_minimum: 0.50
+  residual_improvement_over_zero_minimum_each_axis: 0.20
+  postwarm_gradient_clipped_fraction_strict_maximum: 0.50
+  nonfinite_count_maximum: 0
+
+results:
+  terminal_status: "stop"
+  nonfinite_training_count: 0
+  nonfinite_evaluation_output_count: 0
+  postwarm_gradient_clipped_fraction: 0.30
+  fixed_panel_result_sha256: "c013143e20bdeff9345e7d1a8842abbac9dbcc7db01ecc4e9c2d1061529a2a26"
+  seen:
+    sample_count: 48
+    bin_accuracy:
+      ap: 0.3125
+      lr: 0.6458333134651184
+      dv: 0.7916666865348816
+    mae:
+      ap_um: 1405.2894287109375
+      lr_deg: 9.406439781188965
+      dv_deg: 7.6838059425354
+    physical_corresponding_plane_error_um: 1549.7160082437942
+    residual_improvement_over_zero:
+      ap: -36.47438430786133
+      lr: -11.541919708251953
+      dv: -9.245074272155762
+  held:
+    sample_count: 48
+    bin_accuracy:
+      ap: 0.2916666567325592
+      lr: 0.5208333134651184
+      dv: 0.5833333134651184
+    mae:
+      ap_um: 1425.32080078125
+      lr_deg: 12.710857391357422
+      dv_deg: 15.26272201538086
+    physical_corresponding_plane_error_um: 1673.2140725937625
+    constant_prior_physical_error_um: 1403.519090756721
+    physical_improvement_over_constant_prior: -0.19215626179451029
+    prediction_to_truth_sd_ratio:
+      ap: 0.8596099019050598
+      lr: 0.7582949995994568
+      dv: 0.9609284996986389
+    residual_improvement_over_zero:
+      ap: -37.0085563659668
+      lr: -15.947809219360352
+      dv: -19.350296020507812
+
+qualification:
+  decision: "stop"
+  classification: "pose-representation-not-identifiable-on-seen-transforms"
+  numerically_stable: true
+  seen_bin_accuracy_gates_passed: false
+  held_mae_gates_passed: false
+  held_physical_improvement_gate_passed: false
+  seen_residual_gates_passed: false
+  held_residual_gates_passed: false
+  prediction_spread_gate_passed: true
+  clipping_gate_passed: true
+
+storage:
+  run_root: 'F:\AtlasJointTraining\runs\independent-pose-identifiability-r4322-c7a1ce8e\independent-pose-identifiability-300-r4322-v1'
+  artifact_policy: "single-atomic-resume-state-not-a-selected-model-checkpoint"
+  artifacts:
+    diagnostic_receipt:
+      path: 'F:\AtlasJointTraining\runs\independent-pose-identifiability-r4322-c7a1ce8e\independent-pose-identifiability-300-r4322-v1\diagnostic_receipt.json'
+      bytes: 253482
+      sha256: "eff87bcf62369aa58f843c0f39757b486e980fd9486c9fb43befd6810d82477c"
+    resume_state:
+      path: 'F:\AtlasJointTraining\runs\independent-pose-identifiability-r4322-c7a1ce8e\independent-pose-identifiability-300-r4322-v1\resume_state.pt'
+      bytes: 8171947
+      sha256: "37a7a56fcf353271e2afd6a3bfa74d42f35d2064fd237ebca2518cb33b19b90d"
+    fixed_panel_predictions:
+      path: 'F:\AtlasJointTraining\runs\independent-pose-identifiability-r4322-c7a1ce8e\independent-pose-identifiability-300-r4322-v1\fixed_panel_predictions.json'
+      bytes: 118910
+      sha256: "0d0a2c518ab67f1694cf9414e5dee80760ec9aaf5c0edf38f1ff8f17b751bf55"
+    stdout:
+      path: 'F:\AtlasJointTraining\logs\independent-pose-identifiability-r4322-c7a1ce8e\stdout.log'
+      bytes: 2960
+      sha256: "ede78ef8383e86570447468814bb917ec5a0c33b435d919c64dbb89bfffb6d4b"
+    stderr:
+      path: 'F:\AtlasJointTraining\logs\independent-pose-identifiability-r4322-c7a1ce8e\stderr.log'
+      bytes: 0
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+integrity_audit:
+  artifact_sha256_recomputed_from_f_drive: true
+  resume_state_hash_matches_receipt: true
+  prediction_result_hash_matches_receipt: true
+  terminal_progress_matches_stdout: true
+  stderr_bytes: 0
+  original_artifacts_rewritten: false
+  development_construct_consumed: true
+  calibration_access: false
+  final_test_access: false
+
+decision:
+  model_selected: false
+  architecture_winner: null
+  accuracy_claim: false
+  promotion_authorized: false
+  authorized_next_step: "Controlled spatially aware pose-readout diagnostic on development data only, with the comparison contract and protected-data boundary unchanged."
