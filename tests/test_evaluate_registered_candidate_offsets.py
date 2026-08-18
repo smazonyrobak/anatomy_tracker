@@ -362,8 +362,22 @@ def test_physical_plane_distance_and_evidence_receipts_are_explicit(monkeypatch)
 def test_current_execution_atlas_and_product5_contracts_must_equal_checkpoint_contracts(
     monkeypatch,
 ):
-    atlas_contract = {"contract_sha256": "atlas"}
-    registered_contract = {"contract_sha256": "registered"}
+    expected_atlas_contract = {
+        "contract_sha256": "atlas",
+        "model_shape": [320, 464],
+    }
+    current_atlas_contract = {
+        "contract_sha256": "atlas",
+        "model_shape": (320, 464),
+    }
+    expected_registered_contract = {
+        "contract_sha256": "registered",
+        "fixed_positions": [[1, 2, 3]],
+    }
+    current_registered_contract = {
+        "contract_sha256": "registered",
+        "fixed_positions": [(1, 2, 3)],
+    }
     execution_contract = {
         "source_sha256": {"model": "model-source"},
         "preprocessing_contract": {"version": "preprocessing-v1"},
@@ -374,22 +388,25 @@ def test_current_execution_atlas_and_product5_contracts_must_equal_checkpoint_co
     receipt = {
         "checkpoint_generator_contract": {
             **execution_contract,
-            "synthetic": atlas_contract,
-            "registered_validation": registered_contract,
+            "synthetic": expected_atlas_contract,
+            "registered_validation": expected_registered_contract,
         }
     }
     data = SimpleNamespace(
-        contract=registered_contract,
+        contract=current_registered_contract,
         joint_synthetic_data=SimpleNamespace(
-            generator=SimpleNamespace(contract=atlas_contract)
+            generator=SimpleNamespace(contract=current_atlas_contract)
         ),
     )
     evaluator._bind_current_data_contract(receipt, data)
-    assert receipt["current_data_contract"]["comparison"].startswith("exact equality")
+    assert "canonical JSON equality" in receipt["current_data_contract"]["comparison"]
+    assert receipt["current_data_contract"]["atlas_generator_sha256"] == (
+        evaluator._json_sha256(expected_atlas_contract)
+    )
     assert receipt["current_data_contract"]["source_sha256"] == execution_contract[
         "source_sha256"
     ]
-    data.contract = {"contract_sha256": "changed"}
+    data.joint_synthetic_data.generator.contract["model_shape"] = (320, 465)
     with pytest.raises(ValueError, match="current atlas or Product-5"):
         evaluator._bind_current_data_contract(receipt, data)
 

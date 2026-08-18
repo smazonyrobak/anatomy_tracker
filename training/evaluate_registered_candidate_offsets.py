@@ -864,12 +864,14 @@ def _bind_current_data_contract(checkpoint_receipt: dict, data: JointRegisteredD
         "atlas_generator": data.joint_synthetic_data.generator.contract,
         "registered_validation": data.contract,
     }
-    if current != expected:
+    expected_hashes = {name: _json_sha256(value) for name, value in expected.items()}
+    current_hashes = {name: _json_sha256(value) for name, value in current.items()}
+    if current_hashes != expected_hashes:
         raise ValueError("current atlas or Product-5 validation contract differs from the control")
     checkpoint_receipt["current_data_contract"] = {
         "comparison": (
-            "exact equality with checkpoint source_sha256, preprocessing_contract, "
-            "synthetic, and registered_validation"
+            "exact source/preprocessing equality and canonical JSON equality with "
+            "checkpoint synthetic and registered_validation"
         ),
         "source_sha256": current_execution["source_sha256"],
         "source_sha256_sha256": _json_sha256(current_execution["source_sha256"]),
@@ -877,8 +879,8 @@ def _bind_current_data_contract(checkpoint_receipt: dict, data: JointRegisteredD
         "preprocessing_contract_sha256": _json_sha256(
             current_execution["preprocessing_contract"]
         ),
-        "atlas_generator_sha256": _json_sha256(current["atlas_generator"]),
-        "registered_validation_sha256": _json_sha256(current["registered_validation"]),
+        "atlas_generator_sha256": current_hashes["atlas_generator"],
+        "registered_validation_sha256": current_hashes["registered_validation"],
     }
 
 
