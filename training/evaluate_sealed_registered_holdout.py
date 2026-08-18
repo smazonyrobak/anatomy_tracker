@@ -49,6 +49,11 @@ from training.atlas_pose_release_contract import (
     release_quality_gate,
     validate_complete_method_cohort,
 )
+from training.deepslice_benchmark_orientation import (
+    DEEPSLICE_ORIENTATION_ADAPTER_VERSION,
+    horizontal_image_frame_ouv,
+    horizontally_flipped_deepslice_inputs,
+)
 
 
 # Final-only v7 comparison against frozen DeepSlice modes on specimen-separated registered sections.
@@ -162,6 +167,7 @@ def evaluator_environment_commitment() -> dict:
     source_paths = (
         Path(__file__),
         ROOT / "training" / "atlas_pose_release_contract.py",
+        ROOT / "training" / "deepslice_benchmark_orientation.py",
         ROOT / "source" / "atlas_pose_runtime.py",
         ROOT / "source" / "deepslice_runtime.py",
         ROOT / "source" / "registered_image_quality.py",
@@ -810,45 +816,69 @@ def _propagate_angles(table: pd.DataFrame) -> pd.DataFrame:
 
 def run_deepslice_modes(records: list[dict], paths: list[Path]) -> tuple[dict[str, np.ndarray], dict]:
     """Run published AI, MEns-AI, and MEns-AI-CI states for one experiment."""
-    messages = queue.SimpleQueue()
-    ensemble_records, version, hashes, _, runtime = run_deepslice_inference(
-        list(map(str, paths)), messages, threading.Event()
-    )
-    ensemble = _ordered_table(records, ensemble_records)
+    # DeepSlice expects the opposite horizontal raster view.  The frozen raw bytes
+    # and ground truth remain untouched; only temporary model inputs are flipped.
+    with horizontally_flipped_deepslice_inputs(paths) as deepslice_paths:
+        messages = queue.SimpleQueue()
+        ensemble_records, version, hashes, _, runtime = run_deepslice_inference(
+            list(map(str, deepslice_paths)), messages, threading.Event()
+        )
+        ensemble = _ordered_table(records, ensemble_records)
 
-    inputs, widths, heights = preprocess_deepslice_images(list(map(str, paths)))
-    force_cpu = runtime["backend"] == "ONNX Runtime CPU"
-    sessions, _, _, _ = load_deepslice_onnx_sessions(force_cpu)
-    primary_values = sessions["primary"].run(["Identity:0"], {"images": inputs})[0]
-    primary_records = [
-        {
-            "Filenames": path.name,
-            **dict(zip(OUV_COLUMNS, map(float, values))),
-            "width": int(width),
-            "height": int(height),
-        }
-        for path, values, width, height in zip(paths, primary_values, widths, heights)
-    ]
-    primary = _ordered_table(records, primary_records)
+        inputs, widths, heights = preprocess_deepslice_images(list(map(str, deepslice_paths)))
+        force_cpu = runtime["backend"] == "ONNX Runtime CPU"
+        sessions, _, _, _ = load_deepslice_onnx_sessions(force_cpu)
+        primary_values = sessions["primary"].run(["Identity:0"], {"images": inputs})[0]
+        primary_records = [
+            {
+                "Filenames": path.name,
+                **dict(zip(OUV_COLUMNS, map(float, values))),
+                "width": int(width),
+                "height": int(height),
+            }
+            for path, values, width, height in zip(paths, primary_values, widths, heights)
+        ]
+        primary = _ordered_table(records, primary_records)
 
-    ai = _propagate_angles(primary)
-    mens_ai = _propagate_angles(ensemble)
-    from DeepSlice.coord_post_processing import spacing_and_indexing
+        ai = _propagate_angles(primary)
+        mens_ai = _propagate_angles(ensemble)
+        from DeepSlice.coord_post_processing import spacing_and_indexing
 
-    mens_ai_ci = spacing_and_indexing.enforce_section_ordering(mens_ai.copy())
-    mens_ai_ci = spacing_and_indexing.space_according_to_index(
-        mens_ai_ci,
-        section_thickness=None,
-        voxel_size=VOXEL_UM,
-        suppress=True,
-        species="mouse",
-    )
-    return (
-        {
-            "deepslice_ai": ai.loc[:, OUV_COLUMNS].to_numpy(np.float64),
-            "deepslice_mens_ai": mens_ai.loc[:, OUV_COLUMNS].to_numpy(np.float64),
-            "deepslice_mens_ai_ci": mens_ai_ci.loc[:, OUV_COLUMNS].to_numpy(np.float64),
+        mens_ai_ci = spacing_and_indexing.enforce_section_ordering(mens_ai.copy())
+        mens_ai_ci = spacing_and_indexing.space_according_to_index(
+            mens_ai_ci,
+            section_thickness=None,
+            voxel_size=VOXEL_UM,
+            suppress=True,
+            species="mouse",
+        )
+
+    # Only after AI/MEns/cutting-index processing is the physical plane expressed
+    # back in the immutable raw-image frame: H(O,U,V) = (O+U,-U,V).
+    modes = {
+        "deepslice_ai": horizontal_image_frame_ouv(
+            ai.loc[:, OUV_COLUMNS].to_numpy(np.float64)
+        ),
+        "deepslice_mens_ai": horizontal_image_frame_ouv(
+            mens_ai.loc[:, OUV_COLUMNS].to_numpy(np.float64)
+        ),
+        "deepslice_mens_ai_ci": horizontal_image_frame_ouv(
+            mens_ai_ci.loc[:, OUV_COLUMNS].to_numpy(np.float64)
+        ),
+    }
+    runtime = {
+        **runtime,
+        "orientation_adapter": {
+            "version": DEEPSLICE_ORIENTATION_ADAPTER_VERSION,
+            "input_horizontal_raster_flips": 1,
+            "output_ouv_transform": "H(O,U,V)=(O+U,-U,V)",
+            "output_transform_after_official_postprocessing": True,
+            "raw_images_or_ground_truth_modified": False,
+            "physical_atlas_ml_reflection": False,
         },
+    }
+    return (
+        modes,
         {
             "version": version,
             "model_sha256": hashes,

@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 
 import training.evaluate_sealed_registered_holdout as evaluator
 from training.evaluate_sealed_registered_holdout import (
@@ -22,6 +23,11 @@ from training.evaluate_sealed_registered_holdout import (
     verify_complete_sealed_image_hashes,
 )
 from training.atlas_pose_release_contract import RELEASE_GATE_THRESHOLDS
+from training.deepslice_benchmark_orientation import (
+    DEEPSLICE_ORIENTATION_ADAPTER_VERSION,
+    horizontal_image_frame_ouv,
+    horizontally_flipped_deepslice_inputs,
+)
 from source.atlas_pose_runtime import (
     ATLAS_POSE_PREPROCESSING_VERSION,
     AUTOMATIC_BRAIN_MASK_VERSION,
@@ -79,6 +85,149 @@ def test_annotation_mask_maps_quicknii_r_directly_to_asymmetric_ccf_ml():
     ouv = np.asarray([-126.0, 526.0, 318.0, 708.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     mask = evaluator.annotation_brain_mask(ouv, annotation, shape=(1, 2))
     assert np.array_equal(mask, np.asarray([[True, False]]))
+
+
+def test_deepslice_horizontal_adapter_preserves_asymmetric_physical_plane_and_laterality(
+    tmp_path: Path,
+):
+    raw_ouv = np.asarray(
+        [40.0, 275.0, 260.0, 390.0, 28.0, 12.0, 15.0, -18.0, -255.0]
+    )
+    raw_pose = evaluator.quicknii_to_tracker_pose(raw_ouv)
+    assert abs(raw_pose[1]) > 1.0
+    assert abs(raw_pose[2]) > 1.0
+
+    canonical_ouv = horizontal_image_frame_ouv(raw_ouv)
+    assert np.array_equal(horizontal_image_frame_ouv(canonical_ouv), raw_ouv)
+    assert np.allclose(evaluator.quicknii_to_tracker_pose(canonical_ouv), raw_pose)
+    for raw_s, vertical_t in (
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (0.0, 1.0),
+        (1.0, 1.0),
+        (0.18, 0.37),
+        (0.73, 0.62),
+    ):
+        raw_point = raw_ouv[:3] + raw_s * raw_ouv[3:6] + vertical_t * raw_ouv[6:9]
+        canonical_point = (
+            canonical_ouv[:3]
+            + (1.0 - raw_s) * canonical_ouv[3:6]
+            + vertical_t * canonical_ouv[6:9]
+        )
+        assert np.allclose(canonical_point, raw_point)
+
+    unilateral_s, unilateral_t = 0.18, 0.37
+    raw_landmark = (
+        raw_ouv[:3]
+        + unilateral_s * raw_ouv[3:6]
+        + unilateral_t * raw_ouv[6:9]
+    )
+    assert raw_landmark[0] < evaluator.ATLAS_CENTER_ML_DV[0]
+    atlas_reflection = raw_ouv.copy()
+    atlas_reflection[0] = evaluator.QUICKNII_SHAPE_ML_AP_DV[0] - raw_ouv[0]
+    atlas_reflection[3] = -raw_ouv[3]
+    atlas_reflection[6] = -raw_ouv[6]
+    reflected_landmark = (
+        atlas_reflection[:3]
+        + unilateral_s * atlas_reflection[3:6]
+        + unilateral_t * atlas_reflection[6:9]
+    )
+    reflected_pose = evaluator.quicknii_to_tracker_pose(atlas_reflection)
+    assert reflected_landmark[0] > evaluator.ATLAS_CENTER_ML_DV[0]
+    assert reflected_pose[1] == pytest.approx(-raw_pose[1])
+    assert not np.allclose(atlas_reflection, canonical_ouv)
+
+    pixels = np.arange(15, dtype=np.uint8).reshape(3, 5)
+    image_path = tmp_path / "asymmetric.png"
+    Image.fromarray(pixels).save(image_path)
+    raw_sha256 = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    with horizontally_flipped_deepslice_inputs([image_path]) as flipped_paths:
+        flipped = np.asarray(Image.open(flipped_paths[0]))
+        assert np.array_equal(flipped, np.fliplr(pixels))
+        assert not np.array_equal(flipped, pixels)
+    assert hashlib.sha256(image_path.read_bytes()).hexdigest() == raw_sha256
+
+
+def test_deepslice_modes_flip_once_then_return_postprocessed_plane_to_raw_frame(
+    tmp_path: Path, monkeypatch
+):
+    from DeepSlice.coord_post_processing import spacing_and_indexing
+
+    pixels = np.arange(15, dtype=np.uint8).reshape(3, 5)
+    image_path = tmp_path / "1.png"
+    Image.fromarray(pixels).save(image_path)
+    raw_sha256 = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    raw_ouv = np.asarray(
+        [40.0, 275.0, 260.0, 390.0, 28.0, 12.0, 15.0, -18.0, -255.0]
+    )
+    canonical_ouv = horizontal_image_frame_ouv(raw_ouv)
+    observed_inputs = []
+
+    def observe(paths):
+        observed_inputs.append(np.asarray(Image.open(paths[0])))
+
+    def fake_inference(paths, _messages, _cancel):
+        observe(paths)
+        prediction = {
+            "Filenames": Path(paths[0]).name,
+            **dict(zip(evaluator.OUV_COLUMNS, canonical_ouv)),
+            "width": 5,
+            "height": 3,
+        }
+        return [prediction], "1.2.8", {"primary": "a", "secondary": "b"}, {}, {
+            "backend": "ONNX Runtime CPU"
+        }
+
+    def fake_preprocess(paths):
+        observe(paths)
+        return np.zeros((1, 299, 299, 3), dtype=np.float32), [5], [3]
+
+    class PrimarySession:
+        def run(self, _outputs, _inputs):
+            return [canonical_ouv[None, :]]
+
+    def fake_propagate(table):
+        result = table.copy()
+        result.loc[:, ("ox", "oy", "oz")] = (
+            result.loc[:, ("ox", "oy", "oz")].to_numpy()
+            + 0.25 * result.loc[:, ("ux", "uy", "uz")].to_numpy()
+        )
+        return result
+
+    monkeypatch.setattr(evaluator, "run_deepslice_inference", fake_inference)
+    monkeypatch.setattr(evaluator, "preprocess_deepslice_images", fake_preprocess)
+    monkeypatch.setattr(
+        evaluator,
+        "load_deepslice_onnx_sessions",
+        lambda _force_cpu: ({"primary": PrimarySession()}, {}, "CPUExecutionProvider", None),
+    )
+    monkeypatch.setattr(evaluator, "_propagate_angles", fake_propagate)
+    monkeypatch.setattr(spacing_and_indexing, "enforce_section_ordering", lambda table: table)
+    monkeypatch.setattr(
+        spacing_and_indexing,
+        "space_according_to_index",
+        lambda table, **_kwargs: table,
+    )
+
+    benchmark_record = record(1, 100, 200, 1)
+    benchmark_record["relative_path"] = image_path.name
+    modes, metadata = evaluator.run_deepslice_modes([benchmark_record], [image_path])
+
+    assert len(observed_inputs) == 2
+    assert all(np.array_equal(image, np.fliplr(pixels)) for image in observed_inputs)
+    assert hashlib.sha256(image_path.read_bytes()).hexdigest() == raw_sha256
+    postprocessed_canonical = canonical_ouv.copy()
+    postprocessed_canonical[:3] += 0.25 * canonical_ouv[3:6]
+    expected_raw = horizontal_image_frame_ouv(postprocessed_canonical)[None, :]
+    assert all(np.allclose(prediction, expected_raw) for prediction in modes.values())
+    assert metadata["runtime"]["orientation_adapter"] == {
+        "version": DEEPSLICE_ORIENTATION_ADAPTER_VERSION,
+        "input_horizontal_raster_flips": 1,
+        "output_ouv_transform": "H(O,U,V)=(O+U,-U,V)",
+        "output_transform_after_official_postprocessing": True,
+        "raw_images_or_ground_truth_modified": False,
+        "physical_atlas_ml_reflection": False,
+    }
 
 
 def test_empty_annotation_mask_only_omits_optional_plane_distance():
