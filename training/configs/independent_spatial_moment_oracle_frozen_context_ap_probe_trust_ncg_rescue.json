@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "frozen": true,
+  "name": "independent-spatial-moment-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1",
+  "purpose": "development-only-frozen-context-ap-trust-ncg-solver-rescue",
+  "role": "diagnostic-solver-rescue-not-model-selection",
+  "arm": "spatial_moment",
+  "product5_access": false,
+  "calibration_access": false,
+  "final_test_access": false,
+  "learned_candidate_promotion": false,
+  "source_probe": {
+    "source_run_name": "independent-spatial-moment-oracle-frozen-context-ap-probe-fresh504322-v1",
+    "source_config_contract_sha256": "50650ba2244d1cd25cef1528cbd73afe2416f73f5f9736173d8f6540421b35d3",
+    "source_config_file_sha256": "9b1e7eba683a94c83e81cc7e1ab59b05dc939a99d74dc15f8ba0c22d1896b8df",
+    "source_receipt_file_sha256": "1fea7d3e24b8c48bd08d75d8ad77b038326d3f8a5753f7ca79adc948a6d8f3cb",
+    "source_setup_sha256": "3485d060b3269d7f475e9ff1de52581d3f8737ff966f8acd49e8a42b5a9003c0",
+    "source_result_sha256": "395a6f0d0304994db12d296c1ec6229ae9c533552ab57c35a4bfaded600bbd43",
+    "source_tensor_artifact_sha256": "2e73edb82e03aba04fe93e308df035bec33e2a0d002de463b054b28c61946405",
+    "terminal_ap_head_sha256": {
+      "weight": "6aea16c42edf586a489b0068dca74d5778f730cc4f395cd76504806437c332c7",
+      "bias": "08f450533ea2a8a72406caf9d63e1f8392681be9d0cb708777bc5cc7d2ce5c77"
+    },
+    "feature_sha256": {
+      "seen": [
+        {
+          "context": "9af826587452d891b697dd16bab1be2e1a28e53f030aeb5023f83f7e12faaf7a",
+          "target_ap_bin": "8ba5e88b39ec13cf5115797db594ec817065fb5c48773f7f8f74232e024fc539",
+          "terminal_ap_residual_um": "b031a8f7c355d846a679137cf6d84681cdff5fb3728855c426f77083f9e25996",
+          "truth_ap_um": "c8c393fb6a537634ca68d89ec6509a300428f85f98573a4cf85a5461220296a1"
+        },
+        {
+          "context": "ecd7a3e016e819807f27505f731d28d5f96602c9511dc16c375201df4e0e5d75",
+          "target_ap_bin": "8ba5e88b39ec13cf5115797db594ec817065fb5c48773f7f8f74232e024fc539",
+          "terminal_ap_residual_um": "614d98d1ce41697530d578cdd0235a080d5d2e98e4dbcc3ea2cd695d0f26782d",
+          "truth_ap_um": "c8c393fb6a537634ca68d89ec6509a300428f85f98573a4cf85a5461220296a1"
+        }
+      ],
+      "fresh_held": [
+        {
+          "context": "a6281657f1ea6d591670f82162ca7d53bf156398993bb97b54ae858491242018",
+          "target_ap_bin": "8ba5e88b39ec13cf5115797db594ec817065fb5c48773f7f8f74232e024fc539",
+          "terminal_ap_residual_um": "907e96dd88d5416d46092d39cadb9c54759c7c6f2453553e8d2731a2cec6e96b",
+          "truth_ap_um": "c8c393fb6a537634ca68d89ec6509a300428f85f98573a4cf85a5461220296a1"
+        },
+        {
+          "context": "868acb95d7caaf294e04344086c5436540d9c4d7dda96beb871776285b4460c9",
+          "target_ap_bin": "8ba5e88b39ec13cf5115797db594ec817065fb5c48773f7f8f74232e024fc539",
+          "terminal_ap_residual_um": "789ca0d0aebf062cfb41b161d04948478b91438aa805903e7eca586a0dc1254a",
+          "truth_ap_um": "c8c393fb6a537634ca68d89ec6509a300428f85f98573a4cf85a5461220296a1"
+        }
+      ]
+    }
+  },
+  "diagnostic_artifact_dependencies": [
+    {
+      "role": "consumed-frozen-context-tensor-source-only",
+      "run_name": "independent-spatial-moment-oracle-frozen-context-ap-probe-fresh504322-v1",
+      "tensor_artifact_sha256": "2e73edb82e03aba04fe93e308df035bec33e2a0d002de463b054b28c61946405",
+      "result_sha256": "395a6f0d0304994db12d296c1ec6229ae9c533552ab57c35a4bfaded600bbd43"
+    }
+  ],
+  "learned_checkpoint_dependencies": [
+    {
+      "role": "diagnostic-terminal-context-source-only",
+      "run_name": "independent-spatial-moment-oracle-similarity-pose-identifiability-300-r4322-v1",
+      "resume_state_sha256": "812b044b5d082aa0119c5c4d49c4dad9f6080a82b3819289164e2e7ea773d615",
+      "terminal_model_state_sha256": "061b0bd978e00005c57a5c6c125d6481f47420f152af6cf81017edd6cf8f4363"
+    }
+  ],
+  "paths": {
+    "run_root_env": "ATLAS_JOINT_RUN_ROOT"
+  },
+  "fits": [
+    {
+      "id": "seen_panel_0_to_1",
+      "train": [
+        {
+          "partition": "seen",
+          "panel": 0
+        }
+      ],
+      "test": [
+        {
+          "partition": "seen",
+          "panel": 1
+        }
+      ]
+    },
+    {
+      "id": "seen_panel_1_to_0",
+      "train": [
+        {
+          "partition": "seen",
+          "panel": 1
+        }
+      ],
+      "test": [
+        {
+          "partition": "seen",
+          "panel": 0
+        }
+      ]
+    },
+    {
+      "id": "seen_to_fresh_held",
+      "train": [
+        {
+          "partition": "seen",
+          "panel": 0
+        },
+        {
+          "partition": "seen",
+          "panel": 1
+        }
+      ],
+      "test": [
+        {
+          "partition": "fresh_held",
+          "panel": 0
+        },
+        {
+          "partition": "fresh_held",
+          "panel": 1
+        }
+      ]
+    }
+  ],
+  "solver": {
+    "implementation": "scipy.optimize.minimize",
+    "method": "trust-ncg",
+    "jacobian": "combined-analytic-objective-gradient",
+    "hessian_vector_product": "analytic-full-coordinate",
+    "dtype": "float64-cpu",
+    "initialization": "consumed-artifact-terminal-ap-head-weight-and-bias",
+    "objective": "mean-cross-entropy-41-plus-half-1e-4-l2-on-weight-and-bias",
+    "class_count": 41,
+    "l2_coefficient": 0.0001,
+    "ap_bin_center_minimum_um": -4500.0,
+    "ap_bin_center_maximum_um": 500.0,
+    "ap_bin_center_count": 41,
+    "ap_bin_center_dtype": "torch-float32",
+    "gtol": 1e-08,
+    "maxiter": 250,
+    "initial_trust_radius": 1.0,
+    "max_trust_radius": 1000.0,
+    "eta": 0.15,
+    "disp": false,
+    "return_all": false,
+    "combined_fg_hvp_call_limit_each_fit": 1250,
+    "held_access_during_fit": false,
+    "feature_normalization": null,
+    "retry": null,
+    "fallback_solver": null,
+    "cross_fit_warm_start": false
+  },
+  "gates": {
+    "nonfinite_count_maximum": 0,
+    "solver_result_success_required": true,
+    "independent_final_gradient_inf_norm_maximum": 1e-08,
+    "solver_iterations_maximum_each_fit": 1000,
+    "solver_function_evaluations_maximum_each_fit": 1250,
+    "optimizer_head_sample_presentations_maximum_per_arm": 120000,
+    "independent_verification_sample_presentations_per_arm": 96,
+    "total_head_sample_presentations_maximum_per_arm": 120096,
+    "single_panel_training_correct_required": 24,
+    "pooled_seen_training_correct_required": 48,
+    "opposite_seen_panel_correct_minimum": 23,
+    "opposite_seen_panel_sample_count": 24,
+    "fresh_held_bin_center_ap_mae_um_maximum": 250.0,
+    "fresh_held_prediction_to_truth_sd_ratio_minimum": 0.75
+  },
+  "environment": {
+    "numpy_version": "2.4.4",
+    "scipy_version": "1.17.1",
+    "torch_version": "2.11.0+cu128",
+    "threadpoolctl_version": "3.6.0",
+    "blas_thread_environment": {
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1"
+    },
+    "blas_thread_environment_set_before_python": true,
+    "loaded_blas_and_openmp_thread_count": 1,
+    "torch_intraop_thread_count": 1,
+    "torch_interop_thread_count": 8
+  },
+  "artifacts": {
+    "tensor_payload": "trust_ncg_rescue_tensors.pt",
+    "receipt": "diagnostic_receipt.json",
+    "raw_predictions": true,
+    "save_logits": true,
+    "save_fitted_heads": true,
+    "copy_contexts": false
+  },
+  "lineage": {
+    "source_sha256": {
+      "training/run_frozen_context_ap_probe.py": "e5a3fd702e7b252144d93f5b5645cee9e11d98782efb4b6e9dc207c0217522d5",
+      "training/run_frozen_context_ap_probe_trust_ncg_rescue.py": "9404568d940938b2e2f1cc4266e6b76fc58d5d1249827de3dce113b6e1be8add",
+      "training/run_independent_initializer_foundation.py": "c25341c749ca61140569d9eac6e4b9e315ebfc302d9644a6d35dd89854f90e6f",
+      "training/train_independent_joint.py": "b5f873c12d8a50d82c3972d90f4f9866662c47424e349d4d0104b7e02e7957b1"
+    }
+  },
+  "contract_sha256": "00780370c7855243f9fc36e9fa8798f39cb295f83471506bc60191085da44f78"
+}
