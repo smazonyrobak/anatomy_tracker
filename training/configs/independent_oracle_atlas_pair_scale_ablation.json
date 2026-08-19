@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "frozen": true,
+  "name": "independent-oracle-atlas-pair-source-scale-1p0-ablation-v1",
+  "purpose": "development-only-paired-source-scale-causal-diagnostic",
+  "role": "causal-diagnostic-not-performance-or-promotion",
+  "product5_access": false,
+  "qualification_access": false,
+  "calibration_access": false,
+  "final_test_access": false,
+  "training": false,
+  "device": "cuda",
+  "paths": {
+    "base_run_folder": "I:/AtlasJointProject/runs/AtlasJointTraining/independent-oracle-atlas-pair-energy-1500-v1",
+    "output_run_folder": "I:/AtlasJointProject/runs/AtlasJointTraining/independent-oracle-atlas-pair-source-scale-1p0-ablation-v1",
+    "atlas_repo_relative": "data/Allen Brain Atlas 25um",
+    "checkpoint_file": "final_checkpoint.pt",
+    "development_manifest_file": "development_manifest.json",
+    "development_result_file": "development_1500.json",
+    "receipt_file": "diagnostic_receipt.json"
+  },
+  "artifacts": {
+    "checkpoint_file_sha256": "1f451b0dfff79629b46fdd0bd7149c9a722be4e6c456fa8d714b0291e0f422ce",
+    "development_manifest_file_sha256": "b3b3cdd046519a6e79bd50a6cf1c075e569d50e9c71df8dee22bf94e46c93722",
+    "development_manifest_sha256": "c77d427ce5a3e5efbc98677daf11743643446873528643c20f629ff457a3385c",
+    "development_result_file_sha256": "89245f1c0fdc6094a4841ca89e95941a33e970d98c7790e1e61df4fdc912dd0c",
+    "development_result_sha256": "f9cc842c1f54e8cbe3e893e52a4ef601c0c3b94b5e4f8e0cdeaf96dd3cb75df3",
+    "base_config_contract_sha256": "506ebbb88857bd4242939220d0c98e3c5ac99c389690d051c2cab36adac89ccb",
+    "base_config_file_sha256": "8e747c82ba8f477c0a71ae803cf214e052e14c4b824c1c9859c6e1b00ad061e2",
+    "base_training_history_sha256": "55d202fa695486564d592a7d53f8e931bac54258ad14237e8a665fe193785fe9",
+    "base_data_lineage_sha256": "9b14f3e0395166e26cbc662515c675f336f514db623f13d2609fdd584b42c032",
+    "generator_contract_sha256": "5ff5a29ccc7f0c554020dfc8e7e07d2af59a662f9420422bffc9a86edcd73872",
+    "atlas_sha256": {
+      "average_template_sha256": "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b",
+      "annotation_sha256": "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42",
+      "query_sha256": "5347daf90e02ac1d1cfcbf9c8af86ff23a2fb32cd7e7a2ba2881951931286dbd"
+    },
+    "base_source_sha256": {
+      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60",
+      "training/independent_atlas_pair_energy.py": "6187cb051d048d1e5eec3137b9edc6ac09706cecffcf989507951708681589ec",
+      "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
+      "training/run_independent_atlas_pair_energy.py": "21c73f88a48ca87ac0a44ff022993eea5dc2cfbb1f8c72237ec4b05fa4445b19",
+      "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde"
+    }
+  },
+  "data": {
+    "role": "stored-development-only",
+    "seed": 1104322,
+    "count": 48,
+    "singleton_realizations": true,
+    "source_tensor": "moving_raw_uint8_pre_source_view_downsampled_bilinear_160x232",
+    "source_masks": "absent",
+    "candidate_count": 16,
+    "candidate_chunk_size": 8,
+    "batch_size": 2,
+    "qualification_policy": "no-read-no-generation-no-scoring"
+  },
+  "intervention": {
+    "name": "do(source_scale=1.0)",
+    "baseline_scale_range": [
+      0.9804836511611938,
+      1.0191631317138672
+    ],
+    "treatment_scale": 1.0,
+    "mutated_child_fields": [
+      "scale",
+      "manifest_sha256"
+    ],
+    "preserved_pairing_identity": "synthetic_realization_id",
+    "preserved_generator_fields": "all_except_scale_and_manifest_sha256",
+    "same_rotation_translation_deformation_appearance_noise": true,
+    "same_frozen_model_and_rendered_candidate_tensors": true
+  },
+  "statistics": {
+    "truth_gap": "minimum_nontruth_energy_minus_truth_energy",
+    "paired_truth_gap_improvement": "treatment_truth_gap_minus_baseline_truth_gap",
+    "mcnemar": "exact_two_sided_binomial_on_discordant_top1_pairs",
+    "mcnemar_net_corrections": "baseline_wrong_treatment_correct_minus_baseline_correct_treatment_wrong",
+    "global_pair_accuracy": "truth_energy_strictly_less_than_each_of_three_joint_global_energies_over_144_pairs",
+    "scale_strata": "low_if_abs_log_original_scale_le_development_median_else_high"
+  },
+  "gates": {
+    "baseline_source_hashes_exact": true,
+    "baseline_energies_bit_exact": true,
+    "baseline_top1_exact": 16,
+    "treatment_top1_minimum": 24,
+    "net_corrections_minimum": 8,
+    "mcnemar_exact_two_sided_p_maximum": 0.01,
+    "median_paired_truth_gap_improvement_minimum": 0.25,
+    "global_pair_accuracy_minimum": 0.97,
+    "broken_atlas_correct_maximum": 12,
+    "broken_source_correct_maximum": 12,
+    "nonfinite_count_maximum": 0,
+    "invalid_source_or_render_count_maximum": 0
+  },
+  "interpretation": {
+    "all_gates_pass": "source-scale nuisance causally suppresses local discrimination; preregister learned or marginalized scale handling next",
+    "replay_gate_fails": "diagnostic invalid because the frozen baseline did not replay exactly",
+    "causal_gates_fail": "scale association is not a sufficient causal explanation; prioritize a separate spatial-aggregation diagnostic",
+    "specificity_gate_fails": "reject apparent correction as nonspecific or degenerate scoring",
+    "scope": "development-only mechanism evidence; no performance, promotion, benchmark, or deployment claim"
+  },
+  "training_scale_reference": {
+    "manifest_file_sha256": "c6ce463b728175561e53d2f424ca5cc4812dfe9d78026ff9834462408f32e445",
+    "count": 2048,
+    "observed_range": [
+      0.980411946773529,
+      1.0199992656707764
+    ],
+    "observed_median_abs_log_scale": 0.0098871793436826,
+    "same_clean_generator_distribution_as_development": true,
+    "runtime_access": false
+  },
+  "lineage": {
+    "source_sha256": {
+      "training/run_independent_atlas_pair_scale_ablation.py": "b7f77d4d81dc29c72f94b6ee04e8527ce5135fb16a82262720dbc27987121593",
+      "training/independent_atlas_pair_energy.py": "6187cb051d048d1e5eec3137b9edc6ac09706cecffcf989507951708681589ec",
+      "training/run_independent_atlas_pair_energy.py": "21c73f88a48ca87ac0a44ff022993eea5dc2cfbb1f8c72237ec4b05fa4445b19",
+      "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde",
+      "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
+      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+    }
+  },
+  "contract_sha256": "dea56ad8ccfe8e42ff75a98cef8fbe5b2b11294b7bd1b92ca4543d53ad9d8a2a"
+}
