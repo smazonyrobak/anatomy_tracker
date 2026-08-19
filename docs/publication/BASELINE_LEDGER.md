@@ -803,3 +803,59 @@ Exact commit, source, config, data, atlas, checkpoint, freeze, manifest,
 development, qualification, receipt and stdout/stderr hashes are recorded in
 `publication/atlas_pair_energy_diagnostic.yaml`; the original run artifacts
 were not rewritten.
+
+### Frozen source-scale 1.0 paired causal ablation
+
+The development-only source-scale intervention ran from clean commit
+`af3052c3e49c9b7af1d4603ce7c257b2377b5602` under frozen config contract
+`dea56ad8ccfe8e42ff75a98cef8fbe5b2b11294b7bd1b92ca4543d53ad9d8a2a`.
+It reused the final 271,450-parameter atlas-pair checkpoint and the same 48
+ordered development realizations, fixed candidates and scorer. For each
+realization, the treatment changed only the singleton synthetic child
+manifest's source `scale` to exactly `1.0` and recomputed that manifest's
+commitment. Rotation, translation, deformation, appearance, noise,
+realization ID and seed were preserved. Every baseline scale differed from
+one, every treatment raw and 160-by-232 source hash differed from its paired
+baseline, and the source mask and availability flag remained absent.
+
+The baseline replay was exact: all 48 stored source hashes, candidate poses,
+kinds and targets matched, all nine stored energy arrays per realization were
+bit-exact, and normal/broken-atlas/broken-source top-1 counts remained
+`16 / 0 / 1`. The treatment used the same frozen model, rendered candidate
+tensors and within-condition broken-source derangement. Product-5,
+qualification, calibration, final-test and training access were all false;
+the training scale manifest was reference metadata only and was not read at
+runtime.
+
+| Prespecified check | Gate | Observed | Result |
+| --- | ---: | ---: | --- |
+| Baseline normal top-1 replay | exactly 16 / 48 | 16 / 48 | pass |
+| Treatment normal top-1 | at least 24 / 48 | 15 / 48 | fail |
+| Paired net corrections | at least 8 | -1 | fail |
+| Exact two-sided McNemar | at most 0.01 | 1.0 | fail |
+| Median paired truth-gap improvement | at least 0.25 | 0.02158522605895996 | fail |
+| Strict truth-versus-joint-global pairs | at least 0.97 over exactly 144 | 144 / 144 = 1.0 | pass |
+| Broken-atlas / broken-source top-1 | at most 12 each | baseline 0 / 1; treatment 0 / 1 | pass |
+| Non-finite / invalid source or render | 0 / 0 | 0 / 0 | pass |
+
+Two baseline errors were corrected (sample indices `4` and `42`), while three
+correct baseline decisions regressed (`3`, `19` and `44`). In the lower
+absolute-log-scale stratum, top-1 stayed `10 / 24` and the median paired
+truth-gap change was `-0.015467524528503418`; in the higher stratum, top-1
+fell from `6 / 24` to `5 / 24` despite a descriptive median gap change of
+`0.19292253255844116`.
+
+Execution and receipt integrity are `GO`, but the preregistered branch is
+`causal_gates_fail` and the scientific scale-causality premise is `NO-GO`.
+Setting source scale to one is therefore not a sufficient explanation for the
+local discrimination failure. This consumed development result is not a
+benchmark, performance or accuracy claim, architecture-selection result,
+learned-candidate selection, or promotion authorization. It does not authorize
+gate relaxation, protected-data access or further execution; a separate
+spatial-aggregation diagnostic requires its own frozen contract.
+
+Exact source, config, checkpoint, development, atlas, receipt and stdout/stderr
+paths and SHA-256 values, plus the independently recomputed paired statistics
+and access audit, are recorded in
+`publication/atlas_pair_source_scale_ablation_diagnostic.yaml`; the original
+run artifacts were not rewritten.

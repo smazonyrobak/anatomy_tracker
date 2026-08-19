@@ -1,0 +1,335 @@
+schema_version: "1.0"
+status: "completed_execution_integrity_go_scientific_scale_premise_no_go"
+recorded_date: "2026-08-19"
+purpose: "Immutable development-only record of the frozen atlas-pair source-scale 1.0 causal ablation; not a benchmark, performance claim, accuracy claim, model-selection result, or promotion result."
+
+receipt_contract:
+  format: "independent-atlas-pair-source-scale-ablation-receipt-v1"
+  purpose: "development-only-paired-source-scale-causal-diagnostic"
+  role: "causal-diagnostic-not-performance-or-promotion"
+  scope: "development-only mechanism evidence; no performance, promotion, benchmark, or deployment claim"
+
+lineage:
+  source_commit: "af3052c3e49c9b7af1d4603ce7c257b2377b5602"
+  source_commit_short: "af3052c"
+  commit_subject: "Add frozen source-scale causal diagnostic"
+  repository_clean_at_execution_audit: true
+  upstream_ahead: 0
+  upstream_behind: 0
+  config:
+    path: "training/configs/independent_oracle_atlas_pair_scale_ablation.json"
+    bytes: 6852
+    file_sha256: "fc2c90bddaeb61e68d54d6f3b073bd0ddb54f4b0ce5d98352713f2459fc9d5f7"
+    contract_sha256: "dea56ad8ccfe8e42ff75a98cef8fbe5b2b11294b7bd1b92ca4543d53ad9d8a2a"
+    frozen: true
+  runner:
+    path: "training/run_independent_atlas_pair_scale_ablation.py"
+    bytes: 42146
+    sha256: "b7f77d4d81dc29c72f94b6ee04e8527ce5135fb16a82262720dbc27987121593"
+  tests:
+    path: "tests/test_independent_atlas_pair_scale_ablation.py"
+    bytes: 17150
+    sha256: "2cd4525fb108e5c5c09502f20234b8b486ece7136beb1e027eb25446ea3889de"
+    pre_execution_focused_and_adjacent_result: "43 passed"
+  source_sha256:
+    source/dense_registration_preprocessing.py: "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+    training/independent_atlas_pair_energy.py: "6187cb051d048d1e5eec3137b9edc6ac09706cecffcf989507951708681589ec"
+    training/quicknii_plane_metric.py: "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31"
+    training/run_independent_atlas_pair_energy.py: "21c73f88a48ca87ac0a44ff022993eea5dc2cfbb1f8c72237ec4b05fa4445b19"
+    training/run_independent_atlas_pair_scale_ablation.py: "b7f77d4d81dc29c72f94b6ee04e8527ce5135fb16a82262720dbc27987121593"
+    training/synthetic_registration.py: "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde"
+
+access:
+  data_role: "stored-development-only"
+  development_access: true
+  product5_access: false
+  qualification_access: false
+  qualification_policy: "no-read-no-generation-no-scoring"
+  calibration_access: false
+  final_test_access: false
+  protected_data_access: false
+  training_performed: false
+  training_scale_reference_runtime_access: false
+  model_selection: false
+  learned_candidate_selection: false
+  learned_candidate_promotion: false
+  benchmark_claim: false
+  performance_claim: false
+  accuracy_claim: false
+
+frozen_model:
+  class: "training.independent_atlas_pair_energy.AtlasPairEnergyModel"
+  parameter_count: 271450
+  checkpoint_format: "independent-atlas-pair-energy-final-v1"
+  checkpoint_update: 1500
+  checkpoint_file_sha256: "1f451b0dfff79629b46fdd0bd7149c9a722be4e6c456fa8d714b0291e0f422ce"
+  checkpoint_model_state_sha256: "a5f1b903c2019a03559d0d2e2f782d6387429672afcef057f3a57d5c8e3609c5"
+  base_config_file_sha256: "8e747c82ba8f477c0a71ae803cf214e052e14c4b824c1c9859c6e1b00ad061e2"
+  base_config_contract_sha256: "506ebbb88857bd4242939220d0c98e3c5ac99c389690d051c2cab36adac89ccb"
+  base_training_history_sha256: "55d202fa695486564d592a7d53f8e931bac54258ad14237e8a665fe193785fe9"
+  base_data_lineage_sha256: "9b14f3e0395166e26cbc662515c675f336f514db623f13d2609fdd584b42c032"
+  generator_contract_sha256: "5ff5a29ccc7f0c554020dfc8e7e07d2af59a662f9420422bffc9a86edcd73872"
+  learned_checkpoint_dependencies: []
+  candidate_pose_is_scorer_input: false
+  input_shape: [160, 232]
+  candidate_count: 16
+  candidate_chunk_size: 8
+
+data_lineage:
+  source: "clean synthetic CCF train-split development panel"
+  seed: 1104322
+  count: 48
+  statistical_unit: "one ordered synthetic realization paired across baseline and treatment"
+  parent_manifest_sha256: "c77d427ce5a3e5efbc98677daf11743643446873528643c20f629ff457a3385c"
+  stored_terminal_result_sha256: "f9cc842c1f54e8cbe3e893e52a4ef601c0c3b94b5e4f8e0cdeaf96dd3cb75df3"
+  ordered_unique_realization_ids: 48
+  singleton_realizations: true
+  source_tensor: "moving_raw_uint8_pre_source_view_downsampled_bilinear_160x232"
+  source_mask: "absent/all-zero"
+  mask_available: "absent/all-zero"
+  candidate_contract:
+    candidate_count_each: 16
+    truth_count_each: 1
+    axis_count_each: 12
+    joint_global_count_each: 3
+    candidate_pose_kind_target_match_stored_development: true
+    same_rendered_candidates_across_conditions: true
+    unique_recorded_candidate_image_hashes: 48
+    unique_recorded_candidate_mask_hashes: 48
+  atlas:
+    repo_relative_root: "data/Allen Brain Atlas 25um"
+    average_template_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+    annotation_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+    query_sha256: "5347daf90e02ac1d1cfcbf9c8af86ff23a2fb32cd7e7a2ba2881951931286dbd"
+  training_scale_reference:
+    manifest_file_sha256: "c6ce463b728175561e53d2f424ca5cc4812dfe9d78026ff9834462408f32e445"
+    count: 2048
+    observed_range: [0.980411946773529, 1.0199992656707764]
+    observed_median_absolute_log_scale: 0.0098871793436826
+    same_clean_generator_distribution_as_development: true
+    runtime_access: false
+
+intervention:
+  name: "do(source_scale=1.0)"
+  role: "development-only paired causal diagnostic"
+  baseline_scale_range: [0.9804836511611938, 1.0191631317138672]
+  all_baseline_scales_differ_from_one: true
+  treatment_scale: 1.0
+  all_treatment_scales_equal_one: true
+  mutated_child_fields: ["scale", "manifest_sha256"]
+  only_declared_child_fields_changed: true
+  preserved_pairing_identity: "synthetic_realization_id"
+  preserved_realization_seed: true
+  same_rotation_translation_deformation_appearance_noise: true
+  same_frozen_model: true
+  same_candidate_tensors: true
+  same_condition_broken_source_derangement: true
+  paired_input_integrity:
+    baseline_manifest_commitments_reconstructed_exact: 48
+    treatment_manifest_commitments_reconstructed_exact: 48
+    unique_baseline_manifest_hashes: 48
+    unique_treatment_manifest_hashes: 48
+    baseline_moving_raw_hashes_match_stored_development: 48
+    baseline_160x232_hashes_match_stored_development: 48
+    treatment_moving_raw_hashes_differ_from_paired_baseline: 48
+    treatment_160x232_hashes_differ_from_paired_baseline: 48
+    unique_baseline_moving_raw_hashes: 48
+    unique_treatment_moving_raw_hashes: 48
+    unique_baseline_160x232_hashes: 48
+    unique_treatment_160x232_hashes: 48
+    cross_condition_moving_raw_hash_overlap_count: 0
+    cross_condition_160x232_hash_overlap_count: 0
+
+statistics_contract:
+  truth_gap: "minimum nontruth energy minus truth energy"
+  paired_truth_gap_improvement: "treatment truth gap minus baseline truth gap"
+  mcnemar: "exact two-sided binomial test on discordant paired top-1 decisions"
+  net_corrections: "baseline-wrong/treatment-correct minus baseline-correct/treatment-wrong"
+  global_pair_accuracy: "truth energy strictly less than each of three joint-global energies over exactly 144 pairs"
+  scale_strata: "low if abs(log(original scale)) is at most the development median; high otherwise"
+
+prespecified_gates:
+  baseline_source_hashes_exact: true
+  baseline_energies_bit_exact: true
+  baseline_top1_exact: 16
+  treatment_top1_minimum: 24
+  net_corrections_minimum: 8
+  mcnemar_exact_two_sided_p_maximum: 0.01
+  median_paired_truth_gap_improvement_minimum: 0.25
+  global_pair_accuracy_minimum: 0.97
+  global_pair_count_exact: 144
+  broken_atlas_correct_maximum: 12
+  broken_source_correct_maximum: 12
+  nonfinite_count_maximum: 0
+  invalid_source_or_render_count_maximum: 0
+
+results:
+  baseline_replay:
+    source_hashes_exact: true
+    all_nine_energy_arrays_each_bit_exact: true
+    normal_top1: 16
+    broken_atlas_top1: 0
+    broken_source_top1: 1
+    passed: true
+  treatment:
+    normal_top1: 15
+    broken_atlas_top1: 0
+    broken_source_top1: 1
+  paired_transitions:
+    baseline_wrong_treatment_correct: 2
+    corrected_sample_indices: [4, 42]
+    baseline_correct_treatment_wrong: 3
+    regressed_sample_indices: [3, 19, 44]
+    unchanged_correct: 13
+    unchanged_wrong: 30
+    discordant_count: 5
+    net_corrections: -1
+  exact_mcnemar_two_sided_p: 1.0
+  paired_truth_gap:
+    median_improvement: 0.02158522605895996
+  global_pairs:
+    wins: 144
+    count: 144
+    strict_accuracy: 1.0
+  scale_strata:
+    median_absolute_log_original_scale: 0.009111269751793593
+    low:
+      count: 24
+      baseline_top1: 10
+      treatment_top1: 10
+      median_paired_truth_gap_improvement: -0.015467524528503418
+      sample_indices: [2, 5, 7, 8, 9, 10, 11, 13, 15, 16, 21, 22, 27, 28, 33, 36, 37, 38, 40, 41, 43, 45, 46, 47]
+    high:
+      count: 24
+      baseline_top1: 6
+      treatment_top1: 5
+      median_paired_truth_gap_improvement: 0.19292253255844116
+      sample_indices: [0, 1, 3, 4, 6, 12, 14, 17, 18, 19, 20, 23, 24, 25, 26, 29, 30, 31, 32, 34, 35, 39, 42, 44]
+  numerical_and_input_controls:
+    nonfinite_count: 0
+    invalid_source_count: 0
+    invalid_render_count: 0
+  gate_checks:
+    baseline_source_hashes_exact: true
+    baseline_energies_bit_exact: true
+    baseline_top1_exact: true
+    treatment_top1: false
+    net_corrections: false
+    mcnemar: false
+    truth_gap: false
+    global_pair_accuracy: true
+    baseline_broken_atlas: true
+    baseline_broken_source: true
+    treatment_broken_atlas: true
+    treatment_broken_source: true
+    nonfinite: true
+    invalid_source_or_render: true
+  status_sha256: "7f8bc61c15a20b1cb7538b16acacaa69f9c5d48aa7bb41ea1ae4a92a3f397a34"
+  interpretation_branch: "causal_gates_fail"
+  interpretation: "scale association is not a sufficient causal explanation; prioritize a separate spatial-aggregation diagnostic"
+  receipt_passed: false
+
+storage:
+  run_root: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-source-scale-1p0-ablation-v1'
+  output_file_count: 1
+  residual_temporary_file_count: 0
+  artifacts:
+    diagnostic_receipt:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-source-scale-1p0-ablation-v1\diagnostic_receipt.json'
+      bytes: 436667
+      created_utc: "2026-08-19T04:26:02.5536929Z"
+      sha256: "00e17c31cfa5a58169f4fbfc655c8aa93b0da2b15dfc1cdc35ddf52906ca32d9"
+      receipt_sha256: "4a978228f375c0129db3fa042f465eb55bbbcd763ab3d1c233fbbb6b60f0d15e"
+    consumed_final_checkpoint:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\final_checkpoint.pt'
+      bytes: 2269867
+      sha256: "1f451b0dfff79629b46fdd0bd7149c9a722be4e6c456fa8d714b0291e0f422ce"
+    consumed_development_manifest:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\development_manifest.json'
+      bytes: 64806
+      sha256: "b3b3cdd046519a6e79bd50a6cf1c075e569d50e9c71df8dee22bf94e46c93722"
+      manifest_sha256: "c77d427ce5a3e5efbc98677daf11743643446873528643c20f629ff457a3385c"
+    consumed_development_result:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\development_1500.json'
+      bytes: 257418
+      sha256: "89245f1c0fdc6094a4841ca89e95941a33e970d98c7790e1e61df4fdc912dd0c"
+      result_sha256: "f9cc842c1f54e8cbe3e893e52a4ef601c0c3b94b5e4f8e0cdeaf96dd3cb75df3"
+  logs:
+    stdout:
+      path: 'I:\AtlasJointProject\logs\atlas-pair-scale-ablation.stdout.log'
+      bytes: 129
+      created_utc: "2026-08-19T04:25:39.8818535Z"
+      completed_utc: "2026-08-19T04:26:03.3674031Z"
+      sha256: "83b43aa0cd82d66d234000875ebdfbca7c7449e415e5c1f62f8371b5b1ee6b5e"
+      content: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-source-scale-1p0-ablation-v1\diagnostic_receipt.json'
+    stderr:
+      path: 'I:\AtlasJointProject\logs\atlas-pair-scale-ablation.stderr.log'
+      bytes: 0
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  execution:
+    exit_code: 0
+    exit_code_evidence: "launcher result supplied to the audit; no separate persisted exit-code file"
+    stdout_terminal_path_matches_receipt: true
+    stderr_empty: true
+    all_absolute_run_and_log_paths_on_i_drive: true
+
+integrity_audit:
+  execution_integrity: "GO"
+  p0_findings: 0
+  p1_findings: 0
+  source_commit_verified: true
+  repository_clean_and_upstream_equal_before_documentation_edit: true
+  source_file_hashes_recomputed: true
+  config_file_and_contract_hashes_recomputed: true
+  checkpoint_file_and_model_state_hashes_recomputed: true
+  checkpoint_parameter_count_recomputed: 271450
+  checkpoint_update_recomputed: 1500
+  checkpoint_generator_and_data_lineage_recomputed: true
+  atlas_file_hashes_recomputed: true
+  development_manifest_file_payload_and_parent_hashes_recomputed: true
+  development_result_file_and_payload_hashes_recomputed: true
+  receipt_file_is_canonical_json_plus_newline: true
+  receipt_file_hash_recomputed: true
+  receipt_payload_hash_recomputed: true
+  committed_existing_receipt_validator_passed: true
+  status_hash_recomputed: true
+  all_48_ordered_pair_identities_recomputed: true
+  all_48_baseline_and_treatment_manifest_commitments_recomputed: true
+  all_48_baseline_source_hashes_match_stored_development: true
+  all_48_treatment_source_hashes_are_unique_and_differ_from_baseline: true
+  candidate_pose_kind_target_match_stored_development: true
+  all_nine_baseline_energy_arrays_each_bit_exact: true
+  top1_control_counts_recomputed: true
+  paired_mcnemar_gap_strata_and_global_statistics_recomputed: true
+  all_gate_checks_and_terminal_branch_recomputed: true
+  product5_access: false
+  qualification_access: false
+  calibration_access: false
+  final_test_access: false
+  protected_data_access: false
+  training_performed: false
+  original_run_artifacts_rewritten: false
+  raw_tensor_regeneration_performed: false
+  tensor_regeneration_note: "Treatment source and rendered candidate tensors were not persisted, so their recorded hashes were commitment-, pairing-, uniqueness- and source-code-audited without regenerating tensors; baseline source hashes and all nine baseline energy arrays were independently matched to the stored development artifacts."
+
+decision:
+  execution_integrity: "GO"
+  scientific_scale_causality_premise: "NO-GO"
+  terminal_branch: "causal_gates_fail"
+  terminal_receipt_passed: false
+  model_selected: false
+  learned_candidate_selected: false
+  architecture_winner: null
+  benchmark_claim: false
+  accuracy_claim: false
+  performance_claim: false
+  promotion_authorized: false
+  longer_training_authorized: false
+  gate_relaxation_authorized: false
+  protected_data_access_authorized: false
+  interpretation:
+    - "The run is a valid, hash-bound development diagnostic: execution, baseline replay, pairing, numerical, broken-pair and global-specificity integrity passed."
+    - "Forcing source scale to 1.0 reduced normal top-1 from 16/48 to 15/48, produced net corrections of -1, exact McNemar p=1.0 and median paired truth-gap improvement 0.02158522605895996; every prespecified causal gate failed."
+    - "The 144/144 strict global-pair result and unchanged broken-pair controls reject a nonspecific scoring collapse, but do not rescue the failed local causal premise."
+    - "This consumed synthetic development panel cannot support benchmark, real-histology, outer-domain, accuracy, performance, selection or promotion claims."
+  suggested_next_direction: "A separate spatial-aggregation diagnostic may be prespecified, but this record itself authorizes no further execution or protected-data access."
