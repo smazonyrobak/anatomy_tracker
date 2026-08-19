@@ -1,0 +1,340 @@
+schema_version: "1.0"
+status: "completed_matched_development_diagnostics_stop"
+recorded_date: "2026-08-19"
+purpose: "Immutable negative-evidence record for the matched supervised source-view similarity canonicalization diagnostics; not a benchmark, performance claim, architecture selection, or promotion result."
+
+lineage:
+  source_commit: "f35b234bb8abceb5dc4f938414b959b8b9436ae5"
+  source_commit_short: "f35b234"
+  source_commit_binding: "Both frozen configs and every receipt source hash match the tracked bytes at this commit."
+  source_sha256:
+    source/dense_registration_preprocessing.py: "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+    training/independent_joint_data.py: "e3a52eb88ddc857f1132ac2bfb8f5e2d08aca58cb0f199ab9329ec87b7891e5d"
+    training/independent_joint_model.py: "8eab4b14a74899104258604cb3f74ef1e54704149bc748f1275a18e27d4b27b5"
+    training/independent_joint_variants.py: "b80774a036e57fcb1481ee8557636a36a9e23126902574a04e001eb709c02139"
+    training/quicknii_plane_metric.py: "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31"
+    training/run_independent_initializer_foundation.py: "c25341c749ca61140569d9eac6e4b9e315ebfc302d9644a6d35dd89854f90e6f"
+    training/run_independent_pose_identifiability.py: "e6915a1d6d663d25b0b7c62d184eea48ee7056a877797155de8f5ddb22df0d71"
+    training/synthetic_registration.py: "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde"
+    training/train_independent_joint.py: "b5f873c12d8a50d82c3972d90f4f9866662c47424e349d4d0104b7e02e7957b1"
+  configs:
+    global_average:
+      path: "training/configs/independent_pose_identifiability_supervised_similarity_300_r4322.json"
+      file_sha256: "cda382fa25cf37ce34b3b3a549fec0048640b9bfa9e210bb321e76275c011b02"
+      contract_sha256: "ac8167ec0324fe50290487e987b21c34d9070062959b3c0c1a39048d25a1cc82"
+    spatial_moment:
+      path: "training/configs/independent_pose_identifiability_spatial_moment_supervised_similarity_300_r4322.json"
+      file_sha256: "2b40a4501d282aaf3948c48d63cf4e407cacd52f0136bf6fa4bc516867312619"
+      contract_sha256: "af6563df1a5f8c7f498d4584650b18c33398aeca4884ee6138f0c38c61a55108"
+  learned_checkpoint_dependencies: []
+
+access:
+  data_source: "synthetic CCF train split only"
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+  anatomical_pose_target_access_by_canonicalizer: false
+  real_animal_ids: "not applicable; this is a fixed synthetic development diagnostic"
+
+protocol:
+  role: "diagnostic-not-model-selection"
+  random_seed: 4322
+  optimizer: "AdamW"
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  amp_enabled: true
+  amp_initial_scale: 512.0
+  maximum_optimizer_updates: 300
+  terminal_optimizer_updates: 300
+  terminal_sample_presentations: 7200
+  categorical_loss_weight: 1.0
+  sub_bin_residual_loss_weight: 0.5
+  source_view_supervision_loss_weight: 1.0
+  gradient_clip_norm: 5.0
+  gradient_clip_warmup_updates: 30
+  canonicalizer:
+    initialization_seed: 12731
+    target_parameters: ["synthetic_source_view_rotation_deg", "synthetic_source_view_scale"]
+    loss: "smooth-l1-on-normalized-rotation-and-log-scale"
+    pose_gradient_to_canonicalizer: "blocked-at-sampling-parameters"
+    gradient_clipping: "separate-pose-and-canonicalizer-groups-at-5.0"
+    source_generation_sampling: "inverse(view_h)"
+    canonicalization_sampling: "forward view_h as the output-to-input sampling map"
+  fixed_panel:
+    contract_sha256: "0d66c0d2283d260799ac8bd980d2e99a278e131849b941d420a94d77e85a38d0"
+    synthetic_data_contract_sha256: "36aca63d481f9fca06605addd8f2cbc39a2522b04d7e9d25c132e6c7b9e5dc9c"
+    atlas_contract_sha256: "5ff5a29ccc7f0c554020dfc8e7e07d2af59a662f9420422bffc9a86edcd73872"
+    latent_pose_sha256: "1c8e39ece2bcebf9bfc11d55ceb3fe4b0fd1ea056fa6afe37c46c6ec146bf25d"
+    brain_mask_sha256: "ece6797feeffd5285781c6f62c964175e2aebbf7f862e04b8ae3c43867a8e1b1"
+    outline_mode: "absent"
+    latent_pose_count: 24
+    seen_sample_count: 48
+    held_sample_count: 48
+    seen_panels: 2
+    held_panels: 2
+    held_generator_realization_disjoint_from_seen: true
+    held_nuisance_values_disjoint_from_seen: true
+    generator_realization_sha256:
+      seen: "b7520c0039fc0bd6dc90dbe52fe85b30b3c11a67f16e57b5cdf0841985f7870b"
+      held: "cbd53462be2d432742926b067fcebb2e78aa7d301fb2bac1ea8d0a87c317e5f7"
+    manifests:
+      seen:
+        - "a55104400404b055186c00aea9004a3acdbfe8482be38f9f50749c7084c2eda6"
+        - "575d97a5d9a07d9e99095030754825450fdeedc00d5b2b8bf3df19cf22a5c734"
+      held:
+        - "b5ae1b36c969d2252261f810526997acd0890dfbc893f6ab9ae58985384644af"
+        - "95619721d16d86faa12385176b3a9545397b16121df578a0e83325ae2e8e0d43"
+    input_sha256:
+      seen:
+        - source_image: "ffccdfcfc12f194aeeafffa6b7a9f9e1a1a0b1a1848e04599b8320fdc5efd17a"
+          source_mask: "b8c9060b95fae11485b82a4c0bae5e5e9be388696e36b9781cbd2b046c1ad2a6"
+          mask_available: "d0b1e02a51628cf7395bd20be1b51b20c0551c4c207e9c86c099726223054aab"
+          true_pose: "1c8e39ece2bcebf9bfc11d55ceb3fe4b0fd1ea056fa6afe37c46c6ec146bf25d"
+          truth_source_view_parameters: "56e690aa63a04a84a99dc1369be53410c96ded109b863e8f1724c0376619fbfb"
+        - source_image: "d4053b97dbea4bd826891a3c78b173098de81eb429ba280e87f5d71ad82342f5"
+          source_mask: "b8c9060b95fae11485b82a4c0bae5e5e9be388696e36b9781cbd2b046c1ad2a6"
+          mask_available: "d0b1e02a51628cf7395bd20be1b51b20c0551c4c207e9c86c099726223054aab"
+          true_pose: "1c8e39ece2bcebf9bfc11d55ceb3fe4b0fd1ea056fa6afe37c46c6ec146bf25d"
+          truth_source_view_parameters: "11742c7fa235df3c021fde8afe1ca188b4d19580a7e45e0f18747f7f7f299d06"
+      held:
+        - source_image: "8fec6e4be63ed020aa58fe8c84d33d902d2f206cd2929f768566c95699b392d6"
+          source_mask: "b8c9060b95fae11485b82a4c0bae5e5e9be388696e36b9781cbd2b046c1ad2a6"
+          mask_available: "d0b1e02a51628cf7395bd20be1b51b20c0551c4c207e9c86c099726223054aab"
+          true_pose: "1c8e39ece2bcebf9bfc11d55ceb3fe4b0fd1ea056fa6afe37c46c6ec146bf25d"
+          truth_source_view_parameters: "65edb0bb03f20e4cc27bebf19b9fa3121ff70d7b6844f3a4c8cd50770317c05c"
+        - source_image: "5c9ccd4602535904ed4bd5f6a48e4d9ba11d927e7ce51b8e8d6a55dd3c6fddf2"
+          source_mask: "b8c9060b95fae11485b82a4c0bae5e5e9be388696e36b9781cbd2b046c1ad2a6"
+          mask_available: "d0b1e02a51628cf7395bd20be1b51b20c0551c4c207e9c86c099726223054aab"
+          true_pose: "1c8e39ece2bcebf9bfc11d55ceb3fe4b0fd1ea056fa6afe37c46c6ec146bf25d"
+          truth_source_view_parameters: "cadea8def6a9fc3345e487f8b9b97ad5bc6dbd47a74596903ec83447f7dae24d"
+
+prespecified_gates:
+  seen_bin_accuracy_minimum: {ap: 0.95, lr: 0.90, dv: 0.90}
+  held_mae_maximum: {ap_um: 250.0, lr_deg: 3.0, dv_deg: 3.0}
+  held_physical_improvement_over_constant_prior_minimum: 0.50
+  held_prediction_to_truth_sd_ratio_minimum_each_axis: 0.75
+  residual_improvement_over_zero_minimum_each_axis: 0.20
+  postwarm_gradient_clipped_fraction_strict_maximum: 0.50
+  nonfinite_count_maximum: 0
+  source_view_canonicalization:
+    seen_rotation_mae_deg_maximum: 2.0
+    seen_scale_mae_maximum: 0.03
+    held_rotation_mae_deg_maximum: 3.0
+    held_scale_mae_maximum: 0.05
+
+runs:
+  global_average:
+    model_class: "training.independent_joint_variants.IndependentJointSimilarityCanonicalizedModel"
+    parameter_count: 1373904
+    setup_sha256: "764d9931a5faac186f0cd2d876849bd6a784dd32f2860294d8ae86e884ecab16"
+    initial_state_sha256: "d7c1ad7941701a831a776763a49aa2ec922b1475b8122c8de9e02f7d2b8b263a"
+    final_model_state_sha256: "67cb07394de32738264c916740eb1196323846e06a4e933d7113206480db0ac4"
+    frozen_parameter_initial_sha256: "8e2ff2cc8329f93e9cdf856f602c516d221b170a36290e2128f68be3b01e49c4"
+    frozen_parameter_terminal_sha256: "8e2ff2cc8329f93e9cdf856f602c516d221b170a36290e2128f68be3b01e49c4"
+    fixed_panel_result_sha256: "98d38776cd80b76b12bfd8d5bee09bc8b1d0ffcb8b78b54a3f0a3b06419dd6ee"
+    training:
+      nonfinite_count: 0
+      postwarm_updates: 270
+      postwarm_clipped_updates: 105
+      postwarm_gradient_clipped_fraction: 0.3888888888888889
+    evaluation:
+      nonfinite_output_count: 0
+      seen:
+        sample_count: 48
+        bin_accuracy: {ap: 0.4166666567325592, lr: 0.7083333134651184, dv: 0.7083333134651184}
+        mae: {ap_um: 1425.9708251953125, lr_deg: 7.858999252319336, dv_deg: 10.77894115447998}
+        zero_residual_oracle_bin_mae: {ap_um: 37.5, lr_deg: 0.75, dv_deg: 0.75}
+        residual_improvement_over_zero: {ap: -37.0258903503418, lr: -9.478665351867676, dv: -13.37192153930664}
+        prediction_sd: {ap_um: 1268.9951171875, lr_deg: 11.753145217895508, dv_deg: 17.782249450683594}
+        truth_sd: {ap_um: 1602.3040771484375, lr_deg: 13.25, dv_deg: 18.25}
+        physical_corresponding_plane_error_um: 1679.3354872485033
+        source_view_canonicalization:
+          rotation_mae_deg: 19.97402000427246
+          scale_mae: 0.037670426070690155
+          log_scale_mae: 0.03769417479634285
+      held:
+        sample_count: 48
+        bin_accuracy: {ap: 0.1875, lr: 0.5416666865348816, dv: 0.5833333134651184}
+        mae: {ap_um: 1637.5048828125, lr_deg: 12.210444450378418, dv_deg: 15.27495288848877}
+        zero_residual_oracle_bin_mae: {ap_um: 37.5, lr_deg: 0.75, dv_deg: 0.75}
+        residual_improvement_over_zero: {ap: -42.66679763793945, lr: -15.28059196472168, dv: -19.36660385131836}
+        prediction_sd: {ap_um: 1201.2047119140625, lr_deg: 11.630003929138184, dv_deg: 17.51451873779297}
+        truth_sd: {ap_um: 1602.3040771484375, lr_deg: 13.25, dv_deg: 18.25}
+        prediction_to_truth_sd_ratio: {ap: 0.7496733665466309, lr: 0.8777361512184143, dv: 0.9596996307373047}
+        physical_corresponding_plane_error_um: 1880.4042142370392
+        constant_prior_pose: [-1720.8333740234375, 0.0, 0.0]
+        constant_prior_physical_error_um: 1403.519090756721
+        physical_improvement_over_constant_prior: -0.3397781523749712
+        source_view_canonicalization:
+          rotation_mae_deg: 13.414466857910156
+          scale_mae: 0.03159083053469658
+          log_scale_mae: 0.03163698688149452
+    qualification:
+      decision: "stop"
+      classification: "source-view-canonicalizer-not-identified-on-seen-transforms"
+      passed_checks: ["nonfinite", "postwarm_clipping", "held_source_view_scale"]
+      failed_checks: ["seen_ap_bin_accuracy", "seen_lr_bin_accuracy", "seen_dv_bin_accuracy", "held_ap_mae_um", "held_lr_mae_deg", "held_dv_mae_deg", "held_physical_improvement", "held_prediction_sd", "seen_residual_improvement", "held_residual_improvement", "seen_source_view_rotation", "seen_source_view_scale", "held_source_view_rotation"]
+
+  spatial_moment:
+    model_class: "training.independent_joint_variants.IndependentJointSpatialMomentSimilarityCanonicalizedModel"
+    parameter_count: 1378172
+    setup_sha256: "1000dabd9472d9fae8d4a1c13670daaa96533793c6c2cba5caea91b4fcd2dd9f"
+    initial_state_sha256: "41dbd6a5b38d7b085a191db49e56f8539a62c8eebf5990d5558028cac091c006"
+    final_model_state_sha256: "ec3c5bb71cae842c6fb7f922b527d6f019042bac5944613858576d5c36838525"
+    frozen_parameter_initial_sha256: "e522cdb7d326fb139c18a7153bf00aea1845f7e6a2c3466f3fff24b8f4b127e8"
+    frozen_parameter_terminal_sha256: "e522cdb7d326fb139c18a7153bf00aea1845f7e6a2c3466f3fff24b8f4b127e8"
+    fixed_panel_result_sha256: "8d1692cfae734b00b09e1a74c46f1fe84eaa1de87ea4650933dbba188ac667e9"
+    training:
+      nonfinite_count: 0
+      postwarm_updates: 270
+      postwarm_clipped_updates: 121
+      postwarm_gradient_clipped_fraction: 0.44814814814814813
+    evaluation:
+      nonfinite_output_count: 0
+      seen:
+        sample_count: 48
+        bin_accuracy: {ap: 0.4166666567325592, lr: 0.9375, dv: 0.7291666865348816}
+        mae: {ap_um: 1447.3685302734375, lr_deg: 1.8644698858261108, dv_deg: 9.956648826599121}
+        zero_residual_oracle_bin_mae: {ap_um: 37.5, lr_deg: 0.75, dv_deg: 0.75}
+        residual_improvement_over_zero: {ap: -37.596492767333984, lr: -1.485959768295288, dv: -12.275531768798828}
+        prediction_sd: {ap_um: 1413.8543701171875, lr_deg: 13.032768249511719, dv_deg: 17.8997802734375}
+        truth_sd: {ap_um: 1602.3040771484375, lr_deg: 13.25, dv_deg: 18.25}
+        physical_corresponding_plane_error_um: 1608.2002489787756
+        source_view_canonicalization:
+          rotation_mae_deg: 19.97402000427246
+          scale_mae: 0.037670426070690155
+          log_scale_mae: 0.03769417479634285
+      held:
+        sample_count: 48
+        bin_accuracy: {ap: 0.125, lr: 0.4583333432674408, dv: 0.625}
+        mae: {ap_um: 1532.3494873046875, lr_deg: 14.408251762390137, dv_deg: 13.738422393798828}
+        zero_residual_oracle_bin_mae: {ap_um: 37.5, lr_deg: 0.75, dv_deg: 0.75}
+        residual_improvement_over_zero: {ap: -39.86265182495117, lr: -18.211002349853516, dv: -17.317895889282227}
+        prediction_sd: {ap_um: 1484.3338623046875, lr_deg: 12.28351879119873, dv_deg: 17.800371170043945}
+        truth_sd: {ap_um: 1602.3040771484375, lr_deg: 13.25, dv_deg: 18.25}
+        prediction_to_truth_sd_ratio: {ap: 0.926374614238739, lr: 0.9270580410957336, dv: 0.9753627777099609}
+        physical_corresponding_plane_error_um: 1658.7432268248633
+        constant_prior_pose: [-1720.8333740234375, 0.0, 0.0]
+        constant_prior_physical_error_um: 1403.519090756721
+        physical_improvement_over_constant_prior: -0.18184585998793623
+        source_view_canonicalization:
+          rotation_mae_deg: 13.414466857910156
+          scale_mae: 0.03159083053469658
+          log_scale_mae: 0.03163698688149452
+    qualification:
+      decision: "stop"
+      classification: "source-view-canonicalizer-not-identified-on-seen-transforms"
+      passed_checks: ["seen_lr_bin_accuracy", "held_prediction_sd", "nonfinite", "postwarm_clipping", "held_source_view_scale"]
+      failed_checks: ["seen_ap_bin_accuracy", "seen_dv_bin_accuracy", "held_ap_mae_um", "held_lr_mae_deg", "held_dv_mae_deg", "held_physical_improvement", "seen_residual_improvement", "held_residual_improvement", "seen_source_view_rotation", "seen_source_view_scale", "held_source_view_rotation"]
+
+matched_attribution:
+  same_fixed_panel_contract: true
+  same_atlas_and_synthetic_data_contracts: true
+  same_input_tensor_hashes: true
+  same_raw_example_identifiers_truth_and_nuisance_parameters: true
+  same_seed_schedule_losses_optimizer_and_gates: true
+  canonicalizer_initial_state_sha256: "75f1067cb5fbbcb124bedcfd0a4f6d6e1788ebefa6614a0fbe8e241d290d900a"
+  canonicalizer_final_state_sha256: "37c91f6a84c8b3412b2261e0319cd3e78e89510d0654d0d0317345e79bc2a261"
+  canonicalizer_final_state_bit_exact_between_runs: true
+  canonicalizer_optimizer_states_bit_exact_between_runs: true
+  canonicalizer_optimizer_parameter_count: 11
+  canonicalizer_optimizer_steps_each: 300
+  canonicalizer_gradient_loss_fields_exact_for_all_updates: true
+  canonicalizer_prediction_and_error_fields_exact_for_all_raw_records: true
+  interpretation: "The shared supervised canonicalizer, not the choice of global-average versus spatial-moment pose readout, failed to identify source-view rotation. Pose-result differences cannot rescue that upstream failure."
+
+storage:
+  artifact_policy: "single-atomic-resume-state-not-a-selected-model-checkpoint"
+  global_average:
+    run_root: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-supervised-similarity-pose-identifiability-300-r4322-v1'
+    artifacts:
+      diagnostic_receipt:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-supervised-similarity-pose-identifiability-300-r4322-v1\diagnostic_receipt.json'
+        bytes: 450476
+        sha256: "1c3621cd144fd47b12d7d3a7b093509948d99ee27c2787678a0f014fb8225928"
+      fixed_panel_predictions:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-supervised-similarity-pose-identifiability-300-r4322-v1\fixed_panel_predictions.json'
+        bytes: 151603
+        sha256: "86abc2905e561c535c0bbd2638f757b38c9649db0fa3df861714af1cde229d7b"
+      resume_state:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-supervised-similarity-pose-identifiability-300-r4322-v1\resume_state.pt'
+        bytes: 8295787
+        sha256: "513abacbd24898e473bf01ee9a095441f18a0207c51b13ea72f018cf4c74daaa"
+      stdout:
+        path: 'I:\AtlasJointProject\logs\supervised-stn-300-r4322\base.stdout.log'
+        bytes: 3688
+        sha256: "01cbf3d562c2d7e3b618b97262e0136f73747a22de8382865690c10ecab0e35c"
+      stderr:
+        path: 'I:\AtlasJointProject\logs\supervised-stn-300-r4322\base.stderr.log'
+        bytes: 0
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  spatial_moment:
+    run_root: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-supervised-similarity-pose-identifiability-300-r4322-v1'
+    artifacts:
+      diagnostic_receipt:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-supervised-similarity-pose-identifiability-300-r4322-v1\diagnostic_receipt.json'
+        bytes: 450855
+        sha256: "03ece3251ca5b84f427030671ae6f302a7afed624a5ce1aa8a320d64b039ee51"
+      fixed_panel_predictions:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-supervised-similarity-pose-identifiability-300-r4322-v1\fixed_panel_predictions.json'
+        bytes: 151553
+        sha256: "664a64a95eaedc53a15d75d9d6a7833a5aaa7596f7c74f46e2429ceb53e06242"
+      resume_state:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-supervised-similarity-pose-identifiability-300-r4322-v1\resume_state.pt'
+        bytes: 8349419
+        sha256: "497b0943231c0d95efa0d703ed877daa8bf760d165d6744138976e8161929b16"
+      stdout:
+        path: 'I:\AtlasJointProject\logs\supervised-stn-300-r4322\spatial.stdout.log'
+        bytes: 3712
+        sha256: "e1c5c9404e5952a9549ba6e546999d9619d744d12ba006bd599cb0b4eb93b87e"
+      stderr:
+        path: 'I:\AtlasJointProject\logs\supervised-stn-300-r4322\spatial.stderr.log'
+        bytes: 0
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+integrity_audit:
+  source_commit_and_config_bytes_verified: true
+  config_file_hashes_recomputed: true
+  config_contract_hashes_recomputed_from_payloads: true
+  setup_hashes_recomputed_from_receipts: true
+  fixed_panel_contract_hashes_recomputed_from_payloads: true
+  exact_fixed_panel_contract_between_runs: true
+  artifact_sha256_recomputed_from_i_drive: true
+  resume_state_hashes_match_receipts: true
+  resume_state_setup_status_progress_and_nonfinite_counts_match_receipts: true
+  resume_state_evaluations_qualifications_and_gradient_records_match_receipts: true
+  frozen_parameter_terminal_hashes_match_initial: true
+  prediction_result_hashes_recomputed_from_payloads: true
+  prediction_results_match_receipts_and_resume_states: true
+  raw_prediction_record_hashes_recomputed_per_run: 96
+  raw_prediction_record_hashes_matched_per_run: 96
+  summary_metrics_recomputed_from_raw_predictions: true
+  maximum_absolute_aggregate_recompute_difference:
+    global_average: 0.000244140625
+    spatial_moment: 0.0003662109375
+  stdout_terminal_results_match_receipts: true
+  stderr_bytes_each: 0
+  original_run_artifacts_rewritten: false
+  development_construct_consumed: true
+
+decision:
+  model_selected: false
+  architecture_winner: null
+  accuracy_claim: false
+  performance_claim: false
+  promotion_authorized: false
+  longer_training_of_this_learned_canonicalizer_authorized: false
+  gate_relaxation_authorized: false
+  protected_data_access_authorized: false
+  authorized_next_diagnostic:
+    name: "matched exact-source-view oracle canonicalization upper bound"
+    purpose: "Determine whether the pose readout is identifiable when source-view rotation and scale are removed perfectly, separating canonicalizer failure from downstream pose-readout limitations."
+    comparison: "global-average base versus spatial moments on the same consumed synthetic development construct"
+    oracle_input: "exact synthetic source-view rotation and scale only; anatomical AP/L-R/D-V targets remain inaccessible to canonicalization"
+    sampling_direction: "Sample the observed source with the exact forward view_h as the output-to-input map, matching the proven asymmetric-marker direction test. Source generation itself sampled with inverse(view_h)."
+    learned_canonicalizer: "bypassed; no learned STN estimate is used"
+    fixed_controls: "same fixed examples, manifests, split, seed, schedule, losses, optimizer, gates, update budget, decode, and physical metric unless a new hash-bound oracle config explicitly records the unavoidable canonicalization substitution"
+    product5_access: false
+    calibration_access: false
+    final_test_access: false
+    role: "development-only causal upper-bound diagnostic; not model selection or a performance claim"

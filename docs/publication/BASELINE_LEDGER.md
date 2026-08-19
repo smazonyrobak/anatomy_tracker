@@ -585,3 +585,64 @@ identical canonicalizer. Exact lineage, result, raw-record, state and artifact
 hashes are recorded in
 `publication/spatial_moment_pose_identifiability_diagnostic.yaml`; the original
 artifacts were not rewritten.
+
+### Supervised source-view similarity canonicalization diagnostic
+
+The authorized matched ablation ran from commit
+`f35b234bb8abceb5dc4f938414b959b8b9436ae5`. Its two frozen config contracts
+were `ac8167ec0324fe50290487e987b21c34d9070062959b3c0c1a39048d25a1cc82`
+for the global-average model and
+`af6563df1a5f8c7f498d4584650b18c33398aeca4884ee6138f0c38c61a55108`
+for the spatial-moment model. Both used the same consumed 24-pose synthetic
+CCF train construct, two seen and two held panels, absent outlines, random seed
+4322, 300-update schedule, losses, optimizer and gates. Product-5, calibration
+and final-test access were false, and learned-checkpoint dependencies were
+empty.
+
+The identical randomly initialized canonicalizer was supervised only with the
+exact synthetic source-view rotation and scale; anatomical AP/L--R/D--V targets
+were unavailable to it. Pose-loss gradients were blocked at the sampling
+parameters, and pose and canonicalizer gradients were clipped separately. Both
+runs completed 300 updates and 7,200 sample presentations with no non-finite
+training or evaluation values.
+
+| Diagnostic | Seen AP / L--R / D--V bin accuracy | Seen rotation / scale MAE | Held AP / L--R / D--V MAE | Held rotation / scale MAE | Held physical error / improvement over prior | Post-warm clipping |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Global-average + supervised canonicalizer | 0.4166667 / 0.7083333 / 0.7083333 | 19.9740200 deg / 0.0376704 | 1637.5049 um / 12.2104 deg / 15.2750 deg | 13.4144669 deg / 0.0315908 | 1880.4042 um / -0.3397782 | 0.3888889 |
+| Spatial moments + supervised canonicalizer | 0.4166667 / 0.9375000 / 0.7291667 | 19.9740200 deg / 0.0376704 | 1532.3495 um / 14.4083 deg / 13.7384 deg | 13.4144669 deg / 0.0315908 | 1658.7432 um / -0.1818459 | 0.4481481 |
+
+The source-view gates were at most 2 degrees and 0.03 on seen transforms and
+3 degrees and 0.05 on held transforms. Both canonicalizers therefore failed
+seen rotation and scale and held rotation; only held scale passed. The final
+canonicalizer tensors were bit-exact between runs with SHA-256
+`37c91f6a84c8b3412b2261e0319cd3e78e89510d0654d0d0317345e79bc2a261`.
+All 11 canonicalizer optimizer states, all 300 canonicalizer gradient/loss
+records, and all 96 source-view prediction/error fields were also exact-equal.
+This isolates the shared learned canonicalizer as the upstream failure rather
+than attributing it to either pose readout.
+
+Both terminal classifications are
+`source-view-canonicalizer-not-identified-on-seen-transforms`, with decision
+`stop`. The spatial-moment run's lower physical error is a descriptive result
+inside this consumed single-seed diagnostic only: both models remained worse
+than the `1403.5191 um` constant-pose prior and failed the core pose gates. No
+architecture is selected, no performance or accuracy claim is made, and
+neither longer training of this learned canonicalizer nor gate relaxation is
+authorized.
+
+The only authorized next experiment is a matched exact-source-view oracle
+canonicalization upper-bound diagnostic on the same consumed synthetic
+construct. Source generation sampled with `inverse(view_h)`; the oracle must
+sample the observed source with the exact forward `view_h` as its
+output-to-input map, matching the proven asymmetric-marker direction test. It
+bypasses the learned canonicalizer and may use exact synthetic rotation and
+scale only, never anatomical pose targets. Its purpose is causal diagnosis of
+whether perfect nuisance removal makes the downstream pose readout
+identifiable; it remains development-only with all protected-data access
+false and cannot select an architecture.
+
+Exact source, config, setup, fixed-panel, input, result, raw-record, model,
+canonicalizer, receipt, prediction, resume-state and stdout/stderr paths and
+SHA-256 values are recorded in
+`publication/supervised_similarity_pose_identifiability_diagnostic.yaml`; the
+original run artifacts were not rewritten.
