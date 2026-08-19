@@ -646,3 +646,59 @@ canonicalizer, receipt, prediction, resume-state and stdout/stderr paths and
 SHA-256 values are recorded in
 `publication/supervised_similarity_pose_identifiability_diagnostic.yaml`; the
 original run artifacts were not rewritten.
+
+### Exact-source-view oracle canonicalization upper bound
+
+The authorized oracle diagnostic ran from commit
+`db6ed2163e1181dc8ddb1efdbee8461caa6d9286`. Its frozen config contracts
+were `3202f03d7214ee4767ccbbecedd6b5e1f1e18529de8453e284785cded8976d87`
+for the global-average pose readout and
+`4b4b0ffc8f545dbe7ce631b9c8c3f6a9e6160f8aa2a2858f90c55f0a08e7552d`
+for spatial moments. The two runs used the same consumed synthetic CCF train
+examples, manifests, nuisance assignments, seed, 300-update schedule, losses,
+optimizer and gates. Product-5, calibration and final-test access were false,
+and learned-checkpoint dependencies were empty.
+
+This upper bound did not estimate nuisance parameters. For each fixed panel it
+used the exact synthetic rotation and scale to sample the observed source once
+with forward `view_h` as the output-to-input map. Source generation had sampled
+with `inverse(view_h)`. The model still received only the resulting image,
+zero absent-outline mask and zero availability flag; it received neither the
+nuisance parameters nor anatomical AP/L--R/D--V targets. The protocol is a
+double-bilinear-resampling ceiling that retains source-view crop and
+interpolation loss, not a deployable invariance result.
+
+Oracle integrity passed identically in both runs: zero parameter mismatches,
+zero non-finite canonicalized values, all four fixed panels present, and one
+canonicalization warp per panel. Observed-input hashes and the four
+canonicalized-source hashes were exact-equal between runs. Both runs completed
+300 updates and 7,200 sample presentations with zero non-finite training or
+evaluation outputs.
+
+| Diagnostic | Seen AP / L--R / D--V bin accuracy | Seen AP / L--R / D--V MAE | Seen physical error | Held AP / L--R / D--V MAE | Held physical error / improvement over prior | Post-warm clipping |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Global-average + exact oracle | 0.4166667 / 0.6875000 / 0.7291667 | 1429.7738 um / 8.3367 deg / 10.0016 deg | 1582.8687 um | 1548.4435 um / 11.7089 deg / 12.3831 deg | 1793.5379 um / -0.2778864 | 0.4185185 |
+| Spatial moments + exact oracle | 0.3125000 / 0.8125000 / 0.8750000 | 1603.5231 um / 5.0932 deg / 4.6592 deg | 1763.1318 um | 1958.4974 um / 12.7465 deg / 7.0351 deg | 2143.8478 um / -0.5274803 | 0.3962963 |
+
+Both runs failed every seen bin-accuracy gate, every held MAE gate, seen and
+held residual-improvement gates, and the held physical-improvement gate. All
+residual improvements were negative, and both held physical errors were worse
+than the `1403.5191 um` constant-pose prior. Their terminal decision is `stop`
+with classification
+`pose-representation-not-identifiable-on-seen-panels-conditional-on-oracle-source-view-canonicalization`.
+
+Because exact nuisance parameters, the proven forward transform direction and
+all oracle-integrity gates did not rescue either readout, source-view nuisance
+estimation is not the sole blocker under this fixed double-resampled protocol.
+The remaining failure may reflect crop/interpolation information loss, pose
+representation, optimization or the consumed diagnostic construct. The
+descriptive differences between these two single-seed runs do not select an
+architecture, support a performance claim or authorize promotion, longer
+training, gate relaxation, or protected-data access.
+
+Exact source and config lineage, matched observed-input and canonical-image
+hashes, oracle-integrity evidence, full metrics, result and raw-record hashes,
+model states, receipts, predictions, resume states and stdout/stderr paths and
+SHA-256 values are recorded in
+`publication/oracle_similarity_pose_identifiability_diagnostic.yaml`; the
+original run artifacts were not rewritten.
