@@ -702,3 +702,59 @@ model states, receipts, predictions, resume states and stdout/stderr paths and
 SHA-256 values are recorded in
 `publication/oracle_similarity_pose_identifiability_diagnostic.yaml`; the
 original run artifacts were not rewritten.
+
+### Frozen-context AP probe and trust-NCG solver rescue
+
+The frozen-context AP transfer probe was frozen at commit
+`2ae0f965beae50592847f9686a94ce1e77e18f9f`. Its global-average and
+spatial-moment config contracts were respectively
+`bcfaeac84717ae702f4b239f40004b3525bccb5301e0ddbdade3bae8cd47a2a5`
+and `50650ba2244d1cd25cef1528cbd73afe2416f73f5f9736173d8f6540421b35d3`.
+The probe froze the terminal 192-dimensional AP contexts from the two oracle
+diagnostics, then fit only a 41-class linear AP head in float64 on CPU. Each
+arm used the same two 24-case seen panels and the same three transfer fits.
+Product-5, calibration and final-test access were false; the role was
+development-only diagnosis, never model selection or promotion.
+
+The original L-BFGS-B pair stopped numerically. All three global-average fits
+reached the 1,000-iteration limit with independent final gradient infinity
+norms between `3.0975291161320804e-4` and `8.453242841426724e-4`. The
+spatial-moment opposite-panel fits returned SciPy success, but their independent
+gradient norms remained `2.7879679012592147e-6` and
+`2.180999848982589e-6`; its pooled-seen-to-fresh-held fit also reached the
+1,000-iteration limit at `4.7691638577228085e-6`. Both receipts therefore
+stopped as `ap-head-solver-result-not-successful`. Those runs could not support
+a causal panel-instability interpretation.
+
+Commit `e5b051a692778b3d6809e18f6a9b7377e88c9a64` added a solver-only
+trust-NCG rescue, bound byte-for-byte to the consumed context tensors. Its
+global-average and spatial-moment contracts were
+`b73d5216666fe75171fdd73a37a3486e1134a4079e4ea1867959bec342f1df7a`
+and `00780370c7855243f9fc36e9fa8798f39cb295f83471506bc60191085da44f78`.
+All six fits converged successfully in 18--35 iterations, with independent
+gradient infinity norms from `9.168150722112245e-13` to
+`8.590920992473906e-10`; none exhausted the 250-iteration or 1,250
+objective-gradient-plus-Hessian-vector call limits.
+
+| Frozen context | Single-panel train correct | Pooled-seen train correct | Opposite-panel correct | Prespecified minimum | Authoritative classification |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Global average | 24/24 and 24/24 | 48/48 | 21/24 and 18/24 | 23/24 each | `terminal-ap-context-panel-resampling-instability` |
+| Spatial moment | 24/24 and 24/24 | 48/48 | 23/24 and 22/24 | 23/24 each | `terminal-ap-context-panel-resampling-instability` |
+
+The rescue receipts pass every solver-validity, independent-gradient, budget,
+operator-accounting, finite and training-fit check, and explicitly permit the
+causal classifications above. They explicitly forbid fresh-held transfer
+interpretation because opposite-panel transfer was a prerequisite and failed
+for both arms. For provenance only, the global-average fresh-held bin-centre
+AP MAE, residual-added AP MAE and prediction-to-truth SD ratio were
+`1156.25 um`, `1148.7797760575388 um` and `0.6943662052101008`; the
+spatial-moment values were `937.5 um`, `927.9678975505134 um` and
+`0.8235325051784915`. These are non-authoritative descriptive values, not
+held-panel performance evidence and not a basis for comparing the two arms.
+
+Both decisions remain `stop`. No architecture is selected, no learned
+candidate is promoted, and no protected-data access is authorized. Exact
+per-fit solver results, all four run roots, config and contract bindings, and
+receipt, tensor, stdout and stderr SHA-256 values are recorded in
+`publication/frozen_context_ap_probe_solver_diagnostic.yaml`; the original
+artifacts were not rewritten.

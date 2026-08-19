@@ -1,0 +1,492 @@
+schema_version: "1.0"
+status: "completed_solver_rescue_stop"
+recorded_date: "2026-08-19"
+purpose: "Immutable development-only record of the frozen-context AP probe and its solver-only trust-NCG rescue; not a benchmark, held-panel claim, model-selection result, or promotion result."
+
+lineage:
+  original_probe_commit: "2ae0f965beae50592847f9686a94ce1e77e18f9f"
+  original_probe_commit_short: "2ae0f96"
+  rescue_commit: "e5b051a692778b3d6809e18f6a9b7377e88c9a64"
+  rescue_commit_short: "e5b051a"
+  commit_binding: "The original runner and two configs are unchanged from 2ae0f96, and the rescue runner and two configs are unchanged from e5b051a at the time of this record."
+  source_panel_contract_sha256: "886d24c3e6993bc0beff01e5c4a1e75249b3e47bed1b192a848a3fa7e290583e"
+  configs:
+    original_lbfgsb:
+      global_average:
+        path: "training/configs/independent_oracle_frozen_context_ap_probe_fresh504322.json"
+        file_sha256: "84cf8e0ba4e65a0f91c01add46a9f194d1031924225876fbbcda37bd407ff57d"
+        contract_sha256: "bcfaeac84717ae702f4b239f40004b3525bccb5301e0ddbdade3bae8cd47a2a5"
+      spatial_moment:
+        path: "training/configs/independent_spatial_moment_oracle_frozen_context_ap_probe_fresh504322.json"
+        file_sha256: "9b1e7eba683a94c83e81cc7e1ab59b05dc939a99d74dc15f8ba0c22d1896b8df"
+        contract_sha256: "50650ba2244d1cd25cef1528cbd73afe2416f73f5f9736173d8f6540421b35d3"
+    trust_ncg_rescue:
+      global_average:
+        path: "training/configs/independent_oracle_frozen_context_ap_probe_trust_ncg_rescue.json"
+        file_sha256: "4015b1677a25d628f087b9776412cf482ca4b99e2e6f500335fcd322e3419289"
+        contract_sha256: "b73d5216666fe75171fdd73a37a3486e1134a4079e4ea1867959bec342f1df7a"
+      spatial_moment:
+        path: "training/configs/independent_spatial_moment_oracle_frozen_context_ap_probe_trust_ncg_rescue.json"
+        file_sha256: "7aa7fa0c1dd28c31487a0a04aa837ff05a935b0fc3d03b926616d6750ab7a0a3"
+        contract_sha256: "00780370c7855243f9fc36e9fa8798f39cb295f83471506bc60191085da44f78"
+  frozen_context_sources:
+    global_average:
+      source_run_name: "independent-oracle-similarity-pose-identifiability-300-r4322-v1"
+      source_checkpoint_commit: "db6ed2163e1181dc8ddb1efdbee8461caa6d9286"
+      source_resume_state_sha256: "c2a355b079e59be28fb84b74c34cd3cf380e83788711cf2a52be4f23d8518aa9"
+      terminal_model_state_sha256: "0efb78806303ec88b4465f3f9b19eb0898d214f5aba36b31829c353948061626"
+    spatial_moment:
+      source_run_name: "independent-spatial-moment-oracle-similarity-pose-identifiability-300-r4322-v1"
+      source_checkpoint_commit: "db6ed2163e1181dc8ddb1efdbee8461caa6d9286"
+      source_resume_state_sha256: "812b044b5d082aa0119c5c4d49c4dad9f6080a82b3819289164e2e7ea773d615"
+      terminal_model_state_sha256: "061b0bd978e00005c57a5c6c125d6481f47420f152af6cf81017edd6cf8f4363"
+
+access:
+  data_source: "synthetic CCF train split only"
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+  learned_candidate_promotion: false
+  model_selection: false
+  real_animal_ids: "not applicable; fixed synthetic development panels"
+
+protocol:
+  role: "diagnostic-not-model-selection"
+  outline_mode: "absent"
+  latent_pose_count: 24
+  seen_panels: 2
+  fresh_held_panels: 2
+  source_seen_generator_seed: 304322
+  primary_fresh_held_generator_seed: 504322
+  consumed_held_generator_seed_excluded_from_fit_and_primary_transfer_evaluation: 404322
+  context_dimension: 192
+  feature_extraction: "frozen terminal model in eval mode; no anatomical pose label was input to the model"
+  fits:
+    seen_panel_0_to_1: {train: "seen panel 0", test: "seen panel 1"}
+    seen_panel_1_to_0: {train: "seen panel 1", test: "seen panel 0"}
+    seen_to_fresh_held: {train: "pooled seen panels 0 and 1", test: "fresh-held panels 0 and 1"}
+  objective: "mean cross-entropy over 41 AP classes plus 0.5 * 1e-4 * squared L2 norm of weight and bias"
+  dtype: "float64-cpu"
+  initialization: "terminal AP-head weight and bias"
+  feature_normalization: null
+  original_solver:
+    implementation: "scipy.optimize.minimize"
+    method: "L-BFGS-B"
+    analytic_jacobian: true
+    gtol: 1.0e-08
+    ftol: 1.0e-10
+    maxiter: 1000
+    maxfun: 1250
+    maxcor: 10
+    maxls: 20
+  rescue_solver:
+    implementation: "scipy.optimize.minimize"
+    method: "trust-ncg"
+    analytic_combined_objective_gradient: true
+    analytic_full_coordinate_hessian_vector_product: true
+    gtol: 1.0e-08
+    maxiter: 250
+    initial_trust_radius: 1.0
+    maximum_trust_radius: 1000.0
+    eta: 0.15
+    combined_objective_gradient_and_hvp_call_limit_each_fit: 1250
+    retry: null
+    fallback_solver: null
+    cross_fit_warm_start: false
+  gates:
+    nonfinite_count_maximum: 0
+    solver_result_success_required: true
+    independent_final_gradient_inf_norm_maximum: 1.0e-08
+    single_panel_training_correct_required: 24
+    pooled_seen_training_correct_required: 48
+    opposite_seen_panel_correct_minimum: 23
+    opposite_seen_panel_sample_count: 24
+    fresh_held_bin_center_ap_mae_um_maximum: 250.0
+    fresh_held_prediction_to_truth_sd_ratio_minimum: 0.75
+
+runs:
+  global_average:
+    original_lbfgsb:
+      run_name: "independent-oracle-frozen-context-ap-probe-fresh504322-v1"
+      status: "stop"
+      setup_sha256: "d680f5e379c902d80becb89e7c2acb8e2137daebfea4a1f649db689c8b09eef5"
+      result_sha256: "e2cf23031378beeffadd3d4805095e0787956ab25ed70052c219de183f0b0b59"
+      qualification:
+        decision: "stop"
+        classification: "ap-head-solver-result-not-successful"
+        solver_valid_causal_interpretation: false
+        nonfinite_count: 0
+        single_panel_training_correct: [24, 24]
+        pooled_seen_training_correct: 48
+        opposite_seen_panel_correct: [21, 18]
+        opposite_seen_panel_sample_count_each: 24
+        optimizer_head_sample_presentations: 103392
+        independent_verification_sample_presentations: 96
+        total_head_sample_presentations: 103488
+      exact_solver_results:
+        seen_panel_0_to_1:
+          success: false
+          status: 1
+          message: "STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT"
+          iterations: 1000
+          function_evaluations: 1079
+          independent_verification_function_evaluations: 1
+          final_objective: 0.08725610278672756
+          independent_final_gradient_inf_norm: 0.0008453242841426724
+        seen_panel_1_to_0:
+          success: false
+          status: 1
+          message: "STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT"
+          iterations: 1000
+          function_evaluations: 1081
+          independent_verification_function_evaluations: 1
+          final_objective: 0.07145580174165997
+          independent_final_gradient_inf_norm: 0.00030975291161320804
+        seen_to_fresh_held:
+          success: false
+          status: 1
+          message: "STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT"
+          iterations: 1000
+          function_evaluations: 1074
+          independent_verification_function_evaluations: 1
+          final_objective: 0.1022178741928361
+          independent_final_gradient_inf_norm: 0.0007386757880566032
+      held_metrics_descriptive_only:
+        authoritative: false
+        reason: "The L-BFGS-B solver validity gate failed; the opposite-seen-panel prerequisite also failed."
+        fresh_held_bin_center_ap_mae_um: 1156.25
+        fresh_held_terminal_residual_added_ap_mae_um: 1148.7797760575388
+        fresh_held_prediction_to_truth_sd_ratio: 0.6943662052101008
+    trust_ncg_rescue:
+      run_name: "independent-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1"
+      status: "stop"
+      setup_sha256: "8839c9349139ad829656cd08e57fb8abe36ddf3e0925a5e3f015cbb251216281"
+      result_sha256: "d474d86e03e645b11c150ecb09745099c2a25b194ac3e4ee5a4a903a7b9be3d3"
+      source_artifact_binding:
+        source_run_name: "independent-oracle-frozen-context-ap-probe-fresh504322-v1"
+        source_receipt_file_sha256: "7f8a234f3df05414821a82f15a5f5943b7a49c160af55a5de5da8b57470a271c"
+        source_result_sha256: "e2cf23031378beeffadd3d4805095e0787956ab25ed70052c219de183f0b0b59"
+        source_tensor_artifact_sha256: "0179acda8bba37e7a2c06153f7a99723a46faf81af3e89271571d19d98552f46"
+      qualification:
+        decision: "stop"
+        classification: "terminal-ap-context-panel-resampling-instability"
+        causal_classification_allowed: true
+        fresh_held_transfer_interpretation_allowed: false
+        learned_candidate_promotion_allowed: false
+        nonfinite_count: 0
+        single_panel_training_correct: [24, 24]
+        pooled_seen_training_correct: 48
+        opposite_seen_panel_correct: [21, 18]
+        opposite_seen_panel_sample_count_each: 24
+        optimizer_head_sample_presentations: 57384
+        independent_verification_sample_presentations: 96
+        total_head_sample_presentations: 57480
+      exact_solver_results:
+        seen_panel_0_to_1:
+          success: true
+          status: 0
+          message: "Optimization terminated successfully."
+          iterations: 35
+          function_evaluations: 589
+          objective_gradient_evaluations: 36
+          hessian_vector_evaluations: 553
+          independent_verification_function_evaluations: 1
+          budget_call_limit: 1250
+          budget_exhausted: false
+          final_objective: 0.08703075062773691
+          independent_final_gradient_inf_norm: 1.58651680253483e-11
+          independent_final_gradient_l2_norm: 1.6603966159728707e-10
+          initial_vector_sha256: "8876819905eb7ed31019934dd4ef7bc6629759e3755f992ede57bc0f522999d0"
+          last_accepted_vector_sha256: "e423f6511c70c56755d2a7b0ff98cc0cb2ad26753929d7ec88f149bd54111f0e"
+          scipy_nfev: 36
+          scipy_njev: 36
+          scipy_nhev: 554
+        seen_panel_1_to_0:
+          success: true
+          status: 0
+          message: "Optimization terminated successfully."
+          iterations: 34
+          function_evaluations: 566
+          objective_gradient_evaluations: 35
+          hessian_vector_evaluations: 531
+          independent_verification_function_evaluations: 1
+          budget_call_limit: 1250
+          budget_exhausted: false
+          final_objective: 0.07134657797416041
+          independent_final_gradient_inf_norm: 9.168150722112245e-13
+          independent_final_gradient_l2_norm: 6.446997119765272e-12
+          initial_vector_sha256: "8876819905eb7ed31019934dd4ef7bc6629759e3755f992ede57bc0f522999d0"
+          last_accepted_vector_sha256: "30838ac86067a06039e7598f1dfb043e361f04ffcd84d6a1627e41172d547100"
+          scipy_nfev: 35
+          scipy_njev: 35
+          scipy_nhev: 532
+        seen_to_fresh_held:
+          success: true
+          status: 0
+          message: "Optimization terminated successfully."
+          iterations: 28
+          function_evaluations: 618
+          objective_gradient_evaluations: 29
+          hessian_vector_evaluations: 589
+          independent_verification_function_evaluations: 1
+          budget_call_limit: 1250
+          budget_exhausted: false
+          final_objective: 0.10179968727254707
+          independent_final_gradient_inf_norm: 1.286640462683404e-10
+          independent_final_gradient_l2_norm: 8.337655249770651e-10
+          initial_vector_sha256: "8876819905eb7ed31019934dd4ef7bc6629759e3755f992ede57bc0f522999d0"
+          last_accepted_vector_sha256: "35cb0084cb8e52fa49dfb69f7deac6eee31be77136bf99ba80fb84fba9a315e7"
+          scipy_nfev: 29
+          scipy_njev: 29
+          scipy_nhev: 590
+      held_metrics_descriptive_only:
+        authoritative: false
+        reason: "The opposite-seen-panel transfer prerequisite failed; the receipt explicitly sets fresh_held_transfer_interpretation_allowed to false."
+        fresh_held_bin_center_ap_mae_um: 1156.25
+        fresh_held_terminal_residual_added_ap_mae_um: 1148.7797760575388
+        fresh_held_prediction_to_truth_sd_ratio: 0.6943662052101008
+
+  spatial_moment:
+    original_lbfgsb:
+      run_name: "independent-spatial-moment-oracle-frozen-context-ap-probe-fresh504322-v1"
+      status: "stop"
+      setup_sha256: "3485d060b3269d7f475e9ff1de52581d3f8737ff966f8acd49e8a42b5a9003c0"
+      result_sha256: "395a6f0d0304994db12d296c1ec6229ae9c533552ab57c35a4bfaded600bbd43"
+      qualification:
+        decision: "stop"
+        classification: "ap-head-solver-result-not-successful"
+        solver_valid_causal_interpretation: false
+        nonfinite_count: 0
+        single_panel_training_correct: [24, 24]
+        pooled_seen_training_correct: 48
+        opposite_seen_panel_correct: [23, 22]
+        opposite_seen_panel_sample_count_each: 24
+        optimizer_head_sample_presentations: 95136
+        independent_verification_sample_presentations: 96
+        total_head_sample_presentations: 95232
+      exact_solver_results:
+        seen_panel_0_to_1:
+          success: true
+          status: 0
+          message: "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
+          iterations: 875
+          function_evaluations: 952
+          independent_verification_function_evaluations: 1
+          final_objective: 0.018295823749834926
+          independent_final_gradient_inf_norm: 2.7879679012592147e-06
+        seen_panel_1_to_0:
+          success: true
+          status: 0
+          message: "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
+          iterations: 789
+          function_evaluations: 860
+          independent_verification_function_evaluations: 1
+          final_objective: 0.018571001070560346
+          independent_final_gradient_inf_norm: 2.180999848982589e-06
+        seen_to_fresh_held:
+          success: false
+          status: 1
+          message: "STOP: TOTAL NO. OF ITERATIONS REACHED LIMIT"
+          iterations: 1000
+          function_evaluations: 1076
+          independent_verification_function_evaluations: 1
+          final_objective: 0.023133202906497237
+          independent_final_gradient_inf_norm: 4.7691638577228085e-06
+      held_metrics_descriptive_only:
+        authoritative: false
+        reason: "The L-BFGS-B solver validity gate failed; the opposite-seen-panel prerequisite also failed."
+        fresh_held_bin_center_ap_mae_um: 937.5
+        fresh_held_terminal_residual_added_ap_mae_um: 927.9678975505134
+        fresh_held_prediction_to_truth_sd_ratio: 0.8235325051784915
+    trust_ncg_rescue:
+      run_name: "independent-spatial-moment-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1"
+      status: "stop"
+      setup_sha256: "6e72c40e3bafbe57e3ef581d4a053554525e8d4e80aadf423db581f0a61a1217"
+      result_sha256: "662b8821a28b54cd9293fc84f3fbc0e7a3c6df31de4a416d068c7cda5502e58a"
+      source_artifact_binding:
+        source_run_name: "independent-spatial-moment-oracle-frozen-context-ap-probe-fresh504322-v1"
+        source_receipt_file_sha256: "1fea7d3e24b8c48bd08d75d8ad77b038326d3f8a5753f7ca79adc948a6d8f3cb"
+        source_result_sha256: "395a6f0d0304994db12d296c1ec6229ae9c533552ab57c35a4bfaded600bbd43"
+        source_tensor_artifact_sha256: "2e73edb82e03aba04fe93e308df035bec33e2a0d002de463b054b28c61946405"
+      qualification:
+        decision: "stop"
+        classification: "terminal-ap-context-panel-resampling-instability"
+        causal_classification_allowed: true
+        fresh_held_transfer_interpretation_allowed: false
+        learned_candidate_promotion_allowed: false
+        nonfinite_count: 0
+        single_panel_training_correct: [24, 24]
+        pooled_seen_training_correct: 48
+        opposite_seen_panel_correct: [23, 22]
+        opposite_seen_panel_sample_count_each: 24
+        optimizer_head_sample_presentations: 42360
+        independent_verification_sample_presentations: 96
+        total_head_sample_presentations: 42456
+      exact_solver_results:
+        seen_panel_0_to_1:
+          success: true
+          status: 0
+          message: "Optimization terminated successfully."
+          iterations: 19
+          function_evaluations: 424
+          objective_gradient_evaluations: 20
+          hessian_vector_evaluations: 404
+          independent_verification_function_evaluations: 1
+          budget_call_limit: 1250
+          budget_exhausted: false
+          final_objective: 0.018295799256069008
+          independent_final_gradient_inf_norm: 8.086533938974282e-12
+          independent_final_gradient_l2_norm: 5.3801880014369585e-11
+          initial_vector_sha256: "f61bcf0e31cffb4820edf1bceb41e9e1f79a5cc429a5c99d33507320ced27572"
+          last_accepted_vector_sha256: "f6a5c1a1acbe27058de607bbd8815f9651566c8cde205291e6deaa2789e3b96f"
+          scipy_nfev: 20
+          scipy_njev: 20
+          scipy_nhev: 405
+        seen_panel_1_to_0:
+          success: true
+          status: 0
+          message: "Optimization terminated successfully."
+          iterations: 18
+          function_evaluations: 399
+          objective_gradient_evaluations: 19
+          hessian_vector_evaluations: 380
+          independent_verification_function_evaluations: 1
+          budget_call_limit: 1250
+          budget_exhausted: false
+          final_objective: 0.018570924752749497
+          independent_final_gradient_inf_norm: 8.590920992473906e-10
+          independent_final_gradient_l2_norm: 3.981093138922847e-09
+          initial_vector_sha256: "f61bcf0e31cffb4820edf1bceb41e9e1f79a5cc429a5c99d33507320ced27572"
+          last_accepted_vector_sha256: "d3f9d255885a9fee82b201f78c438fea29b9db9eeb849d3dbd42df9d3ada0f78"
+          scipy_nfev: 19
+          scipy_njev: 19
+          scipy_nhev: 381
+        seen_to_fresh_held:
+          success: true
+          status: 0
+          message: "Optimization terminated successfully."
+          iterations: 20
+          function_evaluations: 471
+          objective_gradient_evaluations: 21
+          hessian_vector_evaluations: 450
+          independent_verification_function_evaluations: 1
+          budget_call_limit: 1250
+          budget_exhausted: false
+          final_objective: 0.023133171861117106
+          independent_final_gradient_inf_norm: 1.3035159577575546e-11
+          independent_final_gradient_l2_norm: 7.280876280199936e-11
+          initial_vector_sha256: "f61bcf0e31cffb4820edf1bceb41e9e1f79a5cc429a5c99d33507320ced27572"
+          last_accepted_vector_sha256: "1066e9a84b87004b57fb777ca6a73097c1b9183f3e6a4519306cf7215f21eccc"
+          scipy_nfev: 21
+          scipy_njev: 21
+          scipy_nhev: 451
+      held_metrics_descriptive_only:
+        authoritative: false
+        reason: "The opposite-seen-panel transfer prerequisite failed; the receipt explicitly sets fresh_held_transfer_interpretation_allowed to false."
+        fresh_held_bin_center_ap_mae_um: 937.5
+        fresh_held_terminal_residual_added_ap_mae_um: 927.9678975505134
+        fresh_held_prediction_to_truth_sd_ratio: 0.8235325051784915
+
+authoritative_result:
+  basis: "Both trust-NCG rescue receipts pass all solver-validity, independent-gradient, budget, accounting, finite, and training-fit checks and set causal_classification_allowed to true."
+  global_average:
+    classification: "terminal-ap-context-panel-resampling-instability"
+    single_panel_training_fit: "24/24 in each direction"
+    pooled_seen_training_fit: "48/48"
+    opposite_seen_panel_transfer: "21/24 and 18/24; both below the preregistered 23/24 minimum"
+  spatial_moment:
+    classification: "terminal-ap-context-panel-resampling-instability"
+    single_panel_training_fit: "24/24 in each direction"
+    pooled_seen_training_fit: "48/48"
+    opposite_seen_panel_transfer: "23/24 and 22/24; the reverse direction is below the preregistered 23/24 minimum"
+  fresh_held_metrics_authoritative: false
+  fresh_held_non_authority_reason: "Opposite-seen-panel transfer is a prerequisite for held-transfer interpretation and failed for both arms."
+  architecture_selected: null
+  learned_candidate_promoted: false
+  protected_data_access_authorized: false
+  decision: "stop"
+
+storage:
+  global_average_original_lbfgsb:
+    run_root: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-frozen-context-ap-probe-fresh504322-v1'
+    artifacts:
+      receipt:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-frozen-context-ap-probe-fresh504322-v1\diagnostic_receipt.json'
+        bytes: 145210
+        sha256: "7f8a234f3df05414821a82f15a5f5943b7a49c160af55a5de5da8b57470a271c"
+      tensor:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-frozen-context-ap-probe-fresh504322-v1\ap_probe_tensors.pt'
+        bytes: 425115
+        sha256: "0179acda8bba37e7a2c06153f7a99723a46faf81af3e89271571d19d98552f46"
+      stdout:
+        path: 'I:\AtlasJointProject\logs\frozen-context-ap-base.stdout.log'
+        bytes: 3359
+        sha256: "30a7a4bf5779e400245c60258918ecfef39e4a0566a454bbf54b3ff79a717421"
+      stderr:
+        path: 'I:\AtlasJointProject\logs\frozen-context-ap-base.stderr.log'
+        bytes: 0
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  spatial_moment_original_lbfgsb:
+    run_root: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-oracle-frozen-context-ap-probe-fresh504322-v1'
+    artifacts:
+      receipt:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-oracle-frozen-context-ap-probe-fresh504322-v1\diagnostic_receipt.json'
+        bytes: 145325
+        sha256: "1fea7d3e24b8c48bd08d75d8ad77b038326d3f8a5753f7ca79adc948a6d8f3cb"
+      tensor:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-oracle-frozen-context-ap-probe-fresh504322-v1\ap_probe_tensors.pt'
+        bytes: 425179
+        sha256: "2e73edb82e03aba04fe93e308df035bec33e2a0d002de463b054b28c61946405"
+      stdout:
+        path: 'I:\AtlasJointProject\logs\frozen-context-ap-spatial.stdout.log'
+        bytes: 3400
+        sha256: "705cba8ed750be2435a4b2e70dfb053fa5061f165a240691131bb650bbaaf0cb"
+      stderr:
+        path: 'I:\AtlasJointProject\logs\frozen-context-ap-spatial.stderr.log'
+        bytes: 0
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  global_average_trust_ncg_rescue:
+    run_root: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1'
+    artifacts:
+      receipt:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1\diagnostic_receipt.json'
+        bytes: 147163
+        sha256: "f0ca3c942814eb7710e48ccd74a9fa552044d20f8e3bbd8bba54cfb107011d8d"
+      tensor:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1\trust_ncg_rescue_tensors.pt'
+        bytes: 345787
+        sha256: "24c63d55f32899b65bb4d40bb0d2aff081f4b7e944f2aeb4dd4809e0af6702b4"
+      stdout:
+        path: 'I:\AtlasJointProject\logs\frozen-context-ap-base-trust-ncg.stdout.log'
+        bytes: 6204
+        sha256: "3a20a4383d5433029bdefc6ab9a66215d514d095096ce0a2878829a584600815"
+      stderr:
+        path: 'I:\AtlasJointProject\logs\frozen-context-ap-base-trust-ncg.stderr.log'
+        bytes: 0
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  spatial_moment_trust_ncg_rescue:
+    run_root: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1'
+    artifacts:
+      receipt:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1\diagnostic_receipt.json'
+        bytes: 147268
+        sha256: "3bcc015f8f30e2fcdd3e57c6fcf02adbc9a61add069a46550d94b3db9005caff"
+      tensor:
+        path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-spatial-moment-oracle-frozen-context-ap-probe-trust-ncg-rescue-v1\trust_ncg_rescue_tensors.pt'
+        bytes: 345787
+        sha256: "5112f8dcf2d9f6b2813006955b90ca764193d9a8cf7ba85df1bcb49081cac8a5"
+      stdout:
+        path: 'I:\AtlasJointProject\logs\frozen-context-ap-spatial-trust-ncg.stdout.log'
+        bytes: 6235
+        sha256: "8a48ae55211636bdd2d41fc302db1407928b02a31f7b967f9c9d4e46b6399f55"
+      stderr:
+        path: 'I:\AtlasJointProject\logs\frozen-context-ap-spatial-trust-ncg.stderr.log'
+        bytes: 0
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+interpretation:
+  original_probe: "The L-BFGS-B pair stopped numerically and could not support a causal instability classification."
+  solver_rescue: "Trust-NCG converged independently for all six fits without exhausting its iteration or operator-call budgets. Each arm fit its source panels exactly but failed at least one opposite-panel transfer direction, validating terminal AP-context panel-resampling instability on these consumed development panels."
+  held_panel: "All fresh-held values above are retained only for provenance. They are explicitly non-authoritative because the prerequisite opposite-panel transfer gate failed in both arms."
+  selection: "No architecture is selected and no learned candidate is promoted."
+  protected_data: "Product-5, calibration, and final-test access remained false."
