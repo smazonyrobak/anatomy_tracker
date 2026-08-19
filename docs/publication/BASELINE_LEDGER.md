@@ -816,7 +816,7 @@ manifest's source `scale` to exactly `1.0` and recomputed that manifest's
 commitment. Rotation, translation, deformation, appearance, noise,
 realization ID and seed were preserved. Every baseline scale differed from
 one, every treatment raw and 160-by-232 source hash differed from its paired
-baseline, and the source mask and availability flag remained absent.
+baseline, and the source mask and availability flag remained absent/all-zero.
 
 The baseline replay was exact: all 48 stored source hashes, candidate poses,
 kinds and targets matched, all nine stored energy arrays per realization were
