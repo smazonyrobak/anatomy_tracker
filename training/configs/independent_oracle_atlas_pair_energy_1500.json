@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "frozen": true,
+  "name": "independent-oracle-atlas-pair-energy-1500-v1",
+  "purpose": "development-only-oracle-atlas-pair-energy-premise",
+  "role": "causal-premise-not-model-selection",
+  "product5_access": false,
+  "calibration_access": false,
+  "final_test_access": false,
+  "learned_checkpoint_dependencies": [],
+  "optimizer_seed": 1404322,
+  "device": "auto",
+  "paths": {
+    "atlas_repo_relative": "data/Allen Brain Atlas 25um",
+    "run_root_env": "ATLAS_JOINT_RUN_ROOT"
+  },
+  "model": {
+    "class": "training.independent_atlas_pair_energy.AtlasPairEnergyModel",
+    "expected_parameter_count": 271450,
+    "maximum_parameter_count": 1500000,
+    "input_shape": [160, 232],
+    "correlation_levels": [8, 16],
+    "correlation_radius": 4,
+    "candidate_chunk_size": 8,
+    "candidate_pose_input": false
+  },
+  "data": {
+    "source": "synthetic_ccf",
+    "split": "train",
+    "stratum": "clean",
+    "oracle_source": "moving_raw_uint8_pre_source_view",
+    "source_view_rotation_deg": 0.0,
+    "source_view_scale": 1.0,
+    "source_resampling_count_before_fixed_downsample": 0,
+    "outline_mode": "absent",
+    "train_seed": 1004322,
+    "train_count": 2048,
+    "development_seed": 1104322,
+    "development_count": 48,
+    "qualification_seeds": [1204322, 1304322],
+    "qualification_count_per_seed": 48,
+    "qualification_generation": "only-after-final-source-config-checkpoint-freeze",
+    "panel_balance": "six-interior-ap-strata-times-eight-signed-tilt-configurations",
+    "premise_truth_ap_margin_um": 500.0,
+    "premise_truth_tilt_abs_max_deg": 25.0,
+    "truth_support_role": "interior-only-causal-premise-not-outer-domain-evidence"
+  },
+  "training": {
+    "optimizer": "AdamW",
+    "learning_rate": 0.0002,
+    "weight_decay": 0.0001,
+    "batch_size": 2,
+    "max_updates": 1500,
+    "amp": true,
+    "amp_initial_scale": 512.0,
+    "gradient_clip_norm": 5.0,
+    "resume_every_updates": 25,
+    "development_updates": [500, 1000, 1500],
+    "candidate_count": 16,
+    "loss": "ranking+0.25*two-scale-ranking+0.25*posterior-point"
+  },
+  "search": {
+    "coarse_shape": [9, 5, 5],
+    "top_k": 3,
+    "refinement_rounds": 3,
+    "neighborhood_shape": [3, 3, 3],
+    "maximum_candidate_evaluations_per_slice": 468,
+    "continuous_refinement": false
+  },
+  "gates": {
+    "nonfinite_count_maximum": 0,
+    "invalid_render_count_maximum": 0,
+    "truth_in_set_correct_minimum_per_48": 46,
+    "ap_mae_um_maximum": 250.0,
+    "lr_mae_deg_maximum": 3.0,
+    "dv_mae_deg_maximum": 3.0,
+    "physical_improvement_over_constant_prior_minimum": 0.5,
+    "broken_pair_correct_maximum_per_48": 12,
+    "order_energy_atol": 0.000001,
+    "order_energy_rtol": 0.000001,
+    "ten_slice_p95_seconds_maximum": 180.0
+  },
+  "lineage": {
+    "source_sha256": {
+      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60",
+      "training/independent_atlas_pair_energy.py": "6187cb051d048d1e5eec3137b9edc6ac09706cecffcf989507951708681589ec",
+      "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
+      "training/run_independent_atlas_pair_energy.py": "21c73f88a48ca87ac0a44ff022993eea5dc2cfbb1f8c72237ec4b05fa4445b19",
+      "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde"
+    }
+  },
+  "contract_sha256": "506ebbb88857bd4242939220d0c98e3c5ac99c389690d051c2cab36adac89ccb"
+}
