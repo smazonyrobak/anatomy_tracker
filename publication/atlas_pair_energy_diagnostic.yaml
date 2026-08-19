@@ -1,0 +1,510 @@
+schema_version: "1.0"
+status: "completed_execution_integrity_go_scientific_premise_no_go"
+recorded_date: "2026-08-19"
+purpose: "Immutable development-only record of the oracle pre-source-view atlas-pair energy causal-premise diagnostic; not a benchmark, performance claim, accuracy claim, model-selection result, or promotion result."
+
+lineage:
+  source_commit: "2afea47fc7c113b84e577fdeee4a3a4dd9b6ef08"
+  source_commit_short: "2afea47"
+  commit_binding: "The runner, model, generator, metric, preprocessing source and frozen config matched this commit when the artifacts were audited."
+  config:
+    path: "training/configs/independent_oracle_atlas_pair_energy_1500.json"
+    file_sha256: "8e747c82ba8f477c0a71ae803cf214e052e14c4b824c1c9859c6e1b00ad061e2"
+    contract_sha256: "506ebbb88857bd4242939220d0c98e3c5ac99c389690d051c2cab36adac89ccb"
+    frozen: true
+  source_sha256:
+    source/dense_registration_preprocessing.py: "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+    training/independent_atlas_pair_energy.py: "6187cb051d048d1e5eec3137b9edc6ac09706cecffcf989507951708681589ec"
+    training/quicknii_plane_metric.py: "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31"
+    training/run_independent_atlas_pair_energy.py: "21c73f88a48ca87ac0a44ff022993eea5dc2cfbb1f8c72237ec4b05fa4445b19"
+    training/synthetic_registration.py: "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde"
+  learned_checkpoint_dependencies: []
+
+data_lineage:
+  data_source: "clean synthetic CCF train split only"
+  data_lineage_sha256: "9b14f3e0395166e26cbc662515c675f336f514db623f13d2609fdd584b42c032"
+  generator_contract_sha256: "5ff5a29ccc7f0c554020dfc8e7e07d2af59a662f9420422bffc9a86edcd73872"
+  generator:
+    version: 2
+    profile: "v2"
+    model_shape: [320, 464]
+    pixel_spacing_um: 25.0
+    split_contract_sha256: "86e1311e12b8d5f69a609a052a56b3873a890495880b08d2becc2014c802c4ff"
+    appearance_contract_sha256: "4255ed6996a05250801a3ad46b66a2952f5b34ee1955099fd1103921de4aa31d"
+    mask_contract_sha256: "a1c13bd1221c3e7d19f97722d0471720d8016c209465e38ba21defcc5f276d62"
+    preprocessing_contract: "native-320x456-rawuint8-brainmask-cosinefeather4-pad4-v2"
+  atlas:
+    repo_relative_root: "data/Allen Brain Atlas 25um"
+    average_template_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+    annotation_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+    query_sha256: "5347daf90e02ac1d1cfcbf9c8af86ff23a2fb32cd7e7a2ba2881951931286dbd"
+  training:
+    seed: 1004322
+    sample_count: 2048
+    manifest_sha256: "8b00606acf291bb84aec2b72e9b098e0efa1766af15588fcbdbbce9f5a319a69"
+    manifest_file_payload_sha256: "b94b3b119576cc6922bfdbdfe03570ecb9576974a0eed6b87b58a1351ee53f2d"
+  development:
+    seed: 1104322
+    sample_count: 48
+    manifest_sha256: "c77d427ce5a3e5efbc98677daf11743643446873528643c20f629ff457a3385c"
+    manifest_file_payload_sha256: "bb11b3cf3c96eb2ae0eb78ab300cb0f568db7c7a760a51d6a4402094b5f6cacb"
+  qualification:
+    seeds: [1204322, 1304322]
+    sample_count_per_seed: 48
+    generation: "only-after-final-source-config-checkpoint-freeze"
+    panel_balance: "six-interior-AP-strata-times-eight-signed-tilt-configurations"
+  source_realization_contract:
+    domain: "atlas-pair-oracle-realization-v1"
+    unit: "one committed child manifest and one generator batch per source"
+    seed_inputs: ["generator_contract_sha256", "parent_manifest_sha256", "sample_index"]
+    batch_position_invariant: true
+    animal_id_sentinel: -1
+    specimen_id_sentinel: -1
+    real_animal_ids: "not applicable; synthetic development diagnostic"
+
+access:
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+  protected_data_access: false
+  learned_checkpoint_dependencies: []
+  model_selection: false
+  learned_candidate_selection: false
+  learned_candidate_promotion: false
+
+protocol:
+  role: "development-only-causal-premise-not-model-selection"
+  model:
+    class: "training.independent_atlas_pair_energy.AtlasPairEnergyModel"
+    initialization: "independent-random-initialization"
+    optimizer_seed: 1404322
+    parameter_count: 271450
+    maximum_parameter_count: 1500000
+    input_shape: [160, 232]
+    correlation_levels: [8, 16]
+    correlation_radius: 4
+    candidate_chunk_size: 8
+    candidate_pose_is_scorer_input: false
+  oracle_source_scope:
+    tensor: "moving_raw_uint8.float()/255 before source-view transform"
+    source_view_rotation_deg: 0.0
+    source_view_scale: 1.0
+    pre_downsample_resampling_count: 0
+    fixed_downsample: "bilinear-align_corners-false-160x232"
+    fixed_downsample_count: 1
+    outline_mode: "absent"
+    source_mask: "all-zero"
+    mask_available: "all-zero"
+  truth_support:
+    role: "interior-only-causal-premise-not-outer-domain-evidence"
+    full_ap_domain_um: [-4500.0, 500.0]
+    ap_margin_um: 500.0
+    interior_ap_support_um: [-4000.0, 0.0]
+    absolute_tilt_maximum_deg: 25.0
+    qualification_ap_values_um: [-4000.0, -3100.0, -2075.0, -1600.0, -575.0, -75.0]
+    outer_runtime_domain_claim: false
+  training:
+    optimizer: "AdamW"
+    learning_rate: 0.0002
+    weight_decay: 0.0001
+    batch_size: 2
+    maximum_optimizer_updates: 1500
+    amp_enabled: true
+    amp_initial_scale: 512.0
+    gradient_clip_norm: 5.0
+    resume_every_updates: 25
+    development_updates: [500, 1000, 1500]
+    candidate_count: 16
+    loss: "ranking+0.25*two-scale-ranking+0.25*posterior-point"
+  free_search:
+    coarse_shape: [9, 5, 5]
+    top_k: 3
+    refinement_rounds: 3
+    neighborhood_shape: [3, 3, 3]
+    maximum_candidate_evaluations_per_slice: 468
+    continuous_refinement: false
+
+prespecified_gates:
+  nonfinite_count_maximum: 0
+  invalid_render_count_maximum: 0
+  truth_in_set_correct_minimum_per_48: 46
+  ap_mae_um_maximum: 250.0
+  lr_mae_deg_maximum: 3.0
+  dv_mae_deg_maximum: 3.0
+  physical_improvement_over_constant_prior_minimum: 0.50
+  broken_pair_correct_maximum_per_48: 12
+  order_energy_atol: 1.0e-06
+  order_energy_rtol: 1.0e-06
+  ten_slice_p95_seconds_maximum: 180.0
+
+execution:
+  integrity_status: "GO"
+  monitored_pid: 23856
+  process_terminal: true
+  gpu_active_during_monitoring: true
+  observed_gpu_memory_gib_approximate: 2.56
+  terminal_optimizer_updates: 1500
+  all_optimizer_updates_applied: true
+  optimizer_step_sequence_consecutive: true
+  amp_scale_before_after_unique: [[512.0, 512.0]]
+  unique_training_indices:
+    update_0500: 1000
+    update_1000: 2000
+    update_1500: 2048
+  total_loss_window_mean:
+    updates_0001_0025: 3.4672330474853514
+    updates_0476_0500: 2.5319853973388673
+    updates_0976_1000: 2.149663841724396
+    updates_1476_1500: 2.1508429050445557
+  final_and_resume_update_equal: true
+  final_and_resume_model_state_exact_equal: true
+  final_model_parameter_count: 271450
+  checkpoint_freeze_preceded_qualification_generation: true
+  stderr_bytes: 0
+
+development_results:
+  authoritative_role: "consumed development trajectory; not a performance claim"
+  truth_in_set_gate_correct_minimum_per_48: 46
+  update_0500:
+    sample_count: 48
+    file_sha256: "134c9d572e0a4c1587fde3ee99c059ef9a70af300e43ef932c940216ed5bc84e"
+    result_sha256: "93535d741edb43d9ad5d2980ff8e1d50ecb008ca00a3d3495746bbbabc604914"
+    passed: false
+    correct:
+      normal_truth_in_set: 10
+      broken_atlas_binding: 1
+      broken_source_pairing: 2
+    nonfinite_count: 0
+    invalid_render_count: 0
+    order_equivariance:
+      evaluated_sample_count: 48
+      maximum_energy_difference: 4.76837158203125e-07
+      decoded_pose_maximum_difference: 0.0
+      energies_allclose: true
+      top1_unchanged: true
+    checks:
+      nonfinite: true
+      invalid_render: true
+      truth_in_set: false
+      broken_atlas_binding: true
+      broken_source_pairing: true
+      order_equivariance: true
+  update_1000:
+    sample_count: 48
+    file_sha256: "7870799715db83bda0f162d441472d508d6d049d026cd0429ce29beaeb81f7ad"
+    result_sha256: "365ceac53ebc37460a1d80fb9ae6e16293fcd7546c80698f94c1d8e72d9950b8"
+    passed: false
+    correct:
+      normal_truth_in_set: 12
+      broken_atlas_binding: 0
+      broken_source_pairing: 0
+    nonfinite_count: 0
+    invalid_render_count: 0
+    order_equivariance:
+      evaluated_sample_count: 48
+      maximum_energy_difference: 9.5367431640625e-07
+      decoded_pose_maximum_difference: 0.0
+      energies_allclose: true
+      top1_unchanged: true
+    checks:
+      nonfinite: true
+      invalid_render: true
+      truth_in_set: false
+      broken_atlas_binding: true
+      broken_source_pairing: true
+      order_equivariance: true
+  update_1500:
+    sample_count: 48
+    file_sha256: "89245f1c0fdc6094a4841ca89e95941a33e970d98c7790e1e61df4fdc912dd0c"
+    result_sha256: "f9cc842c1f54e8cbe3e893e52a4ef601c0c3b94b5e4f8e0cdeaf96dd3cb75df3"
+    passed: false
+    correct:
+      normal_truth_in_set: 16
+      broken_atlas_binding: 0
+      broken_source_pairing: 1
+    nonfinite_count: 0
+    invalid_render_count: 0
+    order_equivariance:
+      evaluated_sample_count: 48
+      maximum_energy_difference: 9.5367431640625e-07
+      decoded_pose_maximum_difference: 0.0
+      energies_allclose: true
+      top1_unchanged: true
+    checks:
+      nonfinite: true
+      invalid_render: true
+      truth_in_set: false
+      broken_atlas_binding: true
+      broken_source_pairing: true
+      order_equivariance: true
+
+qualification_results:
+  authoritative_role: "untouched synthetic qualification of this causal premise only; not a benchmark or product-performance claim"
+  seed_1204322:
+    seed: 1204322
+    sample_count: 48
+    manifest:
+      file_sha256: "86ec6912c4c684b26fdeec7576003656be7025653e3ecf1951fc7352bfa52a4c"
+      file_payload_sha256: "77bae9e332b3ec20c8b6d5b3f340feb41af1e58826402cfdff8c13b108cb4660"
+      panel_manifest_sha256: "9669106246a6cda036e8900ab5a89f164d4a01aefe1dfe99f2aec751da75f81b"
+    result:
+      file_sha256: "98ec18b156b84349347d5c1c54bf7d1356cf734fe052116ee340265d6c27d064"
+      file_payload_sha256: "975e4788f8a36f5d518a49814b80c2e77a28cb377ff6ddd2cc961bd20a88f54d"
+      result_sha256: "078009d357a810d8718524be371449fe5ed31b77de8c6f4bc9778c5ea677960e"
+      status_sha256: "ddc2d798e8be3bc164e0518057793cd9605e0b959977037771ef644f2f7043ca"
+    passed: false
+    fixed_candidates:
+      correct:
+        normal_truth_in_set: 14
+        broken_atlas_binding: 3
+        broken_source_pairing: 0
+      nonfinite_count: 0
+      invalid_render_count: 0
+      order_equivariance:
+        evaluated_sample_count: 48
+        maximum_energy_difference: 9.5367431640625e-07
+        decoded_pose_maximum_difference: 0.0
+        energies_allclose: true
+        top1_unchanged: true
+    free_search:
+      mae:
+        ap_um: 276.62762451171875
+        lr_deg: 1.7174479961395264
+        dv_deg: 5.2604169845581055
+      physical_error_um: 319.8316309578046
+      constant_prior_physical_error_um: 1155.6201265971388
+      physical_improvement_over_constant_prior: 0.7232380921751623
+      ten_slice_projected_p95_seconds: 11.154709550377447
+      seconds_per_slice_minimum: 0.8888800999848172
+      seconds_per_slice_maximum: 1.1626221999758855
+      candidate_evaluations_minimum: 372
+      candidate_evaluations_maximum: 459
+      candidate_evaluations_total: 20530
+      scorer_nonfinite_count: 0
+      metric_nonfinite_count: 0
+      nonfinite_count: 0
+      invalid_render_count: 0
+    source_realizations:
+      count: 48
+      unique_synthetic_realization_ids: 48
+      unique_moving_raw_uint8_sha256: 48
+      unique_source_160x232_sha256: 48
+    checks:
+      nonfinite: true
+      invalid_render: true
+      truth_in_set: false
+      ap_mae: false
+      lr_mae: true
+      dv_mae: false
+      physical_improvement: true
+      broken_atlas_binding: true
+      broken_source_pairing: true
+      order_equivariance: true
+      runtime: true
+  seed_1304322:
+    seed: 1304322
+    sample_count: 48
+    manifest:
+      file_sha256: "18366e614f5e82103714991d33283bd19f9abfc535ca6adfcf846eba65149026"
+      file_payload_sha256: "ecf5363cd7a57b658052bdef7c6153a69b2771d1e2fbc29c8ed1bea2ef8e0fe6"
+      panel_manifest_sha256: "daef54db73272fc2427c5339da94eaec953a504ad6036b0c9da0bd3b8f477962"
+    result:
+      file_sha256: "c876796018f0d39fc38f2d3dc058f84a7de5a55d97cd8789c012a07523a33acf"
+      file_payload_sha256: "2665752ea8083122a7bc18e660dabaf5f62d52d107337663134d80bd60ca4b23"
+      result_sha256: "6337413b6a92969b9e4bd524b898aeae4f50ced1d64e5039791f9c7c93ca6371"
+      status_sha256: "b738b37c6609f70664165bc1567045667a4f4c834201615527c90f91bc973178"
+    passed: false
+    fixed_candidates:
+      correct:
+        normal_truth_in_set: 16
+        broken_atlas_binding: 3
+        broken_source_pairing: 1
+      nonfinite_count: 0
+      invalid_render_count: 0
+      order_equivariance:
+        evaluated_sample_count: 48
+        maximum_energy_difference: 9.5367431640625e-07
+        decoded_pose_maximum_difference: 0.0
+        energies_allclose: true
+        top1_unchanged: true
+    free_search:
+      mae:
+        ap_um: 301.82293701171875
+        lr_deg: 4.567708492279053
+        dv_deg: 5.625
+      physical_error_um: 405.2914097132223
+      constant_prior_physical_error_um: 1208.670849005513
+      physical_improvement_over_constant_prior: 0.6646800822186671
+      ten_slice_projected_p95_seconds: 11.005518900288735
+      seconds_per_slice_minimum: 0.8729201999958605
+      seconds_per_slice_maximum: 1.1323730000294745
+      candidate_evaluations_minimum: 360
+      candidate_evaluations_maximum: 456
+      candidate_evaluations_total: 20428
+      scorer_nonfinite_count: 0
+      metric_nonfinite_count: 0
+      nonfinite_count: 0
+      invalid_render_count: 0
+    source_realizations:
+      count: 48
+      unique_synthetic_realization_ids: 48
+      unique_moving_raw_uint8_sha256: 48
+      unique_source_160x232_sha256: 48
+    checks:
+      nonfinite: true
+      invalid_render: true
+      truth_in_set: false
+      ap_mae: false
+      lr_mae: false
+      dv_mae: false
+      physical_improvement: true
+      broken_atlas_binding: true
+      broken_source_pairing: true
+      order_equivariance: true
+      runtime: true
+  terminal_receipt_passed: false
+  scientific_premise_status: "NO-GO"
+
+storage:
+  run_root: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1'
+  artifact_policy: "frozen final checkpoint plus atomic resume state; neither is selected or promotion-eligible"
+  artifacts:
+    setup_receipt:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\setup_receipt.json'
+      bytes: 3797
+      sha256: "a065d1a2fb3f948fb61e1771db664d01cb48a6047d49540f86c7943e9753e655"
+      payload_sha256: "60c4c60459ac96a8b91fbb4c67cd5a6f14af46d3efa1cba41428e951cd02de53"
+    training_manifest:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\training_manifest.json'
+      bytes: 2720069
+      sha256: "c6ce463b728175561e53d2f424ca5cc4812dfe9d78026ff9834462408f32e445"
+    development_manifest:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\development_manifest.json'
+      bytes: 64806
+      sha256: "b3b3cdd046519a6e79bd50a6cf1c075e569d50e9c71df8dee22bf94e46c93722"
+    development_0500:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\development_0500.json'
+      bytes: 257806
+      sha256: "134c9d572e0a4c1587fde3ee99c059ef9a70af300e43ef932c940216ed5bc84e"
+    development_1000:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\development_1000.json'
+      bytes: 257362
+      sha256: "7870799715db83bda0f162d441472d508d6d049d026cd0429ce29beaeb81f7ad"
+    development_1500:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\development_1500.json'
+      bytes: 257418
+      sha256: "89245f1c0fdc6094a4841ca89e95941a33e970d98c7790e1e61df4fdc912dd0c"
+    final_checkpoint:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\final_checkpoint.pt'
+      bytes: 2269867
+      sha256: "1f451b0dfff79629b46fdd0bd7149c9a722be4e6c456fa8d714b0291e0f422ce"
+    resume_state:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\resume_state.pt'
+      bytes: 5029764
+      sha256: "0d8a86c57df558a50cdbc1a7cfa1e42e2d540194a87cfcac4ec68b848e5124d0"
+    training_trajectory:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\training_trajectory.json'
+      bytes: 2767106
+      sha256: "bffb680690ab2101d83dbe916d5910c1266b67e890655794eef07315b03d972f"
+      payload_sha256: "9951c71bcd775da33e74163eda03f3a91e801efa7e6fdbf4ac95c0e9eb4aa044"
+      training_history_sha256: "55d202fa695486564d592a7d53f8e931bac54258ad14237e8a665fe193785fe9"
+    qualification_freeze:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\qualification_freeze.json'
+      bytes: 1808
+      sha256: "69a142d59599e6459f118e655d0af9d733a5a813b1724e9a53bda195c9ca859e"
+      payload_sha256: "562e0bc7b9e1530064a08088e6b39aa9a1334ff1b3615bbf283abe7edd4cbebc"
+    qualification_manifest_seed_1204322:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\qualification_manifest_seed_1204322.json'
+      bytes: 65187
+      sha256: "86ec6912c4c684b26fdeec7576003656be7025653e3ecf1951fc7352bfa52a4c"
+    qualification_manifest_seed_1304322:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\qualification_manifest_seed_1304322.json'
+      bytes: 65078
+      sha256: "18366e614f5e82103714991d33283bd19f9abfc535ca6adfcf846eba65149026"
+    qualification_seed_1204322:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\qualification_seed_1204322.json'
+      bytes: 2022400
+      sha256: "98ec18b156b84349347d5c1c54bf7d1356cf734fe052116ee340265d6c27d064"
+    qualification_seed_1304322:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\qualification_seed_1304322.json'
+      bytes: 2013473
+      sha256: "c876796018f0d39fc38f2d3dc058f84a7de5a55d97cd8789c012a07523a33acf"
+    diagnostic_receipt:
+      path: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1\diagnostic_receipt.json'
+      bytes: 4039985
+      sha256: "75b496031cab40f1a1ba19e63557b2dc2e7b63f0a40aea434906ae51c59ffd98"
+      receipt_sha256: "c07949cfa3e5d74660586c4162a5eb4f3aff974402b47cd75e35add01db09161"
+  logs:
+    stdout:
+      path: 'I:\AtlasJointProject\logs\oracle-atlas-pair-energy-1500.stdout.log'
+      bytes: 91
+      sha256: "d95fe6d64984976a1855ec22dd40631734d0a0101fe14693ae5d15e708bbc6e3"
+      content: 'I:\AtlasJointProject\runs\AtlasJointTraining\independent-oracle-atlas-pair-energy-1500-v1'
+    stderr:
+      path: 'I:\AtlasJointProject\logs\oracle-atlas-pair-energy-1500.stderr.log'
+      bytes: 0
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+integrity_audit:
+  execution_integrity: "GO"
+  source_commit_verified: true
+  source_file_hashes_recomputed_from_i_drive: true
+  config_file_hash_recomputed: true
+  config_contract_hash_recomputed_from_payload: true
+  setup_payload_hash_recomputed: true
+  data_lineage_hash_recomputed: true
+  atlas_file_hashes_recomputed: true
+  training_and_development_manifest_hashes_recomputed: true
+  qualification_manifests_generated_only_post_freeze: true
+  qualification_manifest_file_and_payload_hashes_recomputed: true
+  qualification_post_freeze_bindings_match_checkpoint_data_and_freeze: true
+  final_checkpoint_hash_recomputed: true
+  final_and_resume_model_states_exact_equal: true
+  training_history_hash_recomputed: true
+  training_updates_consecutive_and_all_applied: true
+  development_result_hashes_recomputed: true
+  qualification_file_payload_and_result_hashes_recomputed: true
+  qualification_receipt_payloads_exact_equal_to_standalone_results: true
+  diagnostic_receipt_hash_recomputed: true
+  candidate_tables_targets_kinds_and_interior_scope_recomputed: true
+  fixed_control_counts_recomputed_from_raw_records: true
+  free_search_selected_poses_candidate_counts_and_metrics_recomputed: true
+  panel_status_recomputed_exact: true
+  source_realization_seed_and_id_formula_recomputed: true
+  qualification_unique_realization_id_count_each: 48
+  qualification_unique_moving_raw_uint8_hash_count_each: 48
+  qualification_unique_source_160x232_hash_count_each: 48
+  raw_tensor_regeneration_performed: false
+  raw_tensor_regeneration_note: "No qualification tensor regeneration was performed; immutable source hashes and their manifest/result/receipt bindings were audited in place."
+  physical_metric_recomputed_from_stored_poses_and_atlas: true
+  physical_metric_maximum_absolute_difference: 1.3642420526593924e-12
+  constant_prior_mean_maximum_absolute_difference_in_independent_cpu_recompute: 2.2374692889570724e-06
+  stdout_terminal_path_matches_run_root: true
+  stderr_bytes: 0
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+  protected_data_access: false
+  original_run_artifacts_rewritten: false
+  repository_clean_before_documentation_edit: true
+
+decision:
+  execution_integrity: "GO"
+  scientific_premise: "NO-GO"
+  terminal_receipt_passed: false
+  model_selected: false
+  learned_candidate_selected: false
+  architecture_winner: null
+  benchmark_claim: false
+  accuracy_claim: false
+  performance_claim: false
+  promotion_authorized: false
+  longer_training_authorized: false
+  gate_relaxation_authorized: false
+  protected_data_access_authorized: false
+  interpretation:
+    - "The run is a valid, hash-bound negative diagnostic: execution, controls, numerical stability, runtime and artifact integrity passed."
+    - "Development and both post-freeze qualification panels failed the central truth-in-set gate; qualification also failed AP and D-V accuracy on both seeds and L-R accuracy on seed 1304322."
+    - "Passing physical-improvement and runtime gates does not override the failed causal premise and pose-accuracy gates."
+    - "The oracle pre-source-view and interior-truth scope prevents interpreting this result as outer-domain, real-histology, benchmark or product-performance evidence."
+  next_step: "No selection, promotion, performance claim, longer training, gate relaxation or protected-data access is authorized by this result."

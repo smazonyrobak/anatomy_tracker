@@ -758,3 +758,48 @@ per-fit solver results, all four run roots, config and contract bindings, and
 receipt, tensor, stdout and stderr SHA-256 values are recorded in
 `publication/frozen_context_ap_probe_solver_diagnostic.yaml`; the original
 artifacts were not rewritten.
+
+### Oracle pre-source-view atlas-pair energy diagnostic
+
+The independently random-initialized atlas-pair energy diagnostic ran from
+commit `2afea47fc7c113b84e577fdeee4a3a4dd9b6ef08` under frozen config contract
+`506ebbb88857bd4242939220d0c98e3c5ac99c389690d051c2cab36adac89ccb`.
+It tested a narrow causal premise: whether a 271,450-parameter energy model
+could rank the true atlas plane when given the synthetic generator's
+`moving_raw_uint8` tensor before any source-view transform. The source was
+normalized and downsampled exactly once to 160 by 232; rotation was zero,
+scale was one, the outline mask and availability flag were both all-zero, and
+candidate pose coordinates were not scorer inputs. Training, development and
+qualification used only clean synthetic CCF train-split data. Truth poses were
+restricted to the prespecified interior support (500 um inside the full AP
+domain and at most 25 degrees absolute tilt), so this diagnostic is not
+evidence about the outer runtime domain. Product-5, calibration and final-test
+access were false, and learned-checkpoint dependencies were empty.
+
+All 1,500 optimizer updates were applied consecutively with AMP remaining at
+512. The final and resume model states were exact-equal, all recorded values
+were finite, stderr was empty, and the post-freeze qualification lineage and
+receipt bindings passed independent audit. Execution integrity is therefore
+`GO`. Scientific evidence did not pass: development truth-in-set top-1 was
+only `10 / 48`, `12 / 48` and `16 / 48` at updates 500, 1,000 and 1,500,
+against the frozen minimum of `46 / 48`.
+
+| Qualification seed | Truth-in-set top-1 | AP / L--R / D--V MAE | Physical error / constant prior | Improvement | Ten-slice projected p95 | Decision |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1204322 | 14 / 48 | 276.627625 um / 1.717448 deg / 5.260417 deg | 319.831631 um / 1155.620127 um | 0.723238 | 11.154710 s | fail |
+| 1304322 | 16 / 48 | 301.822937 um / 4.567708 deg / 5.625000 deg | 405.291410 um / 1208.670849 um | 0.664680 | 11.005519 s | fail |
+
+Both untouched qualification panels passed the non-finite, invalid-render,
+broken-pair control, order-equivariance, physical-improvement and runtime
+checks. Seed 1204322 failed truth-in-set, AP and D--V accuracy; seed 1304322
+failed truth-in-set and all three pose-accuracy gates. The terminal receipt is
+`passed=false`, so the scientific premise decision is `NO-GO`. This is
+immutable negative development evidence, not a benchmark, performance or
+accuracy claim, architecture-selection result, learned-candidate selection,
+or promotion authorization. It does not authorize protected-data access,
+longer training or gate relaxation.
+
+Exact commit, source, config, data, atlas, checkpoint, freeze, manifest,
+development, qualification, receipt and stdout/stderr hashes are recorded in
+`publication/atlas_pair_energy_diagnostic.yaml`; the original run artifacts
+were not rewritten.
