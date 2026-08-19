@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "frozen": true,
+  "name": "independent-oracle-frozen-context-ap-probe-fresh504322-v1",
+  "purpose": "development-only-frozen-context-ap-convergence-transfer-diagnostic",
+  "role": "diagnostic-not-model-selection",
+  "arm": "global_average",
+  "product5_access": false,
+  "calibration_access": false,
+  "final_test_access": false,
+  "learned_candidate_promotion": false,
+  "source_checkpoint_commit": "db6ed2163e1181dc8ddb1efdbee8461caa6d9286",
+  "source_panel_contract_sha256": "886d24c3e6993bc0beff01e5c4a1e75249b3e47bed1b192a848a3fa7e290583e",
+  "source_checkpoint": {
+    "model_class": "training.independent_joint_variants.IndependentJointOracleSimilarityModel",
+    "parameter_count": 1369070,
+    "source_config_relative": "training/configs/independent_pose_identifiability_oracle_similarity_300_r4322.json",
+    "source_config_contract_sha256": "3202f03d7214ee4767ccbbecedd6b5e1f1e18529de8453e284785cded8976d87",
+    "source_config_file_sha256": "4e9b517498ecb33abe35d9478fa453cc5b060be826624ad297e851406bfe0fa7",
+    "source_run_name": "independent-oracle-similarity-pose-identifiability-300-r4322-v1",
+    "source_setup_sha256": "54b0208e61919ef1cbb4786c2274d93d06a677d72273eb57e1f2fa253e0e8b1d",
+    "source_resume_state_sha256": "c2a355b079e59be28fb84b74c34cd3cf380e83788711cf2a52be4f23d8518aa9",
+    "terminal_model_state_sha256": "0efb78806303ec88b4465f3f9b19eb0898d214f5aba36b31829c353948061626",
+    "terminal_named_parameter_sha256": "63b5fb0acf439e4a259e1cfe061e4b4c3ff9cf7b8bed94db1bdbf5e125aa7252"
+  },
+  "learned_checkpoint_dependencies": [
+    {
+      "role": "diagnostic-terminal-context-source-only",
+      "run_name": "independent-oracle-similarity-pose-identifiability-300-r4322-v1",
+      "resume_state_sha256": "c2a355b079e59be28fb84b74c34cd3cf380e83788711cf2a52be4f23d8518aa9",
+      "terminal_model_state_sha256": "0efb78806303ec88b4465f3f9b19eb0898d214f5aba36b31829c353948061626"
+    }
+  ],
+  "paths": {
+    "atlas_repo_relative": "data/Allen Brain Atlas 25um",
+    "run_root_env": "ATLAS_JOINT_RUN_ROOT"
+  },
+  "feature_extraction": {
+    "device": "cuda",
+    "model_mode": "eval",
+    "autocast": false,
+    "model_parameters_trainable": false,
+    "pose_context_features": 192,
+    "model_input": "oracle-source-image-zero-mask-zero-availability",
+    "anatomical_pose_label_input_to_model": false
+  },
+  "data": {
+    "source_seen_generator_seed": 304322,
+    "consumed_descriptive_held_generator_seed": 404322,
+    "primary_fresh_held_generator_seed": 504322,
+    "latent_pose_count": 24,
+    "seen_panels": 2,
+    "fresh_held_panels": 2,
+    "outline_mode": "absent",
+    "source_view_intervention": "exact-oracle-forward-sampling-once",
+    "fresh_held_nuisance_policy": "reuse-frozen-404322-held-rotation-scale-values-and-pair-assignments",
+    "consumed_404322_use": "excluded-from-fitting-and-primary-transfer-evaluation",
+    "expected_manifest_sha256": {
+      "seen": {
+        "generator": "b7520c0039fc0bd6dc90dbe52fe85b30b3c11a67f16e57b5cdf0841985f7870b",
+        "panels": [
+          "a55104400404b055186c00aea9004a3acdbfe8482be38f9f50749c7084c2eda6",
+          "575d97a5d9a07d9e99095030754825450fdeedc00d5b2b8bf3df19cf22a5c734"
+        ],
+        "outlines": [
+          "404d9d259aa40169012ae401184899508ccf32bfdaaa4b703b35c712715cfd01",
+          "cd9d8e871eda2c738b2d203efbc7573e68fb52a40e26487c8f4c3ec5cbc32343"
+        ]
+      },
+      "fresh_held": {
+        "generator": "1311ed79a32982a31cedf464c906eca1addab083cd916d1b334e125388ea418f",
+        "panels": [
+          "826726adf1fa1827af94ae29237589c691a8f83c29646190db1a274d66189bbc",
+          "e86857da57e0b03e3b9d480ae66f61b9985114a4f465b2c7f98109375434a580"
+        ],
+        "outlines": [
+          "e2fad680bf4b766aa2201c6a88c7c7e378071cd81b72167109c121972ec27c7e",
+          "eb1f6f086f1e971cae40f2e0f5e3211e220c2cad83f6cfd1365d151dd8048c70"
+        ]
+      }
+    }
+  },
+  "fits": [
+    {
+      "id": "seen_panel_0_to_1",
+      "train": [{"partition": "seen", "panel": 0}],
+      "test": [{"partition": "seen", "panel": 1}]
+    },
+    {
+      "id": "seen_panel_1_to_0",
+      "train": [{"partition": "seen", "panel": 1}],
+      "test": [{"partition": "seen", "panel": 0}]
+    },
+    {
+      "id": "seen_to_fresh_held",
+      "train": [
+        {"partition": "seen", "panel": 0},
+        {"partition": "seen", "panel": 1}
+      ],
+      "test": [
+        {"partition": "fresh_held", "panel": 0},
+        {"partition": "fresh_held", "panel": 1}
+      ]
+    }
+  ],
+  "solver": {
+    "implementation": "scipy.optimize.minimize",
+    "method": "L-BFGS-B",
+    "jacobian": "analytic",
+    "dtype": "float64-cpu",
+    "initialization": "terminal-ap-head-weight-and-bias",
+    "objective": "mean-cross-entropy-41-plus-half-1e-4-l2-on-weight-and-bias",
+    "class_count": 41,
+    "l2_coefficient": 0.0001,
+    "maxiter": 1000,
+    "maxfun": 1250,
+    "gtol": 1e-8,
+    "ftol": 1e-10,
+    "maxls": 20,
+    "maxcor": 10,
+    "maximum_optimizer_objective_sample_presentations_per_arm": 120000,
+    "independent_verification_objective_sample_presentations_per_arm": 96,
+    "maximum_total_objective_sample_presentations_per_arm": 120096,
+    "held_access_during_fit": false,
+    "feature_normalization": null,
+    "early_stopping": null
+  },
+  "gates": {
+    "nonfinite_count_maximum": 0,
+    "solver_result_success_required": true,
+    "independent_final_gradient_inf_norm_maximum": 1e-8,
+    "solver_iterations_maximum_each_fit": 1000,
+    "solver_function_evaluations_maximum_each_fit": 1250,
+    "optimizer_head_sample_presentations_maximum_per_arm": 120000,
+    "independent_verification_sample_presentations_per_arm": 96,
+    "total_head_sample_presentations_maximum_per_arm": 120096,
+    "single_panel_training_correct_required": 24,
+    "pooled_seen_training_correct_required": 48,
+    "opposite_seen_panel_correct_minimum": 23,
+    "opposite_seen_panel_sample_count": 24,
+    "fresh_held_bin_center_ap_mae_um_maximum": 250.0,
+    "fresh_held_prediction_to_truth_sd_ratio_minimum": 0.75
+  },
+  "artifacts": {
+    "tensor_payload": "ap_probe_tensors.pt",
+    "receipt": "diagnostic_receipt.json",
+    "raw_predictions": true,
+    "save_contexts": true,
+    "save_logits": true,
+    "save_fitted_heads": true
+  },
+  "lineage": {
+    "source_sha256": {
+      "training/independent_joint_model.py": "8eab4b14a74899104258604cb3f74ef1e54704149bc748f1275a18e27d4b27b5",
+      "training/independent_joint_variants.py": "ca5a577a7ce83c1414d8e35facfe56431f5814cc9e18a47ec7e283a52d3d7fc0",
+      "training/independent_joint_data.py": "e3a52eb88ddc857f1132ac2bfb8f5e2d08aca58cb0f199ab9329ec87b7891e5d",
+      "training/train_independent_joint.py": "b5f873c12d8a50d82c3972d90f4f9866662c47424e349d4d0104b7e02e7957b1",
+      "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde",
+      "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
+      "training/run_independent_initializer_foundation.py": "c25341c749ca61140569d9eac6e4b9e315ebfc302d9644a6d35dd89854f90e6f",
+      "training/run_independent_pose_identifiability.py": "9efbc5b7b5a483a531678ffc9f30c04baf749605717ac4e2e5db4ff4fc6f5e03",
+      "training/run_frozen_context_ap_probe.py": "e5a3fd702e7b252144d93f5b5645cee9e11d98782efb4b6e9dc207c0217522d5",
+      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+    }
+  },
+  "contract_sha256": "bcfaeac84717ae702f4b239f40004b3525bccb5301e0ddbdade3bae8cd47a2a5"
+}
