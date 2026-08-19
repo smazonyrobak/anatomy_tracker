@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "frozen": true,
-  "name": "independent-pose-identifiability-300-r4322-v1",
+  "name": "independent-spatial-moment-supervised-similarity-pose-identifiability-300-r4322-v1",
   "purpose": "development-only-cold-start-pose-identifiability-diagnostic",
   "role": "diagnostic-not-model-selection",
   "product5_access": false,
@@ -15,8 +15,8 @@
     "run_root_env": "ATLAS_JOINT_RUN_ROOT"
   },
   "model": {
-    "class": "training.independent_joint_model.IndependentJointModel",
-    "expected_parameter_count": 1369070,
+    "class": "training.independent_joint_variants.IndependentJointSpatialMomentSimilarityCanonicalizedModel",
+    "expected_parameter_count": 1378172,
     "kwargs": {
       "pyramid_channels": [24, 40, 64, 96],
       "pose_context_features": 192,
@@ -72,12 +72,21 @@
     "max_updates": 300,
     "loss_weights": {
       "categorical": 1.0,
-      "sub_bin_residual": 0.5
+      "sub_bin_residual": 0.5,
+      "source_view_supervision": 1.0
     },
     "gradient_clip_norm": 5.0,
     "gradient_clip_warmup_updates": 30,
     "resume": true,
-    "resume_state_every_updates": 10
+    "resume_state_every_updates": 10,
+    "source_view_supervision_contract": {
+      "canonicalizer_initialization_seed": 12731,
+      "targets": ["source_view_rotation_deg", "source_view_scale"],
+      "loss": "smooth-l1-normalized-rotation-and-log-scale",
+      "pose_gradient_to_canonicalizer": "blocked-at-sampling-parameters",
+      "gradient_clipping": "separate-pose-and-canonicalizer-groups-at-5.0",
+      "anatomical_pose_target_access": false
+    }
   },
   "evaluation": {
     "model_state": "raw-current",
@@ -98,6 +107,10 @@
     "held_prediction_to_truth_sd_ratio_minimum_each_axis": 0.75,
     "seen_residual_improvement_over_zero_minimum_each_axis": 0.20,
     "held_residual_improvement_over_zero_minimum_each_axis": 0.20,
+    "seen_source_view_rotation_mae_deg_maximum": 2.0,
+    "seen_source_view_scale_mae_maximum": 0.03,
+    "held_source_view_rotation_mae_deg_maximum": 3.0,
+    "held_source_view_scale_mae_maximum": 0.05,
     "nonfinite_count_maximum": 0,
     "postwarm_gradient_clipped_fraction_strict_maximum": 0.50
   },
@@ -109,9 +122,10 @@
       "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde",
       "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
       "training/run_independent_initializer_foundation.py": "c25341c749ca61140569d9eac6e4b9e315ebfc302d9644a6d35dd89854f90e6f",
-      "training/run_independent_pose_identifiability.py": "54336c66afb5b112d2219d431c1e80172d6e27cb6e95f2e618e11ef20d88879f",
-      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+      "training/run_independent_pose_identifiability.py": "e6915a1d6d663d25b0b7c62d184eea48ee7056a877797155de8f5ddb22df0d71",
+      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60",
+      "training/independent_joint_variants.py": "b80774a036e57fcb1481ee8557636a36a9e23126902574a04e001eb709c02139"
     }
   },
-  "contract_sha256": "c7a1ce8e2808cb14cc806075a397053e54eea7886b45ed105855a6da09073d26"
+  "contract_sha256": "af6563df1a5f8c7f498d4584650b18c33398aeca4884ee6138f0c38c61a55108"
 }

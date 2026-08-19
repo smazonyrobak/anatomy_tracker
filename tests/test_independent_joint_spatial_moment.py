@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 from pathlib import Path
 
@@ -20,6 +21,13 @@ BASE_CONFIG = ROOT / "training/configs/independent_pose_identifiability_300_r432
 SPATIAL_CONFIG = (
     ROOT / "training/configs/independent_pose_identifiability_spatial_moment_300_r4322.json"
 )
+BASE_CONFIG_SHA256 = "efcd541ed9824ca286ff065a0cd7693091cac13bbb353459a8d7f289b2aada6b"
+SPATIAL_CONFIG_SHA256 = "3ed757b9c9fef61e28bafbf5c669bb6edc8a6ee4ee29d2c565375c47a01b239d"
+
+
+def _historical_config(path, expected_sha256):
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == expected_sha256
+    return diagnostic.inspect_pose_identifiability_config(path)
 
 
 def _small_model():
@@ -146,8 +154,10 @@ def test_only_initializer_differs_and_parameter_delta_is_below_two_percent():
 
 
 def test_frozen_spatial_diagnostic_changes_only_model_identity_and_lineage():
-    base = diagnostic.load_pose_identifiability_config(BASE_CONFIG)
-    spatial = diagnostic.load_pose_identifiability_config(SPATIAL_CONFIG)
+    base = _historical_config(BASE_CONFIG, BASE_CONFIG_SHA256)
+    spatial = _historical_config(SPATIAL_CONFIG, SPATIAL_CONFIG_SHA256)
+    with pytest.raises(ValueError, match="source lineage changed"):
+        diagnostic.load_pose_identifiability_config(SPATIAL_CONFIG)
     for name in (
         "schema_version", "frozen", "purpose", "role", "product5_access",
         "calibration_access", "final_test_access", "learned_checkpoint_dependencies",

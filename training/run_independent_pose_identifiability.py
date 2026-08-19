@@ -17,7 +17,11 @@ import torch.nn.functional as F
 import training.independent_joint_data as independent_data
 import training.run_independent_initializer_foundation as foundation
 from training.independent_joint_model import IndependentJointModel, project_pose_to_domain
-from training.independent_joint_variants import IndependentJointSpatialMomentModel
+from training.independent_joint_variants import (
+    IndependentJointSimilarityCanonicalizedModel,
+    IndependentJointSpatialMomentModel,
+    IndependentJointSpatialMomentSimilarityCanonicalizedModel,
+)
 from training.quicknii_plane_metric import (
     QUICKNII_PIXEL_GRID_SHAPE,
     QUICKNII_PLANE_DISTANCE_CONTRACT,
@@ -60,12 +64,28 @@ MODEL_CONTRACTS = {
         "name": "independent-pose-identifiability-300-r4322-v1",
         "expected_parameter_count": 1_369_070,
         "extra_source_files": (),
+        "source_view_supervision": False,
     },
     "training.independent_joint_variants.IndependentJointSpatialMomentModel": {
         "factory": IndependentJointSpatialMomentModel,
         "name": "independent-spatial-moment-pose-identifiability-300-r4322-v1",
         "expected_parameter_count": 1_373_338,
         "extra_source_files": ("training/independent_joint_variants.py",),
+        "source_view_supervision": False,
+    },
+    "training.independent_joint_variants.IndependentJointSimilarityCanonicalizedModel": {
+        "factory": IndependentJointSimilarityCanonicalizedModel,
+        "name": "independent-supervised-similarity-pose-identifiability-300-r4322-v1",
+        "expected_parameter_count": 1_373_904,
+        "extra_source_files": ("training/independent_joint_variants.py",),
+        "source_view_supervision": True,
+    },
+    "training.independent_joint_variants.IndependentJointSpatialMomentSimilarityCanonicalizedModel": {
+        "factory": IndependentJointSpatialMomentSimilarityCanonicalizedModel,
+        "name": "independent-spatial-moment-supervised-similarity-pose-identifiability-300-r4322-v1",
+        "expected_parameter_count": 1_378_172,
+        "extra_source_files": ("training/independent_joint_variants.py",),
+        "source_view_supervision": True,
     },
 }
 
@@ -132,7 +152,7 @@ def nuisance_shortcut_accuracy(config: dict, partition: str) -> np.ndarray:
     ])
 
 
-def load_pose_identifiability_config(path: str | Path) -> dict:
+def inspect_pose_identifiability_config(path: str | Path) -> dict:
     path = Path(path)
     raw = json.loads(path.read_text(encoding="utf-8"))
     contract = raw.pop("contract_sha256")
@@ -241,19 +261,34 @@ def load_pose_identifiability_config(path: str | Path) -> dict:
         raise ValueError("seen nuisance pairs predict pose labels too accurately")
 
     training = raw["training"]
-    if training != {
+    loss_weights = {"categorical": 1.0, "sub_bin_residual": 0.5}
+    source_view_contract = None
+    if model_contract["source_view_supervision"]:
+        loss_weights["source_view_supervision"] = 1.0
+        source_view_contract = {
+            "canonicalizer_initialization_seed": 12731,
+            "targets": ["source_view_rotation_deg", "source_view_scale"],
+            "loss": "smooth-l1-normalized-rotation-and-log-scale",
+            "pose_gradient_to_canonicalizer": "blocked-at-sampling-parameters",
+            "gradient_clipping": "separate-pose-and-canonicalizer-groups-at-5.0",
+            "anatomical_pose_target_access": False,
+        }
+    expected_training = {
         "optimizer": "AdamW",
         "learning_rate": 0.0002,
         "weight_decay": 0.0001,
         "amp": True,
         "amp_initial_scale": 512.0,
         "max_updates": 300,
-        "loss_weights": {"categorical": 1.0, "sub_bin_residual": 0.5},
+        "loss_weights": loss_weights,
         "gradient_clip_norm": 5.0,
         "gradient_clip_warmup_updates": 30,
         "resume": True,
         "resume_state_every_updates": 10,
-    }:
+    }
+    if source_view_contract is not None:
+        expected_training["source_view_supervision_contract"] = source_view_contract
+    if training != expected_training:
         raise ValueError("pose-identifiability training contract changed")
     if raw.get("evaluation") != {
         "model_state": "raw-current",
@@ -264,7 +299,7 @@ def load_pose_identifiability_config(path: str | Path) -> dict:
         "evaluate_at_update": 300,
     }:
         raise ValueError("pose-identifiability evaluation contract changed")
-    if raw.get("gates") != {
+    expected_gates = {
         "seen_ap_bin_accuracy_minimum": 0.95,
         "seen_lr_bin_accuracy_minimum": 0.90,
         "seen_dv_bin_accuracy_minimum": 0.90,
@@ -277,16 +312,32 @@ def load_pose_identifiability_config(path: str | Path) -> dict:
         "held_residual_improvement_over_zero_minimum_each_axis": 0.20,
         "nonfinite_count_maximum": 0,
         "postwarm_gradient_clipped_fraction_strict_maximum": 0.50,
-    }:
+    }
+    if model_contract["source_view_supervision"]:
+        expected_gates.update(
+            {
+                "seen_source_view_rotation_mae_deg_maximum": 2.0,
+                "seen_source_view_scale_mae_maximum": 0.03,
+                "held_source_view_rotation_mae_deg_maximum": 3.0,
+                "held_source_view_scale_mae_maximum": 0.05,
+            }
+        )
+    if raw.get("gates") != expected_gates:
         raise ValueError("pose-identifiability gates changed")
     expected_sources = raw["lineage"]["source_sha256"]
     if set(expected_sources) != set(_source_files(raw)):
         raise ValueError("pose-identifiability source lineage is incomplete")
-    for relative, expected in expected_sources.items():
-        if foundation._source_sha256(REPOSITORY_ROOT / relative) != expected:
-            raise ValueError(f"source lineage changed: {relative}")
     raw["contract_sha256"] = contract
     raw["config_file_sha256"] = foundation._source_sha256(path)
+    return raw
+
+
+def load_pose_identifiability_config(path: str | Path) -> dict:
+    """Load an executable config and fail closed on current-source drift."""
+    raw = inspect_pose_identifiability_config(path)
+    for relative, expected in raw["lineage"]["source_sha256"].items():
+        if foundation._source_sha256(REPOSITORY_ROOT / relative) != expected:
+            raise ValueError(f"source lineage changed: {relative}")
     return raw
 
 
@@ -355,6 +406,9 @@ def _panel_batch(pair: dict, manifest: dict, data_contract_sha256: str) -> dict:
         "source_mask": source["source_mask"].detach().cpu(),
         "mask_available": source["mask_available"].detach().cpu(),
         "true_pose": torch.as_tensor(manifest["true_pose"], dtype=torch.float32),
+        "truth_source_view_parameters": source[
+            "truth_source_view_parameters"
+        ].detach().cpu(),
         "manifest_sha256": manifest["manifest_sha256"],
         "generator_manifest_sha256": manifest["generator_manifest"]["manifest_sha256"],
         "outline_plan_sha256": manifest["outline_plan"]["plan_sha256"],
@@ -399,7 +453,10 @@ def _prepare_fixed_panels(config: dict, synthetic, generator):
         "input_sha256": {
             kind: [
                 {name: foundation._tensor_sha256(panel[name])
-                 for name in ("source_image", "source_mask", "mask_available", "true_pose")}
+                 for name in (
+                     "source_image", "source_mask", "mask_available", "true_pose",
+                     "truth_source_view_parameters",
+                 )}
                 for panel in panels
             ]
             for kind, panels in batches.items()
@@ -407,6 +464,10 @@ def _prepare_fixed_panels(config: dict, synthetic, generator):
         "brain_mask_sha256": foundation._tensor_sha256(brain_mask),
         "physical_plane_distance_contract": QUICKNII_PLANE_DISTANCE_CONTRACT,
         "outline_mode": "absent",
+        "source_view_supervision_target": (
+            "exact-synthetic-source-view-rotation-deg-and-scale-only;"
+            "physical-AP-LR-DV-pose-excluded"
+        ),
         "learned_checkpoint_dependencies": [],
     }
     contract["contract_sha256"] = foundation._canonical_sha256(contract)
@@ -427,6 +488,8 @@ def _pose_parameter_group(model: IndependentJointModel) -> list[torch.nn.Paramet
     ]
     if hasattr(model.pose_head, "spatial_attention_logits"):
         modules.append(model.pose_head.spatial_attention_logits)
+    if hasattr(model, "source_view_canonicalizer"):
+        modules.append(model.source_view_canonicalizer)
     parameters = [parameter for module in modules for parameter in module.parameters()]
     for parameter in parameters:
         parameter.requires_grad_(True)
@@ -439,6 +502,70 @@ def _pose_parameter_group(model: IndependentJointModel) -> list[torch.nn.Paramet
     if any(value.requires_grad for value in model.pose_head.local_cholesky.parameters()):
         raise RuntimeError("probabilistic covariance head must remain frozen")
     return parameters
+
+
+def _clip_training_gradients(
+    model: IndependentJointModel,
+    parameters: list[torch.nn.Parameter],
+    maximum_norm: float,
+) -> dict[str, float | bool]:
+    if not hasattr(model, "source_view_canonicalizer"):
+        preclip = float(torch.nn.utils.clip_grad_norm_(parameters, maximum_norm))
+        postclip = foundation._parameter_grad_norm(parameters)
+        clipped = preclip > maximum_norm
+        return {
+            "preclip_norm": preclip,
+            "postclip_norm": postclip,
+            "clip_factor": min(1.0, postclip / preclip) if clipped and preclip else 1.0,
+            "clipped": clipped,
+        }
+
+    canonicalizer_parameters = list(model.source_view_canonicalizer.parameters())
+    canonicalizer_ids = {id(value) for value in canonicalizer_parameters}
+    pose_parameters = [
+        value for value in parameters if id(value) not in canonicalizer_ids
+    ]
+    if not pose_parameters or len(pose_parameters) + len(canonicalizer_parameters) != len(parameters):
+        raise RuntimeError("canonicalizer and pose clipping groups do not partition training")
+    pose_preclip = float(
+        torch.nn.utils.clip_grad_norm_(pose_parameters, maximum_norm)
+    )
+    canonicalizer_preclip = float(
+        torch.nn.utils.clip_grad_norm_(canonicalizer_parameters, maximum_norm)
+    )
+    pose_postclip = foundation._parameter_grad_norm(pose_parameters)
+    canonicalizer_postclip = foundation._parameter_grad_norm(
+        canonicalizer_parameters
+    )
+    pose_clipped = pose_preclip > maximum_norm
+    canonicalizer_clipped = canonicalizer_preclip > maximum_norm
+    preclip = math.sqrt(pose_preclip**2 + canonicalizer_preclip**2)
+    postclip = math.sqrt(pose_postclip**2 + canonicalizer_postclip**2)
+    return {
+        "preclip_norm": preclip,
+        "postclip_norm": postclip,
+        "clip_factor": min(
+            1.0,
+            pose_postclip / pose_preclip if pose_clipped and pose_preclip else 1.0,
+            canonicalizer_postclip / canonicalizer_preclip
+            if canonicalizer_clipped and canonicalizer_preclip else 1.0,
+        ),
+        "clipped": pose_clipped or canonicalizer_clipped,
+        "pose_preclip_norm": pose_preclip,
+        "pose_postclip_norm": pose_postclip,
+        "pose_clip_factor": (
+            min(1.0, pose_postclip / pose_preclip)
+            if pose_clipped and pose_preclip else 1.0
+        ),
+        "pose_clipped": pose_clipped,
+        "canonicalizer_preclip_norm": canonicalizer_preclip,
+        "canonicalizer_postclip_norm": canonicalizer_postclip,
+        "canonicalizer_clip_factor": (
+            min(1.0, canonicalizer_postclip / canonicalizer_preclip)
+            if canonicalizer_clipped and canonicalizer_preclip else 1.0
+        ),
+        "canonicalizer_clipped": canonicalizer_clipped,
+    }
 
 
 def categorical_residual_loss(
@@ -473,6 +600,46 @@ def categorical_residual_loss(
     }
 
 
+def source_view_supervision_loss(
+    output: dict[str, torch.Tensor],
+    truth_source_view_parameters: torch.Tensor,
+    model: IndependentJointModel,
+) -> dict[str, torch.Tensor]:
+    """Supervise only the exact synthetic nuisance; anatomical pose is absent."""
+    canonicalizer = model.source_view_canonicalizer
+    target_rotation_deg = truth_source_view_parameters[:, 0]
+    target_scale = truth_source_view_parameters[:, 1]
+    target_log_scale = torch.log(target_scale)
+    predicted = torch.stack(
+        (
+            output["source_view_rotation_deg"]
+            / canonicalizer.maximum_rotation_deg,
+            output["source_view_log_scale"]
+            / canonicalizer.maximum_log_scale,
+        ),
+        dim=1,
+    )
+    target = torch.stack(
+        (
+            target_rotation_deg / canonicalizer.maximum_rotation_deg,
+            target_log_scale / canonicalizer.maximum_log_scale,
+        ),
+        dim=1,
+    )
+    return {
+        "loss": F.smooth_l1_loss(predicted, target),
+        "rotation_absolute_error_deg": (
+            output["source_view_rotation_deg"] - target_rotation_deg
+        ).abs(),
+        "scale_absolute_error": (
+            output["source_view_scale"] - target_scale
+        ).abs(),
+        "log_scale_absolute_error": (
+            output["source_view_log_scale"] - target_log_scale
+        ).abs(),
+    }
+
+
 def _decoded_prediction(output: dict, model: IndependentJointModel):
     centers = (
         model.pose_head.ap_centers,
@@ -504,8 +671,10 @@ def _evaluate_panels(model, panel_contract, panels, brain_mask, device) -> dict:
     model.eval()
     result = {"panel_contract_sha256": panel_contract["contract_sha256"]}
     nonfinite = 0
+    has_canonicalizer = hasattr(model, "source_view_canonicalizer")
     for kind in ("seen", "held"):
         raw, predictions, truths, zero_residual, predicted_bins, target_bins, physical = [], [], [], [], [], [], []
+        source_view_errors = []
         for panel_index, cpu in enumerate(panels[kind]):
             image = cpu["source_image"].to(device)
             outline = cpu["source_mask"].to(device)
@@ -520,10 +689,36 @@ def _evaluate_panels(model, panel_contract, panels, brain_mask, device) -> dict:
                 foundation._pose_to_quicknii_ouv(prediction.to(torch.float64)),
                 brain_mask.to(device),
             ) * independent_data.VOXEL_UM
+            view_components = None
+            if has_canonicalizer:
+                view_components = source_view_supervision_loss(
+                    output,
+                    cpu["truth_source_view_parameters"].to(device),
+                    model,
+                )
+                source_view_errors.append(
+                    torch.stack(
+                        (
+                            view_components["rotation_absolute_error_deg"],
+                            view_components["scale_absolute_error"],
+                            view_components["log_scale_absolute_error"],
+                        ),
+                        dim=1,
+                    ).detach().cpu()
+                )
+            finite_outputs = (
+                prediction, output["pose"], output["ap_logits"],
+                output["lr_logits"], output["dv_logits"], distance,
+            )
+            if has_canonicalizer:
+                finite_outputs += (
+                    output["source_view_rotation_deg"],
+                    output["source_view_scale"],
+                    output["source_view_log_scale"],
+                )
             nonfinite += sum(
                 int((~torch.isfinite(value)).sum())
-                for value in (prediction, output["pose"], output["ap_logits"],
-                              output["lr_logits"], output["dv_logits"], distance)
+                for value in finite_outputs
             )
             predictions.append(prediction.detach().cpu())
             truths.append(truth.detach().cpu())
@@ -548,6 +743,26 @@ def _evaluate_panels(model, panel_contract, panels, brain_mask, device) -> dict:
                     "target_bins": targets[item].detach().cpu(),
                     "physical_corresponding_plane_error_um": float(distance[item]),
                 }
+                if view_components is not None:
+                    record.update(
+                        {
+                            "predicted_source_view_rotation_deg": float(
+                                output["source_view_rotation_deg"][item]
+                            ),
+                            "predicted_source_view_scale": float(
+                                output["source_view_scale"][item]
+                            ),
+                            "source_view_rotation_absolute_error_deg": float(
+                                view_components["rotation_absolute_error_deg"][item]
+                            ),
+                            "source_view_scale_absolute_error": float(
+                                view_components["scale_absolute_error"][item]
+                            ),
+                            "source_view_log_scale_absolute_error": float(
+                                view_components["log_scale_absolute_error"][item]
+                            ),
+                        }
+                    )
                 record["record_provenance_sha256"] = foundation._canonical_sha256(record)
                 raw.append(record)
         prediction = torch.cat(predictions)
@@ -568,6 +783,13 @@ def _evaluate_panels(model, panel_contract, panels, brain_mask, device) -> dict:
             "physical_corresponding_plane_error_um": torch.cat(physical).mean(),
             "raw_predictions": raw,
         }
+        if has_canonicalizer:
+            errors = torch.cat(source_view_errors)
+            result[kind]["source_view_canonicalization"] = {
+                "rotation_mae_deg": errors[:, 0].mean(),
+                "scale_mae": errors[:, 1].mean(),
+                "log_scale_mae": errors[:, 2].mean(),
+            }
     held_truth = torch.cat([panel["true_pose"] for panel in panels["held"]])
     prior = held_truth.mean(0, keepdim=True).expand_as(held_truth)
     prior_physical = torch_brain_masked_plane_distance(
@@ -619,6 +841,23 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
         "nonfinite_count": int(nonfinite) + int(evaluation["nonfinite_output_count"]),
         "postwarm_gradient_clipped_fraction": clipped_fraction,
     }
+    if "source_view_canonicalization" in seen:
+        observed.update(
+            {
+                "seen_source_view_rotation_mae_deg": float(
+                    seen["source_view_canonicalization"]["rotation_mae_deg"]
+                ),
+                "seen_source_view_scale_mae": float(
+                    seen["source_view_canonicalization"]["scale_mae"]
+                ),
+                "held_source_view_rotation_mae_deg": float(
+                    held["source_view_canonicalization"]["rotation_mae_deg"]
+                ),
+                "held_source_view_scale_mae": float(
+                    held["source_view_canonicalization"]["scale_mae"]
+                ),
+            }
+        )
     checks = {
         "seen_ap_bin_accuracy": observed["seen_ap_bin_accuracy"] >= gates["seen_ap_bin_accuracy_minimum"],
         "seen_lr_bin_accuracy": observed["seen_lr_bin_accuracy"] >= gates["seen_lr_bin_accuracy_minimum"],
@@ -639,6 +878,30 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
         "nonfinite": observed["nonfinite_count"] <= gates["nonfinite_count_maximum"],
         "postwarm_clipping": clipped_fraction is not None and clipped_fraction < gates["postwarm_gradient_clipped_fraction_strict_maximum"],
     }
+    canonicalizer_check_names = ()
+    if _model_contract(config)["source_view_supervision"]:
+        canonicalizer_check_names = (
+            "seen_source_view_rotation",
+            "seen_source_view_scale",
+            "held_source_view_rotation",
+            "held_source_view_scale",
+        )
+        checks.update(
+            {
+                "seen_source_view_rotation": observed[
+                    "seen_source_view_rotation_mae_deg"
+                ] <= gates["seen_source_view_rotation_mae_deg_maximum"],
+                "seen_source_view_scale": observed[
+                    "seen_source_view_scale_mae"
+                ] <= gates["seen_source_view_scale_mae_maximum"],
+                "held_source_view_rotation": observed[
+                    "held_source_view_rotation_mae_deg"
+                ] <= gates["held_source_view_rotation_mae_deg_maximum"],
+                "held_source_view_scale": observed[
+                    "held_source_view_scale_mae"
+                ] <= gates["held_source_view_scale_mae_maximum"],
+            }
+        )
     check_observed = {
         "seen_ap_bin_accuracy": observed["seen_ap_bin_accuracy"],
         "seen_lr_bin_accuracy": observed["seen_lr_bin_accuracy"],
@@ -653,6 +916,19 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
         "nonfinite": observed["nonfinite_count"],
         "postwarm_clipping": observed["postwarm_gradient_clipped_fraction"],
     }
+    if canonicalizer_check_names:
+        check_observed.update(
+            {
+                "seen_source_view_rotation": observed[
+                    "seen_source_view_rotation_mae_deg"
+                ],
+                "seen_source_view_scale": observed["seen_source_view_scale_mae"],
+                "held_source_view_rotation": observed[
+                    "held_source_view_rotation_mae_deg"
+                ],
+                "held_source_view_scale": observed["held_source_view_scale_mae"],
+            }
+        )
     seen_pass = all(checks[name] for name in (
         "seen_ap_bin_accuracy", "seen_lr_bin_accuracy", "seen_dv_bin_accuracy",
         "seen_residual_improvement",
@@ -662,8 +938,25 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
         "held_physical_improvement", "held_prediction_sd",
         "held_residual_improvement",
     ))
+    seen_canonicalizer_pass = all(
+        checks[name]
+        for name in canonicalizer_check_names
+        if name.startswith("seen_")
+    )
+    held_canonicalizer_pass = all(
+        checks[name]
+        for name in canonicalizer_check_names
+        if name.startswith("held_")
+    )
     if not checks["nonfinite"]:
         classification = "numerical-failure"
+    elif not seen_canonicalizer_pass:
+        classification = "source-view-canonicalizer-not-identified-on-seen-transforms"
+    elif not held_canonicalizer_pass:
+        classification = (
+            "source-view-canonicalizer-identified-on-seen-but-held-transform-"
+            "generalization-insufficient"
+        )
     elif not seen_pass:
         classification = "pose-representation-not-identifiable-on-seen-transforms"
     elif not held_pass:
@@ -706,7 +999,9 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
     device = torch.device(device)
     training = config["training"]
     amp_enabled = bool(training["amp"] and device.type == "cuda")
-    model_class = _model_contract(config)["factory"]
+    model_contract = _model_contract(config)
+    model_class = model_contract["factory"]
+    uses_source_view_supervision = model_contract["source_view_supervision"]
     model = model_class(**config["model"]["kwargs"]).to(device)
     if sum(value.numel() for value in model.parameters()) != int(config["model"]["expected_parameter_count"]):
         raise RuntimeError("pose-identifiability model parameter count changed")
@@ -740,6 +1035,43 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
         "final_test_access": False,
         "learned_checkpoint_dependencies": [],
         "artifact_policy": "single-atomic-resume-state-not-a-selected-model-checkpoint",
+        "source_view_supervision": {
+            "enabled": uses_source_view_supervision,
+            "canonicalizer_initialization_seed": (
+                model.source_view_canonicalizer.initialization_seed
+                if uses_source_view_supervision else None
+            ),
+            "targets": (
+                ["synthetic_source_view_rotation_deg", "synthetic_source_view_scale"]
+                if uses_source_view_supervision else []
+            ),
+            "anatomical_pose_target_access": False,
+            "loss": (
+                "smooth-l1-on-normalized-rotation-and-log-scale"
+                if uses_source_view_supervision else None
+            ),
+            "pose_gradient_to_canonicalizer": (
+                "blocked-at-sampling-parameters"
+                if uses_source_view_supervision else None
+            ),
+            "gradient_clipping": (
+                "separate-pose-and-canonicalizer-groups-at-5.0"
+                if uses_source_view_supervision else None
+            ),
+            "attribution_gates": (
+                {
+                    name: config["gates"][name]
+                    for name in (
+                        "seen_source_view_rotation_mae_deg_maximum",
+                        "seen_source_view_scale_mae_maximum",
+                        "held_source_view_rotation_mae_deg_maximum",
+                        "held_source_view_scale_mae_maximum",
+                    )
+                }
+                if uses_source_view_supervision else {}
+            ),
+            "weight": training["loss_weights"].get("source_view_supervision"),
+        },
         "config": config,
         "source_sha256": source_hashes,
         "initial_state_sha256": initial_state_sha256,
@@ -849,6 +1181,10 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
         outline = cpu["source_mask"].to(device)
         available = cpu["mask_available"].to(device)
         truth = cpu["true_pose"].to(device)
+        truth_source_view = (
+            cpu["truth_source_view_parameters"].to(device)
+            if uses_source_view_supervision else None
+        )
         optimizer.zero_grad(set_to_none=True)
         model.train()
         with torch.amp.autocast(device_type=device.type, enabled=amp_enabled):
@@ -858,10 +1194,27 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
                 float(training["loss_weights"]["categorical"]) * components["categorical"]
                 + float(training["loss_weights"]["sub_bin_residual"]) * components["sub_bin_residual"]
             )
+            view_components = None
+            if uses_source_view_supervision:
+                view_components = source_view_supervision_loss(
+                    output, truth_source_view, model
+                )
+                loss = loss + float(
+                    training["loss_weights"]["source_view_supervision"]
+                ) * view_components["loss"]
+        finite_outputs = (
+            output["ap_logits"], output["lr_logits"], output["dv_logits"],
+            output["continuous_residual"],
+        )
+        if uses_source_view_supervision:
+            finite_outputs += (
+                output["source_view_rotation_deg"],
+                output["source_view_scale"],
+                output["source_view_log_scale"],
+            )
         output_nonfinite = sum(
             int((~torch.isfinite(value)).sum())
-            for value in (output["ap_logits"], output["lr_logits"], output["dv_logits"],
-                          output["continuous_residual"])
+            for value in finite_outputs
         )
         if not bool(torch.isfinite(loss)) or output_nonfinite:
             nonfinite += max(1, output_nonfinite)
@@ -869,10 +1222,11 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
             break
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
-        preclip = float(torch.nn.utils.clip_grad_norm_(
-            parameters, float(training["gradient_clip_norm"])
-        ))
-        postclip = foundation._parameter_grad_norm(parameters)
+        clipping = _clip_training_gradients(
+            model, parameters, float(training["gradient_clip_norm"])
+        )
+        preclip = float(clipping["preclip_norm"])
+        postclip = float(clipping["postclip_norm"])
         if not math.isfinite(preclip) or not math.isfinite(postclip):
             nonfinite += 1
             status = "stop"
@@ -880,8 +1234,8 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
         scaler.step(optimizer)
         scaler.update()
         update += 1
-        clipped = preclip > float(training["gradient_clip_norm"])
-        gradients.append({
+        clipped = bool(clipping["clipped"])
+        gradient_record = {
             "update": update,
             "seen_panel_index": panel_index,
             "loss": float(loss.detach()),
@@ -889,9 +1243,31 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
             "sub_bin_residual_loss": float(components["sub_bin_residual"].detach()),
             "preclip_norm": preclip,
             "postclip_norm": postclip,
-            "clip_factor": min(1.0, postclip / preclip) if clipped and preclip else 1.0,
+            "clip_factor": float(clipping["clip_factor"]),
             "clipped": clipped,
-        })
+        }
+        if view_components is not None:
+            gradient_record.update(
+                {
+                    name: value
+                    for name, value in clipping.items()
+                    if name.startswith(("pose_", "canonicalizer_"))
+                }
+            )
+            gradient_record.update(
+                {
+                    "source_view_supervision_loss": float(
+                        view_components["loss"].detach()
+                    ),
+                    "source_view_rotation_mae_deg": float(
+                        view_components["rotation_absolute_error_deg"].mean().detach()
+                    ),
+                    "source_view_scale_mae": float(
+                        view_components["scale_absolute_error"].mean().detach()
+                    ),
+                }
+            )
+        gradients.append(gradient_record)
         if update % int(training["resume_state_every_updates"]) == 0:
             save("running", qualification_status(None, gradients, nonfinite, config))
 

@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -13,6 +14,15 @@ from training.independent_joint_model import IndependentJointModel
 
 ROOT = Path(__file__).parents[1]
 CONFIG = ROOT / "training/configs/independent_pose_identifiability_300_r4322.json"
+CONFIG_SHA256 = "efcd541ed9824ca286ff065a0cd7693091cac13bbb353459a8d7f289b2aada6b"
+
+
+def _historical_config():
+    assert hashlib.sha256(CONFIG.read_bytes()).hexdigest() == CONFIG_SHA256
+    config = diagnostic.inspect_pose_identifiability_config(CONFIG)
+    with pytest.raises(ValueError, match="source lineage changed"):
+        diagnostic.load_pose_identifiability_config(CONFIG)
+    return config
 
 
 def _tiny_model():
@@ -27,7 +37,7 @@ def _tiny_model():
 
 
 def test_frozen_config_has_balanced_split_safe_poses_and_disjoint_fixed_transforms():
-    config = diagnostic.load_pose_identifiability_config(CONFIG)
+    config = _historical_config()
     poses = diagnostic.latent_pose_table(config)
     assert poses.shape == (24, 3)
     assert np.unique(poses[:, 0]).size == 6
@@ -89,7 +99,7 @@ class FakeManifestSource:
 
 
 def test_fixed_manifests_are_exact_absent_outline_and_map_consistent():
-    config = diagnostic.load_pose_identifiability_config(CONFIG)
+    config = _historical_config()
     poses = diagnostic.latent_pose_table(config)
     transforms = diagnostic.nuisance_transform_tables(config)
     manifests = diagnostic.fixed_panel_manifests(FakeManifestSource(), config)
@@ -189,7 +199,7 @@ def _gradients(clipped_count=134):
 
 
 def test_predeclared_gates_are_exact_strict_and_classify_representation_vs_invariance():
-    config = diagnostic.load_pose_identifiability_config(CONFIG)
+    config = _historical_config()
     passed = diagnostic.qualification_status(_evaluation(), _gradients(), 0, config)
     assert passed["decision"] == "go"
     assert passed["classification"] == "pose-representation-and-held-transform-invariance-demonstrated"
@@ -253,7 +263,7 @@ def _fake_panels(config, synthetic, generator):
 
 
 def test_cpu_micro_run_resumes_bit_exact_with_single_atomic_state(tmp_path, monkeypatch):
-    config = copy.deepcopy(diagnostic.load_pose_identifiability_config(CONFIG))
+    config = copy.deepcopy(_historical_config())
     config["device"] = "cpu"
     config["training"]["amp"] = False
     config["training"]["max_updates"] = 4

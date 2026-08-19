@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -151,6 +153,173 @@ class IndependentJointSpatialMomentModel(IndependentJointModel):
         self.pose_head = SpatialMomentProbabilisticPoseHead(
             pyramid_channels, context_features=pose_context_features
         )
+
+
+class SupervisedSimilarityCanonicalizer(nn.Module):
+    """Tiny diagnostic STN for known synthetic source-view rotation and scale.
+
+    The predicted affine maps canonical output coordinates into the observed
+    source image.  This is the forward source-view homography used by
+    ``independent_joint_data._apply_source_view``, not its inverse.
+    """
+
+    initialization_seed = 12731
+
+    def __init__(self):
+        super().__init__()
+        self.localizer = nn.Sequential(
+            nn.Conv2d(3, 8, 5, stride=2, padding=2, bias=False),
+            nn.GroupNorm(_group_count(8), 8),
+            nn.GELU(),
+            nn.Conv2d(8, 12, 5, stride=2, padding=2, bias=False),
+            nn.GroupNorm(_group_count(12), 12),
+            nn.GELU(),
+            nn.Conv2d(12, 16, 3, stride=2, padding=1, bias=False),
+            nn.GroupNorm(_group_count(16), 16),
+            nn.GELU(),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+        )
+        self.parameters_head = nn.Linear(16, 2)
+        nn.init.zeros_(self.parameters_head.weight)
+        nn.init.zeros_(self.parameters_head.bias)
+        self.register_buffer("maximum_rotation_deg", torch.tensor(45.0))
+        self.register_buffer(
+            "maximum_log_scale", torch.tensor(float(math.log(1.5)))
+        )
+
+    def predict_parameters(self, planes: torch.Tensor) -> dict[str, torch.Tensor]:
+        raw = self.parameters_head(self.localizer(planes))
+        rotation_deg = torch.tanh(raw[:, 0]) * self.maximum_rotation_deg
+        log_scale = torch.tanh(raw[:, 1]) * self.maximum_log_scale
+        return {
+            "source_view_rotation_deg": rotation_deg,
+            "source_view_log_scale": log_scale,
+            "source_view_scale": torch.exp(log_scale),
+        }
+
+    @staticmethod
+    def sampling_theta(
+        rotation_deg: torch.Tensor,
+        log_scale: torch.Tensor,
+        height: int,
+        width: int,
+    ) -> torch.Tensor:
+        """Normalized output-to-input affine for a centered pixel similarity."""
+        angle = rotation_deg * (math.pi / 180.0)
+        scale = torch.exp(log_scale)
+        cosine = scale * torch.cos(angle)
+        sine = scale * torch.sin(angle)
+        zeros = torch.zeros_like(cosine)
+        x_per_y = float(height - 1) / float(width - 1)
+        y_per_x = float(width - 1) / float(height - 1)
+        return torch.stack(
+            (
+                torch.stack((cosine, -sine * x_per_y, zeros), dim=1),
+                torch.stack((sine * y_per_x, cosine, zeros), dim=1),
+            ),
+            dim=1,
+        )
+
+    def warp_with_parameters(
+        self,
+        planes: torch.Tensor,
+        rotation_deg: torch.Tensor,
+        log_scale: torch.Tensor,
+    ) -> torch.Tensor:
+        theta = self.sampling_theta(
+            rotation_deg, log_scale, planes.shape[-2], planes.shape[-1]
+        )
+        grid = F.affine_grid(theta, planes.shape, align_corners=True)
+        return F.grid_sample(
+            planes,
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+
+    def forward(
+        self, planes: torch.Tensor
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        parameters = self.predict_parameters(planes)
+        # This causal diagnostic allows only the exact nuisance labels to train
+        # the localizer.  Pose gradients still train the encoder downstream of
+        # the warped pixels, but cannot repurpose theta to absorb anatomy.
+        warped = self.warp_with_parameters(
+            planes,
+            parameters["source_view_rotation_deg"].detach(),
+            parameters["source_view_log_scale"].detach(),
+        )
+        return warped, parameters
+
+
+class _SupervisedSimilarityCanonicalized:
+    """Diagnostic-only one-warp source canonicalization mixin."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(SupervisedSimilarityCanonicalizer.initialization_seed)
+            canonicalizer = SupervisedSimilarityCanonicalizer()
+        self.source_view_canonicalizer = canonicalizer
+
+    def _canonicalized_source_features(
+        self,
+        source_image: torch.Tensor,
+        source_outline_mask: torch.Tensor,
+        source_mask_available: torch.Tensor,
+    ) -> tuple[tuple[torch.Tensor, ...], dict[str, torch.Tensor]]:
+        planes = self.pyramid._input(
+            source_image, source_outline_mask, source_mask_available
+        )
+        planes, parameters = self.source_view_canonicalizer(planes)
+        feature = self.pyramid.slice_stem(planes)
+        features = []
+        for level in self.pyramid.levels:
+            feature = level(feature)
+            features.append(feature)
+        return tuple(features), parameters
+
+    def encode_source(
+        self,
+        source_image: torch.Tensor,
+        source_outline_mask: torch.Tensor,
+        source_mask_available: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
+        features, _ = self._canonicalized_source_features(
+            source_image, source_outline_mask, source_mask_available
+        )
+        return features
+
+    def initialize(
+        self,
+        slice_image: torch.Tensor,
+        slice_outline_mask: torch.Tensor,
+        slice_mask_available: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        features, parameters = self._canonicalized_source_features(
+            slice_image, slice_outline_mask, slice_mask_available
+        )
+        output = self.pose_head(features)
+        output.update(parameters)
+        return output
+
+
+class IndependentJointSimilarityCanonicalizedModel(
+    _SupervisedSimilarityCanonicalized, IndependentJointModel
+):
+    """Base GAP initializer preceded by the supervised diagnostic STN."""
+
+    architecture_family = "recurrent_supervised_similarity_initializer"
+
+
+class IndependentJointSpatialMomentSimilarityCanonicalizedModel(
+    _SupervisedSimilarityCanonicalized, IndependentJointSpatialMomentModel
+):
+    """Spatial-moment initializer preceded by the same supervised diagnostic STN."""
+
+    architecture_family = "recurrent_spatial_moment_supervised_similarity_initializer"
 
 
 class FactorizedCNNControl(IndependentJointModel):
@@ -461,6 +630,8 @@ class VariantCachedRefinerExport(IndependentCachedRefinerExport):
 LEADER_PARAMETER_REFERENCE = 1_369_070
 DEFAULT_VARIANT_PARAMETERS = {
     IndependentJointSpatialMomentModel.architecture_family: 1_373_338,
+    IndependentJointSimilarityCanonicalizedModel.architecture_family: 1_373_904,
+    IndependentJointSpatialMomentSimilarityCanonicalizedModel.architecture_family: 1_378_172,
     FactorizedCNNControl.architecture_family: 1_387_342,
     RecurrentAttentionVariant.architecture_family: 1_393_454,
 }
