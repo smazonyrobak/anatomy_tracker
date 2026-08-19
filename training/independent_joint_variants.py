@@ -221,13 +221,13 @@ class SupervisedSimilarityCanonicalizer(nn.Module):
             dim=1,
         )
 
+    @staticmethod
     def warp_with_parameters(
-        self,
         planes: torch.Tensor,
         rotation_deg: torch.Tensor,
         log_scale: torch.Tensor,
     ) -> torch.Tensor:
-        theta = self.sampling_theta(
+        theta = SupervisedSimilarityCanonicalizer.sampling_theta(
             rotation_deg, log_scale, planes.shape[-2], planes.shape[-1]
         )
         grid = F.affine_grid(theta, planes.shape, align_corners=True)
@@ -320,6 +320,20 @@ class IndependentJointSpatialMomentSimilarityCanonicalizedModel(
     """Spatial-moment initializer preceded by the same supervised diagnostic STN."""
 
     architecture_family = "recurrent_spatial_moment_supervised_similarity_initializer"
+
+
+class IndependentJointOracleSimilarityModel(IndependentJointModel):
+    """Marker class for runner-side exact source-view canonicalization."""
+
+    architecture_family = "recurrent_oracle_similarity_initializer"
+
+
+class IndependentJointSpatialMomentOracleSimilarityModel(
+    IndependentJointSpatialMomentModel
+):
+    """Spatial-moment marker for runner-side exact source-view canonicalization."""
+
+    architecture_family = "recurrent_spatial_moment_oracle_similarity_initializer"
 
 
 class FactorizedCNNControl(IndependentJointModel):

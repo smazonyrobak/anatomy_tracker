@@ -18,9 +18,12 @@ import training.independent_joint_data as independent_data
 import training.run_independent_initializer_foundation as foundation
 from training.independent_joint_model import IndependentJointModel, project_pose_to_domain
 from training.independent_joint_variants import (
+    IndependentJointOracleSimilarityModel,
     IndependentJointSimilarityCanonicalizedModel,
     IndependentJointSpatialMomentModel,
+    IndependentJointSpatialMomentOracleSimilarityModel,
     IndependentJointSpatialMomentSimilarityCanonicalizedModel,
+    SupervisedSimilarityCanonicalizer,
 )
 from training.quicknii_plane_metric import (
     QUICKNII_PIXEL_GRID_SHAPE,
@@ -58,6 +61,32 @@ MODEL_KWARGS = {
     "maximum_scale": 2.0,
     "maximum_velocity_fraction": 0.12,
 }
+ORACLE_SOURCE_VIEW_CONTRACT = {
+    "targets": [
+        "truth_source_view_parameters.rotation_deg",
+        "truth_source_view_parameters.scale",
+    ],
+    "source_generation_sampling_direction": (
+        "source-view-generated-by-sampling-with-inverse-source-view-h"
+    ),
+    "canonicalization_sampling_direction": (
+        "observed-source-sampled-with-forward-source-view-h-output-to-input"
+    ),
+    "warp": (
+        "training.independent_joint_variants."
+        "SupervisedSimilarityCanonicalizer.warp_with_parameters"
+    ),
+    "warped_tensor": "source-image-only;absent-mask-and-availability-retained",
+    "canonicalization_warps_per_fixed_panel": 1,
+    "resampling_ceiling": (
+        "second-bilinear-resampling-preserves-source-view-crop-and-interpolation-loss"
+    ),
+    "learned_parameters": False,
+    "nuisance_loss": False,
+    "anatomical_pose_target_access": False,
+    "model_abi": "initialize(source_image,source_mask,mask_available)",
+    "outline_contract": "absent-zero-mask-and-zero-availability-only",
+}
 MODEL_CONTRACTS = {
     "training.independent_joint_model.IndependentJointModel": {
         "factory": IndependentJointModel,
@@ -65,6 +94,7 @@ MODEL_CONTRACTS = {
         "expected_parameter_count": 1_369_070,
         "extra_source_files": (),
         "source_view_supervision": False,
+        "oracle_source_view": False,
     },
     "training.independent_joint_variants.IndependentJointSpatialMomentModel": {
         "factory": IndependentJointSpatialMomentModel,
@@ -72,6 +102,7 @@ MODEL_CONTRACTS = {
         "expected_parameter_count": 1_373_338,
         "extra_source_files": ("training/independent_joint_variants.py",),
         "source_view_supervision": False,
+        "oracle_source_view": False,
     },
     "training.independent_joint_variants.IndependentJointSimilarityCanonicalizedModel": {
         "factory": IndependentJointSimilarityCanonicalizedModel,
@@ -79,6 +110,7 @@ MODEL_CONTRACTS = {
         "expected_parameter_count": 1_373_904,
         "extra_source_files": ("training/independent_joint_variants.py",),
         "source_view_supervision": True,
+        "oracle_source_view": False,
     },
     "training.independent_joint_variants.IndependentJointSpatialMomentSimilarityCanonicalizedModel": {
         "factory": IndependentJointSpatialMomentSimilarityCanonicalizedModel,
@@ -86,6 +118,23 @@ MODEL_CONTRACTS = {
         "expected_parameter_count": 1_378_172,
         "extra_source_files": ("training/independent_joint_variants.py",),
         "source_view_supervision": True,
+        "oracle_source_view": False,
+    },
+    "training.independent_joint_variants.IndependentJointOracleSimilarityModel": {
+        "factory": IndependentJointOracleSimilarityModel,
+        "name": "independent-oracle-similarity-pose-identifiability-300-r4322-v1",
+        "expected_parameter_count": 1_369_070,
+        "extra_source_files": ("training/independent_joint_variants.py",),
+        "source_view_supervision": False,
+        "oracle_source_view": True,
+    },
+    "training.independent_joint_variants.IndependentJointSpatialMomentOracleSimilarityModel": {
+        "factory": IndependentJointSpatialMomentOracleSimilarityModel,
+        "name": "independent-spatial-moment-oracle-similarity-pose-identifiability-300-r4322-v1",
+        "expected_parameter_count": 1_373_338,
+        "extra_source_files": ("training/independent_joint_variants.py",),
+        "source_view_supervision": False,
+        "oracle_source_view": True,
     },
 }
 
@@ -288,6 +337,8 @@ def inspect_pose_identifiability_config(path: str | Path) -> dict:
     }
     if source_view_contract is not None:
         expected_training["source_view_supervision_contract"] = source_view_contract
+    if model_contract["oracle_source_view"]:
+        expected_training["oracle_source_view_contract"] = ORACLE_SOURCE_VIEW_CONTRACT
     if training != expected_training:
         raise ValueError("pose-identifiability training contract changed")
     if raw.get("evaluation") != {
@@ -320,6 +371,15 @@ def inspect_pose_identifiability_config(path: str | Path) -> dict:
                 "seen_source_view_scale_mae_maximum": 0.03,
                 "held_source_view_rotation_mae_deg_maximum": 3.0,
                 "held_source_view_scale_mae_maximum": 0.05,
+            }
+        )
+    if model_contract["oracle_source_view"]:
+        expected_gates.update(
+            {
+                "oracle_parameter_mismatch_count_maximum": 0,
+                "oracle_canonicalized_nonfinite_count_maximum": 0,
+                "oracle_fixed_panel_count_required": 4,
+                "oracle_warps_per_fixed_panel_required": 1,
             }
         )
     if raw.get("gates") != expected_gates:
@@ -472,6 +532,98 @@ def _prepare_fixed_panels(config: dict, synthetic, generator):
     }
     contract["contract_sha256"] = foundation._canonical_sha256(contract)
     return contract, batches, brain_mask
+
+
+def _prepare_oracle_source_view_panels(
+    panel_contract: dict,
+    panels: dict[str, list[dict]],
+    device: torch.device,
+) -> tuple[dict, dict[str, list[dict]]]:
+    """Prewarp each fixed absent-outline panel once with exact nuisance truth."""
+    canonicalized_hashes = {"seen": [], "held": []}
+    parameter_mismatch_count = 0
+    canonicalized_nonfinite_count = 0
+    fixed_panel_count = 0
+    canonicalization_warp_count = 0
+    for kind in ("seen", "held"):
+        for panel in panels[kind]:
+            if bool(torch.count_nonzero(panel["source_mask"])) or bool(
+                torch.count_nonzero(panel["mask_available"])
+            ):
+                raise RuntimeError(
+                    "oracle source-view canonicalization requires absent outlines"
+                )
+            nuisance = panel["truth_source_view_parameters"].to(
+                device=device, dtype=torch.float32
+            )
+            declared = torch.stack(
+                (
+                    torch.as_tensor(
+                        panel["source_view_rotation_deg"],
+                        device=device,
+                        dtype=torch.float32,
+                    ),
+                    torch.as_tensor(
+                        panel["source_view_scale"],
+                        device=device,
+                        dtype=torch.float32,
+                    ),
+                ),
+                dim=1,
+            )
+            parameter_mismatch_count += int(torch.count_nonzero(nuisance != declared))
+            if not bool(torch.isfinite(nuisance).all()) or not bool(
+                (nuisance[:, 1] > 0).all()
+            ):
+                raise RuntimeError("oracle source-view nuisance parameters are invalid")
+            with torch.no_grad():
+                canonicalized = SupervisedSimilarityCanonicalizer.warp_with_parameters(
+                    panel["source_image"].to(device),
+                    nuisance[:, 0],
+                    torch.log(nuisance[:, 1]),
+                ).cpu()
+            canonicalization_warp_count += 1
+            canonicalized_nonfinite_count += int(
+                torch.count_nonzero(~torch.isfinite(canonicalized))
+            )
+            panel["oracle_source_image"] = canonicalized
+            panel["oracle_source_image_sha256"] = foundation._tensor_sha256(
+                canonicalized
+            )
+            canonicalized_hashes[kind].append(
+                panel["oracle_source_image_sha256"]
+            )
+            fixed_panel_count += 1
+    if parameter_mismatch_count:
+        raise RuntimeError("oracle source-view parameters differ from the fixed manifest")
+    if canonicalized_nonfinite_count:
+        raise RuntimeError("oracle source-view canonicalization produced nonfinite input")
+    contract = copy.deepcopy(panel_contract)
+    contract.pop("contract_sha256")
+    contract["oracle_source_view_canonicalization"] = {
+        **ORACLE_SOURCE_VIEW_CONTRACT,
+        "fixed_panel_count": fixed_panel_count,
+        "observed_canonicalization_warp_count": canonicalization_warp_count,
+        "observed_warps_per_fixed_panel": (
+            canonicalization_warp_count // fixed_panel_count
+        ),
+        "sample_count": sum(len(panel["source_image"]) for value in panels.values() for panel in value),
+        "parameter_mismatch_count": parameter_mismatch_count,
+        "canonicalized_nonfinite_count": canonicalized_nonfinite_count,
+        "canonicalized_source_image_sha256": canonicalized_hashes,
+        "warp_implementation_source_sha256": foundation._source_sha256(
+            REPOSITORY_ROOT / "training/independent_joint_variants.py"
+        ),
+        "source_view_generation_source_sha256": foundation._source_sha256(
+            REPOSITORY_ROOT / "training/independent_joint_data.py"
+        ),
+    }
+    contract["contract_sha256"] = foundation._canonical_sha256(contract)
+    return contract, panels
+
+
+def _panel_source_image(panel: dict, oracle_source_view: bool) -> torch.Tensor:
+    return panel["oracle_source_image"] if oracle_source_view else panel["source_image"]
 
 
 def _pose_parameter_group(model: IndependentJointModel) -> list[torch.nn.Parameter]:
@@ -670,13 +822,18 @@ def _bin_center_pose(bins: torch.Tensor, model: IndependentJointModel) -> torch.
 def _evaluate_panels(model, panel_contract, panels, brain_mask, device) -> dict:
     model.eval()
     result = {"panel_contract_sha256": panel_contract["contract_sha256"]}
+    oracle_source_view = "oracle_source_view_canonicalization" in panel_contract
+    if oracle_source_view:
+        result["oracle_source_view_canonicalization"] = panel_contract[
+            "oracle_source_view_canonicalization"
+        ]
     nonfinite = 0
     has_canonicalizer = hasattr(model, "source_view_canonicalizer")
     for kind in ("seen", "held"):
         raw, predictions, truths, zero_residual, predicted_bins, target_bins, physical = [], [], [], [], [], [], []
         source_view_errors = []
         for panel_index, cpu in enumerate(panels[kind]):
-            image = cpu["source_image"].to(device)
+            image = _panel_source_image(cpu, oracle_source_view).to(device)
             outline = cpu["source_mask"].to(device)
             available = cpu["mask_available"].to(device)
             truth = cpu["true_pose"].to(device)
@@ -743,6 +900,10 @@ def _evaluate_panels(model, panel_contract, panels, brain_mask, device) -> dict:
                     "target_bins": targets[item].detach().cpu(),
                     "physical_corresponding_plane_error_um": float(distance[item]),
                 }
+                if oracle_source_view:
+                    record["oracle_source_image_sha256"] = cpu[
+                        "oracle_source_image_sha256"
+                    ]
                 if view_components is not None:
                     record.update(
                         {
@@ -858,6 +1019,23 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
                 ),
             }
         )
+    model_contract = _model_contract(config)
+    if model_contract["oracle_source_view"]:
+        oracle = evaluation["oracle_source_view_canonicalization"]
+        observed.update(
+            {
+                "oracle_parameter_mismatch_count": int(
+                    oracle["parameter_mismatch_count"]
+                ),
+                "oracle_canonicalized_nonfinite_count": int(
+                    oracle["canonicalized_nonfinite_count"]
+                ),
+                "oracle_fixed_panel_count": int(oracle["fixed_panel_count"]),
+                "oracle_warps_per_fixed_panel": int(
+                    oracle["observed_warps_per_fixed_panel"]
+                ),
+            }
+        )
     checks = {
         "seen_ap_bin_accuracy": observed["seen_ap_bin_accuracy"] >= gates["seen_ap_bin_accuracy_minimum"],
         "seen_lr_bin_accuracy": observed["seen_lr_bin_accuracy"] >= gates["seen_lr_bin_accuracy_minimum"],
@@ -879,7 +1057,7 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
         "postwarm_clipping": clipped_fraction is not None and clipped_fraction < gates["postwarm_gradient_clipped_fraction_strict_maximum"],
     }
     canonicalizer_check_names = ()
-    if _model_contract(config)["source_view_supervision"]:
+    if model_contract["source_view_supervision"]:
         canonicalizer_check_names = (
             "seen_source_view_rotation",
             "seen_source_view_scale",
@@ -900,6 +1078,30 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
                 "held_source_view_scale": observed[
                     "held_source_view_scale_mae"
                 ] <= gates["held_source_view_scale_mae_maximum"],
+            }
+        )
+    oracle_check_names = ()
+    if model_contract["oracle_source_view"]:
+        oracle_check_names = (
+            "oracle_parameter_parity",
+            "oracle_canonicalized_finite",
+            "oracle_fixed_panel_count",
+            "oracle_single_warp",
+        )
+        checks.update(
+            {
+                "oracle_parameter_parity": observed[
+                    "oracle_parameter_mismatch_count"
+                ] <= gates["oracle_parameter_mismatch_count_maximum"],
+                "oracle_canonicalized_finite": observed[
+                    "oracle_canonicalized_nonfinite_count"
+                ] <= gates["oracle_canonicalized_nonfinite_count_maximum"],
+                "oracle_fixed_panel_count": observed[
+                    "oracle_fixed_panel_count"
+                ] == gates["oracle_fixed_panel_count_required"],
+                "oracle_single_warp": observed[
+                    "oracle_warps_per_fixed_panel"
+                ] == gates["oracle_warps_per_fixed_panel_required"],
             }
         )
     check_observed = {
@@ -929,6 +1131,19 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
                 "held_source_view_scale": observed["held_source_view_scale_mae"],
             }
         )
+    if oracle_check_names:
+        check_observed.update(
+            {
+                "oracle_parameter_parity": observed[
+                    "oracle_parameter_mismatch_count"
+                ],
+                "oracle_canonicalized_finite": observed[
+                    "oracle_canonicalized_nonfinite_count"
+                ],
+                "oracle_fixed_panel_count": observed["oracle_fixed_panel_count"],
+                "oracle_single_warp": observed["oracle_warps_per_fixed_panel"],
+            }
+        )
     seen_pass = all(checks[name] for name in (
         "seen_ap_bin_accuracy", "seen_lr_bin_accuracy", "seen_dv_bin_accuracy",
         "seen_residual_improvement",
@@ -948,8 +1163,11 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
         for name in canonicalizer_check_names
         if name.startswith("held_")
     )
+    oracle_integrity_pass = all(checks[name] for name in oracle_check_names)
     if not checks["nonfinite"]:
         classification = "numerical-failure"
+    elif not oracle_integrity_pass:
+        classification = "oracle-source-view-canonicalization-integrity-failed"
     elif not seen_canonicalizer_pass:
         classification = "source-view-canonicalizer-not-identified-on-seen-transforms"
     elif not held_canonicalizer_pass:
@@ -957,12 +1175,34 @@ def qualification_status(evaluation: dict | None, gradients: list[dict], nonfini
             "source-view-canonicalizer-identified-on-seen-but-held-transform-"
             "generalization-insufficient"
         )
+    elif model_contract["oracle_source_view"] and not seen_pass:
+        classification = (
+            "pose-representation-not-identifiable-on-seen-panels-conditional-on-"
+            "oracle-source-view-canonicalization"
+        )
+    elif model_contract["oracle_source_view"] and not held_pass:
+        classification = (
+            "pose-representation-identifiable-on-seen-but-held-generator-"
+            "generalization-insufficient-conditional-on-oracle-source-view-"
+            "canonicalization"
+        )
     elif not seen_pass:
         classification = "pose-representation-not-identifiable-on-seen-transforms"
     elif not held_pass:
         classification = "pose-representation-identifiable-but-held-transform-invariance-insufficient"
+    elif model_contract["oracle_source_view"] and not checks["postwarm_clipping"]:
+        classification = (
+            "pose-identifiability-and-held-generator-generalization-demonstrated-"
+            "conditional-on-oracle-source-view-canonicalization-but-training-"
+            "stability-gate-failed"
+        )
     elif not checks["postwarm_clipping"]:
         classification = "pose-representation-and-invariance-demonstrated-but-training-stability-gate-failed"
+    elif model_contract["oracle_source_view"]:
+        classification = (
+            "pose-identifiability-and-held-generator-generalization-demonstrated-"
+            "conditional-on-oracle-source-view-canonicalization"
+        )
     else:
         classification = "pose-representation-and-held-transform-invariance-demonstrated"
     return {
@@ -1002,6 +1242,7 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
     model_contract = _model_contract(config)
     model_class = model_contract["factory"]
     uses_source_view_supervision = model_contract["source_view_supervision"]
+    uses_oracle_source_view = model_contract["oracle_source_view"]
     model = model_class(**config["model"]["kwargs"]).to(device)
     if sum(value.numel() for value in model.parameters()) != int(config["model"]["expected_parameter_count"]):
         raise RuntimeError("pose-identifiability model parameter count changed")
@@ -1014,6 +1255,10 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
     generator = SyntheticRegistrationGenerator(atlas_folder, device=device)
     synthetic = independent_data.IndependentSyntheticData(generator)
     panel_contract, panels, brain_mask = _prepare_fixed_panels(config, synthetic, generator)
+    if uses_oracle_source_view:
+        panel_contract, panels = _prepare_oracle_source_view_panels(
+            panel_contract, panels, device
+        )
     output_folder = run_root / config["name"]
     state_path = output_folder / "resume_state.pt"
     receipt_path = output_folder / "diagnostic_receipt.json"
@@ -1071,6 +1316,22 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
                 if uses_source_view_supervision else {}
             ),
             "weight": training["loss_weights"].get("source_view_supervision"),
+        },
+        "oracle_source_view_canonicalization": {
+            "enabled": uses_oracle_source_view,
+            "contract": (
+                panel_contract["oracle_source_view_canonicalization"]
+                if uses_oracle_source_view else None
+            ),
+            "anatomical_pose_target_access": False,
+            "model_receives_nuisance_parameters": False,
+            "model_receives_anatomical_pose_target": False,
+            "nuisance_loss": False,
+            "learned_parameters": False,
+            "interpretation": (
+                "known-nuisance-removal-resampling-ceiling-not-deployable-invariance"
+                if uses_oracle_source_view else None
+            ),
         },
         "config": config,
         "source_sha256": source_hashes,
@@ -1177,7 +1438,7 @@ def run_pose_identifiability(config_path: str | Path, *, max_updates_this_call: 
     while update < call_stop:
         panel_index = update % 2
         cpu = panels["seen"][panel_index]
-        image = cpu["source_image"].to(device)
+        image = _panel_source_image(cpu, uses_oracle_source_view).to(device)
         outline = cpu["source_mask"].to(device)
         available = cpu["mask_available"].to(device)
         truth = cpu["true_pose"].to(device)

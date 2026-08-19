@@ -33,6 +33,16 @@ BASE_STN_CONFIG = (
 MOMENT_STN_CONFIG = (
     ROOT / "training/configs/independent_pose_identifiability_spatial_moment_supervised_similarity_300_r4322.json"
 )
+BASE_STN_CONFIG_SHA256 = "cda382fa25cf37ce34b3b3a549fec0048640b9bfa9e210bb321e76275c011b02"
+MOMENT_STN_CONFIG_SHA256 = "2b40a4501d282aaf3948c48d63cf4e407cacd52f0136bf6fa4bc516867312619"
+
+
+def _historical_stn_config(path, expected_sha256):
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == expected_sha256
+    config = diagnostic.inspect_pose_identifiability_config(path)
+    with pytest.raises(ValueError, match="source lineage changed"):
+        diagnostic.load_pose_identifiability_config(path)
+    return config
 
 
 def _small(model_class):
@@ -202,8 +212,8 @@ def test_parameter_delta_is_tiny_and_default_model_and_initializer_abi_are_uncha
 def test_frozen_stn_configs_are_an_exact_matched_pair_and_exclude_protected_targets():
     assert hashlib.sha256(REFERENCE_CONFIG.read_bytes()).hexdigest() == REFERENCE_CONFIG_SHA256
     reference = diagnostic.inspect_pose_identifiability_config(REFERENCE_CONFIG)
-    base = diagnostic.load_pose_identifiability_config(BASE_STN_CONFIG)
-    moment = diagnostic.load_pose_identifiability_config(MOMENT_STN_CONFIG)
+    base = _historical_stn_config(BASE_STN_CONFIG, BASE_STN_CONFIG_SHA256)
+    moment = _historical_stn_config(MOMENT_STN_CONFIG, MOMENT_STN_CONFIG_SHA256)
     for name in (
         "schema_version", "frozen", "purpose", "role", "product5_access",
         "calibration_access", "final_test_access", "learned_checkpoint_dependencies",
@@ -308,7 +318,7 @@ def test_separate_clipping_keeps_matched_canonicalizer_step_bit_exact():
 
 
 def test_failed_transform_attribution_gate_is_classified_before_pose_failure():
-    config = diagnostic.load_pose_identifiability_config(BASE_STN_CONFIG)
+    config = _historical_stn_config(BASE_STN_CONFIG, BASE_STN_CONFIG_SHA256)
     truth_sd = torch.tensor([1400.0, 12.5, 17.5])
     evaluation = {
         "seen": {
@@ -494,7 +504,9 @@ def _fake_supervised_panels(config, synthetic, generator):
 def test_supervised_runner_one_update_pause_resume_records_nuisance_contract(
     tmp_path, monkeypatch
 ):
-    config = copy.deepcopy(diagnostic.load_pose_identifiability_config(BASE_STN_CONFIG))
+    config = copy.deepcopy(
+        _historical_stn_config(BASE_STN_CONFIG, BASE_STN_CONFIG_SHA256)
+    )
     config["device"] = "cpu"
     config["name"] = "supervised-stn-resume-smoke"
     config["training"]["amp"] = False

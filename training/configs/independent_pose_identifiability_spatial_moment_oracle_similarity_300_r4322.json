@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "frozen": true,
+  "name": "independent-spatial-moment-oracle-similarity-pose-identifiability-300-r4322-v1",
+  "purpose": "development-only-cold-start-pose-identifiability-diagnostic",
+  "role": "diagnostic-not-model-selection",
+  "product5_access": false,
+  "calibration_access": false,
+  "final_test_access": false,
+  "learned_checkpoint_dependencies": [],
+  "seed": 4322,
+  "device": "auto",
+  "paths": {
+    "atlas_repo_relative": "data/Allen Brain Atlas 25um",
+    "run_root_env": "ATLAS_JOINT_RUN_ROOT"
+  },
+  "model": {
+    "class": "training.independent_joint_variants.IndependentJointSpatialMomentOracleSimilarityModel",
+    "expected_parameter_count": 1373338,
+    "kwargs": {
+      "pyramid_channels": [24, 40, 64, 96],
+      "pose_context_features": 192,
+      "pair_features": 96,
+      "hidden_channels": 96,
+      "integration_steps": 6,
+      "maximum_pose_delta": [750.0, 7.5, 7.5],
+      "maximum_translation_pixels": 32.0,
+      "minimum_scale": 0.4,
+      "maximum_scale": 2.0,
+      "maximum_velocity_fraction": 0.12
+    }
+  },
+  "data": {
+    "source": "synthetic_ccf",
+    "split": "train",
+    "stratum": "clean",
+    "pose_regime": "standard",
+    "latent_pose_count": 24,
+    "base_seed": 304322,
+    "held_base_seed": 404322,
+    "ap_um": [-4175.0, -3100.0, -2175.0, -1100.0, -175.0, 400.0],
+    "tilt_lr_abs_deg": 13.25,
+    "tilt_dv_abs_deg": 18.25,
+    "signed_tilt_pairs": [[-1, -1], [-1, 1], [1, -1], [1, 1]],
+    "sub_bin_target_policy": "nonzero-within-nearest-classifier-bin-on-every-axis",
+    "held_generator_realization": "disjoint-from-seen",
+    "outline_mode": "absent",
+    "seen_panels": 2,
+    "held_panels": 2,
+    "training_panel_schedule": "alternate-seen-panel-by-update-parity",
+    "nuisance_transforms": {
+      "seen_rotation_deg": [-30.0, -10.0, 10.0, 30.0],
+      "seen_scale": [0.8, 0.95, 1.05, 1.2],
+      "seen_pair_assignment": [
+        [13, 4, 8, 14, 10, 0, 9, 7, 14, 5, 13, 1, 15, 9, 12, 5, 2, 11, 1, 8, 7, 10, 9, 13],
+        [8, 3, 7, 2, 6, 15, 3, 10, 11, 12, 4, 2, 4, 12, 15, 6, 3, 1, 0, 0, 5, 14, 11, 6]
+      ],
+      "held_rotation_deg": [-20.0, 0.0, 20.0],
+      "held_scale": [0.875, 1.125],
+      "held_pair_assignment": [
+        [3, 1, 1, 5, 2, 0, 4, 5, 0, 0, 5, 2, 4, 5, 1, 3, 2, 3, 0, 3, 5, 5, 1, 3],
+        [1, 4, 3, 2, 3, 1, 5, 4, 5, 4, 0, 4, 2, 1, 0, 2, 1, 2, 2, 0, 3, 4, 4, 0]
+      ]
+    }
+  },
+  "training": {
+    "optimizer": "AdamW",
+    "learning_rate": 0.0002,
+    "weight_decay": 0.0001,
+    "amp": true,
+    "amp_initial_scale": 512.0,
+    "max_updates": 300,
+    "loss_weights": {
+      "categorical": 1.0,
+      "sub_bin_residual": 0.5
+    },
+    "gradient_clip_norm": 5.0,
+    "gradient_clip_warmup_updates": 30,
+    "resume": true,
+    "resume_state_every_updates": 10,
+    "oracle_source_view_contract": {
+      "targets": ["truth_source_view_parameters.rotation_deg", "truth_source_view_parameters.scale"],
+      "source_generation_sampling_direction": "source-view-generated-by-sampling-with-inverse-source-view-h",
+      "canonicalization_sampling_direction": "observed-source-sampled-with-forward-source-view-h-output-to-input",
+      "warp": "training.independent_joint_variants.SupervisedSimilarityCanonicalizer.warp_with_parameters",
+      "warped_tensor": "source-image-only;absent-mask-and-availability-retained",
+      "canonicalization_warps_per_fixed_panel": 1,
+      "resampling_ceiling": "second-bilinear-resampling-preserves-source-view-crop-and-interpolation-loss",
+      "learned_parameters": false,
+      "nuisance_loss": false,
+      "anatomical_pose_target_access": false,
+      "model_abi": "initialize(source_image,source_mask,mask_available)",
+      "outline_contract": "absent-zero-mask-and-zero-availability-only"
+    }
+  },
+  "evaluation": {
+    "model_state": "raw-current",
+    "decode": "argmax-bin-center-plus-bounded-sub-bin-residual",
+    "also_record_public_soft_decode": true,
+    "physical_metric": "deepslice-corresponding-pixel-plane-distance-v1",
+    "raw_predictions": true,
+    "evaluate_at_update": 300
+  },
+  "gates": {
+    "seen_ap_bin_accuracy_minimum": 0.95,
+    "seen_lr_bin_accuracy_minimum": 0.90,
+    "seen_dv_bin_accuracy_minimum": 0.90,
+    "held_ap_mae_um_maximum": 250.0,
+    "held_lr_mae_deg_maximum": 3.0,
+    "held_dv_mae_deg_maximum": 3.0,
+    "held_physical_improvement_over_constant_prior_minimum": 0.50,
+    "held_prediction_to_truth_sd_ratio_minimum_each_axis": 0.75,
+    "seen_residual_improvement_over_zero_minimum_each_axis": 0.20,
+    "held_residual_improvement_over_zero_minimum_each_axis": 0.20,
+    "nonfinite_count_maximum": 0,
+    "postwarm_gradient_clipped_fraction_strict_maximum": 0.50,
+    "oracle_parameter_mismatch_count_maximum": 0,
+    "oracle_canonicalized_nonfinite_count_maximum": 0,
+    "oracle_fixed_panel_count_required": 4,
+    "oracle_warps_per_fixed_panel_required": 1
+  },
+  "lineage": {
+    "source_sha256": {
+      "training/independent_joint_model.py": "8eab4b14a74899104258604cb3f74ef1e54704149bc748f1275a18e27d4b27b5",
+      "training/independent_joint_data.py": "e3a52eb88ddc857f1132ac2bfb8f5e2d08aca58cb0f199ab9329ec87b7891e5d",
+      "training/train_independent_joint.py": "b5f873c12d8a50d82c3972d90f4f9866662c47424e349d4d0104b7e02e7957b1",
+      "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde",
+      "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
+      "training/run_independent_initializer_foundation.py": "c25341c749ca61140569d9eac6e4b9e315ebfc302d9644a6d35dd89854f90e6f",
+      "training/run_independent_pose_identifiability.py": "9efbc5b7b5a483a531678ffc9f30c04baf749605717ac4e2e5db4ff4fc6f5e03",
+      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60",
+      "training/independent_joint_variants.py": "ca5a577a7ce83c1414d8e35facfe56431f5814cc9e18a47ec7e283a52d3d7fc0"
+    }
+  },
+  "contract_sha256": "4b4b0ffc8f545dbe7ce631b9c8c3f6a9e6160f8aa2a2858f90c55f0a08e7552d"
+}
