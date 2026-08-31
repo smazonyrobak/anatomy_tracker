@@ -1,7 +1,7 @@
 schema_version: "1.0"
 receipt_id: "arbitrary-plane-semantic-oracle-pose-ranking-preflight-2026-08-31"
 date: "2026-08-31"
-status: "development_protocol_predeclared_implementation_pending"
+status: "development_protocol_and_primitives_frozen_execution_pending"
 claim_scope: >-
   Predeclared small, model-free arbitrary-plane semantic pose-ranking premise.
   It tests normal, offset and roll while holding the parent in-plane residual,
@@ -61,11 +61,10 @@ literature_conclusions:
 
 current_blocker:
   finding: >-
-    training/arbitrary_plane_manifest.py v1 proposes RP2 infinite planes but
-    explicitly omits a finite frame, roll, centre, in-plane basis and
-    reflection state. Independently fitting a new FOV for every candidate would
-    leak pose through crop and scale.
-  required_action: "implement a new versioned finite-candidate representation before running the premise"
+    The versioned fixed-canvas candidate representation and semantic scorer are
+    implemented. The deterministic streamed 64-case execution runner and its
+    result receipt are not yet frozen.
+  required_action: "freeze and verify the runner, then execute this unchanged development protocol"
 
 finite_candidate_contract:
   physical_pose:
@@ -80,7 +79,11 @@ finite_candidate_contract:
       Let q be the support projection origin and parent state be c0,n0,d0.
       Define r0=c0-q-d0*n0. Apply the minimal SO(3) rotation Rmin taking n0
       to the sign-aligned candidate nc, then set cc=q+dc*nc+Rmin*r0.
-    - "require abs(dot(nc,cc-q)-dc) <= 1e-9 micrometres"
+    - "require abs(dot(nc,cc-q)-dc) <= 1e-9 micrometres on the float64 design state"
+    - >-
+      Reconstruct the effective physical state from the actual float32 renderer
+      state, bind its plane residual separately, and require it to be at most
+      0.01 micrometres; do not apply the float64 tolerance to quantized state.
     - "apply the explicit roll delta about nc through cc after minimal parallel transport"
     - "preserve H/W, physical pixel pitch, U/V spans, basis, and explicit reflection state"
     - "install the truth candidate by reusing the verified parent geometry and raster byte-for-byte"
@@ -96,10 +99,27 @@ finite_candidate_contract:
     - "unique hash-bound candidate identity"
     - "exact deterministic replay"
     - "candidate-order equivariance"
+    - >-
+      Uniqueness of both the canonical float64 design-pose key and exact
+      effective float32 renderer-state/O-U-V receipt; slot-bound candidate IDs
+      alone never establish geometric uniqueness.
   fixed_error_denominator: >-
     Candidate acceptance never uses candidate/target overlap. Every score and
     physical error uses the target fixed-valid or clean-tissue denominator, so
     low-overlap candidates remain hard mismatches rather than disappearing.
+  rendering_path: >-
+    Prepare and verify the atlas annotation once. Render each 40-candidate bank
+    by direct nearest integer indexing of approximately 40*H*W points, chunked
+    per case; do not rescan or batch-expand the scalar atlas. The truth label
+    raster is the verified parent annotation byte-for-byte. Stream case/bank
+    sidecars rather than retaining all candidate or synthetic arrays.
+  provenance_identity: >-
+    Every candidate binds the oracle-preflight hash, candidate implementation
+    and dependency hashes, parent/support/raw and decoded atlas hashes,
+    class/slot/attempt seed lineage, canonical design pose, effective float32
+    grid/O-U-V receipts, reflection state, and label/mask hashes. Bank identity
+    binds the ordered candidate IDs and final-order seed; exact replay verifies
+    all hashes.
 
 development_cases:
   base_realization_count: 64
@@ -113,6 +133,13 @@ development_cases:
     uint64 little-endian first eight SHA-256 bytes of UTF-8
     'arbitrary-plane-oracle-cases/v1\0<case_root_seed>\0<field>\0<case_index>\0<attempt>';
     independent fields are finite-parent, synthetic, and outline.
+  generator_seed_mapping: >-
+    For case index i and case-rejection attempt a, pass the derived
+    finite-parent seed to make_finite_arbitrary_plane_render with sample_index=i;
+    after acceptance pass the independently derived synthetic seed to
+    make_arbitrary_plane_synthetic_realization with its inherited sample index.
+    Generate the three outline modes by explicit mode strings from the same
+    accepted finite parent and synthetic seed. Record all rejected attempts.
   maximum_case_rejection_attempts: 4096
   ordinary_offset_acceptance: >-
     Truth offset must be at least 550 micrometres from both ends of its selected
@@ -155,8 +182,10 @@ candidate_bank:
   seed_derivation: >-
     uint64 little-endian first eight SHA-256 bytes of the UTF-8 literal
     'arbitrary-plane-finite-candidates/v1\0<candidate_root_seed>\0<base_plane_realization_id>\0<class>\0<slot>\0<attempt>';
-    final-order replaces class/slot with 'final-order' and uses attempt zero.
-    Bind every rejection and accepted slot before scoring.
+    serialize each root seed as its declared canonical lowercase 0x-prefixed
+    16-hex-digit string;
+    the final-order seed uses the literal with class='final-order', slot='bank'
+    and attempt='0'. Bind every rejection and accepted slot before scoring.
   exact_composition:
     truth: 1
     offset_only: 6
@@ -180,6 +209,12 @@ candidate_bank:
       Six independently seeded Haar-RP2 normals conditional on 20 to 60 degree
       distance from truth; sample offset uniformly from connected
       brain-intersection intervals and roll uniformly on [-pi,pi).
+    sign_and_roll_convention: >-
+      Canonicalize and jointly sign-align (n,d) before transport, so antipodal
+      inputs yield the identical right-handed candidate state. Positive roll
+      uses u'=cos(r)u+sin(r)v, v'=-sin(r)u+cos(r)v about +n; record roll delta
+      separately from any derived absolute roll. The 45-degree tangent is
+      exactly normalized (u0+v0).
   truth_position: "uniformly shuffled with an independent seed"
   invalid_or_duplicate_policy: >-
     Local slots are never tuned or substituted: reject the whole base case
@@ -220,6 +255,10 @@ scores:
       For each channel k on the fixed-valid mask M, Dk=(2*sum(M*Tk*Ck)+1e-12)
       /(sum(M*Tk^2)+sum(M*Ck^2)+1e-12). The score is the unweighted arithmetic
       mean of Dk and higher is better.
+    memory_contract: >-
+      Cache target channels once and iterate candidates with target-defined
+      channels in chunks of eight. Never materialize a
+      40-by-channel-by-H-by-W float64 tensor.
     exterior_policy: >-
       The mask M is fixed_valid_correspondence_mask from the target. Candidate
       background within M remains zero and is therefore a mismatch; no
@@ -228,7 +267,9 @@ scores:
     tie_policy: "scores within absolute 1e-12 of the maximum are tied; a tied truth is not top-1"
   ablations:
     raw_ID_agreement: "fraction of fixed-valid pixels with exact integer-ID equality"
-    mask_only_Dice: "binary nonzero-label Dice on the fixed-valid denominator"
+    mask_only_Dice: >-
+      Unsmoothed binary nonzero-label Dice on M:
+      (2*count(Tm AND Cm)+1e-12)/(count(Tm)+count(Cm)+1e-12).
   image_information_probe_status: >-
     Not part of this semantic gate. After a pass, freeze a separate small
     protocol defining dewarped observation intensity, atlas-template intensity,
@@ -243,11 +284,27 @@ scores:
 
 controls:
   exact_mandatory:
-    - "exact replay of every case, candidate and raw score"
-    - "candidate-order permutation equivariance"
-    - "RP2 sign-equivalence"
-    - "truth metadata and coordinate-channel exclusion audit"
-    - "current x/W,y/H physical-coordinate contract"
+    exact_replay: "exact replay of every case, candidate and raw score, including paired-outline semantic invariance"
+    candidate_order_permutation_equivariance: "candidate-order permutation equivariance"
+    rp2_sign_equivalence: "RP2 sign-equivalence"
+    truth_metadata_coordinate_channel_exclusion: "truth metadata and coordinate-channel exclusion audit"
+    xy_over_wh_coordinate_contract: "current x/W,y/H physical-coordinate contract"
+  exact_result_schema: >-
+    Each named control is a strict Boolean record with a canonical evidence
+    receipt SHA-256 over control name, pass/fail value and evidence payload.
+    Aggregate truthy flags, cross-bound evidence and unverified receipt strings
+    are not accepted.
+  verified_case_result_schema: >-
+    Every primary row binds case index, parent plane realization ID, one unique
+    paired-view-group ID, exactly three unique outline-descendant IDs, truth
+    normal and derived orientation family, finite candidate-bank ID, 40 ordered
+    candidate IDs, truth candidate ID, target label/mask/channel/pitch receipts
+    and raw float64 semantic/ID-agreement/mask-Dice landscapes. Every shuffled
+    row retains the exact bank/order/truth identity of primary row i and binds
+    the exact target receipt of row (i+17) modulo 64. Recompute top-1, rank,
+    reciprocal rank, win fraction, tied candidate-ID set and all gates from the
+    raw 40-score vectors; tied ID sets are canonicalized independently of
+    candidate array order.
   shuffled_target:
     permutation: "target case i is replaced by case (i+17) modulo 64"
     repeats: 1
@@ -281,13 +338,20 @@ metrics:
       and selected candidate. Compute Euclidean micrometre errors on that same
       fixed-valid mask, RMS as sqrt(mean(e^2)) and p95 with NumPy
       quantile(method='linear'). Candidate overlap never changes the mask.
+    tied_maximum_policy: >-
+      Save the full set of candidate IDs within absolute 1e-12 of the maximum.
+      When the set has more than one member, selected candidate and all selected
+      pose errors are null; never resolve a tie by array order.
   reporting_strata:
     - "orientation family"
     - "appearance family"
     - "damage family/severity"
-    - "outline mode"
     - "support size"
   statistical_unit: "base synthetic realization, never candidate pair or outline descendant"
+  outline_reporting: >-
+    Report exact semantic invariance across the three paired outline descendants
+    once per base ID; do not treat outline descendants as replicated semantic
+    observations or an outline-effect stratum.
   uncertainty_status: >-
     Preserve the complete score landscape, but do not call normalized scores a
     calibrated posterior. Calibration is deferred to unseen animals after the
