@@ -2,3 +2,11 @@
 /.gitattributes text eol=lf
 *.py text eol=lf
 *.json text eol=lf
+
+# These consumed atlas-pair artifacts were provenance-bound as CRLF bytes.
+/training/configs/independent_oracle_atlas_pair_energy_1500.json text eol=crlf
+/training/configs/independent_oracle_atlas_pair_scale_ablation.json text eol=crlf
+/training/independent_atlas_pair_energy.py text eol=crlf
+/training/run_independent_atlas_pair_energy.py text eol=crlf
+/training/run_independent_atlas_pair_scale_ablation.py text eol=crlf
+/tests/test_independent_atlas_pair_scale_ablation.py text eol=crlf
