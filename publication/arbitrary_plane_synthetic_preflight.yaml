@@ -50,9 +50,10 @@ coordinate_contract:
   dimension_symbol: "D=min(clean tissue u-span, clean tissue v-span) in micrometres"
   pixel_pitch_symbol: "p=isotropic physical pixel pitch in micrometres per pixel"
   global_local_separation: >-
-    Global in-plane translation, rotation, scale and shear remain explicit
-    pose/basis parameters. Remove the least-squares constant and linear field
-    from the sampled local velocity before exponentiation.
+    Global in-plane translation, rotation and positive scale remain explicit
+    pose/basis parameters. Reflection and shear are explicitly excluded from
+    v1. Remove the least-squares constant and linear field from the sampled
+    local velocity before exponentiation.
   map_storage:
     - "forward and inverse maps in physical micrometres"
     - "forward and inverse maps in raster pixels"
@@ -207,9 +208,20 @@ g3_damage_background_and_outline:
     severe_exception: "separately named stress stratum only"
   supervision_masks:
     arrays: ["clean_tissue", "visible", "missing", "artifact", "loss_valid"]
+    mutually_exclusive_observation_categories:
+      - "physical loss"
+      - "occlusion"
+      - "invalidating appearance artifact"
+      - "visible observed tissue"
+    overlap_precedence: "physical loss, then occlusion, then invalidating appearance artifact, then visible observed tissue"
+    derived_masks: ["clean_tissue", "section_footprint", "observation_invalid", "loss_valid"]
     loss_valid_definition: "visible AND NOT artifact"
     missing_as_atlas_background_correspondence: false
-    partition_requirement: "disjoint and exactly reconstructs the declared tissue domain"
+    partition_requirement: >-
+      The four observation categories are disjoint after precedence and their
+      union exactly reconstructs clean_tissue. The clean_tissue,
+      section_footprint, observation_invalid and loss_valid arrays are derived
+      masks and are not themselves claimed to be mutually disjoint.
   background_without_outline:
     base_intensity_range: [0.0, 0.25]
     smooth_additive_field_standard_deviation_range: [0.0, 0.08]
