@@ -55,10 +55,10 @@ coordinate_contract:
     v1. Remove the least-squares constant and linear field from the sampled
     local velocity before exponentiation.
   map_storage:
-    - "forward and inverse maps in physical micrometres"
-    - "forward and inverse maps in raster pixels"
+    - "effective forward and inverse maps in float32 raster pixels"
+    - "float64 physical-coordinate views derived from those exact effective maps"
     - "explicit push/pull and interpolation convention"
-    - "float64 truth and separately hash-bound effective float32 render state"
+    - "the effective float32 maps consumed by rendering are the discrete truth; no stronger analytic-inverse claim"
 
 g1_deformation:
   stage_name: "G1 topology-preserving geometry and clean moving section"
@@ -90,7 +90,12 @@ g1_deformation:
     inverse: "psi=exp(-v)"
     squaring_steps: "n=max(0,ceil(log2(max_norm_velocity_pixels/0.5)))"
     maximum_squaring_steps: 12
-    dynamic_padding_pixels: "ceil(maximum_displacement_um/p)+2"
+    fov_boundary_policy: >-
+      The finite parent already spans the complete projected atlas support.
+      v1 does not invent atlas signal by padding it after rendering; it rejects
+      any realization retaining less than 99.5% of clean fixed tissue in the
+      source FOV. Dynamic pre-render padding remains an optional later
+      efficiency improvement, not a truth-changing acceptance shortcut.
   resampling:
     scalar: "bilinear"
     annotation: "nearest-neighbour integer"
