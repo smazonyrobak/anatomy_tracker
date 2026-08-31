@@ -246,22 +246,33 @@ def test_all_five_damage_families_change_tissue_pixels(kind, category):
     assert receipt["changed_pixel_count"] > 0
 
 
-def test_near_cardinal_and_oblique_finite_parents_and_nondefault_shape_are_not_benchmarks():
-    normals = []
-    for parent_seed, output_shape, synthetic_seed in (
-        (3033, (41, 57), 811),
-        (2**63 + 101, (47, 53), 812),
-    ):
-        parent, support = _parent(seed=parent_seed, output_shape=output_shape)
-        artifact = make_arbitrary_plane_synthetic_realization(
-            parent, support, root_seed=synthetic_seed
-        )
-        verify_arbitrary_plane_synthetic_realization(artifact, support)
-        assert artifact["arrays"]["model_input_image"].shape == output_shape
-        assert not artifact["development_scope"]["benchmark"]
-        normals.append(np.asarray(parent["geometry"]["normal_rp2_ap_dv_ml"]))
-    assert np.max(np.abs(normals[0])) > 0.99
-    assert np.max(np.abs(normals[1])) < 0.95
+@pytest.mark.parametrize(
+    "parent_seed,synthetic_seed,dominant_axis",
+    (
+        (826, 1826, 0),
+        (419, 1419, 1),
+        (85, 1085, 2),
+        (2**63 + 101, 812, None),
+    ),
+)
+def test_pinned_near_cardinal_and_oblique_complete_realizations_are_not_benchmarks(
+    parent_seed, synthetic_seed, dominant_axis
+):
+    output_shape = (47, 53)
+    parent, support = _parent(seed=parent_seed, output_shape=output_shape)
+    artifact = make_arbitrary_plane_synthetic_realization(
+        parent, support, root_seed=synthetic_seed
+    )
+    verify_arbitrary_plane_synthetic_realization(artifact, support)
+    normal = np.asarray(parent["geometry"]["normal_rp2_ap_dv_ml"])
+
+    assert artifact["arrays"]["model_input_image"].shape == output_shape
+    assert not artifact["development_scope"]["benchmark"]
+    if dominant_axis is None:
+        assert np.max(np.abs(normal)) < 0.95
+    else:
+        assert np.argmax(np.abs(normal)) == dominant_axis
+        assert np.abs(normal[dominant_axis]) > 0.99
 
 
 def test_identity_appearance_bypasses_artifacts_and_tiny_support_disables_damage():
