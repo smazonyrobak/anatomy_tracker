@@ -199,18 +199,33 @@ def test_case_builder_forwards_frozen_commit_to_parent_and_candidate_verificatio
         finite_parent_generator_source_commit,
     ):
         seen["candidate_bank"] = finite_parent_generator_source_commit
+        return {}
+
+    def synthetic(
+        parent,
+        support_index,
+        *,
+        finite_parent_generator_source_commit,
+        **kwargs,
+    ):
+        seen["synthetic"] = finite_parent_generator_source_commit
         raise RuntimeError("commit-forwarded")
 
     monkeypatch.setattr(runner, "make_finite_arbitrary_plane_render_from_context", finite_parent)
     monkeypatch.setattr(
         runner, "make_arbitrary_plane_finite_candidate_bank_from_context", candidate_bank
     )
+    monkeypatch.setattr(runner, "make_arbitrary_plane_synthetic_realization", synthetic)
     monkeypatch.setattr(runner, "orientation_accepts", lambda case_index, normal: True)
 
     with pytest.raises(RuntimeError, match="commit-forwarded"):
         runner.build_oracle_case(0, {}, {}, {}, source_commit)
 
-    assert seen == {"finite_parent": source_commit, "candidate_bank": source_commit}
+    assert seen == {
+        "finite_parent": source_commit,
+        "candidate_bank": source_commit,
+        "synthetic": source_commit,
+    }
 
 
 def test_atomic_json_is_durable_idempotent_and_refuses_changed_frozen_output(tmp_path):

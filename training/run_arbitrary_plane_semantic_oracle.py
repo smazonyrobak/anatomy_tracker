@@ -628,6 +628,7 @@ def build_oracle_case(
                         sample_index=case_index,
                         synthetic_stratum="ordinary",
                         outline_mode=current_mode,
+                        finite_parent_generator_source_commit=source_commit,
                     )
                 )
         except ValueError as error:

@@ -43,6 +43,7 @@ def _assets(shape=(17, 15, 13)):
 def _parent(
     *, seed=2**63 + 101, output_shape=(47, 53),
     animal_id="animal-7", specimen_id="specimen-7a", experiment_id="experiment-71",
+    generator_source_commit=None,
 ):
     template, annotation, support = _assets()
     parent = make_finite_arbitrary_plane_render(
@@ -63,6 +64,7 @@ def _parent(
         animal_id=animal_id,
         specimen_id=specimen_id,
         experiment_id=experiment_id,
+        generator_source_commit=generator_source_commit,
     )
     return parent, support
 
@@ -98,6 +100,49 @@ def test_complete_realization_replays_preserves_provenance_and_is_model_independ
     assert all(artifact["generator"][key] == [] for key in dependency_keys)
     assert int(artifact["root_seed"], 16) > 2**53
     json.dumps(synthetic_realization_receipt(artifact), allow_nan=False)
+
+
+def test_entrypoints_bind_finite_parent_source_commit_and_legacy_none_remains_compatible():
+    source_commit, wrong_commit = "a" * 40, "b" * 40
+    parent, support = _parent(generator_source_commit=source_commit)
+    with pytest.raises(ValueError, match="source commit does not match"):
+        make_arbitrary_plane_synthetic_realization(
+            parent,
+            support,
+            root_seed=2**63 + 55,
+            finite_parent_generator_source_commit=wrong_commit,
+        )
+    artifact = make_arbitrary_plane_synthetic_realization(
+        parent,
+        support,
+        root_seed=2**63 + 55,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    replayed = replay_arbitrary_plane_synthetic_realization(
+        artifact,
+        support,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    verify_arbitrary_plane_synthetic_realization(
+        artifact,
+        support,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    assert replayed["synthetic_realization_id"] == artifact["synthetic_realization_id"]
+    for operation in (
+        replay_arbitrary_plane_synthetic_realization,
+        verify_arbitrary_plane_synthetic_realization,
+    ):
+        with pytest.raises(ValueError, match="source commit does not match"):
+            operation(
+                artifact,
+                support,
+                finite_parent_generator_source_commit=wrong_commit,
+            )
+
+    legacy_artifact, _, legacy_support = _make()
+    replay_arbitrary_plane_synthetic_realization(legacy_artifact, legacy_support)
+    verify_arbitrary_plane_synthetic_realization(legacy_artifact, legacy_support)
 
 
 def test_map_pullback_physical_coordinates_and_exclusive_mask_algebra_are_exact():

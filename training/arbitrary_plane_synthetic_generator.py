@@ -1152,8 +1152,18 @@ def _resolved_config(
     return config
 
 
-def _generate(parent: dict[str, object], support: dict[str, object], config: dict[str, object]) -> dict[str, object]:
-    verify_finite_arbitrary_plane_render(parent, support)
+def _generate(
+    parent: dict[str, object],
+    support: dict[str, object],
+    config: dict[str, object],
+    *,
+    finite_parent_generator_source_commit: str | None,
+) -> dict[str, object]:
+    verify_finite_arbitrary_plane_render(
+        parent,
+        support,
+        generator_source_commit=finite_parent_generator_source_commit,
+    )
     if parent["support_index_sha256"] != support["support_index_sha256"]:
         raise ValueError("finite parent and support index do not match")
     g1_arrays, g1_parameters, g1_logs = _g1(parent, support, config)
@@ -1275,12 +1285,18 @@ def make_arbitrary_plane_synthetic_realization(
     synthetic_stratum: str = "ordinary",
     outline_mode: str | None = None,
     config_overrides: dict[str, object] | None = None,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> dict[str, object]:
     """Create one complete G1/G2/G3 realization and issue its final identity."""
     config = _resolved_config(
         finite_parent, root_seed, sample_index, synthetic_stratum, outline_mode, config_overrides
     )
-    return _generate(finite_parent, support_index, config)
+    return _generate(
+        finite_parent,
+        support_index,
+        config,
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+    )
 
 
 def synthetic_realization_receipt(artifact: dict[str, object]) -> dict[str, object]:
@@ -1295,16 +1311,27 @@ def synthetic_realization_receipt(artifact: dict[str, object]) -> dict[str, obje
 
 
 def replay_arbitrary_plane_synthetic_realization(
-    artifact: dict[str, object], support_index: dict[str, object]
+    artifact: dict[str, object],
+    support_index: dict[str, object],
+    *,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> dict[str, object]:
     """Replay all isolated streams from the verified parent and bound config."""
     if "synthetic_realization_id" not in artifact:
         raise ValueError("incomplete synthetic artifact has no synthetic_realization_id")
-    return _generate(artifact["finite_parent"], support_index, copy.deepcopy(artifact["generator"]["resolved_config"]))
+    return _generate(
+        artifact["finite_parent"],
+        support_index,
+        copy.deepcopy(artifact["generator"]["resolved_config"]),
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+    )
 
 
 def verify_arbitrary_plane_synthetic_realization(
-    artifact: dict[str, object], support_index: dict[str, object]
+    artifact: dict[str, object],
+    support_index: dict[str, object],
+    *,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> None:
     """Verify provenance, arrays, mask algebra, identity, and exact deterministic replay."""
     required = {
@@ -1315,7 +1342,11 @@ def verify_arbitrary_plane_synthetic_realization(
         raise ValueError("incomplete synthetic artifact cannot be verified or identified")
     if artifact["schema_version"] != SYNTHETIC_SCHEMA or artifact["generator_algorithm"] != SYNTHETIC_ALGORITHM:
         raise ValueError("synthetic schema or algorithm does not match")
-    verify_finite_arbitrary_plane_render(artifact["finite_parent"], support_index)
+    verify_finite_arbitrary_plane_render(
+        artifact["finite_parent"],
+        support_index,
+        generator_source_commit=finite_parent_generator_source_commit,
+    )
     if artifact["finite_parent_identity"] != _finite_identity(artifact["finite_parent"]):
         raise ValueError("finite parent identity does not match")
     if artifact["finite_parent_receipt"] != finite_render_receipt(artifact["finite_parent"]):
@@ -1391,7 +1422,11 @@ def verify_arbitrary_plane_synthetic_realization(
     receipt = synthetic_realization_receipt(artifact)
     if artifact["synthetic_receipt_sha256"] != _payload_sha256(receipt):
         raise ValueError("synthetic JSON receipt hash does not match")
-    replayed = replay_arbitrary_plane_synthetic_realization(artifact, support_index)
+    replayed = replay_arbitrary_plane_synthetic_realization(
+        artifact,
+        support_index,
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+    )
     if synthetic_realization_receipt(replayed) != receipt:
         raise ValueError("synthetic receipt does not match exact replay")
     if any(not np.array_equal(value, replayed["arrays"][name]) for name, value in arrays.items()):
