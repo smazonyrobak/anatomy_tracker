@@ -121,6 +121,10 @@ def test_multiscale_physical_velocity_is_explicit_deterministic_and_smooth():
     assert np.isfinite(first).all()
     assert np.mean(np.abs(np.diff(first, axis=1))) < 0.25 * np.std(first)
     assert np.mean(np.abs(np.diff(first, axis=2))) < 0.25 * np.std(first)
+    with pytest.raises(TypeError, match="explicit numpy.random.Generator"):
+        sample_multiscale_physical_velocity(
+            np.random, (31, 47), **arguments  # type: ignore[arg-type]
+        )
 
 
 def test_adaptive_stationary_velocity_exponential_uses_shared_steps():

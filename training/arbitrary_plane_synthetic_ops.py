@@ -213,6 +213,8 @@ def sample_multiscale_physical_velocity(
     rms_amplitudes_um: tuple[float, ...],
 ) -> np.ndarray:
     """Sample a deterministic multiscale smooth ``(u,v)`` SVF in micrometres."""
+    if not isinstance(rng, np.random.Generator):
+        raise TypeError("rng must be an explicit numpy.random.Generator")
     height, width = (int(value) for value in shape)
     scales = np.asarray(correlation_lengths_px, dtype=np.float64)
     amplitudes = np.asarray(rms_amplitudes_um, dtype=np.float64)
@@ -368,7 +370,7 @@ def fixed_source_maps(
     translation_xy: tuple[float, float] | np.ndarray,
     max_scaled_displacement_px: float = 0.5,
 ) -> dict[str, np.ndarray | int]:
-    """Construct exact synthetic point maps for a fixed atlas and source image.
+    """Construct effective numeric point maps for a fixed atlas and source image.
 
     The local SVF acts in fixed coordinates.  ``fixed_to_source_map`` is
     ``similarity o exp(v)``.  ``source_to_fixed_map`` is
