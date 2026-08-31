@@ -169,3 +169,40 @@ slice-to-volume rendering in SVoRT, joint global/deformable registration in
 SynthMorph and NICE-Trans, and efficient recurrent local-correlation updates
 in recent medical-registration work. These precedents motivate the family;
 none determines the final architecture without the matched screen.
+
+## Evidence update: preserve topology before adding recurrence
+
+The frozen oracle atlas-pair diagnostic showed that global mean/max
+correlation summaries could not reliably rank the true local plane. Setting
+source scale exactly to one did not rescue it. A subsequent parameter-matched
+pair then gave one arm fixed top--bottom, left--right and diagonal 2-by-2 Haar
+correlation contrasts; that arm reached only `13 / 48` fixed-candidate
+decisions on each of two fresh panels and did not outperform its global
+control. The defensible conclusion is narrow: these four low-order summary
+families are insufficient under the tested scorer and training protocol. It
+does not reject spatial correlation maps, learned aggregation or recurrence.
+
+The next frozen mechanism test therefore retains each correlation map until a
+small spatial CNN has processed it. Treatment receives the native map layout;
+the matched control receives a precommitted bijective spatial permutation of
+the same per-pixel correlation-and-mask vectors. Both arms have identical
+active layers, parameters and initial state, and off-centre convolution weights
+start at zero so their initial outputs are exact-equal. This isolates useful
+anatomical neighbourhood topology without the fixed-Haar control's dormant
+input columns. A recurrent state is added only if native topology first
+provides reproducible ranking evidence; otherwise the cross-modal features or
+candidate construction change before model complexity increases.
+
+This sequence is consistent with mouse-histology evidence that local features
+benefit from their global spatial arrangement in
+[GridNet](https://doi.org/10.1093/bioinformatics/btab447), multiscale local
+correlation and sequential warping in
+[Dual-PRNet](https://doi.org/10.1016/j.media.2022.102379), all-pairs
+correlation with recurrent updates in
+[RAFT](https://doi.org/10.1007/978-3-030-58536-5_24), and iterative
+slice-to-volume resampling in
+[SVoRT](https://doi.org/10.1007/978-3-031-16446-0_1). These papers motivate
+the components; none validates the exact proposed 2-D histology-to-3-D CCF
+hybrid. The project therefore continues to require matched random-init
+experiments rather than transferred weights or architectural deference to a
+previous build.

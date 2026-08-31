@@ -1,0 +1,531 @@
+schema_version: "1.0"
+status: "completed_recovered_execution_integrity_go_spatial_rescue_advancement_no_go"
+recorded_date: "2026-08-31"
+purpose: "Immutable development-only record of the paired fixed-2x2-Haar spatial-aggregation causal-rescue diagnostic; not a benchmark, product-performance claim, accuracy claim, architecture-selection result, or promotion result."
+
+decision:
+  execution_integrity: "GO"
+  uninterrupted_execution: false
+  recovery_disclosed: true
+  scientific_fixed_haar_rescue: "NOT_SUPPORTED"
+  advancement_decision: "NO-GO"
+  terminal_branch: "both-fail-insufficient-stop"
+  terminal_receipt_passed: false
+  independent_confirmation_authorized: false
+  model_selected: false
+  learned_candidate_selected: false
+  architecture_winner: null
+  benchmark_claim: false
+  accuracy_claim: false
+  performance_claim: false
+  promotion_authorized: false
+  longer_training_authorized: false
+  gate_relaxation_authorized: false
+  protected_data_access_authorized: false
+
+lineage:
+  source_commit: "a95420b3474bc106e1f6a783bdf9eb4af4879349"
+  source_commit_short: "a95420b"
+  commit_subject: "Add paired Haar spatial aggregation diagnostic"
+  branch: "codex/joint-registration"
+  source_commit_pushed_before_execution: true
+  repository_clean_and_upstream_equal_before_execution: true
+  config:
+    path: "training/configs/independent_oracle_atlas_pair_spatial_aggregation_pair_1500_r1404322.json"
+    bytes: 7487
+    file_sha256: "0ef8d32da009b4265af6c67c39b1519c1d65c0807bf285b5b9f29307475b403b"
+    contract_sha256: "93fd5d04575e10e023d46735abc7e601b1234f8b5b54ac8cb080328dd9f8d6b2"
+    family_self_sha256: "93fd5d04575e10e023d46735abc7e601b1234f8b5b54ac8cb080328dd9f8d6b2"
+    frozen: true
+  source:
+    training/independent_atlas_pair_spatial_aggregation.py:
+      bytes: 4898
+      sha256: "68bbe59a3af78f6f9e19623d1d518ad7e98e72bbf3bcdc7acb1c30db91644f74"
+    training/run_independent_atlas_pair_spatial_aggregation.py:
+      bytes: 110073
+      sha256: "063a1833e3f07b923c5030a435e24c8d9d02ba620f6bd6a3211f4a855fe3dd3b"
+    training/independent_atlas_pair_energy.py:
+      bytes: 8058
+      sha256: "6187cb051d048d1e5eec3137b9edc6ac09706cecffcf989507951708681589ec"
+    training/run_independent_atlas_pair_energy.py:
+      bytes: 67426
+      sha256: "21c73f88a48ca87ac0a44ff022993eea5dc2cfbb1f8c72237ec4b05fa4445b19"
+    training/synthetic_registration.py:
+      bytes: 42460
+      sha256: "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde"
+    training/quicknii_plane_metric.py:
+      bytes: 5320
+      sha256: "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31"
+    source/dense_registration_preprocessing.py:
+      bytes: 1725
+      sha256: "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+  tests:
+    tests/test_independent_atlas_pair_spatial_aggregation.py:
+      bytes: 12615
+      sha256: "612874371cea6880252e7dcbdd1e2aef486da0dc74100657d890f3ca759a7cbd"
+    tests/test_run_independent_atlas_pair_spatial_aggregation.py:
+      bytes: 42496
+      sha256: "39e75f0771b3166d9b8b50fa12c49ef2aaed893dccc416c16857af85664ef299"
+    relevant_result: "53 passed: 18 model, 25 runner, 10 adjacent historical atlas-pair"
+  learned_checkpoint_dependencies: []
+
+access:
+  data_role: "synthetic-CCF-train-split-development-only"
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+  protected_data_access: false
+  learned_checkpoint_dependencies: []
+  model_selection: false
+  learned_candidate_selection: false
+  promotion: false
+
+family:
+  null_class: "training.independent_atlas_pair_spatial_aggregation.AtlasPairEnergyGlobalAggregationControl"
+  treatment_class: "training.independent_atlas_pair_spatial_aggregation.AtlasPairEnergyHaar2x2SpatialAggregation"
+  initialization: "instantiate both, then strict-load the complete null state into treatment"
+  claim_scope: "causal access to fixed 2x2 Haar correlation contrasts only"
+  correlation_levels: [8, 16]
+  correlation_radius: 4
+  statistics_dimension_per_level: 405
+  shared_global_dimensions: 162
+  contrast_dimensions: 243
+  head: "LayerNorm(405)-Linear(405,25)-GELU-Linear(25,1)"
+  parameter_count_each: 271780
+  maximum_parameter_count_each: 1500000
+  candidate_pose_is_scorer_input: false
+  null_input: "global mean/max plus 243 exact-zero contrast inputs"
+  treatment_input: "global mean/max plus top-bottom, left-right and diagonal centered correlation contrasts"
+  contrast_normalization: "coefficients divided by two and normalized by global masked support"
+  odd_center_handling: "centre row/column split symmetrically 0.5/0.5"
+  caveat: "Parameter count and complete state schema match, but the null arm's 243 contrast columns are dormant, so functional input rank is intentionally unequal."
+  prohibited_scope:
+    - "not generic spatial-pooling evidence"
+    - "not equivariance evidence"
+    - "not evidence for or against all spatially preserving architectures"
+
+initialization:
+  seed: 1404322
+  full_initial_state_equal: true
+  initial_state_sha256:
+    "null": "9a005d4f0788754969a4bdcd4a26cc2cbceafd60597c680632dfadae230c372f"
+    treatment: "9a005d4f0788754969a4bdcd4a26cc2cbceafd60597c680632dfadae230c372f"
+  state_schema_sha256: "24bd6d8911b871db8784488d7bbddc9c17e435c37099c8d094cbfec63b82a144"
+  initial_statistics_integrity_sha256: "62c24808702095b4d6a1770932ac66b119dff137b1a1c2f5b68f97ec6adb4e6a"
+  first_162_exact_across_modes: true
+  null_contrasts_exact_zero: true
+  level_8:
+    null_statistics_sha256: "129a0432cb8dd8f4a525d8c291fbe4b0482e67fa9f1c41543e6255e15c8422da"
+    treatment_statistics_sha256: "399794666f4d83e043e38e18360095d4ae35c6137e86fc533ce757ceaad6c438"
+  level_16:
+    null_statistics_sha256: "ff12ec6a76653c09bdff0fb81ac664946a94ff2c02b794173cabe9ae54ec39d6"
+    treatment_statistics_sha256: "3d720dbea3b3646a19bb6abfee1a718689204b1f7886e4b901c28b08b4b70401"
+
+data_lineage:
+  data_lineage_sha256: "79029cbb385deb56b09c4ec581ec73ae84eb899ba75fdfc8ec939e85300049d5"
+  generator_contract_sha256: "5ff5a29ccc7f0c554020dfc8e7e07d2af59a662f9420422bffc9a86edcd73872"
+  train_seed: 1004322
+  train_count: 2048
+  train_manifest_sha256: "8b00606acf291bb84aec2b72e9b098e0efa1766af15588fcbdbbce9f5a319a69"
+  development_seed: 1104322
+  development_count: 48
+  development_manifest_sha256: "c77d427ce5a3e5efbc98677daf11743643446873528643c20f629ff457a3385c"
+  fresh_qualification_seeds: [1604322, 1704322]
+  qualification_count_per_seed: 48
+  consumed_or_forbidden_seeds: [1204322, 1304322, 1504322]
+  fresh_seed_audit_before_launch: true
+  qualification_generated_only_after_joint_freeze: true
+  panel_balance: "six interior AP strata times eight signed-tilt configurations"
+  animal_id_sentinel: -1
+  specimen_id_sentinel: -1
+  real_animal_ids: "not applicable; synthetic diagnostic"
+  oracle_source:
+    tensor: "moving_raw_uint8.float()/255 before source-view transform"
+    rotation_deg: 0.0
+    scale: 1.0
+    pre_downsample_resampling_count: 0
+    fixed_downsample: "bilinear-align_corners-false-160x232"
+    outline_mode: "absent"
+    source_mask: "all-zero"
+    mask_available: "all-zero"
+  truth_support:
+    full_ap_domain_um: [-4500.0, 500.0]
+    margin_um: 500.0
+    interior_ap_support_um: [-4000.0, 0.0]
+    absolute_tilt_maximum_deg: 25.0
+    outer_runtime_domain_claim: false
+  atlas:
+    root: "data/Allen Brain Atlas 25um"
+    average_template_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+    annotation_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+    query_sha256: "5347daf90e02ac1d1cfcbf9c8af86ff23a2fb32cd7e7a2ba2881951931286dbd"
+  raw_pair_identity:
+    - panel_role
+    - panel_seed
+    - panel_manifest_sha256
+    - sample_index
+    - synthetic_realization_id
+    - realization_manifest_sha256
+    - moving_raw_uint8_sha256
+    - source_160x232_sha256
+    - latent_pose_id
+    - candidate_table_sha256
+    - pair_key_sha256
+  retained_raw_outputs: "Both qualification files retain all normal/broken energy, energy8 and energy16 arrays plus both arms' source-keyed free-search predictions, errors, timings, candidate counts and stage receipts."
+
+protocol:
+  training:
+    optimizer: "AdamW"
+    learning_rate: 0.0002
+    weight_decay: 0.0001
+    batch_size: 2
+    maximum_paired_updates: 1500
+    source_presentations_per_arm: 3000
+    amp_enabled: true
+    amp_scale: 512.0
+    gradient_clip_norm: 5.0
+    clipping_fraction_gate: false
+    resume_every_updates: 25
+    development_updates: [500, 1000, 1500]
+    candidate_count: 16
+    candidate_chunk_size: 8
+    loss: "ranking+0.25*two-scale-ranking+0.25*posterior-point"
+    step_barrier: "both arms forward/backward, unscaled, finite-checked and clipped before either optimizer step"
+    persistence_unit: "completed paired update only"
+    early_stopping: false
+    budget_extension: false
+  search:
+    coarse_shape: [9, 5, 5]
+    top_k: 3
+    refinement_rounds: 3
+    neighborhood_shape: [3, 3, 3]
+    maximum_candidate_evaluations_per_slice: 468
+    continuous_refinement: false
+  evaluation:
+    development: "paired fixed candidates only"
+    qualification: "all 48 fixed cases and free search for both arms on each frozen seed"
+    pooled_96_role: "descriptive only; cannot rescue a failed seed"
+    cross_arm_energy_delta_gate: false
+
+prespecified_gates:
+  nonfinite_count_maximum: 0
+  invalid_render_count_maximum: 0
+  truth_in_set_correct_minimum_per_48: 46
+  ap_mae_um_maximum: 250.0
+  lr_mae_deg_maximum: 3.0
+  dv_mae_deg_maximum: 3.0
+  physical_improvement_minimum: 0.50
+  broken_pair_correct_maximum_per_48: 12
+  order_energy_atol: 1.0e-06
+  order_energy_rtol: 1.0e-06
+  ten_slice_p95_seconds_maximum: 180.0
+  causal:
+    paired_rows_exact: 48
+    treatment_truth_in_set_minimum: 46
+    null_truth_in_set_maximum: 45
+    net_corrections_minimum: 8
+    exact_two_sided_mcnemar_p_maximum: 0.01
+
+execution:
+  applied_paired_updates: 1500
+  optimizer_steps_consecutive: true
+  arm_presentations: 3000
+  training_history_sha256: "7d94f09e0adb9fcc11a6b30605cbf3154085253bc64596374380d60fa4494f17"
+  training_integrity_sha256: "5c45d6f2a53bf683a2963d54a68f62f2db021a406e2447dabdffea7b2435a0db"
+  training_integrity_passed: true
+  amp_scale_before_after_unique: [[512.0, 512.0]]
+  finite_forward_all_updates: true
+  finite_unscaled_gradients_all_updates: true
+  paired_barrier_all_updates: true
+  paired_input_identity_all_updates: true
+  clipped_updates:
+    "null": 1463
+    treatment: 1449
+  unique_training_indices:
+    update_0500: 1000
+    update_1000: 2000
+    update_1500: 2048
+  total_loss_window_mean:
+    "null":
+      updates_0001_0025: 3.467669515609741
+      updates_0476_0500: 2.4937970542907717
+      updates_0976_1000: 2.0143720471858977
+      updates_1476_1500: 2.05368705034256
+    treatment:
+      updates_0001_0025: 3.468427562713623
+      updates_0476_0500: 2.423686327934265
+      updates_0976_1000: 2.1281424307823182
+      updates_1476_1500: 1.9588512015342712
+  final_and_resume_exact_equal: true
+  final_model_state_sha256:
+    "null": "fea04801afba798caaa5b26aedb00828a996fc3eea1159e567b26f0732771a04"
+    treatment: "7bef70bddd685000bab0182f4110c8bd914f8cc34a89ec37f3d71cc7bc68dca7"
+
+development_results:
+  authoritative_role: "consumed development trajectory; not a performance claim"
+  common_integrity: "48 paired rows and unique keys, paired input identity, zero non-finites, zero invalid renders, and complete raw identities at every update"
+  update_0500:
+    correct:
+      "null": {normal: 11, broken_atlas: 0, broken_source: 1}
+      treatment: {normal: 9, broken_atlas: 3, broken_source: 1}
+    order_maximum_energy_difference: {"null": 9.5367431640625e-07, treatment: 4.76837158203125e-07}
+    net_corrections: -2
+    exact_two_sided_mcnemar_p: 0.6875
+    passed: false
+    file_sha256: "0dc9bfbd04d50b95a450a4916a67b452eedc36f0c2063edc9d795b3153bc6b8d"
+    payload_sha256: "e1a825e541f01855e564ab8a235cfb97fb39992cb6f0a39d61473a95cba7a472"
+    result_sha256: "d7efe30f77dba3b34e1680e8823a4071e274a0d179394b214bce9cc99d19a496"
+    status_sha256: "8265f95db94bbf208ad3f91d40e24fa842d3199e2a79453282bce8679297c4ae"
+  update_1000:
+    correct:
+      "null": {normal: 11, broken_atlas: 1, broken_source: 1}
+      treatment: {normal: 11, broken_atlas: 2, broken_source: 1}
+    order_maximum_energy_difference: {"null": 1.9073486328125e-06, treatment: 9.5367431640625e-07}
+    net_corrections: 0
+    exact_two_sided_mcnemar_p: 1.0
+    passed: false
+    file_sha256: "7981250f5b901bba2951d68bb7ee7685f4d94a753d031f77b6e4afe8a852cac8"
+    payload_sha256: "14b07d843b9e7ce0ea02a7a14fb998a50363b2b028ae505a491819aa3a64c465"
+    result_sha256: "ba296731da81c9f50db057bf6efff60053946a6a2581bbeac6992c7bcb36ce7d"
+    status_sha256: "13675100b61c03fa6229ad3fa3e69f442637ecf455bd3fa3920aacf9036f91ba"
+  update_1500:
+    correct:
+      "null": {normal: 13, broken_atlas: 3, broken_source: 0}
+      treatment: {normal: 11, broken_atlas: 3, broken_source: 0}
+    order_maximum_energy_difference: {"null": 2.86102294921875e-06, treatment: 1.1920928955078125e-06}
+    net_corrections: -2
+    exact_two_sided_mcnemar_p: 0.625
+    passed: false
+    file_sha256: "6f36dd027b57f2eed0104173526529eb9af6c67889638fc6071d2455f9216b64"
+    payload_sha256: "1cea38f02b5e6d7e3ba004760a5c207b4f1ad7f200136c72e3aeb6089b3a4258"
+    result_sha256: "0ca4c9b35f8d18973df3c6f7f83cdea914e81f4b44dd9e6d672e319725ec5d17"
+    status_sha256: "64059d4ecbd1f88dde79e3200a0ef907acd17b25f81a4990940de3abf4760ab8"
+
+qualification_results:
+  authoritative_role: "untouched synthetic qualification of this fixed-Haar premise only; not a benchmark or product-performance claim"
+  seed_1604322:
+    lineage:
+      panel_manifest_sha256: "775b973551ba2951ec4c4ecfb8abcca334ad49ff25508c4faf0765dd5e746ba2"
+      manifest_file_sha256: "c9d15fe6cb3857c44d6e44d52777fc5d73f1abe4dd3f6c06c6e4ab2ab4c04da7"
+      manifest_payload_sha256: "9aaeda873d44ec87d8333aeb389318a98c5d90d379ad029ee7ddd6f5becec51b"
+      result_file_sha256: "e12b03efe3bcd975fb6892de43142862359c26bbb656b466d6147bfe88dd5f23"
+      result_payload_sha256: "d9b20e947c88e3e11a8dcbce3943ce17b48e261a0cda2257a8bafdd0aa18622f"
+      result_sha256: "176c096bcfc537b348ec60d7ca2d6a51a6a57597b4937465e07b89a987368213"
+    fixed:
+      correct:
+        "null": {normal: 13, broken_atlas: 3, broken_source: 0}
+        treatment: {normal: 13, broken_atlas: 2, broken_source: 0}
+      order_maximum_energy_difference: {"null": 1.9073486328125e-06, treatment: 9.5367431640625e-07}
+      decoded_pose_maximum_difference: {"null": 0.0, treatment: 0.0}
+      energies_allclose: {"null": true, treatment: true}
+      top1_unchanged: {"null": true, treatment: true}
+      null_wrong_treatment_correct: 5
+      null_correct_treatment_wrong: 5
+      net_corrections: 0
+      discordant_count: 10
+      exact_two_sided_mcnemar_p: 1.0
+    free_search:
+      "null":
+        mae: {ap_um: 116.796875, lr_deg: 1.5963542461395264, dv_deg: 2.2213542461395264}
+        physical_error_um: 162.9175066170019
+        constant_prior_physical_error_um: 1180.253473868712
+        physical_improvement: 0.861963967720442
+        ten_slice_p95_seconds: 10.501964050694369
+        candidate_evaluations: {minimum: 372, maximum: 452, total: 20126}
+      treatment:
+        mae: {ap_um: 237.1744842529297, lr_deg: 2.9635417461395264, dv_deg: 3.2552084922790527}
+        physical_error_um: 266.7706262276855
+        constant_prior_physical_error_um: 1180.253473868712
+        physical_improvement: 0.7739717508703895
+        ten_slice_p95_seconds: 12.212959149037488
+        candidate_evaluations: {minimum: 405, maximum: 458, total: 20568}
+    checks:
+      integrity: true
+      treatment_truth_in_set: false
+      treatment_ap_mae: true
+      treatment_lr_mae: true
+      treatment_dv_mae: false
+      treatment_physical_improvement: true
+      treatment_runtime: true
+      treatment_order: true
+      null_truth_below_46: true
+      null_order: false
+      net_corrections: false
+      mcnemar: false
+    interpretation_branch: "both-fail-insufficient-stop"
+    passed: false
+    status_sha256: "e5b0b8c7471a8f50966c44d3bb229be38135f9a80e643263fce4b74f8ab739e8"
+  seed_1704322:
+    lineage:
+      panel_manifest_sha256: "91ff88e72f4ad746ee00a087255bd638de97f9dc9d339651013bad07687cc915"
+      manifest_file_sha256: "f2d18bd1ed6d28fa1021e2a5b72f09dfdea19cd8048d2da9f0d968d05b841394"
+      manifest_payload_sha256: "1ceed11c9fe6e277fd5b93785bed99d1f03881d28d080e1d107612ee7f5bd454"
+      result_file_sha256: "7f6a6f787f57abfd8eb5512e6267b3422ae1bac92aedd73f1d7e884f2b3c6111"
+      result_payload_sha256: "f6bc4b25f2d63a0d436c280a86d647b1b2ecea3a8c4d5b86e4ba59bca2f897c7"
+      result_sha256: "044ab67fc0510e117d4685d259b30f6b5bae4400fd124ba277836b6555605e73"
+    fixed:
+      correct:
+        "null": {normal: 14, broken_atlas: 2, broken_source: 0}
+        treatment: {normal: 13, broken_atlas: 1, broken_source: 0}
+      order_maximum_energy_difference: {"null": 2.86102294921875e-06, treatment: 9.5367431640625e-07}
+      decoded_pose_maximum_difference: {"null": 0.0, treatment: 0.0}
+      energies_allclose: {"null": true, treatment: true}
+      top1_unchanged: {"null": true, treatment: true}
+      null_wrong_treatment_correct: 4
+      null_correct_treatment_wrong: 5
+      net_corrections: -1
+      discordant_count: 9
+      exact_two_sided_mcnemar_p: 1.0
+    free_search:
+      "null":
+        mae: {ap_um: 144.66146850585938, lr_deg: 1.7890625, dv_deg: 2.4348959922790527}
+        physical_error_um: 188.29008671926044
+        constant_prior_physical_error_um: 991.9592504834947
+        physical_improvement: 0.8101836475364435
+        ten_slice_p95_seconds: 10.589931251015514
+        candidate_evaluations: {minimum: 335, maximum: 455, total: 20286}
+      treatment:
+        mae: {ap_um: 158.72396850585938, lr_deg: 1.9661458730697632, dv_deg: 2.6940104961395264}
+        physical_error_um: 189.56498718616754
+        constant_prior_physical_error_um: 991.9592504834947
+        physical_improvement: 0.8088984128191042
+        ten_slice_p95_seconds: 12.219933100161143
+        candidate_evaluations: {minimum: 399, maximum: 453, total: 20619}
+    checks:
+      integrity: true
+      treatment_truth_in_set: false
+      treatment_ap_mae: true
+      treatment_lr_mae: true
+      treatment_dv_mae: true
+      treatment_physical_improvement: true
+      treatment_runtime: true
+      treatment_order: true
+      null_truth_below_46: true
+      null_order: false
+      net_corrections: false
+      mcnemar: false
+    interpretation_branch: "both-fail-insufficient-stop"
+    passed: false
+    status_sha256: "cf3baa95698b438d65b8c9a4cc54079d2a56526aef7864060df9e0de7ed8f484"
+  all_free_search_nonfinite_and_invalid_counts_zero: true
+  family_status:
+    integrity_passed: true
+    passed: false
+    per_seed_pass: {"1604322": false, "1704322": false}
+    paired_qualification_rows: 96
+    paired_free_search_rows: 96
+    unique_family_pair_keys: 96
+    pooled_96_is_descriptive_only: true
+    interpretation_branch: "both-fail-insufficient-stop"
+    independent_confirmation_authorized: false
+    protected_data_access_authorized: false
+    promotion_authorized: false
+    family_status_sha256: "4cad0e9ebdcf2078f3e2ce3310263aa765d990b847e564b4672a4d07464701eb"
+
+recovery_incident:
+  classification: "audit-induced Windows atomic-rename interruption with validated transparent artifact promotion"
+  model_failure: false
+  uninterrupted_execution_claim: false
+  original_session:
+    exec_session_id: 57575
+    reached_update: 1500
+    immutable_development_1500_written: true
+    failing_operation: "_atomic_torch os.replace(joint_resume_state.pt.tmp, joint_resume_state.pt)"
+    exception: "PermissionError [WinError 5]"
+    likely_cause: "Concurrent read-only torch.load audit of the canonical resume checkpoint held a transient Windows file lock."
+    qualification_had_begun: false
+  pre_recovery_canonical:
+    update: 1475
+    bytes: 10089119
+    sha256: "aeef3df96a2498e96eba81e0b8d70777d6c4bdf8efb74f43f14410cd6eab92f8"
+    training_history_sha256: "e42bc227401219a6813f3df1648a23f38112790e55103db265a53341ed5c2d4b"
+  completed_original_tmp:
+    update: 1500
+    bytes: 10492236
+    sha256: "0b0dcc59d82f9ca472326703d25c02e9e1719330668f4a3851ed820f9886c359"
+  discarded_recomputation:
+    exec_session_id: 67492
+    action: "Loaded update 1475 and recomputed updates 1476-1500."
+    outcome: "Immutable-development guard rejected a CUDA receipt-level difference before any new resume save."
+    artifacts_adopted: false
+    original_tmp_overwritten: false
+  tmp_validation:
+    read_only: true
+    committed_functions_used: [inspect_config, _device, initialize_pair, _optimizers_and_scalers, _load_joint_resume, _training_integrity]
+    update_and_history_1500: true
+    development_updates_exact_to_immutable_json: true
+    development_payload_and_status_hashes_recomputed: true
+    both_model_hashes_valid: true
+    optimizer_scaler_rng_and_development_commitments_valid: true
+    amp_scales_512: true
+    training_integrity_all_checks_passed: true
+  promotion:
+    absolute_path_containment_and_preconditions_checked: true
+    canonical_1475_moved_to: "joint_resume_state.interrupted_update_1475.pt"
+    validated_tmp_moved_to: "joint_resume_state.pt"
+    promoted_hash_unchanged: true
+    backup_hash_unchanged: true
+    residual_tmp_count: 0
+  final_session:
+    exec_session_id: 43846
+    loaded_update: 1500
+    additional_training_updates: 0
+    created_final_trajectory_and_freeze_before_qualification: true
+    qualification_seed_order: [1604322, 1704322]
+    exit_code: 0
+  limitation: "The validated bytes and commitment chain preserve scientific content, but filesystem evidence is not a digital signature and this must not be represented as the runner's own uninterrupted atomic publication."
+
+storage:
+  run_root: 'F:\AtlasJointTraining\runs\independent-oracle-atlas-pair-spatial-aggregation-pair-1500-r1404322-v1'
+  file_count: 16
+  residual_tmp_count: 0
+  stdout_stderr_files_persisted: false
+  artifacts:
+    setup_receipt: {bytes: 7045, sha256: "b3b9c6a0ac451b4278f92444ff825aee35b2ff8851718973b9b088d34eb077f8", payload_sha256: "b77a401245ae953ba57493e2b504a21b2e467a5789cf19a423a283f799535c1f"}
+    training_manifest: {bytes: 2720431, sha256: "c1e8399363d1c6c8450c8dd689e8abf419b58a8ca0d9bb9b50c1b59f0efd1db4", payload_sha256: "c43b902d9504bb5e8935870441fa4d7d5cf831b9e75659d4c90b574a18e5b57c"}
+    development_manifest: {bytes: 65168, sha256: "0be2d398bde52088aeda4fec8ea16083b4dcd9cb743081d9e8f759bad1c37372", payload_sha256: "2493239393347671a2000beba887143a3eb5306e81487c51227e7979566a9505"}
+    development_0500: {bytes: 458846, sha256: "0dc9bfbd04d50b95a450a4916a67b452eedc36f0c2063edc9d795b3153bc6b8d"}
+    development_1000: {bytes: 458579, sha256: "7981250f5b901bba2951d68bb7ee7685f4d94a753d031f77b6e4afe8a852cac8"}
+    development_1500: {bytes: 459162, sha256: "6f36dd027b57f2eed0104173526529eb9af6c67889638fc6071d2455f9216b64"}
+    interrupted_update_1475: {bytes: 10089119, sha256: "aeef3df96a2498e96eba81e0b8d70777d6c4bdf8efb74f43f14410cd6eab92f8"}
+    resume_state: {bytes: 10492236, sha256: "0b0dcc59d82f9ca472326703d25c02e9e1719330668f4a3851ed820f9886c359"}
+    final_checkpoint: {bytes: 6006998, sha256: "30f1c32ba82706e8226f8ec4f2b8685b2377ac054e827311988f27aa0c87c8a7"}
+    training_trajectory: {bytes: 4895390, sha256: "bd881aa9bb996374726d697867a421c5a76608a62d44f143cba354500ccd29e4", payload_sha256: "ab2146ff9ea7f5abcac2ed172861343b8848e7f1fc0b897f7c4cd852542c9652"}
+    qualification_freeze: {bytes: 2846, sha256: "708232973fabb6259e2fd4cc6e3836668d894e3bcc038073374e46ad92c3c386", payload_sha256: "a73e484a756b482b298e70a04a128f916b010d2e3a0f2408a057984f97ec9f12"}
+    qualification_manifest_1604322: {bytes: 65749, sha256: "c9d15fe6cb3857c44d6e44d52777fc5d73f1abe4dd3f6c06c6e4ab2ab4c04da7", payload_sha256: "9aaeda873d44ec87d8333aeb389318a98c5d90d379ad029ee7ddd6f5becec51b"}
+    qualification_1604322: {bytes: 7711016, sha256: "e12b03efe3bcd975fb6892de43142862359c26bbb656b466d6147bfe88dd5f23", payload_sha256: "d9b20e947c88e3e11a8dcbce3943ce17b48e261a0cda2257a8bafdd0aa18622f", result_sha256: "176c096bcfc537b348ec60d7ca2d6a51a6a57597b4937465e07b89a987368213"}
+    qualification_manifest_1704322: {bytes: 65625, sha256: "f2d18bd1ed6d28fa1021e2a5b72f09dfdea19cd8048d2da9f0d968d05b841394", payload_sha256: "1ceed11c9fe6e277fd5b93785bed99d1f03881d28d080e1d107612ee7f5bd454"}
+    qualification_1704322: {bytes: 7760370, sha256: "7f6a6f787f57abfd8eb5512e6267b3422ae1bac92aedd73f1d7e884f2b3c6111", payload_sha256: "f6bc4b25f2d63a0d436c280a86d647b1b2ecea3a8c4d5b86e4ba59bca2f897c7", result_sha256: "044ab67fc0510e117d4685d259b30f6b5bae4400fd124ba277836b6555605e73"}
+    diagnostic_receipt: {bytes: 15480929, sha256: "d9ac868ad63cab0dcd4e1c7287dac70b2f9b98f8e586f0390f273e3f4e9deee3", receipt_sha256: "7335e98fed5c25f6490706757a12454ad0429cd1984b7014b6c2867b4719837b"}
+
+integrity_audit:
+  existing_receipt_validator_passed: true
+  execution_integrity: "GO"
+  p0_findings: 0
+  p1_findings: 0
+  source_and_config_hashes_recomputed: true
+  all_artifact_file_hashes_recomputed: true
+  final_and_resume_states_exact_equal: true
+  post_freeze_qualification_binding_verified: true
+  raw_qualification_pair_keys_complete: true
+  paired_fixed_inputs_exact: true
+  paired_free_search_sources_exact: true
+  qualification_source_tensors_regenerated: 96
+  regenerated_source_hash_manifest_and_truth_matches: 96
+  no_selective_missing_free_search: true
+  fresh_seed_prelaunch_audit_passed: true
+  original_immutable_development_json_rewritten: false
+  recovery_pathname_mutation_disclosed: true
+  forensic_update_1475_excluded_from_canonical_bundle: true
+  p2_notes:
+    - "The two optimizer steps occur sequentially in memory without rollback, although only completed paired updates can persist."
+    - "Interim same-file hashes are integrity commitments, not adversarial signatures; final file hashes bind frozen artifacts."
+    - "Atomic os.replace lacks fsync-level sudden-power-loss durability and, on Windows, was vulnerable to the disclosed audit-reader lock."
+
+interpretation:
+  - "The run is a valid, hash-bound negative diagnostic after disclosed recovery; training, numerical, pairing, raw-output, freeze and receipt integrity pass."
+  - "The treatment missed the 46-of-48 fixed-ranking gate by a wide margin on development and both fresh qualification seeds; causal corrections and McNemar gates also failed on both seeds."
+  - "Passing physical-improvement and runtime gates does not override failed local ranking, the seed-1604322 D-V failure, or the null-control order warning."
+  - "The result rejects advancement of these fixed 2x2 Haar summaries only. It does not reject learned topology-preserving correlation processing, recurrence, equivariance, attention or deformation."
+  - "The oracle pre-source-view, clean-synthetic and interior-truth scope prevents interpreting this as outer-domain, real-histology, benchmark or product-performance evidence."
+  - "A subsequent experiment requires a new frozen contract and fresh development/qualification seeds; this family does not authorize reuse, extension, promotion or protected-data access."

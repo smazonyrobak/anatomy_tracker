@@ -859,3 +859,72 @@ paths and SHA-256 values, plus the independently recomputed paired statistics
 and access audit, are recorded in
 `publication/atlas_pair_source_scale_ablation_diagnostic.yaml`; the original
 run artifacts were not rewritten.
+
+### Paired fixed-Haar spatial-aggregation causal diagnostic
+
+The paired diagnostic ran from pushed commit
+`a95420b3474bc106e1f6a783bdf9eb4af4879349` under frozen contract
+`93fd5d04575e10e023d46735abc7e601b1234f8b5b54ac8cb080328dd9f8d6b2`.
+It compared two independently trained, random-initialized 271,780-parameter
+atlas-pair scorers. Both used the same 162 global mean/max correlation
+statistics. The treatment additionally received 243 fixed top--bottom,
+left--right and diagonal 2-by-2 Haar contrasts, while those inputs were exact
+zero in the parameter-matched null arm. Complete initial states were
+bit-identical. This tests only causal access to these fixed contrasts, not
+spatial architectures generally. The null arm's dormant contrast columns also
+create the prespecified functional-input-rank mismatch.
+
+Training used only clean synthetic CCF train-split data, the oracle
+pre-source-view image downsampled once to 160 by 232, and absent/all-zero
+outline inputs. Product-5, calibration, final-test and protected-data access
+were false, and learned-checkpoint dependencies were empty. All 1,500 paired
+updates and 3,000 source presentations per arm are present; AMP remained at
+512, paired-input and step-barrier checks passed throughout, and the final and
+resume model states are exact-equal.
+
+The original execution reached update 1,500 and wrote the immutable terminal
+development result, but a concurrent read-only audit caused a transient
+Windows file lock and `os.replace` failed while publishing the already-written
+resume-state temporary file. Qualification had not begun. The valid update
+1,475 checkpoint was retained. A replay of updates 1,476--1,500 was rejected
+by the immutable-development guard because its CUDA receipt differed and none
+of that replay was adopted. The original update-1,500 temporary state then
+passed the committed resume, model, optimizer, scaler, RNG, development and
+training-integrity validators before transparent promotion; its SHA-256
+remained
+`0b0dcc59d82f9ca472326703d25c02e9e1719330668f4a3851ed820f9886c359`.
+A final runner loaded it without further training, froze both models, generated
+only fresh seeds `1604322` and `1704322`, wrote the complete receipt, and
+exited zero. Execution integrity is therefore `GO`, with recovery disclosed;
+this is not an uninterrupted-execution claim.
+
+Development treatment truth-in-set top-1 was `9 / 48`, `11 / 48` and
+`11 / 48` at updates 500, 1,000 and 1,500, against the frozen `46 / 48`
+minimum. The paired treatment never exceeded the null arm at these boundaries.
+
+| Qualification seed | Fixed top-1 null / treatment | Net corrections / exact McNemar p | Treatment AP / L--R / D--V MAE | Treatment physical error / improvement | Ten-slice p95 null / treatment |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1604322 | 13 / 48 / 13 / 48 | 0 / 1.0 | 237.1745 um / 2.9635 deg / 3.2552 deg | 266.7706 um / 0.773972 | 10.5020 s / 12.2130 s |
+| 1704322 | 14 / 48 / 13 / 48 | -1 / 1.0 | 158.7240 um / 1.9661 deg / 2.6940 deg | 189.5650 um / 0.808898 | 10.5899 s / 12.2199 s |
+
+The treatment failed the central fixed-ranking and both paired causal gates by
+a wide margin. Seed `1604322` additionally failed the treatment D--V gate.
+Physical improvement and runtime passed on both seeds. The null arm had lower
+descriptive free-search errors, but its strict absolute order-difference check
+failed on both panels (`1.907e-6` and `2.861e-6` versus `1e-6`), despite
+allclose energies, unchanged top-1 and zero decoded-pose difference. That
+control warning further precludes a positive causal conclusion; it does not
+explain away the treatment's `13 / 48` fixed-ranking results.
+
+Both seed branches and the family branch are
+`both-fail-insufficient-stop`. Fixed 2-by-2 Haar contrasts did not rescue local
+ranking, no independent confirmation is authorized, and no architecture is
+selected. This is a hash-bound negative development diagnostic, not a
+benchmark, real-histology result, product-performance or accuracy claim, or
+evidence against learned topology-preserving, recurrent, equivariant,
+attention-based or deformation architectures generally.
+
+Exact source, config, model, training, development, recovery, freeze,
+qualification, raw prediction, receipt and artifact hashes are recorded in
+`publication/atlas_pair_spatial_aggregation_diagnostic.yaml`. The preserved
+update-1,475 checkpoint and the recovery-path mutation are part of that record.
