@@ -56,7 +56,7 @@ def _atlas():
     return template, annotation, support
 
 
-def _parent(seed=1, output_shape=(48, 64)):
+def _parent(seed=1, output_shape=(48, 64), generator_source_commit=None):
     template, annotation, support = _atlas()
     parent = make_finite_arbitrary_plane_render(
         template,
@@ -72,6 +72,7 @@ def _parent(seed=1, output_shape=(48, 64)):
         template_decoder="fixture",
         annotation_decoder="fixture",
         minimum_brain_pixels=64,
+        generator_source_commit=generator_source_commit,
     )
     return parent, template, annotation, support
 
@@ -283,6 +284,97 @@ def test_prepared_annotation_is_hashed_once_across_generation_verification_and_r
     assert first["generator"]["resolved_config"]["prepared_annotation_context_sha256"] == context[
         "prepared_context_sha256"
     ]
+
+
+def test_prepared_candidate_entrypoints_bind_finite_parent_source_commit():
+    source_commit, wrong_commit = "a" * 40, "b" * 40
+    parent, _, annotation, support = _parent(generator_source_commit=source_commit)
+    context = prepare_arbitrary_plane_finite_candidate_context(annotation, support)
+    with pytest.raises(ValueError, match="source commit does not match"):
+        make_arbitrary_plane_finite_candidate_bank_from_context(
+            parent,
+            context,
+            support,
+            finite_parent_generator_source_commit=wrong_commit,
+        )
+    bank = make_arbitrary_plane_finite_candidate_bank_from_context(
+        parent,
+        context,
+        support,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    verify_arbitrary_plane_finite_candidate_bank_from_context(
+        bank,
+        parent,
+        context,
+        support,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    replayed = replay_arbitrary_plane_finite_candidate_bank_from_context(
+        bank,
+        parent,
+        context,
+        support,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    assert replayed["finite_candidate_bank_id"] == bank["finite_candidate_bank_id"]
+    for operation in (
+        verify_arbitrary_plane_finite_candidate_bank_from_context,
+        replay_arbitrary_plane_finite_candidate_bank_from_context,
+    ):
+        with pytest.raises(ValueError, match="source commit does not match"):
+            operation(
+                bank,
+                parent,
+                context,
+                support,
+                finite_parent_generator_source_commit=wrong_commit,
+            )
+
+
+def test_noncontext_candidate_entrypoints_bind_finite_parent_source_commit():
+    source_commit, wrong_commit = "a" * 40, "b" * 40
+    parent, _, annotation, support = _parent(generator_source_commit=source_commit)
+    with pytest.raises(ValueError, match="source commit does not match"):
+        make_arbitrary_plane_finite_candidate_bank(
+            parent,
+            annotation,
+            support,
+            finite_parent_generator_source_commit=wrong_commit,
+        )
+    bank = make_arbitrary_plane_finite_candidate_bank(
+        parent,
+        annotation,
+        support,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    verify_arbitrary_plane_finite_candidate_bank(
+        bank,
+        parent,
+        annotation,
+        support,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    replayed = replay_arbitrary_plane_finite_candidate_bank(
+        bank,
+        parent,
+        annotation,
+        support,
+        finite_parent_generator_source_commit=source_commit,
+    )
+    assert replayed["finite_candidate_bank_id"] == bank["finite_candidate_bank_id"]
+    for operation in (
+        verify_arbitrary_plane_finite_candidate_bank,
+        replay_arbitrary_plane_finite_candidate_bank,
+    ):
+        with pytest.raises(ValueError, match="source commit does not match"):
+            operation(
+                bank,
+                parent,
+                annotation,
+                support,
+                finite_parent_generator_source_commit=wrong_commit,
+            )
 
 
 def test_prepared_annotation_context_rejects_mutation_and_forgery():

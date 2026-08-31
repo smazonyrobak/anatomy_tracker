@@ -771,8 +771,14 @@ def _generate_bank(
     support_index: dict[str, object],
     candidate_root_seed: int,
     shuffle_root_seed: int,
+    *,
+    finite_parent_generator_source_commit: str | None,
 ) -> dict[str, object]:
-    verify_finite_arbitrary_plane_render(finite_parent, support_index)
+    verify_finite_arbitrary_plane_render(
+        finite_parent,
+        support_index,
+        generator_source_commit=finite_parent_generator_source_commit,
+    )
     annotation = np.asarray(annotation_ap_dv_ml)
     if annotation.shape != tuple(support_index["annotation_shape"]) or not np.issubdtype(
         annotation.dtype, np.integer
@@ -1072,6 +1078,7 @@ def make_arbitrary_plane_finite_candidate_bank_from_context(
     *,
     candidate_root_seed: int | str = DEFAULT_CANDIDATE_ROOT_SEED,
     shuffle_root_seed: int | str = DEFAULT_SHUFFLE_ROOT_SEED,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> dict[str, object]:
     """Create one bank without re-hashing or expanding the prepared atlas."""
     annotation, annotation_sha256, context_sha256 = _validate_prepared_annotation_context(
@@ -1085,6 +1092,7 @@ def make_arbitrary_plane_finite_candidate_bank_from_context(
         support_index,
         _uint64(candidate_root_seed),
         _uint64(shuffle_root_seed),
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
     )
 
 
@@ -1095,6 +1103,7 @@ def make_arbitrary_plane_finite_candidate_bank(
     *,
     candidate_root_seed: int | str = DEFAULT_CANDIDATE_ROOT_SEED,
     shuffle_root_seed: int | str = DEFAULT_SHUFFLE_ROOT_SEED,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> dict[str, object]:
     """One-shot wrapper; repeated runs should prepare one context explicitly."""
     context = prepare_arbitrary_plane_finite_candidate_context(annotation_ap_dv_ml, support_index)
@@ -1104,6 +1113,7 @@ def make_arbitrary_plane_finite_candidate_bank(
         support_index,
         candidate_root_seed=candidate_root_seed,
         shuffle_root_seed=shuffle_root_seed,
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
     )
 
 
@@ -1136,6 +1146,8 @@ def _verified_replay_from_context(
     finite_parent: dict[str, object],
     prepared_context: MappingProxyType,
     support_index: dict[str, object],
+    *,
+    finite_parent_generator_source_commit: str | None,
 ) -> dict[str, object]:
     required = {
         "schema_version",
@@ -1161,6 +1173,7 @@ def _verified_replay_from_context(
         support_index,
         _uint64(config["candidate_root_seed"]),
         _uint64(config["shuffle_root_seed"]),
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
     )
     if finite_candidate_bank_receipt(artifact) != finite_candidate_bank_receipt(replayed):
         raise ValueError("Finite candidate receipt or hash-bound metadata does not replay exactly")
@@ -1191,9 +1204,17 @@ def verify_arbitrary_plane_finite_candidate_bank_from_context(
     finite_parent: dict[str, object],
     prepared_context: MappingProxyType,
     support_index: dict[str, object],
+    *,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> None:
     """Verify a bank without re-hashing the decoded atlas annotation."""
-    _verified_replay_from_context(artifact, finite_parent, prepared_context, support_index)
+    _verified_replay_from_context(
+        artifact,
+        finite_parent,
+        prepared_context,
+        support_index,
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+    )
 
 
 def replay_arbitrary_plane_finite_candidate_bank_from_context(
@@ -1201,9 +1222,17 @@ def replay_arbitrary_plane_finite_candidate_bank_from_context(
     finite_parent: dict[str, object],
     prepared_context: MappingProxyType,
     support_index: dict[str, object],
+    *,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> dict[str, object]:
     """Replay a bank without re-hashing or batch-expanding the atlas."""
-    return _verified_replay_from_context(artifact, finite_parent, prepared_context, support_index)
+    return _verified_replay_from_context(
+        artifact,
+        finite_parent,
+        prepared_context,
+        support_index,
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+    )
 
 
 def verify_arbitrary_plane_finite_candidate_bank(
@@ -1211,10 +1240,18 @@ def verify_arbitrary_plane_finite_candidate_bank(
     finite_parent: dict[str, object],
     annotation_ap_dv_ml: np.ndarray,
     support_index: dict[str, object],
+    *,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> None:
     """Verify identities, exact truth reuse, and deterministic candidate replay."""
     context = prepare_arbitrary_plane_finite_candidate_context(annotation_ap_dv_ml, support_index)
-    _verified_replay_from_context(artifact, finite_parent, context, support_index)
+    _verified_replay_from_context(
+        artifact,
+        finite_parent,
+        context,
+        support_index,
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+    )
 
 
 def replay_arbitrary_plane_finite_candidate_bank(
@@ -1222,7 +1259,15 @@ def replay_arbitrary_plane_finite_candidate_bank(
     finite_parent: dict[str, object],
     annotation_ap_dv_ml: np.ndarray,
     support_index: dict[str, object],
+    *,
+    finite_parent_generator_source_commit: str | None = None,
 ) -> dict[str, object]:
     """Return the exact regenerated bank after first verifying the supplied artifact."""
     context = prepare_arbitrary_plane_finite_candidate_context(annotation_ap_dv_ml, support_index)
-    return _verified_replay_from_context(artifact, finite_parent, context, support_index)
+    return _verified_replay_from_context(
+        artifact,
+        finite_parent,
+        context,
+        support_index,
+        finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+    )

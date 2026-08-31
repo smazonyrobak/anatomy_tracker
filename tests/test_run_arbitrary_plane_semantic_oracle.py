@@ -183,6 +183,36 @@ def test_orientation_assignment_and_single_shuffled_cycle_cover_all_frozen_cases
     assert all(shuffled_target_index(first) == second for first, second in zip(cycle, cycle[1:] + cycle[:1]))
 
 
+def test_case_builder_forwards_frozen_commit_to_parent_and_candidate_verification(monkeypatch):
+    source_commit = "a" * 40
+    seen = {}
+
+    def finite_parent(*args, generator_source_commit, **kwargs):
+        seen["finite_parent"] = generator_source_commit
+        return {"geometry": {"normal_rp2_ap_dv_ml": [1.0, 0.0, 0.0]}}
+
+    def candidate_bank(
+        parent,
+        candidate_context,
+        support_index,
+        *,
+        finite_parent_generator_source_commit,
+    ):
+        seen["candidate_bank"] = finite_parent_generator_source_commit
+        raise RuntimeError("commit-forwarded")
+
+    monkeypatch.setattr(runner, "make_finite_arbitrary_plane_render_from_context", finite_parent)
+    monkeypatch.setattr(
+        runner, "make_arbitrary_plane_finite_candidate_bank_from_context", candidate_bank
+    )
+    monkeypatch.setattr(runner, "orientation_accepts", lambda case_index, normal: True)
+
+    with pytest.raises(RuntimeError, match="commit-forwarded"):
+        runner.build_oracle_case(0, {}, {}, {}, source_commit)
+
+    assert seen == {"finite_parent": source_commit, "candidate_bank": source_commit}
+
+
 def test_atomic_json_is_durable_idempotent_and_refuses_changed_frozen_output(tmp_path):
     path = tmp_path / "nested" / "receipt.json"
     first = _atomic_json(path, {"seed": np.uint64(7), "status": "frozen"})

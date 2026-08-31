@@ -605,7 +605,12 @@ def build_oracle_case(
             )
             continue
         try:
-            bank = make_arbitrary_plane_finite_candidate_bank_from_context(parent, candidate_context, support_index)
+            bank = make_arbitrary_plane_finite_candidate_bank_from_context(
+                parent,
+                candidate_context,
+                support_index,
+                finite_parent_generator_source_commit=source_commit,
+            )
         except ValueError as error:
             if not str(error).startswith("finite candidate case rejected: "):
                 raise
