@@ -1,0 +1,4 @@
+# Frozen training contracts hash source and configuration bytes exactly.
+/.gitattributes text eol=lf
+*.py text eol=lf
+*.json text eol=lf
