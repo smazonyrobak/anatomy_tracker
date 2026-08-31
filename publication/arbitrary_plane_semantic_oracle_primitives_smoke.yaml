@@ -1,0 +1,127 @@
+schema_version: "1.0"
+receipt_id: "arbitrary-plane-semantic-oracle-primitives-smoke-2026-08-31"
+date: "2026-08-31"
+status: "development_primitives_go_execution_pending"
+claim_scope: >-
+  Engineering verification of the fixed-canvas finite-candidate representation
+  and model-free semantic scorer before the predeclared 64-case development
+  premise. This is not the semantic-oracle result, model training, architecture
+  selection, biological validation, uncertainty calibration, a DeepSlice
+  comparison, qualification, final-test evaluation or a performance benchmark.
+
+repository:
+  branch: "codex/joint-registration"
+  implementation_commit: "f3b78107e02ce126a00d596b6edc0798d51ce115"
+  implementation_commit_subject: "Add arbitrary-plane semantic candidate oracle"
+  pushed_before_smoke: true
+  upstream_equal_before_smoke: true
+  sources:
+    training/arbitrary_plane_finite_candidates.py: "0a653eb195fb3e31930aa1f5d1cbf08960dd022418c5dd195325e548d9a76058"
+    training/arbitrary_plane_semantic_oracle.py: "24a50f1c6a4d93de36e7360f72c9505a1266c19eae4bdc70c1d3ba6c72510038"
+    publication/arbitrary_plane_oracle_pose_ranking_preflight.yaml: "028e7cebf6dfa0535d9324b04351aba994f067dec0c5910f071f042c3ca8ac52"
+    tests/test_arbitrary_plane_finite_candidates.py: "75ba57c930863a7310248f21e054c69513c3df24e55cf50f59d105146558c6f3"
+    tests/test_arbitrary_plane_semantic_oracle.py: "a537c4b573bd7a9c91fdc07c293bc36843e1f1baf3629f2f01255e7baf1d915d"
+
+independence:
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  model_training: false
+  initialization: "deterministic case and candidate random streams only"
+
+verification:
+  combined_arbitrary_plane_regression:
+    result: "159 passed in 26.30 seconds"
+    modules: >-
+      geometry, support, rendered generator, finite candidates, synthetic
+      operations, synthetic observations, complete generator, manifest and
+      semantic oracle
+  finite_candidate_independent_audit:
+    result: "PASS"
+    remaining_p1: []
+    remaining_p2: []
+  semantic_oracle_independent_audit:
+    result: "PASS"
+    remaining_p1: []
+    remaining_p2: []
+  compile_and_diff_checks: "PASS"
+
+real_allen_one_bank_smoke:
+  role: "development scalability and exactness smoke; not a benchmark"
+  source_commit: "f3b78107e02ce126a00d596b6edc0798d51ce115"
+  atlas:
+    id: "Allen CCFv3"
+    version: "2017 25um"
+    template_path: "data/Allen Brain Atlas 25um/average_template_25.nrrd"
+    annotation_path: "data/Allen Brain Atlas 25um/annotation_25.nrrd"
+    template_file_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+    annotation_file_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+    shape_ap_dv_ml: [528, 320, 456]
+    voxel_size_um: [25.0, 25.0, 25.0]
+    support_index_sha256: "0f6d8325ff1aa1965b28e4c5edb1327ae58129a78fe41d6f2ccf1896f449f65c"
+  case:
+    split: "development"
+    parent_seed: 0
+    sample_index: 0
+    output_shape_h_w: [192, 256]
+    margin_u_v_um: [250.0, 250.0]
+    animal_id: null
+    specimen_id: null
+    experiment_id: null
+    finite_plane_render_id: "59f7392941791a485624a9de75fee65fa29424715dd6c1f71c42ce66c885801c"
+  contexts:
+    finite_render_context_sha256: "7cc9e4f4ae040680f2d244f687c907dd62191e26b5d6a8c35a33f35dc1033ed9"
+    finite_candidate_context_sha256: "9e7e241b1b72bee571dffad53ea817d8221564c5827837f053490d29370eed88"
+    decoded_annotation_full_hash_count: 1
+  result:
+    finite_candidate_bank_id: "df33d43c35dff49ccc8a204a38a9f88f787634dadd14862c3b34214bd9cee7ce"
+    finite_candidate_receipt_sha256: "1795d1e6265909da4bfa268c6c84384971e9ffe1b5c1d4f8aece3bef0a829ae7"
+    candidate_count: 40
+    minimum_candidate_brain_pixels: 2867
+    maximum_effective_float32_plane_residual_um: 0.0009282997993977915
+    effective_residual_limit_um: 0.01
+    exact_generation_verification_and_replay: true
+  observed_runtime:
+    interpretation: "single-run engineering telemetry only"
+    nrrd_load_seconds: 1.404142
+    support_build_seconds: 5.717041
+    one_time_context_seconds: 5.932906
+    candidate_bank_seconds: 0.684069
+    exact_verify_and_replay_seconds: 0.755686
+    total_seconds: 14.532808
+    observed_process_rss_mib_after_verification: 1874.1
+  runtime:
+    python: "3.11.15"
+    numpy: "2.4.4"
+    scipy: "1.17.1"
+    torch: "2.11.0+cu128"
+
+scientific_interpretation:
+  decision: "GO_freeze_streamed_64_case_semantic_oracle_runner"
+  supported_statement: >-
+    The standalone arbitrary-plane candidate geometry, fixed-canvas annotation
+    rendering, deterministic identity/replay and bounded semantic scoring are
+    internally consistent on focused fixtures, and one full Allen 192-by-256
+    bank executes without a scalability or numerical-residual blocker.
+  unsupported_statements:
+    - "the 64-case semantic pose-ranking gate has passed"
+    - "histological image appearance contains enough information for pose recovery"
+    - "a learned pose/deformation model has been trained or selected"
+    - "real histology or unseen animals have been validated"
+    - "predictive uncertainty is calibrated"
+    - "DeepSlice or expert-assisted tools have been benchmarked"
+
+data_access:
+  allen_template_and_annotation: true
+  synthetic_development: true
+  deepslice_ground_truth: false
+  real_lab_histology: false
+  calibration_animals: false
+  qualification_animals: false
+  final_test_animals: false
+  full_benchmark: false
+
+next_step: >-
+  Freeze and verify the deterministic streamed 64-case runner, then execute the
+  unchanged semantic-oracle protocol with exact primary, shuffled-target,
+  paired-outline, provenance and raw-score controls.
