@@ -307,11 +307,11 @@ def _digest(value):
 
 
 def _scores_for_rank(rank):
-    scores = np.linspace(0.99, 0.01, 40)
+    scores = np.linspace(0.79, 0.01, 40)
     truth = 0
-    scores[truth] = 1.0 if rank == 1 else 1.0 - rank / 100.0
+    scores[truth] = 1.0 if rank == 1 else 0.8 if rank < 40 else 0.0
     if rank > 1:
-        scores[1:rank] = np.linspace(1.1, scores[truth] + 0.01, rank - 1)
+        scores[1:rank] = np.linspace(0.99, scores[truth] + 0.01, rank - 1)
     return scores.tolist()
 
 
@@ -353,7 +353,11 @@ def _gate_fixture():
                 "orientation": orientation,
                 "target": target,
                 "scores": {
-                    "semantic": _scores_for_rank(1 if local_index < successful_count else 2)
+                    "semantic": _scores_for_rank(1 if local_index < successful_count else 2),
+                    "raw_ID_agreement": [0.5] * 40,
+                    "mask_only_Dice": [0.75] * 40,
+                    "channel_count": 2,
+                    "smoothing_sigma_px": 3.0,
                 },
             }
         )
@@ -367,7 +371,13 @@ def _gate_fixture():
                 "ordered_candidate_ids": base["ordered_candidate_ids"],
                 "truth_candidate_id": base["truth_candidate_id"],
                 "target": primary[shuffled_target_index(index)]["target"],
-                "scores": {"semantic": _scores_for_rank(1 if index < 6 else 40)},
+                "scores": {
+                    "semantic": _scores_for_rank(1 if index < 6 else 40),
+                    "raw_ID_agreement": [0.25] * 40,
+                    "mask_only_Dice": [0.5] * 40,
+                    "channel_count": 2,
+                    "smoothing_sigma_px": 3.0,
+                },
             }
         )
     exact_controls = {}

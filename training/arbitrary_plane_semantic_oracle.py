@@ -422,9 +422,37 @@ def semantic_gate_summary(
         if len(candidate_ids) != 40 or len(set(candidate_ids)) != 40:
             raise ValueError("each result must bind exactly 40 unique ordered candidate IDs")
         truth_id = str(result["truth_candidate_id"])
-        scores = np.asarray(result["scores"]["semantic"], dtype=np.float64)
-        if scores.shape != (40,):
-            raise ValueError("each raw semantic score landscape must contain 40 values")
+        score_payload = result["scores"]
+        required_score_keys = {
+            "semantic",
+            "raw_ID_agreement",
+            "mask_only_Dice",
+            "channel_count",
+            "smoothing_sigma_px",
+        }
+        if set(score_payload) != required_score_keys:
+            raise ValueError("raw score payload does not match the frozen five-field schema")
+        arrays = {
+            name: np.asarray(score_payload[name], dtype=np.float64)
+            for name in ("semantic", "raw_ID_agreement", "mask_only_Dice")
+        }
+        if any(
+            values.shape != (40,)
+            or not np.isfinite(values).all()
+            or np.any((values < 0.0) | (values > 1.0))
+            for values in arrays.values()
+        ):
+            raise ValueError("each raw semantic and ablation landscape must contain 40 finite [0,1] values")
+        channel_count = score_payload["channel_count"]
+        expected_channel_count = result["target"]["channel_receipt"]["channel_count"]
+        if type(channel_count) is not int or channel_count != expected_channel_count or channel_count <= 0:
+            raise ValueError("score channel count does not match the target-defined channel receipt")
+        expected_sigma = SMOOTHING_SIGMA_UM / float(result["target"]["pixel_pitch_um"])
+        if not np.isclose(
+            float(score_payload["smoothing_sigma_px"]), expected_sigma, rtol=0.0, atol=0.0
+        ):
+            raise ValueError("score smoothing sigma does not equal 75 micrometres over target pitch")
+        scores = arrays["semantic"]
         return rank_candidate_ids(scores, candidate_ids, truth_id)
 
     primary_rankings = []
