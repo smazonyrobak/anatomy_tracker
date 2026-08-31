@@ -928,3 +928,60 @@ Exact source, config, model, training, development, recovery, freeze,
 qualification, raw prediction, receipt and artifact hashes are recorded in
 `publication/atlas_pair_spatial_aggregation_diagnostic.yaml`. The preserved
 update-1,475 checkpoint and the recovery-path mutation are part of that record.
+
+### Paired native-topology causal diagnostic
+
+The next diagnostic ran without interruption from pushed commit
+`7ec5ce15f7d51a03dfc59ce269a62c947541ee8e` under frozen contract
+`1f9c551bb3ac5837ac41e2692a5cc58a159c8a95326820c0fab23264bb51b4dd`.
+It compared two independently stored, random-initialized 284,058-parameter
+atlas-pair scorers with identical learned layers and exact-equal initial states
+and outputs. Both processed the full correlation-plus-mask lattices with the
+same small spatial CNN. The treatment saw native lattice layout; the control
+saw one precommitted bijective random permutation at each scale, inverted only
+after spatial processing. This isolates native rectangular neighbourhoods
+within this architecture. Sparse random adjacencies remain in the control, so
+it is not a topology-free network.
+
+Training used 1,500 paired updates and only clean synthetic, interior
+oblique-coronal CCF train-split data. Source tensors were generated once and
+presented identically to both arms. All 1,536 off-centre convolution
+coefficients per arm started at zero, received finite nonzero gradients from
+the first update, and were finite, nonzero and arm-distinct by update 2 and at
+the end. Complete training, optimizer, AMP, RNG, pairing, barrier, topology,
+final-equals-resume and qualification-freeze validators passed. There were no
+learned-checkpoint dependencies and no Product-5, calibration, final-test or
+other protected-data access.
+
+Development fixed-candidate top-1 was null/treatment `10 / 12`, `10 / 20`
+and `9 / 15` out of 48 at updates 500, 1,000 and 1,500. The transient update
+1,000 paired advantage did not meet the `46 / 48` absolute requirement and
+did not persist.
+
+| Qualification seed | Fixed top-1 null / treatment | Net corrections / exact McNemar p | Free-search physical error null / treatment | Treatment AP / L--R / D--V MAE | Ten-slice p95 null / treatment |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 2104322 | 9 / 48 / 16 / 48 | +7 / 0.092285 | 363.924 um / 712.170 um | 644.857 um / 4.264 deg / 12.746 deg | 21.850 s / 20.945 s |
+| 2204322 | 17 / 48 / 17 / 48 | 0 / 1.0 | 321.216 um / 618.447 um | 562.565 um / 4.270 deg / 11.137 deg | 17.563 s / 17.467 s |
+
+Every one of the 96 unique fixed rows and both arms' four-stage free-search
+outputs was independently recomputed from raw arrays and exact regenerated
+source tensors. There were no invalid renders or non-finite values. Energy
+allclose, top-1 and decoded-pose order checks passed for both arms on both
+seeds; the largest descriptive reorder difference was `9.536743e-7`.
+
+Both arms failed both fresh panels. The family branch is therefore
+`both-fail-change-feature-or-candidate-construction-before-recurrence`:
+native topology did not provide the prespecified reproducible causal rescue,
+and recurrence is not licensed by this test. This is narrow evidence about the
+fixed feature, candidate and scorer construction, not evidence that topology,
+recurrence, attention or equivariance are useless generally. The treatment's
+descriptively worse free-search errors are also not product-accuracy estimates.
+
+The result is strictly coronal-family evidence. Sagittal, horizontal, grazing
+and general oblique frames were not representable, so it cannot support the
+required arbitrary-plane claim. Development now moves to a versioned
+arbitrary-plane generator, structured 3-D slice-frame/QuickNII O/U/V geometry,
+and revised features/candidates before any recurrent model is built. Exact
+source, config, training, qualification, receipt, artifact and audit hashes are
+recorded in `publication/atlas_pair_topology_diagnostic.yaml`; the frozen v2
+sources and run artifacts remain unchanged.

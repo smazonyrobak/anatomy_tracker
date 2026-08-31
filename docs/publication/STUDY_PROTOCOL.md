@@ -4,14 +4,19 @@
 
 This document specifies the study before the proposed unified model is trained. It does not claim that the architecture, datasets, benchmarks or results described as planned already exist. The implementation baseline is commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` (`c668103`). Existing evidence is transcribed in [`BASELINE_LEDGER.md`](BASELINE_LEDGER.md); future values must be appended with immutable run and artifact hashes.
 
-The study asks whether one jointly trained recurrent model can estimate a coronal section's 3-D Allen CCF pose and its 2-D nonlinear anatomical correspondence more accurately and robustly than the present two-stage pipeline and published alternatives, while remaining practical in the desktop application.
+The study asks whether one jointly trained model can estimate any
+brain-intersecting section's full 3-D Allen CCF frame and 2-D nonlinear
+anatomical correspondence more accurately and robustly than the present
+two-stage pipeline and applicable published alternatives, while remaining
+practical in the desktop application. Recurrent refinement remains a tested
+hypothesis, not an architectural commitment before premise evidence.
 
 ## Prespecified claims
 
 1. **Pose:** the joint model improves atlas-plane localization over the frozen AtlasPose pipeline and leading automatic comparators.
 2. **Dense correspondence:** given the same plane, it improves visible-tissue anatomical correspondence over the frozen dense model and registered classical/learned baselines without increasing folding.
 3. **Joint feedback:** recurrent pose--warp feedback improves the full pipeline beyond a feed-forward cascade; deformation does not merely conceal pose error.
-4. **Sequence inference:** optional common-tilt and partial-order evidence improves series alignment while satisfying every declared hard constraint.
+4. **Sequence inference:** optional shared-normal and ordered-stack-offset evidence improves series alignment while satisfying every declared hard constraint.
 5. **Scientific utility:** improved registration reduces 3-D probe-trajectory and recording-site region-assignment error.
 6. **Usability:** ten ordinary whole-brain sections complete within 180 seconds on the reference workstation. This is a ballpark usability ceiling, not permission to trade away accuracy.
 
@@ -22,8 +27,8 @@ Claims 1--5 require locked evidence. Attractive overlays, development cohorts an
 Results are reported separately for:
 
 - **automatic:** image input only, including an automatic visible-tissue mask if used;
-- **outline-assisted:** a user-supplied visible-tissue/brain-surface mask, with interaction disclosed;
-- **constraint-assisted:** optional AP range, partial ordering, shared tilt or surgical constraints, with each information source disclosed;
+- **outline-assisted:** an optional user smart-brush visible-tissue/brain-surface mask, with interaction and outline quality disclosed;
+- **constraint-assisted:** optional valid plane domain, stack ordering, shared normal or surgical constraints, with each information source disclosed;
 - **expert-assisted:** manual QuickNII/VisuAlign or equivalent workflow.
 
 An assisted result may not be presented as a fully automatic comparison. The primary automatic benchmark gives every method the same raw image and no information unavailable to its comparator.
@@ -32,13 +37,30 @@ An assisted result may not be presented as a fully automatic comparison. The pri
 
 ### A. Published DeepSlice reproduction
 
-Use the published human-consensus dataset and its original brain-level development/test assignment; the final public test component contains only four brains and is therefore comparator reproduction evidence, not a broad biological holdout. Run the frozen publication DeepSlice implementation and the official recommended model-ensemble/angle-integration/cutting-index workflow. Report raw single-section and series-assisted outputs separately. Preserve raw raster bytes and raw-frame ground truth. The frozen DeepSlice adapter applies exactly one horizontal image reparameterization into its expected A-to-P view and applies the inverse O/U/V transform only after all official postprocessing. Use DeepSlice's physical plane-distance calculation: average Euclidean separation between corresponding predicted and reference CCF points over pixels whose reference coordinates lie inside brain.
+Use the DeepSlice Ground Truth dataset (DOI `10.25949/22802411`) and its
+original brain-level development/test assignment; the final public test
+component contains only four brains and is therefore comparator reproduction
+evidence, not a broad biological or arbitrary-plane holdout. Run the frozen
+publication DeepSlice implementation and official recommended workflow. Report
+raw single-section and series-assisted outputs separately. Preserve raw raster
+bytes and raw-frame ground truth. The frozen adapter applies exactly one
+horizontal image reparameterization into its expected A-to-P view and applies
+the inverse O/U/V transform only after all official postprocessing. Use
+DeepSlice's corresponding-pixel physical plane distance over reference brain.
 
 This public dataset and the local 1,400-section comparison cohort are consumed. They may reproduce a named comparator and diagnose regressions, but cannot be used for hyperparameter selection or a new final-generalization claim. The previously tracked local comparison used the wrong horizontal view for DeepSlice and is invalid until the frozen adapter is rerun.
 
 ### B. New hidden real pose benchmark
 
-Target 30--50 brains, at least three laboratories, several acquisition/staining conditions and approximately 500--1,000 whole coronal sections. The final sample size is set by a preregistered pilot-based power calculation. Split by animal/experiment and laboratory, never by slice. Three or more blinded neuroanatomists create QuickNII-compatible alignments. The consensus and uncertainty protocol is frozen before model evaluation. A third party should retain final labels when feasible.
+Target 30--50 brains, at least three laboratories, several
+acquisition/staining conditions and approximately 500--1,000 whole sections.
+Recruitment deliberately spans coronal, sagittal, horizontal and
+extreme-oblique cutting rather than assuming a coronal convenience sample. The
+final sample size is set by a preregistered pilot-based power calculation.
+Split by animal/experiment and laboratory, never by slice. Three or more
+blinded neuroanatomists create QuickNII-compatible alignments. The consensus
+and uncertainty protocol is frozen before model evaluation. A third party
+should retain final labels when feasible.
 
 ### C. New real dense-registration benchmark
 
@@ -46,7 +68,13 @@ Target 150--250 sections from at least 20 animals. Multiple blinded experts iden
 
 ### D. Exact synthetic out-of-generator benchmark
 
-Use exact pose, forward/inverse maps, labels and validity masks. Test transformations and artifact implementations must be independent of the training generator, not merely use new random seeds. Stratify clean, mild, moderate and severe cases and include difficult neighbouring-plane negatives. This track tests correctness and controlled robustness, not real-histology validity.
+Use exact arbitrary-plane O/U/V, structured frames, forward/inverse maps,
+labels and validity masks. Test transformations and artifact implementations
+must be independent of the training generator, not merely use new random
+seeds. Stratify equal-area orientation cells, offset/support, cardinal and
+extreme-oblique planes, clean through severe artifacts, and difficult
+neighbouring-plane negatives. This track tests correctness and controlled
+robustness, not real-histology validity.
 
 ### E. Downstream probe mapping
 
@@ -74,15 +102,23 @@ Superiority to a comparator requires a paired brain-level confidence interval ex
 
 ## Secondary endpoints
 
-- AP, L--R and D--V MAE, median, signed bias and p95;
+- physical corresponding-plane error, geodesic normal error, physical offset
+  error and in-plane frame error, with legacy AP/L--R/D--V summaries only for
+  the coronal comparator subset;
 - plane-anchor/corner error and catastrophic-error rates;
 - landmark p95 error, macro Dice, bottom-30% Dice, boundary F1, ASSD and HD95;
 - forward/reverse endpoint error, cycle error, negative-Jacobian fraction, minimum determinant and SD log-Jacobian;
 - risk--coverage and failure-detection AUROC/AUPRC from the compatibility-derived risk ordering;
+- proper scoring rules plus 50/80/90/95% empirical coverage and spatial-volume
+  width for the pose posterior, including the prespecified check that nominal
+  90% credible regions contain approximately 90% of unseen-animal references;
 - trajectory entry, angular, roll, depth and region-sequence errors;
 - latency, peak memory, failure rate and manual interaction time.
 
-All endpoints are stratified by AP band, tilt, artifact severity, laboratory, stain/acquisition, damage, and distance to an Allen boundary where sample size permits.
+All endpoints are stratified by equal-area orientation cell, physical offset,
+visible support, cardinal family, artifact severity, laboratory,
+stain/acquisition, damage and distance to an Allen boundary where sample size
+permits.
 
 ## Statistical analysis
 

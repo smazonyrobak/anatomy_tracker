@@ -44,11 +44,21 @@ Generation is on demand from immutable manifests so 500,000 training views need 
 
 ## Geometry distribution
 
-Initial ranges follow the demonstrated AtlasPose generator unless development evidence justifies a frozen amendment:
+The frozen v2 AP/tilt generator remains unchanged for provenance. New
+release-eligible work uses a versioned v3 arbitrary-plane contract:
 
-- AP from +500 to -4500 µm with balanced 500-µm bands;
-- L--R and D--V tilts from -35 to +35 degrees;
-- arbitrary in-plane rotation;
+- sample a Gaussian direction and normalize it to obtain a surface-area-uniform
+  normal on the antipodally identified sphere, not uniform Euler angles;
+- sample in-plane roll uniformly over a full turn;
+- sample signed offset uniformly over the annotation foreground projected onto
+  that normal, then verify actual rendered support;
+- retain named near-tangent, tiny-support and anatomically ambiguous stress
+  strata without silently changing the reference validation measure;
+- store the constrained centre/frame/log-scale state and exact QuickNII O/U/V,
+  projection bounds, offset quantile, tissue support, RNG stream, rejection
+  attempt, atlas hashes and synthetic-realization identity;
+- use nullable animal/specimen IDs for atlas-derived samples and preserve exact
+  animal/specimen/experiment IDs for all real descendants;
 - image scale from 0.5 to 1.5;
 - bounded translations;
 - radial, anisotropic stretch and swirl velocity components;
@@ -56,7 +66,11 @@ Initial ranges follow the demonstrated AtlasPose generator unless development ev
 - positive-Jacobian forward and inverse ground truth;
 - tears, missing cortex and occlusions represented as invalid tissue rather than deformation.
 
-Wrong-plane candidates sample very close offsets (including the 25-µm atlas step), moderate offsets and anatomically confusing distant planes. Pose ranking must remain sensitive after an optimal bounded local warp.
+Wrong-plane candidates use geodesic normal perturbations, physical normal-offset
+perturbations and coupled anatomically confusing planes. Every positive and
+candidate must intersect the brain; exact O/U/V and physical candidate
+distances are hash-bound. Pose ranking must remain sensitive after an optimal
+bounded local warp.
 
 ## Appearance distribution
 

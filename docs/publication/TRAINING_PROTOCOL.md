@@ -2,7 +2,17 @@
 
 ## Objective
 
-Train one recurrent pose-and-registration network end to end. The model must learn exact global plane geometry, bounded local correspondence and wrong-plane rejection. Its compatibility head supplies a monotone risk score for ranking and abstention analysis; version 1 does not claim that this score is a calibrated probability. Model scale and iteration count are selected on development data under the runtime budget; no architecture is promoted merely because it is newer or larger.
+Train one pose-and-registration network end to end for every brain-intersecting
+section plane, including coronal, sagittal, horizontal and extreme oblique
+cuts. The model must learn exact global 3-D slice-frame geometry, bounded local
+correspondence and wrong-plane rejection. Its geometry output includes a point
+estimate and a tractable probabilistic posterior over plane normal and physical
+offset; calibration is retained only if it does not reduce point-estimate
+accuracy. Compatibility remains a monotone risk score for ranking and
+abstention unless and until it separately earns probability calibration. Model
+scale, posterior complexity and iteration count are selected on development
+data under the runtime budget; no architecture is promoted merely because it
+is newer or larger.
 
 ## Stage 0: freeze the experiment
 
@@ -18,7 +28,15 @@ Before model code is trained:
 
 ## Stage 1: generator and premise tests
 
-Use a small audit set, not a performance claim. Validate exact geometry, artifacts, masks and topology. Perturb known poses and test whether existing/new registration features rank the true plane above neighbouring candidates. Failure of this test prevents describing warp residual as pose confidence.
+Use a small audit set, not a performance claim. First validate the structured
+3-D frame, exact QuickNII O/U/V conversion, cardinal and arbitrary-plane
+rendering, raster-flip reparameterizations, artifacts, masks and topology.
+Sample the reference plane distribution with equal-area antipodal normals,
+uniform in-plane roll and uniform valid annotation-support offset; keep named
+tiny-support and tangent-plane stress strata separate. Perturb normals by
+geodesic angle and offsets in physical distance, then test whether candidate
+features rank the true plane. Failure prevents recurrence and prevents
+describing warp residual as pose confidence.
 
 ## Stage 2: 20k--50k controlled experiments
 
@@ -48,7 +66,8 @@ Increase to 200k and up to 500k unique synthetic views only if learning and vali
 ## Curriculum
 
 1. **Foundational exact supervision:** train every randomly initialized branch
-   on exact/near-exact atlas planes, mild deformation, supervised pose and flow.
+   on exact/near-exact atlas frames across the full arbitrary-plane reference
+   distribution, mild deformation, supervised O/U/V geometry and flow.
 2. **Scheduled closed loop:** a growing fraction of model-predicted poses and nearby hard negatives.
 3. **Full closed loop:** recurrent predictions, full artifact distribution, difficult anatomical negatives and mixed real/synthetic batches.
 
@@ -59,13 +78,14 @@ reported separately, but it cannot determine the shipped weights.
 
 ## Loss families
 
-- physical plane-anchor loss and component pose likelihood;
+- physical O/U/V plane-anchor loss, structured frame loss and local
+  tangent-space pose likelihood;
 - coarse-bin/residual loss where used;
 - singleton positive-versus-hard-negative listwise ranking on exact synthetic
   and Product-5 pairs;
-- six sign-balanced one-axis Product-5 negatives (`+/- AP`, `+/- L--R`,
-  `+/- D--V`) whose scheduled levels cover nearest, `100 um / 1 deg`
-  resolvable and wider offsets;
+- sign-balanced geodesic-normal and physical-offset negatives for arbitrary
+  synthetic planes, plus the legacy six one-axis Product-5 negatives only in
+  their explicitly coronal auxiliary track;
 - forward and inverse visible-pixel endpoint error on exact synthetic pairs;
 - label/hierarchy and boundary correspondence;
 - inverse and gradient-inverse consistency;
@@ -87,6 +107,13 @@ Every run records:
 - best/last checkpoints and exact early-stopping reason;
 - non-finite gradients, rejected batches and process interruptions.
 
+Synthetic manifests also record the exact normal, in-plane axes, centre,
+O/U/V, roll, offset quantile, tissue support, RNG stream and rejection attempt,
+CCF asset identity, and nullable animal/specimen fields. Real records retain
+their exact animal, specimen and experiment IDs. Accurate, imperfect and absent
+outline modes are all trained; smart-brush output is helpful optional evidence,
+never a required input contract.
+
 Training runs detached and resumable on the designated fast workspace. A progress JSON and plain terminal log update throughout. Monitoring is periodic and must not interrupt a healthy process. Checkpoints are written atomically; a short CPU run verifies exact model/optimizer/scheduler/RNG/data-stream continuation. CUDA resume restores the same state, but bitwise equivalence is not claimed because `grid_sample` backward can be nondeterministic on CUDA.
 
 ## Candidate selection
@@ -106,3 +133,16 @@ The canonical release loader selects `ema.shadow` from the validation-selected P
 ## Hidden qualification
 
 The final bundle is evaluated once on the locked benchmarks. A failing result remains recorded; training cannot silently continue against that test. Further development creates a new model version and requires a newly protected confirmatory set for any renewed final claim.
+
+Full benchmarking waits until the method stabilizes. At that point splits are
+strictly by animal with untouched final-test animals; Allen/synthetic data are
+training sources, DeepSlice Ground Truth (DOI `10.25949/22802411`) is a public
+benchmark, and separate lab histology supplies external validation where
+available. Blinded expert alignments define the reference. The primary endpoint
+is physical landmark or corresponding-plane registration error, with plane
+angle, regional overlap, failures, correction time, effect sizes and 95%
+confidence intervals also reported using animals as statistical units. Exact
+splits, code, configurations, seeds and raw predictions are retained. Nominal
+credible-set coverage is assessed on unseen animals (for example, whether 90%
+regions contain the reference about 90% of the time) before uncertainty is
+propagated into trajectory volumes or brain-region confidence.

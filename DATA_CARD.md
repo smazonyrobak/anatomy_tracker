@@ -45,14 +45,25 @@ This card describes data roles for the frozen baseline and proposed unified-mode
 
 ### Planned new real benchmarks
 
-- **Pose target:** 30--50 animals, at least three laboratories, multiple acquisition/staining conditions, approximately 500--1,000 sections; final N by pilot power calculation.
+- **Pose target:** 30--50 animals, at least three laboratories, multiple acquisition/staining conditions and deliberately sampled coronal, sagittal, horizontal and extreme-oblique cuts, approximately 500--1,000 sections; final N by pilot power calculation.
 - **Dense target:** 150--250 sections from at least 20 animals with blinded landmark and boundary annotation.
 - **Probe target:** exact digital phantoms and an independent real Neuropixels cohort.
 - **Status:** not yet collected/frozen.
 
 ## Synthetic data
 
-Training samples are generated on demand from immutable manifests and include exact pose, forward/inverse deformation, label maps, visible/damaged masks and appearance metadata. Geometry covers AP +500 to -4500 µm, tilts up to ±35°, arbitrary rotation, 0.5--1.5 scale, translation and compound local diffeomorphic distortion. Appearance is grayscale and includes clean through severe tone, illumination, tiling, vignette, blur, noise, speck, blowout, bubble, tear, missing-tissue and occlusion conditions.
+The frozen v2 generator covers only an oblique-coronal AP/tilt chart and is
+retained for historical diagnostics. A side-by-side v3 path generates every
+brain-intersecting plane on demand from immutable manifests. Its reference
+measure uses equal-area antipodal plane normals, uniform in-plane roll and
+uniform valid offset over projected annotation support. Each sample records a
+structured 3-D frame and exact QuickNII O/U/V, source-asset hashes, RNG stream,
+rejection attempts, support measures and synthetic-realization identity;
+animal/specimen IDs are nullable for atlas data and exact for real data.
+Samples also include forward/inverse deformation, label maps, visible/damaged
+masks and appearance metadata. Appearance is grayscale and includes clean
+through severe tone, illumination, tiling, vignette, blur, noise, speck,
+blowout, bubble, tear, missing-tissue and occlusion conditions.
 
 The exact synthetic test uses independent transformation/artifact implementations. Different random seeds alone are insufficient independence.
 
@@ -60,7 +71,8 @@ The existing 8,192-case AtlasPose synthetic test has already been inspected and 
 
 ## Splitting and leakage control
 
-- Split by animal/experiment, never by section.
+- Split real data by animal/experiment, never by section; synthetic atlas
+  realizations retain explicit source identity and disjoint hash-bound manifests.
 - Serial neighbours, channels, crops and augmented descendants inherit the parent split.
 - Hash exact files and audit perceptual near-duplicates.
 - Validation guides selection; hidden test is consumed once after freezing.
@@ -73,7 +85,13 @@ Real pose consensus uses multiple blinded experts and reports leave-one-rater-ou
 
 ## Bias and limitations
 
-Likely biases include C57BL/6-derived reference anatomy, adult-brain emphasis, over-representation of Allen acquisition pipelines, whole-section input, clean block-face geometry and user-selected visible masks. Performance must be stratified by laboratory, appearance, AP, tilt and damage. Pathological or genuinely unusual anatomy must not be judged solely by how completely the model can deform it into a normal atlas.
+Likely biases include C57BL/6-derived reference anatomy, adult-brain emphasis,
+over-representation of Allen acquisition pipelines, whole-section input, clean
+block-face geometry and user-selected visible masks. Performance must be
+stratified by laboratory, appearance, equal-area orientation cell, physical
+offset, visible support and damage. Pathological or genuinely unusual anatomy
+must not be judged solely by how completely the model can deform it into a
+normal atlas.
 
 ## Access and licensing
 

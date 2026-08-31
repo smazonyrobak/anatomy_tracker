@@ -206,3 +206,59 @@ the components; none validates the exact proposed 2-D histology-to-3-D CCF
 hybrid. The project therefore continues to require matched random-init
 experiments rather than transferred weights or architectural deference to a
 previous build.
+
+## Evidence update: change geometry, features and candidates before recurrence
+
+The native-topology treatment completed the matched test but did not reproduce
+a causal rescue. It reached `16 / 48` fixed-candidate decisions against `9 / 48`
+for the scrambled control on fresh seed `2104322`, then tied `17 / 48` on seed
+`2204322`; both were far below the frozen `46 / 48` requirement. Its
+free-search physical error was also descriptively higher on both panels. Run,
+pairing, topology, order, artifact and raw-result integrity all passed. The
+prespecified branch is therefore to revise cross-modal features and/or
+candidate construction before recurrence. This does not imply that spatial
+topology or recurrence is generally unhelpful.
+
+That diagnostic also exposed a scope mismatch with the intended product: the
+v2 pose graph can describe only a coronal-family plane. The new model must
+instead accept every brain-intersecting plane, including sagittal, horizontal
+and extreme oblique sections. Frozen v2 generator and diagnostic sources will
+remain byte-identical; arbitrary-plane support is a separate versioned path.
+
+QuickNII O/U/V is the normative serialized and evaluation geometry because it
+maps raster coordinates directly to three-dimensional CCF points for any plane.
+The learned internal state is constrained rather than nine unconstrained
+coordinates: a 3-D raster centre, a continuous 6-D representation of a
+right-handed orthonormal frame `[u,v,n]`, and positive log scale with fixed
+raster aspect. Exact conversion uses `U = span_x u`, `V = span_y v` and
+`O = centre - U/2 - V/2`. Recurrent refinement, when later justified, composes
+a small `so(3)` rotation, local-frame 3-D translation and log-scale increment.
+The dense SVF remains affine-free. Raster flips are explicit O/U/V
+reparameterizations, never learned physical reflections.
+
+The reference synthetic orientation distribution samples normals uniformly on
+the antipodally identified sphere, roll uniformly, and signed plane offset
+uniformly over the annotation support projected onto that normal. Rendering
+then verifies nonempty support. Training may add named rare/tangent stress
+strata, but they cannot silently change the reference validation measure.
+Tiny-support or symmetry-ambiguous slices remain in uncertainty/failure
+training; point-accuracy summaries use a frozen visible-support threshold and
+report abstention rather than pretending an unidentifiable plane is exact.
+
+The initial probabilistic geometry design uses equal-area antipodal normal
+cells, conditional physical-offset candidates and local tangent-space
+covariance for two normal rotations plus normal offset. It preserves
+multimodality without forcing independent Gaussian Euler angles. Point
+estimates remain explicit, and the probabilistic head is retained only if it
+does not reduce their accuracy. On unseen animals, credible spatial volumes
+will be checked for nominal coverage before their uncertainty can propagate to
+electrode trajectories or region assignments.
+
+Implementation proceeds in this order: geometry conversions and a general
+differentiable renderer; a provenance-bound v3 manifest and generator;
+geodesic-normal/physical-offset candidates; the new data and posterior
+contract; then a small arbitrary-plane oracle ranking premise test. Recurrence
+is built only after that premise is adequate. Existing Product-5 and DeepSlice
+data remain useful coronal auxiliary/comparator evidence, but cannot validate
+arbitrary-plane performance; external real validation must deliberately span
+cardinal and extreme-oblique cutting planes and remain split by animal.

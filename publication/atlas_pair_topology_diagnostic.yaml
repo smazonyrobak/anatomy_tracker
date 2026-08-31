@@ -1,0 +1,343 @@
+schema_version: "1.0"
+status: "completed_execution_integrity_go_native_topology_rescue_no_go"
+recorded_date: "2026-08-31"
+purpose: "Immutable development-only record of the paired native-versus-permuted spatial-topology causal diagnostic; not a benchmark, product-performance claim, arbitrary-plane claim, accuracy claim, architecture-selection result, or promotion result."
+
+decision:
+  execution_integrity: "GO"
+  scientific_native_topology_rescue: "NOT_SUPPORTED"
+  advancement_decision: "NO-GO"
+  terminal_branch: "both-fail-change-feature-or-candidate-construction-before-recurrence"
+  terminal_receipt_passed: false
+  independent_confirmation_authorized: false
+  recurrent_model_authorized_by_this_test: false
+  model_selected: false
+  learned_candidate_selected: false
+  architecture_winner: null
+  benchmark_claim: false
+  accuracy_claim: false
+  arbitrary_plane_claim: false
+  performance_claim: false
+  promotion_authorized: false
+  longer_training_authorized: false
+  gate_relaxation_authorized: false
+  protected_data_access_authorized: false
+
+lineage:
+  source_commit: "7ec5ce15f7d51a03dfc59ce269a62c947541ee8e"
+  source_commit_short: "7ec5ce1"
+  commit_subject: "Freeze paired topology diagnostic"
+  branch: "codex/joint-registration"
+  source_commit_pushed_before_execution: true
+  repository_clean_and_upstream_equal_before_execution: true
+  repository_clean_and_upstream_equal_after_audit: true
+  config:
+    path: "training/configs/independent_oracle_atlas_pair_topology_pair_1500_r1804322.json"
+    file_sha256: "add4b8c08c3a94e190914e9a3f36b98536be0272e69ee560df89cde6446a5dbe"
+    contract_sha256: "1f9c551bb3ac5837ac41e2692a5cc58a159c8a95326820c0fab23264bb51b4dd"
+    family_self_sha256: "1f9c551bb3ac5837ac41e2692a5cc58a159c8a95326820c0fab23264bb51b4dd"
+    frozen: true
+  permutation_contract_sha256: "fb6bb618fbfa1696d73cfcb075fa6c1c63ce691fe98987cfaf56a094dc2af1b5"
+  source:
+    source/dense_registration_preprocessing.py: "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+    training/independent_atlas_pair_energy.py: "6187cb051d048d1e5eec3137b9edc6ac09706cecffcf989507951708681589ec"
+    training/independent_atlas_pair_topology.py: "f6e57b1d521f659e7dbea092da8ff0d246d3b4cd180c30970d92ae86aacc9961"
+    training/quicknii_plane_metric.py: "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31"
+    training/run_independent_atlas_pair_energy.py: "21c73f88a48ca87ac0a44ff022993eea5dc2cfbb1f8c72237ec4b05fa4445b19"
+    training/run_independent_atlas_pair_topology.py: "b9d093ea7e003f912804e84f2b8f0d7677994b14fbcaf3c6b637368cc03e4451"
+    training/synthetic_registration.py: "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde"
+  learned_checkpoint_dependencies: []
+
+access:
+  data_role: "synthetic-CCF-train-split-development-only"
+  product5_access: false
+  calibration_access: false
+  final_test_access: false
+  protected_data_access: false
+  learned_checkpoint_dependencies: []
+  model_selection: false
+  learned_candidate_selection: false
+  promotion: false
+  audit_limit: "Source-and-receipt evidence; no OS-level syscall access log exists."
+
+family:
+  null_class: "training.independent_atlas_pair_topology.AtlasPairEnergyScrambledTopologyControl"
+  treatment_class: "training.independent_atlas_pair_topology.AtlasPairEnergyNativeTopology"
+  initialization: "instantiate both, then strict-load the complete null state into treatment"
+  claim_scope: "causal access to native lattice neighbourhoods versus one fixed random spatial permutation"
+  parameter_count_each: 284058
+  maximum_parameter_count_each: 1500000
+  candidate_pose_is_scorer_input: false
+  correlation_levels: [8, 16]
+  correlation_radius: 4
+  spatial_processor: "82-channel correlation-plus-mask input; 1x1 projection to 32; three residual depthwise-separable blocks with dilation 1, 2 and 4; 1x1 projection to 16; global and masked mean/max summaries"
+  summary_dimension: 194
+  null_input: "the same active learned graph after a fixed bijective lattice permutation, restored only after spatial processing"
+  treatment_input: "the same active learned graph on the native correlation lattice"
+  complete_state_schema_equal: true
+  initial_outputs_exact_equal: true
+  off_center_coefficients_per_arm: 1536
+  all_off_center_coefficients_zero_at_initialization: true
+  caveat: "The null destroys most native local adjacency but retains sparse random adjacency; it is a scrambled-topology control, not a topology-free network."
+  prohibited_scope:
+    - "not evidence for or against recurrence generally"
+    - "not evidence for or against attention or equivariance generally"
+    - "not evidence for arbitrary-plane localization"
+    - "not evidence that cross-modal features or candidate construction are adequate"
+
+permutations:
+  seed_level_8: 180432208
+  seed_level_16: 180432216
+  level_8:
+    permutation_sha256: "283089a1c7ff350cb32b15218cca8c8507a7ab6bf2d5cb739b7a93f52e078a9f"
+    inverse_sha256: "100761938c9b19320414075ddfe1367848ab377fba7395e2caf6f60d9e0406b9"
+    fixed_points: 2
+    lattice_points: 580
+    retained_native_four_neighbour_edges: 7
+    native_four_neighbour_edges: 1111
+  level_16:
+    permutation_sha256: "4cc5dd17a832d0b66b4fb54cea2cc4ddd52f0d5f93e26ac9179128ec78a5617"
+    inverse_sha256: "121716ff0e162330646b6b6c78d99bd5e5284db971d3ca3d7f7983c7e895d5a2"
+    fixed_points: 1
+    lattice_points: 150
+    retained_native_four_neighbour_edges: 5
+    native_four_neighbour_edges: 275
+
+initialization:
+  seed: 1804322
+  full_initial_state_equal: true
+  independent_state_storage: true
+  initial_state_sha256:
+    null: "55f08cbcf0a5fc02522653eef09340dbdbf1b28e37eb826ab445f837ca726768"
+    treatment: "55f08cbcf0a5fc02522653eef09340dbdbf1b28e37eb826ab445f837ca726768"
+  initialization_sha256: "67a47d14ce358ddab2f0c63429a5651a2571c0042675a539b6e977844e1680d2"
+  state_schema_sha256: "875dc725f702b58ca87e71587e32af03dd1b11019a4777820fc612d520b646bf"
+  optimizer_states_empty_and_equal: true
+  scaler_states_equal: true
+  initial_amp_scale: 512.0
+
+data_lineage:
+  data_lineage_sha256: "e6d7b1f982970050d6fee583fa36881e8556d770576eda06fcbef82b0a6208ee"
+  generator_contract_sha256: "5ff5a29ccc7f0c554020dfc8e7e07d2af59a662f9420422bffc9a86edcd73872"
+  train_seed: 1904322
+  train_manifest_sha256: "29a2d3f579401c711faaf558a8d4cba223b73d92fba994afc63b1e01840e69f0"
+  development_seed: 2004322
+  development_manifest_sha256: "b75f0557effa0f25c9c05105cb978004a3899de38e33ab2cddc35108531e35be"
+  fresh_qualification_seeds: [2104322, 2204322]
+  qualification_count_per_seed: 48
+  consumed_or_forbidden_prior_seeds: [1004322, 1104322, 1204322, 1304322, 1404322, 1504322, 1604322, 1704322]
+  qualification_generated_only_after_joint_freeze: true
+  animal_id: null
+  specimen_id: null
+  source_entity_type: "synthetic Allen CCF realization"
+  real_animal_ids: "not applicable to this synthetic mechanism diagnostic"
+  oracle_source:
+    tensor: "moving_raw_uint8.float()/255 before source-view transform"
+    rotation_deg: 0.0
+    scale: 1.0
+    pre_downsample_resampling_count: 0
+    fixed_downsample: "bilinear-align_corners-false-160x232"
+    outline_mode: "absent"
+    source_mask: "all-zero"
+    mask_available: "all-zero"
+  plane_scope:
+    family: "interior oblique-coronal only"
+    ap_support_um: [-4000.0, 0.0]
+    absolute_tilt_maximum_deg: 25.0
+    arbitrary_plane_coverage: false
+    limitation: "Sagittal, horizontal, grazing and general oblique frames were not representable in this v2 diagnostic."
+  atlas:
+    average_template_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+    annotation_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+    query_sha256: "5347daf90e02ac1d1cfcbf9c8af86ff23a2fb32cd7e7a2ba2881951931286dbd"
+
+protocol:
+  updates: 1500
+  batch_size: 2
+  candidates_per_source: 16
+  source_presentations_per_arm: 3000
+  optimizer: "AdamW"
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+  amp_initial_and_final_scale: 512.0
+  development_updates: [500, 1000, 1500]
+  qualification_seeds: [2104322, 2204322]
+  qualification_count_per_seed: 48
+  pairing: "one source/candidate realization generated once per update or panel row and presented as the same tensor objects to both arms"
+  order_gate: "allclose energies plus unchanged top-1, decoded pose and count; raw maximum difference is descriptive"
+  causal_gate: "treatment at least 46/48, positive net corrections and prespecified exact paired McNemar gate on each fresh seed"
+
+determinism:
+  cuda_execution: true
+  deterministic_algorithms: true
+  cudnn_deterministic: true
+  cudnn_benchmark: false
+  cublas_workspace_config: ":4096:8"
+
+training_integrity:
+  passed: true
+  integrity_sha256: "a71b7ef82ea3becf448699c50613bf89071e59cd6e91bb0884440cd715eed588"
+  training_history_sha256: "80c2243433239114f72d9667dc9287732951411e80d11290936cbac913bd603e"
+  all_updates_present: true
+  finite_forward_and_unscaled_gradients_all_updates: true
+  paired_inputs_and_step_barrier_all_updates: true
+  off_center_gradients_every_update: true
+  cumulative_off_center_gradient_coverage_complete_by_update: 2
+  update_2_and_final_off_center_weights_finite_nonzero_and_distinct: true
+  final_equals_resume: true
+  clipped_update_count:
+    null: 1398
+    treatment: 1413
+  clipping_interpretation: "recorded descriptively; no frozen clipping-fraction gate"
+
+development:
+  authoritative_role: "consumed synthetic development only"
+  rows:
+    - update: 500
+      fixed_correct_null: 10
+      fixed_correct_treatment: 12
+      net_corrections: 2
+      exact_mcnemar_p: 0.803619384765625
+      branch: "both-fail-change-feature-or-candidate-construction-before-recurrence"
+    - update: 1000
+      fixed_correct_null: 10
+      fixed_correct_treatment: 20
+      net_corrections: 10
+      exact_mcnemar_p: 0.00634765625
+      branch: "both-fail-change-feature-or-candidate-construction-before-recurrence"
+    - update: 1500
+      fixed_correct_null: 9
+      fixed_correct_treatment: 15
+      net_corrections: 6
+      exact_mcnemar_p: 0.1795654296875
+      branch: "both-fail-change-feature-or-candidate-construction-before-recurrence"
+
+qualification:
+  authoritative_role: "untouched synthetic qualification of this native-topology premise only; not a benchmark or product-performance claim"
+  paired_fixed_rows: 96
+  paired_free_search_rows: 96
+  unique_family_pair_keys: 96
+  pooled_96_interpretation: "descriptive only; gates apply per seed"
+  seeds:
+    - seed: 2104322
+      fixed_correct:
+        null: 9
+        treatment: 16
+      null_wrong_treatment_correct: 10
+      null_correct_treatment_wrong: 3
+      net_corrections: 7
+      exact_mcnemar_p: 0.09228515625
+      null_free_search:
+        ap_mae_um: 334.44012451171875
+        lr_mae_deg: 2.8828125
+        dv_mae_deg: 5.8815107345581055
+        physical_error_um: 363.92380060955276
+        improvement_over_constant_prior: 0.677845639727495
+        ten_slice_projected_p95_seconds: 21.8503384507494
+      treatment_free_search:
+        ap_mae_um: 644.8568115234375
+        lr_mae_deg: 4.2643232345581055
+        dv_mae_deg: 12.74609375
+        physical_error_um: 712.16980351098
+        improvement_over_constant_prior: 0.369569654221034
+        ten_slice_projected_p95_seconds: 20.9448326501297
+      order_equivariance:
+        both_arms_energies_allclose: true
+        both_arms_top1_unchanged: true
+        both_arms_decoded_pose_maximum_difference: 0.0
+        maximum_energy_difference: 0.00000095367431640625
+      passed: false
+    - seed: 2204322
+      fixed_correct:
+        null: 17
+        treatment: 17
+      null_wrong_treatment_correct: 9
+      null_correct_treatment_wrong: 9
+      net_corrections: 0
+      exact_mcnemar_p: 1.0
+      null_free_search:
+        ap_mae_um: 260.2864685058594
+        lr_mae_deg: 3.2122397422790527
+        dv_mae_deg: 5.45703125
+        physical_error_um: 321.21565334311293
+        improvement_over_constant_prior: 0.683737532865983
+        ten_slice_projected_p95_seconds: 17.5625273995101
+      treatment_free_search:
+        ap_mae_um: 562.5651245117188
+        lr_mae_deg: 4.26953125
+        dv_mae_deg: 11.13671875
+        physical_error_um: 618.4465428763465
+        improvement_over_constant_prior: 0.391089981434834
+        ten_slice_projected_p95_seconds: 17.4666778997052
+      order_equivariance:
+        both_arms_energies_allclose: true
+        both_arms_top1_unchanged: true
+        both_arms_decoded_pose_maximum_difference: 0.0
+        maximum_energy_difference: 0.00000095367431640625
+      passed: false
+  family:
+    passed: false
+    integrity_passed: true
+    per_seed_pass:
+      "2104322": false
+      "2204322": false
+    interpretation_branch: "both-fail-change-feature-or-candidate-construction-before-recurrence"
+    family_status_sha256: "dbf94df5f01dd673999cb5da83268c6bfc40f06bda76d9e86175015f86390d8e"
+
+artifacts:
+  root: "F:/AtlasJointTraining/runs/independent-oracle-atlas-pair-topology-pair-1500-r1804322-v1"
+  exact_file_count: 15
+  unexpected_files: []
+  temporary_files: []
+  files:
+    development_manifest.json: "444319c86fe470dc0994f1f13d1a19fff2dac19123a9ebb31dfd1cc97154230e"
+    diagnostic_receipt.json: "5d36c26e7ae623736be1316b8a412ffd6ff5f530cce0f3bdd884be2dbf26555d"
+    joint_final_checkpoint.pt: "f4db503ffa0e73b79c661525156a468ea173409f6c255d51285232a6201c870e"
+    joint_resume_state.pt: "7aa33e5ab214d10b2144602610733f092ca2ba4980c2774e0a2920d26d079bdc"
+    paired_development_0500.json: "80e4cdf20ba87393d47681a6fcdb1d0f5c21d13b6ea4d96d41a863e5d28910a5"
+    paired_development_1000.json: "81af550834dbfc27dea4379bc939bb91e1d38da8ab6c32a9df78227a9e0bd667"
+    paired_development_1500.json: "f69ae100b4c8fae1301e525cbdecc263a223bedd3f22ac60561ba0538cc34c80"
+    paired_qualification_seed_2104322.json: "61fe519afbe3d81e99576c51fb09d989fd2bc98250406248ac5c40008d37cd32"
+    paired_qualification_seed_2204322.json: "3a13f0e0847b873676713b44af02511481ef64b858abc1644a0776e0e2864aa7"
+    paired_training_trajectory.json: "9a515a82bbe15e225495f449a4bd5421df9c0542f173c6119fc1d8eab66ffd0d"
+    qualification_joint_freeze.json: "e3fd8f4bb81e5436c3e49a98531f56ebdae4dd8d34b3098a735572af2ab3fa81"
+    qualification_manifest_seed_2104322.json: "8e5ca3d650fcc17fe00d78b981444bfbd037e4eb8722b432770fb4017eea3cb8"
+    qualification_manifest_seed_2204322.json: "549011733628ed89b1510ad01283c021cf722d3554c05cf24d8d44850a4267d1"
+    setup_receipt.json: "eb2a48fbc7be5f9ef46792093a8b6eb6503f3a3a05bf77cb4cd468dcbb40f63d"
+    training_manifest.json: "632e0f6c12ce64a8255920b21685fe1713143d6fc0b2b400a23d0c3e8c1869f9"
+  stdout_log:
+    path: "F:/AtlasJointTraining/topology_pair_r1804322_stdout.log"
+    sha256: "1f800ba29aefc9f8df40dc0e6fb0569de9cb325a57cb0f876aa20728040e4d6e"
+  receipt_payload_sha256: "73357a731a23ec2fb33230055d212cffe430a68a38a88f4e20458e9e18a0de4a"
+  freeze_payload_sha256: "844fdf52287de36e318e1e1299f8374822c9feb623db442858c8f3156c574e36"
+  final_model_state_sha256:
+    null: "d76ad3c0ed4515bc7dd52242364da1bfd1861cb71fd3f3de259e8d550b9f9c8d"
+    treatment: "b5614e746dd45d08c2299eee10689bfa130cac0556a96acb445d0a926562453f"
+
+audit:
+  independent_artifact_and_semantic_audit: "PASS"
+  findings:
+    p0: []
+    p1: []
+    p2: []
+  validators:
+    - "config and family self-hash"
+    - "all seven frozen source hashes"
+    - "regenerated setup, train, development and qualification manifests"
+    - "resume loader and final verifier"
+    - "final equals resume and joint-freeze capability"
+    - "trajectory and all development/qualification receipt semantics"
+    - "family-status and terminal diagnostic-receipt recomputation"
+    - "all per-slice physical distances recomputed directly from raw O/U/V poses and Allen annotation"
+  read_only_audit_left_artifact_hashes_unchanged: true
+  physical_distance_recomputation_maximum_absolute_difference_um: 0.00000000000137
+  constant_prior_per_row_maximum_difference_um: 0.000122
+  constant_prior_difference_interpretation: "CPU-versus-CUDA float32 mean reduction only; aggregate stored arithmetic is exact and no decision changes."
+
+interpretation:
+  - "Native anatomical lattice topology did not produce the prespecified reproducible causal rescue: 16/48 versus 9/48 on one fresh seed and 17/48 versus 17/48 on the other, far below 46/48."
+  - "The native treatment's free-search physical error was descriptively worse than the scrambled control on both fresh seeds; these synthetic values are diagnostic, not product-accuracy estimates."
+  - "The result directs development to change the cross-modal features and/or candidate construction before adding recurrence."
+  - "Because this diagnostic used only interior oblique-coronal planes, it cannot validate the user's required arbitrary-plane domain."
+  - "The next implementation is a side-by-side versioned arbitrary-plane generator and nonsingular 3-D frame/QuickNII O/U/V contract; frozen v2 code and artifacts remain byte-identical."
+  - "No previous trained model supplied weights, features, pseudo-labels or initialization."

@@ -1,6 +1,6 @@
 schema_version: "1.0"
 protocol_version: "0.1.0"
-status: "implementation_complete_development_training_in_progress"
+status: "arbitrary_plane_geometry_revision_in_progress"
 created_date: "2026-08-17"
 baseline:
   repository_commit: "c6681039e0b7acf35c9cdbee43040a3dca29cdab"
@@ -8,44 +8,45 @@ baseline:
   branch: "codex/joint-registration"
   immutable_ledger: "docs/publication/BASELINE_LEDGER.md"
 study:
-  title: "Joint recurrent atlas-plane localization and nonlinear registration of coronal mouse-brain histology"
+  title: "Joint arbitrary-plane atlas localization and nonlinear registration of mouse-brain histology"
   objective: >-
-    Determine whether one jointly trained recurrent model improves global CCF plane pose,
+    Determine whether one jointly trained model improves full arbitrary-plane CCF geometry,
     local anatomical correspondence, compatibility-derived failure ranking, and downstream probe mapping
     over frozen internal and published alternatives while remaining practical in the desktop GUI.
   model_status: "implemented_development_training_active_not_qualified"
   intended_scope:
     species: "Mus musculus"
     anatomy: "whole adult brain"
-    section_plane: "coronal"
+    section_plane: "any brain-intersecting plane"
     image_channels: "grayscale"
     atlas: "Allen CCFv3 25 um"
   excluded_claims:
     - "clinical or diagnostic use"
-    - "non-coronal or partial-field generalization without new qualification"
+    - "arbitrary-plane or partial-field performance before dedicated new qualification"
     - "market-wide superiority before every applicable locked comparator passes reproduction"
 model:
   unit: "single jointly trained checkpoint"
   components:
     geometry_appropriate_pose_and_registration_encoders: true
-    shared_recurrent_review_core: true
+    shared_recurrent_review_core: "candidate only after arbitrary-plane premise passes"
     explicit_global_pose_head: true
     explicit_similarity_head: true
     stationary_velocity_dense_head: true
     forward_and_inverse_maps: true
     trained_compatibility_energy: true
-    recurrent_shared_refinement: true
+    recurrent_shared_refinement: "prespecified ablation, not yet selected"
   deployment:
     checkpoint_count: 1
     onnx_entry_graphs: 2
     host_atlas_renderer_between_iterations: true
     rationale: "Preserve the large 3-D atlas outside ONNX while exporting both entry graphs from one jointly trained checkpoint."
-  initial_iterations: 3
+  initial_iterations: "three is a hypothesis; feed-forward versus recurrent depth is selected later"
   iteration_selection: "development accuracy-latency ablation"
   public_pose_outputs:
-    - "ap_um_from_bregma_anterior_positive"
-    - "lr_tilt_deg"
-    - "dv_tilt_deg"
+    - "quicknii_ouv_ml_ap_dv"
+    - "structured_ccf_frame_center_rotation6d_log_scale"
+    - "credible_spatial_plane_volume_after_calibration"
+    - "derived_ap_lr_dv_only_when_coronal_conversion_is_well_conditioned"
   dense_outputs:
     - "fixed_atlas_to_moving_histology_absolute_xy_px"
     - "moving_histology_to_fixed_atlas_absolute_xy_px"
@@ -58,9 +59,9 @@ analysis_modes:
   - id: "automatic"
     information: "raw image only; automatic mask allowed and disclosed"
   - id: "outline_assisted"
-    information: "user visible-tissue/surface mask"
+    information: "optional smart-brush visible-tissue/surface mask; accurate, imperfect and absent-mask modes remain supported"
   - id: "constraint_assisted"
-    information: "optional AP/order/common-tilt/surgical information"
+    information: "optional full-plane domain, stack-order/shared-normal or surgical information"
   - id: "expert_assisted"
     information: "manual QuickNII/VisuAlign or equivalent"
 data:
@@ -75,6 +76,7 @@ data:
       role: ["diagnostic_only"]
     - id: "deepslice_public_ground_truth"
       role: ["public_comparator_benchmark"]
+      doi: "10.25949/22802411"
       leakage_status: "previously_inspected_not_pristine"
     - id: "local_session_722"
       role: ["workflow_diagnostic"]
@@ -84,6 +86,7 @@ data:
     target_animals: "30-50"
     target_laboratories_minimum: 3
     target_sections: "500-1000"
+    orientation_sampling: "deliberately include coronal, sagittal, horizontal and extreme-oblique animals"
     final_n_rule: "pilot-based power calculation frozen before final collection"
   planned_hidden_real_dense:
     status: "not_collected"
@@ -92,10 +95,19 @@ data:
     landmarks_per_section: "15-30 when identifiable"
 synthetic_generator:
   generation: "on_demand_from_hashed_manifests"
+  provenance:
+    source_entity_type: "atlas"
+    asset_identity_and_hash_required: true
+    animal_id: null
+    specimen_id: null
+    synthetic_realization_id_required: true
+    exact_rng_stream_and_rejection_attempt_required: true
   pose_domain:
-    ap_um: [-4500, 500]
-    lr_deg: [-35, 35]
-    dv_deg: [-35, 35]
+    orientation: "uniform surface-area normal on RP2 plus uniform in-plane roll"
+    offset: "uniform over the annotation-support projection for the sampled normal"
+    support: "all brain-intersecting planes; named tiny-support/tangent stress strata retained"
+    serialized_geometry: "QuickNII O/U/V"
+    internal_geometry: "3-D centre plus continuous 6-D right-handed frame plus positive log scale"
   nuisance:
     in_plane_rotation: "arbitrary"
     scale: [0.5, 1.5]
@@ -119,7 +131,8 @@ synthetic_generator:
       - "bubbles_tears_missing_tissue_and_occlusion"
   negative_pose_training:
     required: true
-    includes_adjacent_25um_planes: true
+    includes_geodesic_normal_and_physical_offset_neighbours: true
+    keeps_candidates_brain_intersecting: true
   locked_synthetic_test:
     independent_implementation_required: true
     new_seeds_alone_sufficient: false
@@ -136,7 +149,7 @@ training:
         - "recurrent_local_correlation_convgru"
         - "windowed_cross_attention_after_export_preflight"
       matching: "same manifests, seeds, losses and recurrence; within 10 percent parameters, MACs and peak memory"
-      purpose: "select a self-contained architecture before recurrence, feedback, hard-negative, and field-control ablations"
+      purpose: "select a self-contained arbitrary-plane family, then test recurrence, feedback, hard-negative, and field-control ablations"
     - id: "multiseed_qualification"
       views: 100000
       seeds_minimum: 3
@@ -144,7 +157,7 @@ training:
       views_maximum: 500000
       condition: "scale only while frozen validation endpoints improve"
   curriculum:
-    - "exact or near-exact plane with mild warp"
+    - "exact or near-exact arbitrary-plane frame with mild warp"
     - "scheduled predicted poses and nearby hard negatives"
     - "fully closed-loop recurrent inference with full artifact mix"
   learned_checkpoint_dependencies:
@@ -160,14 +173,14 @@ training:
 constraints:
   implemented_outside_model_weights: true
   families:
-    ap_range: "hard candidate mask"
-    partial_order: "joint constrained MAP over checked slices only"
-    common_tilt: "one exact LR/DV pair; separate AP per slice"
-    surgical: "feasible pose and trajectory set from entry, angle, depth, probe geometry, observations"
+    plane_domain: "hard candidate mask in full O/U/V geometry"
+    partial_order: "ordered signed offsets along a declared stack normal; legacy AP order preserved for converted coronal sessions"
+    common_orientation: "shared frame normal plus per-slice signed offsets"
+    surgical: "feasible 3-D O/U/V point and trajectory set from entry, angle, depth, probe geometry and observations"
   hard_constraint_satisfaction_required: 1.0
   infeasible_behavior: "return conflicts and minimum violation; never silently relax"
 probabilistic_pose:
-  required_architecture_output: "candidate energy distribution plus compact local covariance"
+  required_architecture_output: "equal-area antipodal normal distribution, conditional physical-offset candidates, and local tangent covariance over two normal rotations plus normal offset"
   calibration_data: "held-out animals only"
   point_accuracy_noninferiority_required: true
   required_reports:
@@ -183,6 +196,7 @@ evaluation:
     - "new_hidden_real_dense_registration"
     - "exact_out_of_generator_synthetic"
     - "downstream_probe_mapping"
+    - "dedicated_real_cardinal_and_extreme_oblique_external_validation"
   comparison_modes:
     - "pose_only_before_warp"
     - "warp_only_at_common_exact_plane"

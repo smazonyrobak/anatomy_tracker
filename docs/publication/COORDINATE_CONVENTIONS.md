@@ -2,7 +2,7 @@
 
 This document is normative. Code, datasets, model metadata, figures and exports must identify their coordinate contract and version.
 
-## Public stereotaxic pose
+## Legacy coronal stereotaxic pose
 
 - AP is micrometres from bregma.
 - AP `0` is bregma.
@@ -11,15 +11,31 @@ This document is normative. Code, datasets, model metadata, figures and exports 
 - In-plane rotation is a nuisance/image-orientation variable and is not a cutting tilt.
 - User-selected image orientation is authoritative; automatic alignment must not silently mirror the section.
 
-The existing renderer defines an oblique plane in atlas voxel axes by
+These values are a derived compatibility view only when a plane is
+well-conditioned in the coronal chart. They are not the normative geometry for
+the arbitrary-plane model. The frozen existing renderer defines an oblique
+coronal plane in atlas voxel axes by
 
 `AP = AP_center + tan(LR) * (ML_index - ML_center) + tan(DV) * (DV_index - DV_center)`.
 
-Equivalently, `source/atlas_pose_runtime.py` uses the normal proportional to `[-tan(LR), 1, -tan(DV)]` in its atlas-axis ordering. This formula, rather than an informal visual description, defines tilt signs. Any change requires a contract-version increment and regression fixtures.
+Equivalently, `source/atlas_pose_runtime.py` uses the normal proportional to `[-tan(LR), 1, -tan(DV)]` in its atlas-axis ordering. This formula, rather than an informal visual description, defines tilt signs. Any change requires a contract-version increment and regression fixtures. Exact sagittal and horizontal normals are singular in this chart and must remain in full-frame/O/U/V form rather than being clipped into invented tilt values.
 
 ## QuickNII representation
 
-QuickNII represents a plane by origin `O` and in-plane vectors `U` and `V`. The joint model may use O/U/V internally, but conversion to and from public AP/L--R/D--V values must use one tested implementation. Evaluation of DeepSlice uses the official corresponding-pixel plane-distance definition and coordinate convention.
+QuickNII represents a plane by origin `O` and in-plane vectors `U` and `V`.
+This is the normative serialized, interchange and evaluation geometry for the
+arbitrary-plane model. A normalized raster point `(s,t)` maps to CCF by
+`P(s,t)=O+sU+tV`, so no cutting orientation is a special case. Evaluation of
+DeepSlice uses the official corresponding-pixel plane-distance definition and
+coordinate convention within DeepSlice's applicable coronal scope.
+
+The learned internal state is constrained: a 3-D raster centre `c`, a
+right-handed orthonormal frame `R=[u,v,n]` represented by a continuous 6-D
+rotation parameterization, and positive log scale with a fixed raster aspect.
+The exact conversion is `U=span_x*u`, `V=span_y*v`, and
+`O=c-U/2-V/2`. Unconstrained nine-coordinate O/U/V regression is not an
+eligible implementation. Raster reflections remain explicit metadata
+reparameterizations and never enter the proper-rotation state.
 
 A horizontal raster flip is an image-coordinate reparameterization, not a physical atlas reflection. For normalized horizontal pixel coordinate `s`, the same physical plane is represented after a flip by
 
