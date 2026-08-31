@@ -65,6 +65,8 @@ def bilinear_sample_scalar(
     values = np.asarray(image, dtype=np.float32)
     if values.ndim != 2:
         raise ValueError("scalar image must have shape (H,W)")
+    if not np.isfinite(values).all():
+        raise ValueError("scalar image must be finite")
     height, width = values.shape
     x0, x1, y0, y1, wx, wy = _bilinear_indices(
         output_to_input, (height, width), padding_mode
@@ -82,7 +84,10 @@ def bilinear_sample_scalar(
         + corner(x0, y1) * (1.0 - wx) * wy
         + corner(x1, y1) * wx * wy
     )
-    return result.astype(np.float32, copy=False)
+    result = result.astype(np.float32, copy=False)
+    if not np.isfinite(result).all():
+        raise ValueError("bilinear scalar result became nonfinite")
+    return result
 
 
 def bilinear_sample_field(
@@ -95,6 +100,8 @@ def bilinear_sample_field(
     field = np.asarray(field_xy, dtype=np.float32)
     if field.ndim != 3 or field.shape[0] != 2:
         raise ValueError("field must have shape (2,H,W)")
+    if not np.isfinite(field).all():
+        raise ValueError("field must be finite")
     return np.stack(
         [
             bilinear_sample_scalar(field[axis], output_to_input, padding_mode=padding_mode)
@@ -117,8 +124,8 @@ def nearest_sample_labels(
     if pixel_map.ndim != 3 or pixel_map.shape[0] != 2 or not np.isfinite(pixel_map).all():
         raise ValueError("pixel map must be finite with shape (2,H,W)")
     height, width = values.shape
-    x = np.floor(pixel_map[0] + 0.5).astype(np.int64)
-    y = np.floor(pixel_map[1] + 0.5).astype(np.int64)
+    x = np.rint(pixel_map[0]).astype(np.int64)
+    y = np.rint(pixel_map[1]).astype(np.int64)
     valid = (x >= 0) & (x < width) & (y >= 0) & (y < height)
     sampled = values[np.clip(y, 0, height - 1), np.clip(x, 0, width - 1)]
     return np.where(valid, sampled, np.asarray(outside_label, dtype=values.dtype))
@@ -145,12 +152,24 @@ def physical_velocity_to_pixel(
     """
     velocity = np.asarray(velocity_uv_um, dtype=np.float64)
     basis = np.asarray(pixel_basis_uv_um, dtype=np.float64)
-    if velocity.ndim != 3 or velocity.shape[0] != 2:
-        raise ValueError("physical velocity must have shape (2,H,W)")
-    if basis.shape != (2, 2) or not np.isfinite(basis).all() or np.linalg.det(basis) <= 0.0:
+    if velocity.ndim != 3 or velocity.shape[0] != 2 or not np.isfinite(velocity).all():
+        raise ValueError("physical velocity must be finite with shape (2,H,W)")
+    with np.errstate(over="ignore", invalid="ignore"):
+        determinant = (
+            float(np.linalg.det(basis)) if basis.shape == (2, 2) else float("nan")
+        )
+    if (
+        basis.shape != (2, 2)
+        or not np.isfinite(basis).all()
+        or not np.isfinite(determinant)
+        or determinant <= 0.0
+    ):
         raise ValueError("pixel basis must be one finite positive-orientation 2x2 matrix")
     converted = np.linalg.solve(basis, velocity.reshape(2, -1))
-    return converted.reshape(velocity.shape).astype(np.float32)
+    converted = converted.reshape(velocity.shape).astype(np.float32)
+    if not np.isfinite(converted).all():
+        raise ValueError("physical-to-pixel velocity conversion became nonfinite")
+    return converted
 
 
 def remove_tissue_affine_component(
@@ -160,8 +179,13 @@ def remove_tissue_affine_component(
     """Subtract the least-squares affine velocity fitted over tissue pixels."""
     velocity = np.asarray(velocity_xy, dtype=np.float32)
     tissue = np.asarray(tissue_mask, dtype=bool)
-    if velocity.ndim != 3 or velocity.shape[0] != 2 or tissue.shape != velocity.shape[1:]:
-        raise ValueError("velocity and tissue mask must have shapes (2,H,W) and (H,W)")
+    if (
+        velocity.ndim != 3
+        or velocity.shape[0] != 2
+        or tissue.shape != velocity.shape[1:]
+        or not np.isfinite(velocity).all()
+    ):
+        raise ValueError("velocity must be finite and velocity/mask shapes must be (2,H,W)/(H,W)")
     if np.count_nonzero(tissue) < 3:
         raise ValueError("affine removal needs at least three tissue pixels")
     height, width = tissue.shape
@@ -175,7 +199,10 @@ def remove_tissue_affine_component(
         rcond=None,
     )[0]
     affine = np.einsum("hwk,kc->chw", design, coefficients)
-    return (velocity - affine).astype(np.float32)
+    result = (velocity - affine).astype(np.float32)
+    if not np.isfinite(result).all():
+        raise ValueError("affine-component removal became nonfinite")
+    return result
 
 
 def sample_multiscale_physical_velocity(
@@ -209,7 +236,10 @@ def sample_multiscale_physical_velocity(
         rms = np.sqrt(np.mean(np.sum(smooth * smooth, axis=0)))
         if amplitude > 0.0:
             velocity += smooth * (float(amplitude) / max(float(rms), np.finfo(np.float64).eps))
-    return velocity.astype(np.float32)
+    result = velocity.astype(np.float32)
+    if not np.isfinite(result).all():
+        raise ValueError("sampled physical velocity became nonfinite")
+    return result
 
 
 def _integration_steps(velocity_xy: np.ndarray, max_scaled_displacement_px: float) -> int:
@@ -227,7 +257,10 @@ def _scaling_and_squaring_steps(velocity_xy: np.ndarray, steps: int) -> np.ndarr
         displacement = displacement + bilinear_sample_field(
             displacement, identity + displacement, padding_mode="border"
         )
-    return (identity + displacement).astype(np.float32)
+    result = (identity + displacement).astype(np.float32)
+    if not np.isfinite(result).all():
+        raise ValueError("integrated stationary-velocity map became nonfinite")
+    return result
 
 
 def scaling_and_squaring(
@@ -285,7 +318,10 @@ def _apply_similarity(
     points = np.asarray(points_xy, dtype=np.float64).reshape(2, -1)
     transformed = float(scale) * rotation @ (points - center_xy[:, None])
     transformed += center_xy[:, None] + translation_xy[:, None]
-    return transformed.reshape(np.asarray(points_xy).shape).astype(np.float32)
+    transformed = transformed.reshape(np.asarray(points_xy).shape).astype(np.float32)
+    if not np.isfinite(transformed).all():
+        raise ValueError("similarity map became nonfinite")
+    return transformed
 
 
 def similarity_maps(
@@ -306,6 +342,7 @@ def similarity_maps(
         or not np.isfinite(angle_rad)
         or not np.isfinite(scale)
         or scale <= 0.0
+        or scale < 1.0 / np.finfo(np.float64).max
     ):
         raise ValueError("similarity needs an H,W > 1, finite parameters, and positive scale")
     identity = identity_pixel_map((height, width))

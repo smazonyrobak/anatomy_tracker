@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import torch
 
 from training.arbitrary_plane_synthetic_ops import (
     bilinear_sample_field,
@@ -40,6 +41,29 @@ def test_arbitrary_shape_sampling_and_full_integer_labels():
     assert sampled_labels.dtype == np.int64
     assert np.array_equal(sampled_labels[:, :-1], labels[:, 1:])
     assert np.all(sampled_labels[:, -1] == 0)
+
+    tie_map = np.stack(
+        (
+            np.asarray([[-0.5, 0.5, 1.5, 2.5, 3.5]], np.float32),
+            np.ones((1, 5), np.float32),
+        )
+    )
+    rounded = torch.round(torch.from_numpy(tie_map)).numpy().astype(np.int64)
+    valid = (
+        (rounded[0] >= 0)
+        & (rounded[0] < shape[1])
+        & (rounded[1] >= 0)
+        & (rounded[1] < shape[0])
+    )
+    expected_ties = np.where(
+        valid,
+        labels[
+            np.clip(rounded[1], 0, shape[0] - 1),
+            np.clip(rounded[0], 0, shape[1] - 1),
+        ],
+        0,
+    )
+    assert np.array_equal(nearest_sample_labels(labels, tie_map), expected_ties)
 
 
 def test_map_composition_uses_absolute_pixel_center_semantics():
@@ -228,3 +252,36 @@ def test_every_predeclared_topology_gate_can_reject_independently():
     assert not any(
         result["accepted"] for result in (minimum, maximum, rms, q99, maximum_cycle)
     )
+
+
+def test_generation_facing_numeric_helpers_reject_nonfinite_values():
+    shape = (7, 9)
+    identity = identity_pixel_map(shape)
+    scalar = np.ones(shape, np.float32)
+    velocity = np.zeros((2, *shape), np.float32)
+    tissue = np.ones(shape, bool)
+    bad_scalar = scalar.copy()
+    bad_scalar[2, 3] = np.nan
+    bad_map = identity.copy()
+    bad_map[0, 2, 3] = np.inf
+    bad_velocity = velocity.copy()
+    bad_velocity[1, 3, 4] = np.nan
+    with pytest.raises(ValueError, match="scalar image must be finite"):
+        bilinear_sample_scalar(bad_scalar, identity)
+    with pytest.raises(ValueError, match="pixel map must be finite"):
+        bilinear_sample_scalar(scalar, bad_map)
+    with pytest.raises(ValueError, match="field must be finite"):
+        bilinear_sample_field(bad_velocity, identity)
+    with pytest.raises(ValueError, match="physical velocity must be finite"):
+        physical_velocity_to_pixel(bad_velocity, np.eye(2))
+    with pytest.raises(ValueError, match="velocity must be finite"):
+        remove_tissue_affine_component(bad_velocity, tissue)
+    with pytest.raises(ValueError, match="velocity must be finite"):
+        integrate_stationary_velocity(bad_velocity)
+    with pytest.raises(ValueError, match="finite parameters"):
+        similarity_maps(
+            shape,
+            angle_rad=0.0,
+            scale=np.nextafter(0.0, 1.0),
+            translation_xy=(0.0, 0.0),
+        )
