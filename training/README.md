@@ -34,6 +34,64 @@ Calibration is deliberately deferred until the architecture is frozen, using
 animal-disjoint calibration-fit and calibration-check cohorts; until then these
 values are distributions produced by the model, not calibrated confidence.
 
+## Arbitrary-plane complete synthetic generator
+
+The arbitrary-plane track now has a deterministic finite Allen CCF renderer but
+not yet a complete synthetic realization. The predeclared implementation
+protocol is
+[`../publication/arbitrary_plane_synthetic_preflight.yaml`](../publication/arbitrary_plane_synthetic_preflight.yaml).
+It adds three stages without using any learned checkpoint, previous-model
+weight, pretrained feature extractor or learned style model:
+
+1. **G1 deformation:** two-scale, affine-free stationary velocity fields in
+   physical section coordinates, integrated as `exp(v)` and `exp(-v)` by
+   adaptive scaling-and-squaring. Ordinary samples must pass positive-Jacobian,
+   forward/inverse composition, tissue-coverage, integer-label and exact-replay
+   gates. Tiny or tangent cases remain a separately named stress stratum.
+2. **G2 appearance:** clean, template-derived, label-conditioned and mixed
+   grayscale views with randomized polarity, gamma, gain, offset, low-frequency
+   bias, blur, resolution and noise. Label-only views are capped until montage
+   review so Allen parcellation edges cannot become a guaranteed shortcut.
+3. **G3 observation damage and outline:** tears, missing tissue, holes,
+   occlusion and fold-like ambiguity alter the observed image and validity
+   masks, never the anatomical deformation. Accurate, deliberately imperfect
+   and absent-outline descendants share the same latent sample; the smart brush
+   remains optional, and its outline is never the dense-validity target.
+
+All numeric ranges and development mixtures in that protocol are predeclared
+engineering defaults pending a seed-hidden, blinded montage audit. They are not
+biological prevalence estimates, benchmark outcomes or release evidence. The
+G1--G3 checks are small deterministic smokes on train/development data only;
+they do not authorize full benchmarking or access to final-test animals. After
+stabilization, a small positive-Jacobian non-SVF holdout tests for
+generator/decoder parameterization matching before the arbitrary-plane oracle
+pose-ranking premise.
+
+Future real validation remains strictly animal-split, with untouched final-test
+animals. Allen/synthetic data are for development; the DeepSlice Ground Truth
+dataset (DOI `10.25949/22802411`) is the public benchmark, and separate real lab
+histology is the preferred external validation. Comparisons use blinded expert
+reference alignments, physical landmark error as the primary endpoint, and also
+report plane/angle error, regional overlap, failures and correction time.
+Animals are the statistical units; effect sizes receive 95% confidence
+intervals, and exact splits, code, configs, seeds and raw predictions are saved.
+Probabilistic pose and dense-map outputs are calibrated only later on unseen
+animals, with nominal-coverage and point-accuracy checks.
+
+### Primary sources for the generator protocol
+
+1. Ashburner J. (2007), “A fast diffeomorphic image registration algorithm.” [DOI](https://doi.org/10.1016/j.neuroimage.2007.07.007)
+2. Mansi T, Pennec X, Sermesant M, Delingette H, Ayache N. (2011), “iLogDemons: A Demons-Based Registration Algorithm for Tracking Incompressible Elastic Biological Tissues.” [DOI](https://doi.org/10.1007/s11263-010-0405-z)
+3. Dalca AV, Balakrishnan G, Guttag J, Sabuncu MR. (2019), “Unsupervised Learning of Probabilistic Diffeomorphic Registration for Images and Surfaces.” [DOI](https://doi.org/10.1016/j.media.2019.07.006)
+4. Hoffmann M, Billot B, Greve DN, Iglesias JE, Fischl B, Dalca AV. (2022), “SynthMorph: Learning Contrast-Invariant Registration Without Acquired Images.” [DOI](https://doi.org/10.1109/TMI.2021.3116879)
+5. Billot B, Greve DN, Puonti O, Thielscher A, Van Leemput K, Fischl B, Dalca AV, Iglesias JE. (2023), “SynthSeg: Segmentation of brain MRI scans of any contrast and resolution without retraining.” [DOI](https://doi.org/10.1016/j.media.2023.102789)
+6. Lee BC, Tward DJ, Mitra PP, Miller MI. (2018), “On variational solutions for whole brain serial-section histology using a Sobolev prior in the computational anatomy random orbit model.” [DOI](https://doi.org/10.1371/journal.pcbi.1006610)
+7. Tward D, Brown T, Kageyama Y, Patel J, Hou Z, Mori S, Albert M, Troncoso J, Miller M. (2020), “Diffeomorphic Registration With Intensity Transformation and Missing Data: Application to 3D Digital Pathology of Alzheimer's Disease.” [DOI](https://doi.org/10.3389/fnins.2020.00052)
+8. Casamitjana A, Lorenzi M, Ferraris S, Peter L, Modat M, Stevens A, Fischl B, Vercauteren T, Iglesias JE. (2022), “Robust joint registration of multiple stains and MRI for multimodal 3D histology reconstruction: Application to the Allen human brain atlas.” [DOI](https://doi.org/10.1016/j.media.2021.102265)
+9. Tellez D, Litjens G, Bándi P, Bulten W, Bokhorst J-M, Ciompi F, van der Laak J. (2019), “Quantifying the effects of data augmentation and stain color normalization in convolutional neural networks for computational pathology.” [DOI](https://doi.org/10.1016/j.media.2019.101544)
+10. Wang NC, Kaplan J, Lee J, Hodgin J, Udager A, Rao A. (2021), “Stress Testing Pathology Models with Generated Artifacts.” [DOI](https://doi.org/10.4103/jpi.jpi_6_21)
+11. Tian L, Greer H, Vialard F-X, Kwitt R, San José Estépar R, Rushmore RJ, Makris N, Bouix S, Niethammer M. (2023), “GradICON: Approximate Diffeomorphisms via Gradient Inverse Consistency.” [DOI](https://doi.org/10.1109/CVPR52729.2023.01734)
+
 ## Historical AtlasPose protocol
 
 AtlasPose predicts `[AP from bregma (um, anterior positive), L-R tilt (degrees), D-V tilt (degrees)]` from a coronal mouse-brain section. The auxiliary orientation logit resolves the 180-degree ambiguity left after smart-mask roll canonicalization; it is not another anatomical coordinate.

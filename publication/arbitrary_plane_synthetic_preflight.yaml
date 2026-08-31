@@ -1,0 +1,330 @@
+schema_version: "1.0"
+receipt_id: "arbitrary-plane-complete-synthetic-protocol-2026-08-31"
+date: "2026-08-31"
+status: "development_protocol_predeclared_implementation_pending"
+claim_scope: >-
+  Predeclared G1/G2/G3 engineering defaults and mandatory acceptance gates for
+  small deterministic development smokes of the complete arbitrary-plane
+  synthetic generator. This receipt contains no generated result, model
+  training, architecture selection, accuracy estimate, uncertainty
+  calibration, benchmark, qualification, final-test access or release claim.
+
+repository:
+  branch: "codex/joint-registration"
+  source_parent_commit: "83700c552bb771ad2b81e5aa44ad1a84e61335e2"
+  implemented_parent_stage: "finite arbitrary-plane CCF render precursor"
+  complete_generator_status: "pending G1 deformation, G2 appearance and G3 damage/outline implementation"
+  frozen_v2_or_diagnostic_sources_may_be_modified: false
+
+defaults_interpretation:
+  authoritative_role: "predeclared engineering defaults for early development only"
+  biological_prevalence_claim: false
+  realism_claim: false
+  benchmark_outcome: false
+  qualification_outcome: false
+  freeze_condition: >-
+    Inspect seed-hidden montages stratified by plane, support size, severity and
+    outline mode. Revise or freeze every range and mixture before large-scale
+    training; record the decision in a new hash-bound receipt.
+
+scope_controls:
+  permitted_splits: ["train", "development"]
+  final_test_manifest_created_opened_or_sampled: false
+  deep_slice_ground_truth_used: false
+  real_lab_histology_used: false
+  full_benchmark_permitted: false
+  premature_architecture_benchmark_permitted: false
+  next_scientific_gate_after_stabilization: "small arbitrary-plane oracle pose-ranking premise"
+  ordinary_sampling_and_named_stress_strata_are_separate: true
+
+model_independence:
+  initialization: "random seed streams only"
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  learned_style_or_stain_model_dependencies: []
+  legacy_models_role: "comparators only; no weights, features, pseudo-labels or architecture constraints"
+
+coordinate_contract:
+  deformation_domain: "2-D physical section coordinates in micrometres"
+  dimension_symbol: "D=min(clean tissue u-span, clean tissue v-span) in micrometres"
+  pixel_pitch_symbol: "p=isotropic physical pixel pitch in micrometres per pixel"
+  global_local_separation: >-
+    Global in-plane translation, rotation, scale and shear remain explicit
+    pose/basis parameters. Remove the least-squares constant and linear field
+    from the sampled local velocity before exponentiation.
+  map_storage:
+    - "forward and inverse maps in physical micrometres"
+    - "forward and inverse maps in raster pixels"
+    - "explicit push/pull and interpolation convention"
+    - "float64 truth and separately hash-bound effective float32 render state"
+
+g1_deformation:
+  stage_name: "G1 topology-preserving geometry and clean moving section"
+  identity_probability: 0.15
+  random_svf:
+    field_count: 2
+    distribution: "independent zero-mean Gaussian stationary velocity fields"
+    correlation_length_over_D:
+      fine: [0.08, 0.15]
+      coarse: [0.20, 0.35]
+    interpolation: "smooth upsampling on a padded physical grid"
+    affine_removal_domain: "clean tissue"
+    target_postintegration_rms_displacement_over_D:
+      distribution: "log-uniform"
+      range: [0.005, 0.04]
+    maximum_displacement_over_D: 0.10
+    postintegration_rescale_policy: "rescale velocity and reintegrate at most once; otherwise reject"
+  analytic_local_primitive:
+    probability: 0.50
+    choices: ["radial expansion/compression", "anisotropic local stretch", "swirl"]
+    choice_probability: "uniform"
+    centre: "sampled within clean tissue"
+    radius_over_D: [0.10, 0.35]
+    peak_amplitude_over_D: [0.0, 0.02]
+    composition: "add to the local SVF before exponentiation"
+  integration:
+    method: "scaling and squaring"
+    forward: "phi=exp(v)"
+    inverse: "psi=exp(-v)"
+    squaring_steps: "n=max(0,ceil(log2(max_norm_velocity_pixels/0.5)))"
+    maximum_squaring_steps: 12
+    dynamic_padding_pixels: "ceil(maximum_displacement_um/p)+2"
+  resampling:
+    scalar: "bilinear"
+    annotation: "nearest-neighbour integer"
+    tissue_and_validity_masks: "nearest-neighbour Boolean"
+  mandatory_acceptance_gates:
+    finite_velocity_and_maps: true
+    ordinary_minimum_clean_brain_pixels: "max(256,0.005*H*W)"
+    tiny_or_tangent_exception: "separately named stress stratum only"
+    jacobian_domain: "common valid physical-coordinate interior excluding one-pixel derivative margin"
+    forward_and_inverse_jacobian_determinant_range: [0.20, 5.0]
+    negative_or_nonfinite_jacobian_count: 0
+    jacobian_summary_fields: ["minimum", "q01", "median", "q99", "maximum"]
+    forward_inverse_composition_rms_pixels_maximum: 0.05
+    forward_inverse_composition_q99_pixels_maximum: 0.25
+    forward_inverse_composition_max_pixels_maximum: 0.50
+    inverse_forward_composition_rms_pixels_maximum: 0.05
+    inverse_forward_composition_q99_pixels_maximum: 0.25
+    inverse_forward_composition_max_pixels_maximum: 0.50
+    clean_tissue_retained_in_valid_fov_minimum_fraction: 0.995
+    annotation_output_dtype: "integer"
+    annotation_tissue_mask_consistency: "exact"
+    deterministic_replay: "byte-identical"
+
+g2_appearance:
+  stage_name: "G2 grayscale acquisition and stain-appearance domain randomization"
+  input_normalization: >-
+    Deterministic clean-tissue q01/q99 scaling and clipping to [0,1], with
+    min/max fallback below 256 tissue pixels; bind the effective statistics.
+  identity_bypass_probability: 0.15
+  nonidentity_source_family_probabilities:
+    template_derived: 0.50
+    label_conditioned: 0.25
+    template_label_mixture: 0.25
+  label_conditioned:
+    visible_label_mean_range: [0.10, 0.90]
+    visible_label_standard_deviation_range: [0.0, 0.08]
+    postrender_blur_sigma_pixels: [0.5, 1.5]
+    maximum_fraction_before_montage_audit: 0.25
+    anti_shortcut_policy: >-
+      With probability 0.5 return each nonzero label contrast toward a
+      parent/global tissue mean; when ontology support is available, coarsen
+      instead to 8-64 visible groups. Never render every Allen boundary as a
+      guaranteed distinct edge in every sample.
+  template_label_mixture_alpha: [0.25, 0.75]
+  independent_operators:
+    polarity_inversion_probability: 0.50
+    gamma:
+      distribution: "log-uniform"
+      range: [0.5, 2.0]
+    gain:
+      distribution: "log-uniform"
+      range: [0.7, 1.4]
+    offset_range: [-0.15, 0.15]
+    multiplicative_bias:
+      form: "exp(B)"
+      base_grid: [4, 4]
+      B_mean: 0.0
+      B_standard_deviation_range: [0.0, 0.30]
+      interpolation: "smooth"
+    gaussian_blur:
+      probability: 0.50
+      sigma_pixels: [0.0, 1.5]
+    anisotropic_resolution_loss:
+      probability: 0.25
+      independent_axis_downsample_factor: [1.0, 3.0]
+    additive_gaussian_noise:
+      probability: 0.70
+      standard_deviation_normalized: [0.0, 0.06]
+    final_clip_range: [0.0, 1.0]
+  deferred_until_montage_review:
+    - "random non-monotone cubic tone curves"
+    - "trained style transfer"
+    - "trained stain normalization"
+  mandatory_acceptance_gates:
+    output_dtype: "float32"
+    finite: true
+    output_range: [0.0, 1.0]
+    pre_damage_tissue_q99_minus_q01_minimum: 0.10
+    pre_damage_tissue_standard_deviation_minimum: 0.03
+    low_information_exception: "separately named stress stratum only"
+    deterministic_replay: "byte-identical"
+    required_bound_fields:
+      - "clean and post-appearance array hashes"
+      - "source family and mixture alpha"
+      - "every operator present/absent bit, parameter, order and RNG substream"
+      - "normalization and interpolation contract"
+
+g3_damage_background_and_outline:
+  stage_name: "G3 observation damage, background and optional smart-brush modes"
+  operation_order: "after G1 geometric warp and G2 appearance"
+  geometry_invariance: "damage may change observation and visibility, never phi, psi or anatomical targets"
+  damage_event_count_probabilities:
+    none: 0.50
+    one: 0.40
+    two: 0.10
+  damage_type_probabilities_for_development_coverage:
+    boundary_bite_or_missing_cortex: 0.20
+    internal_hole: 0.20
+    tear_or_crack: 0.20
+    blackout_or_occluding_polygon: 0.20
+    fold_like_bright_or_doubled_strip: 0.20
+  event_parameters:
+    affected_clean_tissue_fraction_per_event:
+      distribution: "log-uniform"
+      range: [0.005, 0.15]
+    boundary_bite_components: 1
+    internal_hole_components: [1, 3]
+    crack_control_points: [2, 5]
+    crack_width_over_D: [0.01, 0.04]
+    fold_correspondence_policy: "mark the entire ambiguous overlap invalid; never assign two correspondences"
+  damage_eligibility:
+    disable_below_clean_tissue_pixels: 128
+    ordinary_maximum_union_missing_or_artifact_fraction: 0.25
+    ordinary_minimum_visible_pixels: "max(64,0.70*N_clean)"
+    severe_exception: "separately named stress stratum only"
+  supervision_masks:
+    arrays: ["clean_tissue", "visible", "missing", "artifact", "loss_valid"]
+    loss_valid_definition: "visible AND NOT artifact"
+    missing_as_atlas_background_correspondence: false
+    partition_requirement: "disjoint and exactly reconstructs the declared tissue domain"
+  background_without_outline:
+    base_intensity_range: [0.0, 0.25]
+    smooth_additive_field_standard_deviation_range: [0.0, 0.08]
+    pixel_noise_standard_deviation_range: [0.0, 0.03]
+  outline_mode_probabilities_for_development_coverage:
+    accurate: 0.3333333333333333
+    imperfect: 0.3333333333333333
+    absent: 0.3333333333333333
+  outline_semantics:
+    accurate:
+      availability: 1
+      source: "observed visible-tissue outline, stored separately from loss-valid truth"
+      exterior_intensity: 0.0
+    imperfect:
+      availability: 1
+      source: "independently perturbed accurate observed-tissue outline"
+      exterior_intensity: 0.0
+      signed_erosion_or_dilation_radius_pixels: [-5, 5]
+      radius_cap: "0.02*D/p"
+      smooth_boundary_displacement_rms_over_D: [0.0, 0.01]
+      smooth_boundary_correlation_length_over_D: 0.10
+      island_or_gap_count: [0, 2]
+      island_or_gap_clean_tissue_fraction: [0.001, 0.02]
+      accepted_iou_with_accurate_outline: [0.70, 0.98]
+    absent:
+      availability: 0
+      outline_array: "all zero"
+      exterior: "generated background retained"
+      automatic_perfect_mask_substitution_permitted: false
+  mandatory_acceptance_gates:
+    declared_damage_event_changes_target_pixels: true
+    mask_partition_exact: true
+    black_exterior_exact_for_available_outline_modes: true
+    outline_rng_independent_of_damage_rng: true
+    model_input_outline_equals_dense_validity_target: false
+    deterministic_replay: "byte-identical"
+    paired_view_requirement: >-
+      The same latent plane, deformation and appearance replays across all
+      three outline modes under one paired_view_group_id; each child has a
+      distinct synthetic_realization_id.
+
+provenance_and_identity:
+  required_rng_lineage: ["root seed", "split", "sample index", "attempt index", "named field substream"]
+  required_source_lineage:
+    - "raw and decoded Allen template hashes"
+    - "raw and decoded Allen annotation hashes"
+    - "support-index hash"
+    - "generator, dependency and resolved-config hashes"
+    - "package versions and interpolation contracts"
+  required_intermediate_hashes:
+    - "clean finite render"
+    - "local velocity, forward map, inverse map and validity"
+    - "pre-damage appearance"
+    - "all damage and supervision masks"
+    - "model input, outline and availability"
+  receipt_format: "JSON-safe receipt plus dtype/shape-aware array sidecar"
+  synthetic_realization_id_issue_condition: >-
+    Issue only after the complete G1/G2/G3 state, artifacts, parameters,
+    rejections and hashes are bound and verify by exact replay.
+
+staged_smoke_plan:
+  G1:
+    purpose: "integration, topology, inverse and resampling correctness only"
+    cases: "small deterministic near-AP, near-ML, near-DV, oblique and named boundary-stress set"
+    promotion: "all G1 mandatory gates plus seed-hidden deformation-grid montage review"
+  G2:
+    purpose: "exercise every appearance family/operator without measuring model performance"
+    cases: "paired clean and randomized views on the accepted G1 set"
+    promotion: "all G2 gates plus seed-hidden intensity montage review"
+  G3:
+    purpose: "exercise damage partitions and all optional-outline semantics"
+    cases: "paired accurate, imperfect and absent-outline descendants of the same latent samples"
+    promotion: "all G3 gates plus seed-hidden damage/outline montage review"
+  prohibited_conclusions:
+    - "real-histology accuracy"
+    - "architecture superiority"
+    - "calibrated confidence"
+    - "benchmark or release eligibility"
+
+future_independent_deformation_holdout:
+  required: true
+  timing: "after G1-G3 stabilization and before broad model claims"
+  family: "non-SVF B-spline or analytic displacement fields accepted only when positive-Jacobian and numerically invertible"
+  role: "small separately named holdout detecting generator-decoder parameterization matching"
+  used_for_training: false
+  used_to_set_generator_or_model_hyperparameters: false
+  full_benchmark: false
+
+future_real_validation:
+  split_unit: "animal, never slice"
+  untouched_final_test_animals_required: true
+  development_data: "Allen and synthetic"
+  public_benchmark: "DeepSlice Ground Truth dataset DOI 10.25949/22802411"
+  external_validation: "separate real lab histology, ideally laboratory-held-out"
+  comparators: ["DeepSlice", "relevant expert-assisted tools"]
+  reference: "blinded expert alignments"
+  primary_metric: "physical anatomical landmark registration error"
+  secondary_metrics: ["plane/angle error", "regional overlap", "failure rate", "correction time"]
+  statistical_unit: "animal"
+  reporting: "effect sizes with 95% confidence intervals"
+  reproducibility: "save exact splits, code, configs, seeds and raw predictions"
+  probabilistic_outputs: >-
+    After the method stabilizes, evaluate calibrated AP/plane/tilt and dense-map
+    uncertainty on unseen animals; verify nominal interval coverage and no loss
+    of point-estimate accuracy before making confidence claims.
+
+primary_sources:
+  - "Ashburner J. (2007), A fast diffeomorphic image registration algorithm, https://doi.org/10.1016/j.neuroimage.2007.07.007"
+  - "Mansi T et al. (2011), iLogDemons: A Demons-Based Registration Algorithm for Tracking Incompressible Elastic Biological Tissues, https://doi.org/10.1007/s11263-010-0405-z"
+  - "Dalca AV et al. (2019), Unsupervised Learning of Probabilistic Diffeomorphic Registration for Images and Surfaces, https://doi.org/10.1016/j.media.2019.07.006"
+  - "Hoffmann M et al. (2022), SynthMorph: Learning Contrast-Invariant Registration Without Acquired Images, https://doi.org/10.1109/TMI.2021.3116879"
+  - "Billot B et al. (2023), SynthSeg: Segmentation of brain MRI scans of any contrast and resolution without retraining, https://doi.org/10.1016/j.media.2023.102789"
+  - "Lee BC et al. (2018), On variational solutions for whole brain serial-section histology using a Sobolev prior in the computational anatomy random orbit model, https://doi.org/10.1371/journal.pcbi.1006610"
+  - "Tward D et al. (2020), Diffeomorphic Registration With Intensity Transformation and Missing Data: Application to 3D Digital Pathology of Alzheimer's Disease, https://doi.org/10.3389/fnins.2020.00052"
+  - "Casamitjana A et al. (2022), Robust joint registration of multiple stains and MRI for multimodal 3D histology reconstruction: Application to the Allen human brain atlas, https://doi.org/10.1016/j.media.2021.102265"
+  - "Tellez D et al. (2019), Quantifying the effects of data augmentation and stain color normalization in convolutional neural networks for computational pathology, https://doi.org/10.1016/j.media.2019.101544"
+  - "Wang NC et al. (2021), Stress Testing Pathology Models with Generated Artifacts, https://doi.org/10.4103/jpi.jpi_6_21"
+  - "Tian L et al. (2023), GradICON: Approximate Diffeomorphisms via Gradient Inverse Consistency, https://doi.org/10.1109/CVPR52729.2023.01734"
