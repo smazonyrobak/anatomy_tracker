@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "frozen": true,
+  "name": "independent-oracle-atlas-pair-spatial-aggregation-pair-1500-r1404322-v1",
+  "purpose": "development-only-paired-spatial-aggregation-causal-diagnostic",
+  "role": "causal-rescue-premise-not-model-selection",
+  "product5_access": false,
+  "calibration_access": false,
+  "final_test_access": false,
+  "learned_checkpoint_dependencies": [],
+  "optimizer_seed": 1404322,
+  "device": "auto",
+  "paths": {
+    "atlas_repo_relative": "data/Allen Brain Atlas 25um",
+    "run_root_env": "ATLAS_JOINT_RUN_ROOT"
+  },
+  "family": {
+    "self_hash": "contract_sha256-over-complete-payload-excluding-contract_sha256",
+    "arm_order": [
+      "null",
+      "treatment"
+    ],
+    "null": {
+      "class": "training.independent_atlas_pair_spatial_aggregation.AtlasPairEnergyGlobalAggregationControl",
+      "aggregation": "global-mean-max-plus-243-exact-zero-contrast-inputs"
+    },
+    "treatment": {
+      "class": "training.independent_atlas_pair_spatial_aggregation.AtlasPairEnergyHaar2x2SpatialAggregation",
+      "aggregation": "global-mean-max-plus-top-bottom-left-right-diagonal-haar-contrasts"
+    },
+    "initialization": "instantiate-both-then-strict-load-complete-null-state-into-treatment",
+    "initial_state_requirement": "bit-identical-all-tensors-and-state-schema",
+    "claim_scope": "causal-fixed-2x2-haar-correlation-contrast-access-rescue-only",
+    "parameter_matching_caveat": "null-243-contrast-columns-are-dormant-exact-zero-inputs; state-schema-and-parameter-count-match-but-functional-input-rank-is-intentionally-unequal"
+  },
+  "model": {
+    "expected_parameter_count_each": 271780,
+    "maximum_parameter_count_each": 1500000,
+    "input_shape": [
+      160,
+      232
+    ],
+    "correlation_levels": [
+      8,
+      16
+    ],
+    "correlation_radius": 4,
+    "candidate_chunk_size": 8,
+    "candidate_pose_input": false,
+    "statistics_dimension_each_level": 405,
+    "shared_global_statistics_dimension": 162,
+    "contrast_statistics_dimension": 243,
+    "head": "LayerNorm(405)-Linear(405,25)-GELU-Linear(25,1)"
+  },
+  "data": {
+    "source": "synthetic_ccf",
+    "split": "train",
+    "stratum": "clean",
+    "oracle_source": "moving_raw_uint8_pre_source_view",
+    "source_view_rotation_deg": 0.0,
+    "source_view_scale": 1.0,
+    "source_resampling_count_before_fixed_downsample": 0,
+    "outline_mode": "absent",
+    "train_seed": 1004322,
+    "train_count": 2048,
+    "development_seed": 1104322,
+    "development_count": 48,
+    "qualification_seeds": [
+      1604322,
+      1704322
+    ],
+    "consumed_or_forbidden_qualification_seeds": [
+      1204322,
+      1304322,
+      1504322
+    ],
+    "qualification_count_per_seed": 48,
+    "qualification_generation": "only-after-both-final-states-jointly-freeze",
+    "panel_balance": "six-interior-ap-strata-times-eight-signed-tilt-configurations",
+    "premise_truth_ap_margin_um": 500.0,
+    "premise_truth_tilt_abs_max_deg": 25.0,
+    "truth_support_role": "interior-only-causal-premise-not-outer-domain-evidence"
+  },
+  "training": {
+    "optimizer": "AdamW",
+    "learning_rate": 0.0002,
+    "weight_decay": 0.0001,
+    "batch_size": 2,
+    "max_updates": 1500,
+    "paired_presentations": 3000,
+    "amp": true,
+    "amp_initial_scale": 512.0,
+    "amp_required_to_stay": 512.0,
+    "gradient_clip_norm": 5.0,
+    "gradient_clipping_fraction_gate": false,
+    "resume_every_updates": 25,
+    "development_updates": [
+      500,
+      1000,
+      1500
+    ],
+    "candidate_count": 16,
+    "loss": "ranking+0.25*two-scale-ranking+0.25*posterior-point",
+    "step_barrier": "both-unscaled-finite-checked-and-clipped-before-either-optimizer-step",
+    "persistence_unit": "completed-paired-update-only",
+    "early_stopping": false,
+    "budget_extension": false
+  },
+  "search": {
+    "coarse_shape": [
+      9,
+      5,
+      5
+    ],
+    "top_k": 3,
+    "refinement_rounds": 3,
+    "neighborhood_shape": [
+      3,
+      3,
+      3
+    ],
+    "maximum_candidate_evaluations_per_slice": 468,
+    "continuous_refinement": false
+  },
+  "evaluation": {
+    "development": "paired-fixed-candidates-only",
+    "qualification_fixed_candidates": "one-shared-source-and-candidate-tensor-set-for-both-arms",
+    "qualification_free_search": "always-run-unchanged-search-for-both-arms",
+    "qualification_free_search_arm_order": "alternate-null-first-on-even-sample-treatment-first-on-odd-sample",
+    "cross_arm_energy_delta_gate": false,
+    "no_selective_missing": "exactly-48-source-keyed-predictions-errors-and-search-receipts-per-arm-per-qualification-seed",
+    "pooled_96_role": "descriptive-only-cannot-rescue-failed-seed",
+    "gate_roles": {
+      "treatment": "all-absolute-integrity-control-accuracy-and-runtime-gates",
+      "null": "integrity-control-runtime-plus-causal-ranking-contrast; other-accuracy-descriptive"
+    }
+  },
+  "gates": {
+    "nonfinite_count_maximum": 0,
+    "invalid_render_count_maximum": 0,
+    "truth_in_set_correct_minimum_per_48": 46,
+    "ap_mae_um_maximum": 250.0,
+    "lr_mae_deg_maximum": 3.0,
+    "dv_mae_deg_maximum": 3.0,
+    "physical_improvement_over_constant_prior_minimum": 0.5,
+    "broken_pair_correct_maximum_per_48": 12,
+    "order_energy_atol": 1e-06,
+    "order_energy_rtol": 1e-06,
+    "ten_slice_p95_seconds_maximum": 180.0,
+    "causal": {
+      "paired_rows_per_seed": 48,
+      "treatment_truth_in_set_minimum": 46,
+      "null_truth_in_set_maximum": 45,
+      "net_corrections_minimum": 8,
+      "exact_two_sided_mcnemar_p_maximum": 0.01
+    }
+  },
+  "integrity": {
+    "first_global_statistics_exact_dimension": 162,
+    "null_contrast_statistics_exact_zero_dimension": 243,
+    "paired_input_identity_required_updates": 1500,
+    "optimizer_steps_required": [
+      1,
+      1500
+    ],
+    "amp_scale_required": 512.0,
+    "final_must_equal_resume": true,
+    "paired_qualification_rows_required": 96
+  },
+  "interpretation": {
+    "integrity_failure": "invalid-stop",
+    "both_fail": "insufficient-stop",
+    "treatment_pass_null_fail_paired_pass": "causal-rescue-only-authorize-independent-confirmation",
+    "both_pass": "no-spatial-necessity-claim",
+    "one_seed_pass": "family-fail",
+    "ranking_causal_pass_but_treatment_free_search_fail": "local-fixed-haar-mechanism-supported-end-to-end-no-go",
+    "prohibitions": [
+      "no-early-stop",
+      "no-extension",
+      "no-gate-change",
+      "no-seed-substitution",
+      "no-protected-data",
+      "no-promotion-from-this-family"
+    ]
+  },
+  "lineage": {
+    "source_sha256": {
+      "training/independent_atlas_pair_spatial_aggregation.py": "68bbe59a3af78f6f9e19623d1d518ad7e98e72bbf3bcdc7acb1c30db91644f74",
+      "training/run_independent_atlas_pair_spatial_aggregation.py": "063a1833e3f07b923c5030a435e24c8d9d02ba620f6bd6a3211f4a855fe3dd3b",
+      "training/independent_atlas_pair_energy.py": "6187cb051d048d1e5eec3137b9edc6ac09706cecffcf989507951708681589ec",
+      "training/run_independent_atlas_pair_energy.py": "21c73f88a48ca87ac0a44ff022993eea5dc2cfbb1f8c72237ec4b05fa4445b19",
+      "training/synthetic_registration.py": "5a7274b56cdfa95fdb410b1b441325c4ee9ab3b15eb8076be2781e92c00c1dde",
+      "training/quicknii_plane_metric.py": "fd3f3bc0a1f2e0b57b33db706c2d5d73134b3525bdc6989dfb4bcf2defd6dc31",
+      "source/dense_registration_preprocessing.py": "cad4a5fdbaa4be638abe6dbaf1add2c95c74bb10d4e2d851b2a8ea8682cf4f60"
+    }
+  },
+  "contract_sha256": "93fd5d04575e10e023d46735abc7e601b1234f8b5b54ac8cb080328dd9f8d6b2"
+}
