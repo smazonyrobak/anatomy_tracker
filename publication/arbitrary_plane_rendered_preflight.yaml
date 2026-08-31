@@ -1,0 +1,230 @@
+schema_version: "1.0"
+receipt_id: "finite-arbitrary-plane-render-preflight-2026-08-31"
+date: "2026-08-31"
+status: "development_preflight_passed_finite_render_precursor_only"
+claim_scope: >-
+  Development evidence that the compact Allen support index can drive
+  deterministic finite CCF intensity, annotation and mask renders for
+  brain-intersecting planes across cardinal and extreme-oblique orientations.
+  This is not a complete synthetic-realization generator, model training,
+  architecture selection, uncertainty calibration, benchmarking,
+  qualification, or a release claim.
+
+repository:
+  branch: "codex/joint-registration"
+  source_parent_commit: "576375f9a9849f9a41db5d2b0c450ab549fb9cca"
+  snapshot_semantics: >-
+    The implementation was an uncommitted working-tree snapshot over the
+    source parent; exact file hashes below are authoritative. The receipt is
+    committed with that snapshot, avoiding a self-referential commit hash.
+  generator_source_commit_field_during_smoke: null
+  frozen_v2_or_diagnostic_sources_modified: false
+  implementation_files:
+    training/arbitrary_plane_geometry.py: "29510d226a31ad34c3143b4c3b1b28f9755db4d683a43b55d81f7a660645cf1f"
+    training/arbitrary_plane_manifest.py: "6ef206e210498403865ac822b59e87b5935a35029dd44ea682891ef370686abc"
+    training/arbitrary_plane_support.py: "9710525005c346450f9c541da53c10a0f97a0bc4e2e4f7b2583017d6a15c46ed"
+    training/arbitrary_plane_rendered_generator.py: "4050834dd24676bfa08350b2b290133d0ccbc3cee7b54ce91e581297f0bfa0ea"
+  test_files:
+    tests/test_arbitrary_plane_geometry.py: "8f68c28a97601e4bab1c92703e2c84e6f3a006b624a655b6cb3768976f147344"
+    tests/test_arbitrary_plane_manifest.py: "a5ad968b148f08ed7b7f0f3d1c1c844efd98beff8b237bd737dab1d1502dd56f"
+    tests/test_arbitrary_plane_support.py: "e368034c2c9168168a0e49ccfea3c7085cad849f6166f3e0544a3f9896ed6529"
+    tests/test_arbitrary_plane_rendered_generator.py: "0de766f3b6046b09471fa7b4446c389d62b4fc518408bfc0b3da696f57c56408"
+
+independence:
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  initialization: "random seed streams only; no learned initialization"
+  legacy_models_role: "comparators only"
+  synthetic_realization_id_issued: false
+
+implemented_contract:
+  stage: "finite rendered geometry precursor"
+  plane_orientation_measure: "orientation-balanced Haar-uniform RP2 normal; not Crofton plane measure"
+  in_plane_roll_measure: "independent uniform [0,2pi)"
+  reference_offset_measure: "length-uniform over the merged union of per-component support intervals"
+  stress_stratum: "separately named boundary-stress bands"
+  raster_aspect_policy: "isotropic physical pixel pitch with symmetric padding on the shorter axis"
+  quicknii_pixel_mapping: "P(x,y)=O+(x/W)U+(y/H)V"
+  scalar_sampling: "CPU torch.grid_sample trilinear, zero padding, align_corners=True"
+  label_sampling: "native unsigned atlas indexing at torch.round coordinates, sampled output cast losslessly to int64, out-of-bounds zero"
+  renderer_state: "effective float32 state and exact Allen/physical/QuickNII O/U/V, coordinate raster, normalized grid and validity mask are hash-bound"
+  reflection_state: "explicitly false in precursor v1; reflection serialization is tested separately"
+  split_scope: ["train", "development"]
+  final_test_manifest_created_or_opened: false
+  nullable_atlas_subject_ids: true
+  exact_real_animal_specimen_experiment_ids_preserved_when_present: true
+  complete_synthetic_realization_pending:
+    - "deformation and exact forward/inverse maps"
+    - "histology appearance and damage"
+    - "accurate, imperfect and absent-outline smart-brush modes"
+    - "moving images and complete masks"
+
+prepared_context:
+  schema: "anatomy-tracker.prepared-finite-render-context/v1"
+  prepared_context_sha256: "04c387c1a778bfd0962cea972047b5eadc84f8cd2bce92ff74e9656f0af63b47"
+  behavior: >-
+    Atlas/support validation, finite checks, canonical conversion and hashes
+    occur once. Later samples reuse owned tensors and frozen support without
+    rescanning atlas arrays; tensor identity/version checks reject mutation.
+  fixture_instrumentation: "two samples caused zero repeated atlas-volume hash calls and zero repeated support-index verification calls"
+  trust_boundary: >-
+    The raw scalar URI/SHA is authenticated by the trusted prepared context or
+    an externally supplied raw file/digest. A self-contained artifact cannot
+    authenticate caller-supplied raw bytes that were never provided.
+
+tests:
+  focused_generator_result: "32 passed"
+  combined_arbitrary_plane_result: "74 passed"
+  combined_plus_frozen_zero_tilt_regression_result: "75 passed"
+  combined_plus_regression_observed_duration_seconds: 19.69
+  command: >-
+    python -m pytest -q tests/test_arbitrary_plane_geometry.py
+    tests/test_arbitrary_plane_support.py tests/test_arbitrary_plane_manifest.py
+    tests/test_arbitrary_plane_rendered_generator.py
+    tests/test_synthetic_registration.py::test_zero_tilt_plane_preserves_native_pixels_and_full_allen_ids
+  py_compile: "passed for all four arbitrary-plane implementation modules"
+  git_diff_check: "passed"
+  independent_review: "GO; no remaining P1/P2"
+  covered_adversarial_rejections:
+    - "effective Allen, physical and QuickNII O/U/V coherent rehashes"
+    - "annotation raw-source and decoded-array contradictions against supplied support"
+    - "scalar-source contradiction against the prepared-context receipt"
+    - "generator algorithm, implementation path and dependency-contract contradictions"
+    - "sampling-measure and acceptance-predicate claim changes"
+    - "learned dependency or warm-start declarations"
+    - "prepared tensor/support mutation"
+  deterministic_replay:
+    - "every attempted pose replays from root seed, split, sample index and attempt index"
+    - "finite geometry replays from pose and supplied support"
+    - "cached real-Allen raster replay was byte-identical"
+
+environment:
+  os: "Windows 10 10.0.19045"
+  python: "3.11.15"
+  torch: "2.11.0+cu128"
+  numpy: "2.4.4"
+  scipy: "1.17.1"
+  pynrrd: "1.1.3"
+  render_device: "CPU"
+  available_gpu: "NVIDIA GeForce RTX 2080 Ti"
+  qhull: "8.0.2 (2020.2.r 2020/08/31)"
+
+pinned_allen_smoke:
+  role: "small deterministic real-Allen development smoke; not benchmarking or qualification"
+  root_seed_uint64: 9223372036875036639
+  root_seed_hex: "0x80000000013527df"
+  output_shape_h_w: [160, 232]
+  margin_u_v_um: [100.0, 100.0]
+  minimum_brain_pixels: 1
+  maximum_rejection_attempts: 64
+  raw_sources:
+    template:
+      uri: "data/Allen Brain Atlas 25um/average_template_25.nrrd"
+      source_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+      decoder: "pynrrd 1.1.3"
+      index_order: "F"
+      decoded_dtype: "<u2"
+      decoded_shape: [528, 320, 456]
+      decoded_array_sha256: "92c1441a9a025d83199bcf3321fb8fb4b519f44030ab44d11f751f64e9516bce"
+      float32_array_sha256: "b7ad03fa18551a980232a1558be8b473581fbf162d2df3669337451858fa02fa"
+      normalization: "none"
+    annotation:
+      uri: "data/Allen Brain Atlas 25um/annotation_25.nrrd"
+      source_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+      decoder: "pynrrd 1.1.3"
+      index_order: "F"
+      decoded_dtype: "<u4"
+      decoded_shape: [528, 320, 456]
+      decoded_array_sha256: "d691efd938b9e4694e7b939aa5e71efc68441b6a25aa31f0caea51a6d26b6c8c"
+  support_index_sha256: "0f6d8325ff1aa1965b28e4c5edb1327ae58129a78fe41d6f2ccf1896f449f65c"
+  samples:
+    train_ap_reference:
+      split: "train"
+      sample_index: 4010
+      stratum: "reference"
+      accepted_attempt_index: 0
+      normal_rp2_ap_dv_ml: [0.9995338126854075, 0.02838702594643678, -0.011239842369400633]
+      signed_offset_um: 2896.8577418409013
+      roll_rad: 3.881581288655926
+      brain_pixel_count: 12153
+      plane_realization_id: "227f62b5c5ede178c6601c2b6a8474debb970a441539022f08f3bff83fc30311"
+      finite_plane_geometry_sha256: "88e60e4ea1b4cd03bf2f1c3cfb4f195111bf89c067113b9bbabe20036c894b78"
+      rendered_artifacts_sha256: "f49c0e6fb4f013cba6617eed6ba19dd2f6c86565ddab5e78ee99bd2fbf5c0584"
+      finite_plane_render_id: "e5808c0cbbcb1216ee534984a0cfe670dc5e94f9f1864a62445a9d2fb88a7618"
+      finite_render_receipt_sha256: "5c0e5d330a64e7478daf0dc71595b5260850be233562d6266ace7ff0cdf02c9c"
+    train_ml_reference:
+      split: "train"
+      sample_index: 1797
+      stratum: "reference"
+      accepted_attempt_index: 0
+      normal_rp2_ap_dv_ml: [-0.03304698716743531, -0.005735636243757529, 0.9994373412655917]
+      signed_offset_um: -1231.7055729884319
+      roll_rad: 3.501289650269444
+      brain_pixel_count: 19756
+      plane_realization_id: "1e137da8a4a977fbe29d872ab497975eebdfb477f605719b9b317d2b0eb35f76"
+      finite_plane_geometry_sha256: "49ee793afe1b869f9009a7ec60a808e0d1d69ad7d4eb639e21b65478a3168793"
+      rendered_artifacts_sha256: "30be76647212fb6701abfbd9831a6f6aa699f08b556b5325ce0656e05cebfb0a"
+      finite_plane_render_id: "a4b11e911c9f6dd27daf45aecbcf27db9d114abbc9f50cf66dbeccbf5c016d83"
+      finite_render_receipt_sha256: "2b78b51f4f223ce1f0faebfd5beb80c162e72d05f6f8654683d24831295dd540"
+    development_dv_reference:
+      split: "development"
+      sample_index: 1901
+      stratum: "reference"
+      accepted_attempt_index: 0
+      normal_rp2_ap_dv_ml: [0.0006099588421216397, 0.9998952361320226, -0.014461836352892849]
+      signed_offset_um: 3561.364221361078
+      roll_rad: 0.2909252637280138
+      brain_pixel_count: 74
+      plane_realization_id: "51af5646ef26758f6740c9b0365f4450025b5ea00b73b02e4ea747c256e02537"
+      finite_plane_geometry_sha256: "d662c1a049d80b0edd5deda351a59e328c30d899a510d77ff120f53564049e8d"
+      rendered_artifacts_sha256: "5493b6cc43a76b97ecb421ca50d852f9b727235e57067b1c966b96f1b78588b3"
+      finite_plane_render_id: "0e783c0e6685c3bdf610383dd8e1e45da70e9173035bff88abcdc6da05ace164"
+      finite_render_receipt_sha256: "6744d788b13de4c901fbf5794063d3822b86cf5130ed6695b57344324cee3fd7"
+    development_oblique_boundary:
+      split: "development"
+      sample_index: 1342
+      stratum: "boundary-stress"
+      accepted_attempt_index: 0
+      normal_rp2_ap_dv_ml: [0.5665215684768866, 0.5842173149577061, 0.5811569851202831]
+      signed_offset_um: -4358.356361687446
+      roll_rad: 3.0646459368739594
+      brain_pixel_count: 1140
+      plane_realization_id: "5cd621791cde969bcf111d3046e8f4bac652ddb5f6886676ee05d26da1c91c79"
+      finite_plane_geometry_sha256: "a3bbdacb7de00db865dac25c17ba5ff5a0fc18329ab87083ddc08694fff219dc"
+      rendered_artifacts_sha256: "504deadca11b48a8bb6ded2ddf500ad3cc33809ef739701f5b89dd63cb087791"
+      finite_plane_render_id: "223a8eee122578a41af28a0a3e31b613967d175a95fbef5b137ed960aca25897"
+      finite_render_receipt_sha256: "4b2b16626ec380b4527873778d6ee829570e045b8cf54889be11ac1e58e1efb3"
+  config_layer_variant:
+    base_sample: "train_ap_reference"
+    output_shape_h_w: [192, 272]
+    plane_realization_id: "227f62b5c5ede178c6601c2b6a8474debb970a441539022f08f3bff83fc30311"
+    finite_plane_geometry_sha256: "1f9d57f11236cc2f5abd8909ca26a40ede48c725c3286b1a0c20edca0a6b72f4"
+    rendered_artifacts_sha256: "c176009dbae7cd843ccdda2065dc4abc5b765b83f7fa95406db83edf94d23ab3"
+    finite_plane_render_id: "f6ede3b14d6684603426cd85558884ca6a2e8f85447d80b3ea9ea40578b441ea"
+    finite_render_receipt_sha256: "6e247a9fdc55d8a6ea06601c07bb918291459d6d39a3742be5f6b4684bcae494"
+    interpretation: "plane identity stayed fixed while finite geometry and render identities changed"
+  cached_replay: "exact for development_oblique_boundary"
+
+scientific_result:
+  result: "GO for the finite arbitrary-plane rendering precursor"
+  interpretation: >-
+    The pinned Allen atlas produced nonempty, provenance-bound renders on
+    near-AP, near-ML, near-DV and balanced extreme-oblique planes, including a
+    named boundary-stress slice. All were accepted on attempt zero and one
+    cached replay was exact. This establishes geometry/rendering feasibility,
+    not pose identifiability or model accuracy.
+
+limitations_and_next_step:
+  limitations:
+    - "The four-sample smoke is deliberately small and is not distributional validation."
+    - "The finite precursor has no appearance, deformation, damage or smart-brush-mode realization."
+    - "No wrong-plane candidate family or oracle pose-ranking premise has been tested on this v3 renderer."
+    - "No model has been trained, selected, calibrated or benchmarked."
+    - "No final-test animal, DeepSlice Ground Truth case or external lab histology was opened."
+    - "Probabilistic pose and dense-map uncertainty remain planned, not implemented."
+  next_step: >-
+    Add complete deformation/appearance/damage and optional accurate,
+    imperfect and absent-outline smart-brush modes with full
+    synthetic_realization_id binding. Then run the small arbitrary-plane
+    oracle ranking premise before implementing any recurrent joint model.

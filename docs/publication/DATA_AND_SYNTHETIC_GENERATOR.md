@@ -86,10 +86,8 @@ The first v3 manifest implementation is an exact small-volume geometry
 prototype. It materializes occupied voxel centres to test the reference
 measure, intersection rule, replay hashes and provenance without touching the
 frozen v2 path. That representation is deliberately not approved for full
-Allen-scale generation. A separate hash-bound compact-support backend now
-replaces its linear per-plane occupied-voxel scan at Allen scale and has passed
-development parity fixtures, but is not yet wired into the manifest sampler;
-the large training manifest therefore remains unfrozen.
+Allen-scale generation. A separate hash-bound compact-support backend replaces
+its linear per-plane occupied-voxel scan at Allen scale.
 
 The implemented development-only full-scale backend uses connectivity plus a
 compact convex-support index. For each line along the AP array axis it retains the first
@@ -107,8 +105,28 @@ point cloud and per-plane full-mask scan. The stored integer endpoint audit set,
 hull, source and Qhull/dependency identity are hash-bound; analytical and
 seeded small-mask tests plus the pinned-CCF endpoint parity audit define the numerical tolerance.
 Disconnected masks retain separate component intervals rather than using the
-single-interval fast path. This backend is not yet integrated into a complete
-rendered-sample manifest, so the large training manifest remains unfrozen.
+single-interval fast path.
+
+The support backend is now integrated into a development-only finite-render
+precursor. It samples deterministic RP2 normals, roll and offsets from the
+merged component-interval union; uses isotropic physical pixel pitch with
+symmetric padding; emits official QuickNII `x/W,y/H` geometry; and renders CCF
+intensity, uint32 annotation IDs and tissue masks. A prepared immutable context
+hashes the full Allen assets once and supports random-access samples without
+per-sample atlas rescans. Separate `plane_realization_id`,
+`finite_plane_geometry_sha256`, `rendered_artifacts_sha256` and
+`finite_plane_render_id` layers prevent raster/template choices from being
+mistaken for plane identity. The exact effective float32 renderer grid and its
+Allen, physical and QuickNII O/U/V are bound alongside the float64 design
+geometry. The small pinned-Allen preflight in
+[`../../publication/arbitrary_plane_rendered_preflight.yaml`](../../publication/arbitrary_plane_rendered_preflight.yaml)
+passed near-cardinal and extreme-oblique samples plus exact cached replay. It
+is a geometry/render feasibility result, not model or accuracy evidence.
+
+This is still not a complete rendered synthetic realization: deformation,
+appearance, damage, moving images and accurate/imperfect/absent outline modes
+remain unbound. Consequently `synthetic_realization_id` is still withheld and
+the large training manifest remains unfrozen.
 
 Future finite-raster wrong-plane candidates use geodesic normal perturbations,
 physical normal-offset perturbations and coupled anatomically confusing planes.
@@ -116,14 +134,13 @@ Every positive and candidate must intersect the brain; their exact O/U/V and
 physical candidate distances must be hash-bound. Pose ranking must remain
 sensitive after an optimal bounded local warp.
 
-The current candidate prototype intentionally stops at the unoriented infinite
-plane. It uses a coordinate-free three-component RP2 log map in physical
-AP/DV/ML axes and randomizes the recorded truth slot, but does not yet claim a
-finite raster candidate: roll, centre, basis, O/U/V and reflection state are
-excluded. Before candidate images become training-eligible, the verified base
+The current candidate prototype remains an unoriented infinite-plane proposal.
+The positive finite-render precursor now binds roll, centre, basis, O/U/V and
+reflection state, but wrong-plane candidates do not yet inherit that finite
+geometry. Before candidate images become training-eligible, the verified base
 frame is minimally rotated/parallel-transported to each candidate normal, an
-explicit roll perturbation is applied, and the final raster is required to
-contain a prespecified amount of rendered tissue.
+explicit roll perturbation is applied, and every candidate raster is required
+to contain a prespecified amount of rendered tissue.
 
 ## Appearance distribution
 

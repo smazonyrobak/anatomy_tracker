@@ -11,8 +11,8 @@ from training.arbitrary_plane_geometry import (
     allen_index_to_physical_um_vectors,
     allen_to_quicknii_points,
     allen_to_quicknii_vectors,
-    flip_frame,
     frame_to_quicknii_ouv,
+    frame_to_quicknii_ouv_with_reflection,
     horizontal_flip_quicknii_ouv,
     identity_biased_rotation_6d_to_frame,
     legacy_quicknii_boundary_pose_to_frame,
@@ -232,7 +232,7 @@ def test_coronal_sagittal_horizontal_and_extreme_oblique_ouv_round_trips():
     assert torch.allclose(allen_to_quicknii_points(ccf), normalized_raster_to_quicknii(ouv[3, None], st), atol=1e-11)
 
 
-def test_horizontal_and_vertical_flips_are_involutions_and_only_reparameterize_raster():
+def test_explicit_raster_reflections_preserve_the_base_frame_and_reparameterize_pixels():
     rotation = torch.tensor([1.0, 2.0, 3.0, -2.0, 4.0, 1.0], dtype=torch.float64)
     center = torch.tensor([170.0, 111.0, 301.0], dtype=torch.float64)
     frame = rotation_6d_to_frame(rotation)
@@ -241,11 +241,39 @@ def test_horizontal_and_vertical_flips_are_involutions_and_only_reparameterize_r
         torch.tensor(-0.42, dtype=torch.float64),
     )
     ouv = frame_to_quicknii_ouv(center, frame, basis)
+    original_center = center.clone()
+    original_frame = frame.clone()
+    original_basis = basis.clone()
     height, width = 241, 370
-    horizontal = horizontal_flip_quicknii_ouv(ouv, width)
-    vertical = vertical_flip_quicknii_ouv(ouv, height)
+    horizontal = frame_to_quicknii_ouv_with_reflection(
+        center, frame, basis, (height, width), horizontal_reflection=True
+    )
+    vertical = frame_to_quicknii_ouv_with_reflection(
+        center, frame, basis, (height, width), vertical_reflection=True
+    )
+    assert torch.equal(center, original_center)
+    assert torch.equal(frame, original_frame)
+    assert torch.equal(basis, original_basis)
+    assert torch.equal(
+        frame_to_quicknii_ouv_with_reflection(center, frame, basis, (height, width)), ouv
+    )
+    with pytest.raises(ValueError, match="height and width"):
+        frame_to_quicknii_ouv_with_reflection(center, frame, basis, (height, 0))
+    assert torch.allclose(horizontal, horizontal_flip_quicknii_ouv(ouv, width), atol=1e-12)
+    assert torch.allclose(vertical, vertical_flip_quicknii_ouv(ouv, height), atol=1e-12)
     assert torch.allclose(horizontal_flip_quicknii_ouv(horizontal, width), ouv, atol=1e-12)
     assert torch.allclose(vertical_flip_quicknii_ouv(vertical, height), ouv, atol=1e-12)
+
+    base_normal = F.normalize(torch.cross(ouv[3:6], ouv[6:9], dim=0), dim=0)
+    reflected_normal = F.normalize(
+        torch.cross(horizontal[3:6], horizontal[6:9], dim=0), dim=0
+    )
+    assert torch.allclose(reflected_normal, -base_normal, atol=1e-12)
+    assert torch.allclose(
+        torch.dot(reflected_normal, horizontal[:3]),
+        -torch.dot(base_normal, ouv[:3]),
+        atol=1e-12,
+    )
 
     st = torch.tensor([0.17, 0.81], dtype=torch.float64)
     assert torch.allclose(
@@ -262,10 +290,6 @@ def test_horizontal_and_vertical_flips_are_involutions_and_only_reparameterize_r
         ),
         atol=1e-12,
     )
-    flipped_state = flip_frame(center, frame, basis, (height, width), horizontal=True)
-    assert torch.allclose(frame_to_quicknii_ouv(*flipped_state), horizontal, atol=1e-11)
-    restored_state = flip_frame(*flipped_state, (height, width), horizontal=True)
-    assert torch.allclose(frame_to_quicknii_ouv(*restored_state), ouv, atol=1e-11)
 
 
 def _cardinal_state(name, shape, index):
@@ -394,6 +418,22 @@ def test_arbitrary_plane_renderer_is_differentiable_through_frame_center_and_bas
         assert torch.count_nonzero(value) > 0
     assert rendered_labels.dtype == labels.dtype
     assert rendered_labels.shape == image.shape
+
+
+def test_arbitrary_plane_renderer_preserves_uint32_ids_and_returns_int64_labels():
+    volume = torch.arange(5 * 4 * 3, dtype=torch.float32).reshape(5, 4, 3)
+    labels = torch.zeros(volume.shape, dtype=torch.uint32)
+    labels[2, 1, 1] = 614_454_277
+    center = torch.tensor([2.0, 1.0, 1.0])
+    frame = torch.eye(3)
+    basis = torch.zeros((2, 2))
+
+    _, rendered_labels = render_arbitrary_plane(
+        volume, center, frame, basis, (2, 2), labels
+    )
+
+    assert rendered_labels.dtype == torch.int64
+    assert torch.unique(rendered_labels).tolist() == [614_454_277]
 
 
 def test_legacy_renderer_adapter_matches_inclusive_voxel_center_geometry():

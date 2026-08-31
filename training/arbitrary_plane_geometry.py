@@ -361,25 +361,28 @@ def vertical_flip_quicknii_ouv(ouv: torch.Tensor, raster_height: int) -> torch.T
     )
 
 
-def flip_frame(
+def frame_to_quicknii_ouv_with_reflection(
     center_ap_dv_ml: torch.Tensor,
     frame_ap_dv_ml: torch.Tensor,
     inplane_basis: torch.Tensor,
     raster_shape: tuple[int, int],
     *,
-    horizontal: bool = False,
-    vertical: bool = False,
+    horizontal_reflection: bool = False,
+    vertical_reflection: bool = False,
     atlas_shape_ap_dv_ml: tuple[int, int, int] = DEFAULT_ALLEN_SHAPE_AP_DV_ML,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> torch.Tensor:
+    """Serialize explicit raster reflections without changing the proper frame."""
     ouv = frame_to_quicknii_ouv(
         center_ap_dv_ml, frame_ap_dv_ml, inplane_basis, atlas_shape_ap_dv_ml
     )
     height, width = raster_shape
-    if horizontal:
+    if height <= 0 or width <= 0:
+        raise ValueError("Raster height and width must be positive")
+    if horizontal_reflection:
         ouv = horizontal_flip_quicknii_ouv(ouv, width)
-    if vertical:
+    if vertical_reflection:
         ouv = vertical_flip_quicknii_ouv(ouv, height)
-    return quicknii_ouv_to_frame(ouv, atlas_shape_ap_dv_ml)
+    return ouv
 
 
 def _allen_edges_to_frame(
@@ -531,7 +534,7 @@ def render_arbitrary_plane(
          indices[..., 2].clamp(0, native_width - 1)),
         -1,
     )
-    sampled_labels = labels[clipped[..., 0], clipped[..., 1], clipped[..., 2]]
+    sampled_labels = labels[clipped[..., 0], clipped[..., 1], clipped[..., 2]].to(torch.int64)
     return image, torch.where(valid, sampled_labels, torch.zeros_like(sampled_labels))[:, None]
 
 

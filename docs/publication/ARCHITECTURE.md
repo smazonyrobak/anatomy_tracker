@@ -293,8 +293,11 @@ is a proposal, not posterior mass.
 Implementation proceeds in this order: geometry conversions and a general
 differentiable renderer; a provenance-bound v3 manifest and generator;
 geodesic-normal/physical-offset candidates; the new data and posterior
-contract; then a small arbitrary-plane oracle ranking premise test. Recurrence
-is built only after that premise is adequate. Existing Product-5 and DeepSlice
-data remain useful coronal auxiliary/comparator evidence, but cannot validate
-arbitrary-plane performance; external real validation must deliberately span
-cardinal and extreme-oblique cutting planes and remain split by animal.
+contract; then a small arbitrary-plane oracle ranking premise test. The finite
+CCF render precursor has passed its pinned-Allen development preflight, while
+complete deformation/appearance/outline realization and finite wrong-plane
+candidates remain next. Recurrence is built only after the oracle premise is
+adequate. Existing Product-5 and DeepSlice data remain useful coronal
+auxiliary/comparator evidence, but cannot validate arbitrary-plane
+performance; external real validation must deliberately span cardinal and
+extreme-oblique cutting planes and remain split by animal.

@@ -119,13 +119,14 @@ Every run records:
 Complete rendered synthetic manifests record the exact normal, in-plane axes,
 centre, O/U/V, roll, offset quantile, tissue support, RNG stream and rejection
 attempt, CCF asset identity, and nullable animal/specimen/experiment fields.
-The current plane-only precursor intentionally records only normal, physical
-offset, provisional roll, support/intersection provenance and
-`plane_realization_id`; it cannot issue a `synthetic_realization_id` until the
-finite frame, basis, O/U/V, deformation, appearance, mask and render are bound.
-Real records retain their exact animal, specimen and experiment IDs. Accurate,
-imperfect and absent outline modes are all trained; smart-brush output is
-helpful optional evidence, never a required input contract.
+The implemented finite-render precursor now binds the positive plane frame,
+basis, intended and effective O/U/V, exact float32 sampling grid, CCF
+intensity/annotation/mask, rejection history and layered finite-render IDs. It
+still cannot issue a `synthetic_realization_id` until deformation, appearance,
+damage, moving images and accurate/imperfect/absent outline modes are also
+bound. Real records retain their exact animal, specimen and experiment IDs.
+Smart-brush output remains helpful optional evidence, never a required input
+contract.
 
 Training runs detached and resumable on the designated fast workspace. A progress JSON and plain terminal log update throughout. Monitoring is periodic and must not interrupt a healthy process. Checkpoints are written atomically; a short CPU run verifies exact model/optimizer/scheduler/RNG/data-stream continuation. CUDA resume restores the same state, but bitwise equivalence is not claimed because `grid_sample` backward can be nondeterministic on CUDA.
 
