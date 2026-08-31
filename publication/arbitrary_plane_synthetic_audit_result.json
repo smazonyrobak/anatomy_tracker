@@ -1,0 +1,143 @@
+{
+  "appearance_family_counts": {
+    "identity": 16,
+    "label-conditioned": 17,
+    "template-derived": 46,
+    "template-label-mixture": 21
+  },
+  "audit_source_sha256": "dfe93a393c9a831ce515896e9360b1968b3322afd4ee8983a8aed1b8292b10c7",
+  "completed_record_count": 100,
+  "damage_type_presence_counts": {
+    "blackout-or-occluding-polygon": 17,
+    "boundary-bite-or-missing-cortex": 5,
+    "fold-like-bright-or-doubled-strip": 7,
+    "internal-hole": 16,
+    "tear-or-crack": 11
+  },
+  "fixture": {
+    "animal_id": "animal-7",
+    "experiment_id": "experiment-71",
+    "finite_plane_render_id": "356450fba398f9432c4c6e9ad67eae9f1d39f8882430f3c77866cc809cba4c27",
+    "finite_render_receipt_sha256": "70e2ff9e89331ea89266dc1511ffc9635fe1a572a2782bdd4a3b6d03623525ec",
+    "parent_arguments": {
+      "animal_id": "animal-7",
+      "annotation_decoder": "pynrrd 1.1.3",
+      "annotation_index_order": "F",
+      "experiment_id": "experiment-71",
+      "margin_um": [13.0, 17.0],
+      "output_shape": [47, 53],
+      "sample_index": 29,
+      "scalar_source_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "scalar_source_uri": "file:///fixture/template.nrrd",
+      "seed": 9223372036854775909,
+      "specimen_id": "specimen-7a",
+      "split": "development",
+      "template_decoder": "pynrrd 1.1.3",
+      "template_index_order": "F"
+    },
+    "specimen_id": "specimen-7a",
+    "support_index_sha256": "fad619f41e9ea39c425ea419309b7dfe71965bed62927198146d82909893dfe4"
+  },
+  "maximum_accepted_attempt_index": {
+    "g1": 3,
+    "g2": 1,
+    "g3": 1
+  },
+  "model_independence": {
+    "learned_checkpoint_dependencies": [],
+    "pretrained_feature_dependencies": [],
+    "previous_model_dependencies": []
+  },
+  "outline_mode_counts": {
+    "absent-outline-acquired-background": 38,
+    "accurate-outline-black-exterior": 32,
+    "imperfect-outline-black-exterior": 30
+  },
+  "paired_outline_results": {
+    "absent-outline-acquired-background": {
+      "appearance_realization_id": "62656180a44d34aa2827eba31d6659fc6afa7d8eb1a5358338952d5d46bc5ffa",
+      "black_exterior_exact": null,
+      "damage_realization_id": "2a3f6d26089fb22a4578c9787fef687e84e39dd66462449ec9365d0d237433cd",
+      "deformation_realization_id": "fbeaeea5d330f27c27e50ac3c370bdaaaa0f7e39ac2e88bf75697bbd82da387b",
+      "outline_realization_id": "9e0e7ea446f23faa31175662df1d99dde5ee58e2a18620a7b2353a89a579288b",
+      "paired_view_group_id": "25c5035359ac31232695813f5f4e4e45b88213b965461c6c393bc402fe7032c8",
+      "quality_iou": null,
+      "resolved_config_sha256": "0958b540f1447b1d644fbc236266b5075ffafc93abdf418c0770a323c12a21b4",
+      "synthetic_realization_id": "df59bab1a5213b5aa260df4990d359faad0f495a19e27617506bb19d1fdf456d"
+    },
+    "accurate-outline-black-exterior": {
+      "appearance_realization_id": "62656180a44d34aa2827eba31d6659fc6afa7d8eb1a5358338952d5d46bc5ffa",
+      "black_exterior_exact": true,
+      "damage_realization_id": "2a3f6d26089fb22a4578c9787fef687e84e39dd66462449ec9365d0d237433cd",
+      "deformation_realization_id": "fbeaeea5d330f27c27e50ac3c370bdaaaa0f7e39ac2e88bf75697bbd82da387b",
+      "outline_realization_id": "df0abf507c339c522d2abc6f1c6658e266930b2461bd241da050fff4305dd5c7",
+      "paired_view_group_id": "25c5035359ac31232695813f5f4e4e45b88213b965461c6c393bc402fe7032c8",
+      "quality_iou": 1.0,
+      "resolved_config_sha256": "707235ee4688d60dff088cb3512af9ab15867110b8ed9a111388fdeb0f3407e5",
+      "synthetic_realization_id": "38dabec03a45f88928361acd478493daf6faab82394ee48802166dc1670274d0"
+    },
+    "imperfect-outline-black-exterior": {
+      "appearance_realization_id": "62656180a44d34aa2827eba31d6659fc6afa7d8eb1a5358338952d5d46bc5ffa",
+      "black_exterior_exact": true,
+      "damage_realization_id": "2a3f6d26089fb22a4578c9787fef687e84e39dd66462449ec9365d0d237433cd",
+      "deformation_realization_id": "fbeaeea5d330f27c27e50ac3c370bdaaaa0f7e39ac2e88bf75697bbd82da387b",
+      "outline_realization_id": "6b6315152602de477db7cc026c0cd70a67bc4d43c43a3fcb3cbecfd67ba43864",
+      "paired_view_group_id": "25c5035359ac31232695813f5f4e4e45b88213b965461c6c393bc402fe7032c8",
+      "quality_iou": 0.7521367521367521,
+      "resolved_config_sha256": "d33dabcb365f0b0336cbbda46cd11a41a52672939e7c4f784db17c44102f99b1",
+      "synthetic_realization_id": "cf57794b8c272d387d3dd6fddb5dfecc1e761e1133b4d809c2cbe2bf0f4f7548"
+    }
+  },
+  "paired_outline_root_seed": "0x800000000000004d",
+  "pinned_orientation_results": [
+    {
+      "brain_pixel_count": 855,
+      "dominant_axis": 0,
+      "finite_plane_render_id": "c4503187f1b68822da91e19634b4e78e5d261ca7602ee90a42d58d407ebd6310",
+      "name": "near-AP",
+      "normal_rp2_ap_dv_ml": [0.9945823289809145, -0.06536610822832127, -0.08082860121258716],
+      "parent_seed": "0x000000000000033a",
+      "synthetic_realization_id": "49f6626cb1f2aec6c99132896d76b9f460e7be805b09bfcb8379bab1bda98a7a",
+      "synthetic_seed": "0x0000000000000722"
+    },
+    {
+      "brain_pixel_count": 741,
+      "dominant_axis": 1,
+      "finite_plane_render_id": "719a8e41ec01dd6e5fbe66e00ca7118155c950037b562a58989cdf1c51bac85c",
+      "name": "near-DV",
+      "normal_rp2_ap_dv_ml": [-0.05361119159352817, 0.9979538547674573, 0.0348416975862924],
+      "parent_seed": "0x00000000000001a3",
+      "synthetic_realization_id": "50dafa72bbe5fbcfa1e47159a29736723f547a23fc4064130236191f3e179f74",
+      "synthetic_seed": "0x000000000000058b"
+    },
+    {
+      "brain_pixel_count": 1018,
+      "dominant_axis": 2,
+      "finite_plane_render_id": "2777610bb2280713907a5988cdbecffcdd6e43ff03a20cd91f1b1d64e11d7a45",
+      "name": "near-ML",
+      "normal_rp2_ap_dv_ml": [0.13354610805677047, -0.02415729096227914, 0.9907481326332406],
+      "parent_seed": "0x0000000000000055",
+      "synthetic_realization_id": "f99bbaed9d80ebd06d3a921884599f9133148903c8beddeef00eed9c436c1670",
+      "synthetic_seed": "0x000000000000043d"
+    },
+    {
+      "brain_pixel_count": 275,
+      "dominant_axis": null,
+      "finite_plane_render_id": "356450fba398f9432c4c6e9ad67eae9f1d39f8882430f3c77866cc809cba4c27",
+      "name": "oblique",
+      "normal_rp2_ap_dv_ml": [0.8675141764288503, -0.49422124582682003, -0.05625401202011944],
+      "parent_seed": "0x8000000000000065",
+      "synthetic_realization_id": "a346d1a47473a3784beffc92c9a613c8feee03648b7ae23030bc91ff159e40f7",
+      "synthetic_seed": "0x000000000000032c"
+    }
+  ],
+  "raw_records_sha256": "8bfcdc654111470f8feb7a8ee0f0e483e9c70cb7b6d4c36c4f542a3375db35f6",
+  "result_payload_sha256": "7166406b730c6ed217e82e418461c1826325e9a8f82befe1a16a9d238cf57470",
+  "root_seed_sequence": {
+    "encoding": "canonical-lowercase-uint64-hex/v1",
+    "start_inclusive": "0x0000000000000000",
+    "step": 1,
+    "stop_exclusive": "0x0000000000000064"
+  },
+  "schema_version": "anatomy-tracker.arbitrary-plane-synthetic-audit/v1"
+}

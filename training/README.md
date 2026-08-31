@@ -63,7 +63,7 @@ previous-model weight, pretrained feature extractor or learned style model:
    and absent-outline descendants share the same latent sample; the smart brush
    remains optional, and its outline is never the dense-validity target.
 
-The complete generator passed 112 combined arbitrary-plane checks and an
+The complete generator passed 116 combined arbitrary-plane checks and an
 additional 100-seed fixture smoke with no failures. This establishes its narrow
 engineering contract, not realism or model performance. All numeric ranges and
 development mixtures remain engineering defaults pending a seed-hidden montage
@@ -72,6 +72,8 @@ authorize full benchmarking or access to final-test animals. The next
 scientific gate is the small arbitrary-plane oracle pose-ranking premise. A
 separate positive-Jacobian non-SVF holdout remains required before broad model
 claims to test for generator/decoder parameterization matching.
+The model-free oracle protocol is predeclared in
+[`../publication/arbitrary_plane_oracle_pose_ranking_preflight.yaml`](../publication/arbitrary_plane_oracle_pose_ranking_preflight.yaml).
 
 Future real validation remains strictly animal-split, with untouched final-test
 animals. Allen/synthetic data are for development; the DeepSlice Ground Truth

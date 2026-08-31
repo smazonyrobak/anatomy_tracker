@@ -1,0 +1,358 @@
+schema_version: "1.0"
+receipt_id: "arbitrary-plane-semantic-oracle-pose-ranking-preflight-2026-08-31"
+date: "2026-08-31"
+status: "development_protocol_predeclared_implementation_pending"
+claim_scope: >-
+  Predeclared small, model-free arbitrary-plane semantic pose-ranking premise.
+  It tests normal, offset and roll while holding the parent in-plane residual,
+  physical spans, raster size and reflection state known. Exact synthetic
+  deformation, visibility and atlas labels are available to the oracle. It is
+  a renderer and atlas-label self-discriminability gate, not evidence that
+  histological appearance contains recoverable pose information. It is not
+  model training, architecture selection, calibrated uncertainty, a DeepSlice
+  comparison, a real-data benchmark, qualification or final-test evaluation.
+
+repository:
+  branch: "codex/joint-registration"
+  source_parent_commit: "35eb10811568c7a3f568024e18b6f1e4f3deab73"
+  required_generator_result: "publication/arbitrary_plane_synthetic_smoke.yaml"
+  required_generator_implementation_commit: "20bda7f20c9c9cce7573a9d60befde5947c3e4e4"
+
+atlas_sources:
+  lock_file: "publication/data.lock.yaml"
+  average_template_25_nrrd_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+  annotation_25_nrrd_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+  decoded_array_hashes_required_in_result: true
+
+independence:
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  initialization: "deterministic random candidate and case seed streams only"
+  legacy_role: >-
+    Historical coronal oracle and joint-model code may inform safeguards only.
+    Its weights, features, architecture, 3-DOF pose, fixed atlas dimensions and
+    half-pixel metric contracts are not reused.
+
+literature_conclusions:
+  evidence:
+    - >-
+      QuickNII's physical O/U/V anchors represent user-defined oblique planes;
+      this supports the interchange geometry, not an automatic ranker.
+    - >-
+      DeepSlice shows that large synthetic data can support automatic atlas
+      anchoring, but its whole-coronal, ImageNet-initialized Xception design is
+      not evidence for the best arbitrary-plane architecture here.
+    - >-
+      AMBIA supports single-section AP/tilt estimation but remains a
+      near-coronal parameterization.
+    - >-
+      STAM demonstrates that small yaw changes can alter visible anatomy, so
+      the candidate bank needs close angular distractors.
+    - >-
+      Mouse histology work by Xiong et al. supports coarse-to-fine HOG scoring
+      under uneven stain and deformation, while MIND and TIRL support local
+      structural descriptors and ranked multiresolution search across contrast.
+  engineering_choices_not_literature_facts:
+    - "64 base realizations and a 40-candidate bank"
+    - "the exact candidate perturbation magnitudes and gates below"
+    - "region-balanced semantic overlap as the primary oracle score"
+    - "considering masked MIND and HOG in a separately frozen later image-information pilot"
+
+current_blocker:
+  finding: >-
+    training/arbitrary_plane_manifest.py v1 proposes RP2 infinite planes but
+    explicitly omits a finite frame, roll, centre, in-plane basis and
+    reflection state. Independently fitting a new FOV for every candidate would
+    leak pose through crop and scale.
+  required_action: "implement a new versioned finite-candidate representation before running the premise"
+
+finite_candidate_contract:
+  physical_pose:
+    centre: "c in physical AP/DV/ML micrometres"
+    frame: "right-handed orthonormal columns [u,v,n]"
+    inplane_basis: "positive 2x2 physical U/V span basis"
+    plane_coordinates: "canonical RP2 normal n plus aligned signed offset d and separate roll"
+    interchange: "QuickNII-compatible O/U/V under the current x/W,y/H sampling contract"
+  proposal_transport:
+    - "align candidate normal sign to the parent RP2 representative"
+    - >-
+      Let q be the support projection origin and parent state be c0,n0,d0.
+      Define r0=c0-q-d0*n0. Apply the minimal SO(3) rotation Rmin taking n0
+      to the sign-aligned candidate nc, then set cc=q+dc*nc+Rmin*r0.
+    - "require abs(dot(nc,cc-q)-dc) <= 1e-9 micrometres"
+    - "apply the explicit roll delta about nc through cc after minimal parallel transport"
+    - "preserve H/W, physical pixel pitch, U/V spans, basis, and explicit reflection state"
+    - "install the truth candidate by reusing the verified parent geometry and raster byte-for-byte"
+  prohibited:
+    - "per-candidate support-fitted crop, scale, pitch or canvas"
+    - "normal-dependent tangent-frame reset without parallel transport"
+    - "candidate metadata, pose deltas, IDs, order or coordinate grids entering a scorer"
+    - "legacy fixed-299, 25-um or (x+0.5)/W geometry"
+  acceptance:
+    - "brain intersection"
+    - "at least 64 rendered candidate-brain pixels, independent of target overlap"
+    - "finite physical/raster coordinates"
+    - "unique hash-bound candidate identity"
+    - "exact deterministic replay"
+    - "candidate-order equivariance"
+  fixed_error_denominator: >-
+    Candidate acceptance never uses candidate/target overlap. Every score and
+    physical error uses the target fixed-valid or clean-tissue denominator, so
+    low-overlap candidates remain hard mismatches rather than disappearing.
+
+development_cases:
+  base_realization_count: 64
+  split: "development"
+  unit: "base synthetic plane realization"
+  output_shape_h_w: [192, 256]
+  finite_render_margin_u_v_um: [250.0, 250.0]
+  case_root_seed: "0xa11e5eed00000001"
+  case_indices: "integers 0 through 63 inclusive"
+  seed_derivation: >-
+    uint64 little-endian first eight SHA-256 bytes of UTF-8
+    'arbitrary-plane-oracle-cases/v1\0<case_root_seed>\0<field>\0<case_index>\0<attempt>';
+    independent fields are finite-parent, synthetic, and outline.
+  maximum_case_rejection_attempts: 4096
+  ordinary_offset_acceptance: >-
+    Truth offset must be at least 550 micrometres from both ends of its selected
+    connected support interval. After constructing all deterministic local
+    slots, reject the base case before scoring if any is nonintersecting,
+    nonunique or renders fewer than 64 candidate-brain pixels. Edge planes
+    remain descriptive stress cases, not part of the primary 64-case gate.
+  paired_outline_descendants_per_base: 3
+  paired_outline_modes:
+    - "accurate-outline-black-exterior"
+    - "imperfect-outline-black-exterior"
+    - "absent-outline-acquired-background"
+  orientation_stratification:
+    near_AP: 12
+    near_DV: 12
+    near_ML: 12
+    general_oblique: 28
+  orientation_case_index_assignment:
+    near_AP: "0 through 11"
+    near_DV: "12 through 23"
+    near_ML: "24 through 35"
+    general_oblique: "36 through 63"
+  orientation_sampling: >-
+    Draw continuous Haar-uniform RP2 normals conditionally within each coverage
+    bucket, continuous uniform roll, and brain-support-conditioned offsets. The
+    buckets guarantee coverage; they do not discretize the supported planes.
+  orientation_thresholds:
+    near_axis: "absolute named normal component >= 0.90"
+    general_oblique: "maximum absolute normal component < 0.90"
+  primary_stratum: "ordinary"
+  descriptive_only_strata: ["boundary stress", "tiny support", "low information"]
+  final_test_animals_accessed: false
+  deepslice_ground_truth_accessed: false
+  real_lab_histology_accessed: false
+
+candidate_bank:
+  candidates_per_case: 40
+  candidate_root_seed: "0xcaad1da7e0000001"
+  shuffle_root_seed: "0x5c0e5eed00000001"
+  seed_derivation: >-
+    uint64 little-endian first eight SHA-256 bytes of the UTF-8 literal
+    'arbitrary-plane-finite-candidates/v1\0<candidate_root_seed>\0<base_plane_realization_id>\0<class>\0<slot>\0<attempt>';
+    final-order replaces class/slot with 'final-order' and uses attempt zero.
+    Bind every rejection and accepted slot before scoring.
+  exact_composition:
+    truth: 1
+    offset_only: 6
+    normal_angle_only: 16
+    roll_only: 6
+    coupled_local: 5
+    global_hard_negative: 6
+  perturbations:
+    offset_only: "signed 100, 250 and 500 micrometres"
+    normal_angle_only: >-
+      Signed 1, 3, 7 and 12 degrees along each parent physical-frame tangent
+      axis a in {u0,v0}, with nc=cos(theta)*n0+sin(theta)*a and dc=d0.
+    roll_only: "signed 3, 10 and 30 degrees added about n0 with nc=n0 and dc=d0"
+    coupled_local:
+      - "+3 degrees tangent-0, +250 micrometres, +10 degrees roll"
+      - "-3 degrees tangent-0, -250 micrometres, -10 degrees roll"
+      - "+7 degrees tangent-1, -100 micrometres, +30 degrees roll"
+      - "-7 degrees tangent-1, +100 micrometres, -30 degrees roll"
+      - "+12 degrees at tangent azimuth 45 degrees, +500 micrometres, +15 degrees roll"
+    global_hard_negative: >-
+      Six independently seeded Haar-RP2 normals conditional on 20 to 60 degree
+      distance from truth; sample offset uniformly from connected
+      brain-intersection intervals and roll uniformly on [-pi,pi).
+  truth_position: "uniformly shuffled with an independent seed"
+  invalid_or_duplicate_policy: >-
+    Local slots are never tuned or substituted: reject the whole base case
+    before scoring if any local slot fails. Deterministically resample only
+    global slots that are duplicate, nonintersecting or render fewer than 64
+    candidate-brain pixels, up to 4096 attempts per slot; reject the whole case
+    on exhaustion. Every accepted bank has exactly 40 unique candidates and all
+    case/candidate rejections are preserved.
+  out_of_fov_policy: "candidate background counts as mismatch, never missing-score exclusion"
+
+oracle_target:
+  construction: >-
+    Pull source_annotation once onto the verified fixed lattice with the exact
+    fixed_to_source_map using nearest-neighbour integer sampling. Score only
+    fixed_valid_correspondence_mask; use the generator's exact deformation and
+    visibility truth without exposing pose metadata to the scorer.
+  interpretation: >-
+    This is an anatomical identifiability ceiling conditioned on perfect
+    deformation and visibility, not evidence that an image model can infer the
+    same information.
+
+scores:
+  primary:
+    name: "fixed-physical-scale region-balanced soft Dice over raw Allen IDs"
+    input: "oracle target labels and candidate-rendered atlas labels"
+    label_source: "raw integer annotation IDs bound by the decoded annotation-array hash; no ontology remapping"
+    channels: >-
+      One binary channel for every nonzero target ID occupying at least 16
+      fixed-valid pixels, plus one pooled channel for all smaller nonzero target
+      IDs. Omit the pooled channel when its target set is empty. Candidate
+      channels use exactly the target-defined ID sets.
+    smoothing: >-
+      Set every target and candidate channel to zero outside the fixed-valid
+      mask, convert to float64, and apply scipy.ndimage.gaussian_filter with
+      sigma=75 micrometres divided by the parent's isotropic physical pixel
+      pitch, truncate=3.0, mode='constant', cval=0.0, independently per channel.
+    formula: >-
+      For each channel k on the fixed-valid mask M, Dk=(2*sum(M*Tk*Ck)+1e-12)
+      /(sum(M*Tk^2)+sum(M*Ck^2)+1e-12). The score is the unweighted arithmetic
+      mean of Dk and higher is better.
+    exterior_policy: >-
+      The mask M is fixed_valid_correspondence_mask from the target. Candidate
+      background within M remains zero and is therefore a mismatch; no
+      candidate-specific overlap mask is permitted.
+    resolution: "score all 40 candidates at the native 192x256 raster; no shortlist or reranking"
+    tie_policy: "scores within absolute 1e-12 of the maximum are tied; a tied truth is not top-1"
+  ablations:
+    raw_ID_agreement: "fraction of fixed-valid pixels with exact integer-ID equality"
+    mask_only_Dice: "binary nonzero-label Dice on the fixed-valid denominator"
+  image_information_probe_status: >-
+    Not part of this semantic gate. After a pass, freeze a separate small
+    protocol defining dewarped observation intensity, atlas-template intensity,
+    normalization, masks and exact MIND/HOG implementations before inspecting
+    any image score. The cited MIND/HOG literature motivates that later probe;
+    it does not validate categorical-label scoring.
+  smart_brush_interpretation: >-
+    Semantic labels and maps are identical across paired outline descendants,
+    so the semantic score is computed once per base realization and cannot
+    estimate a smart-brush effect. Outline effects belong to the later image
+    information and learned-model studies.
+
+controls:
+  exact_mandatory:
+    - "exact replay of every case, candidate and raw score"
+    - "candidate-order permutation equivariance"
+    - "RP2 sign-equivalence"
+    - "truth metadata and coordinate-channel exclusion audit"
+    - "current x/W,y/H physical-coordinate contract"
+  shuffled_target:
+    permutation: "target case i is replaced by case (i+17) modulo 64"
+    repeats: 1
+    seed_required: false
+    preprocessing: >-
+      M, target-defined label channels and physical smoothing sigma/pixel pitch
+      all come from the shuffled target; candidate rasters and candidate order
+      remain bank i. The target pitch is an allowed scorer constant, not
+      candidate metadata.
+    original_truth_top1_rate_maximum: 0.10
+    original_truth_mean_reciprocal_rank_maximum: 0.15
+    interpretation: "negative control for target-independent or leaked truth preference"
+
+metrics:
+  primary:
+    top1: "truth is the unique maximum outside the absolute 1e-12 tie tolerance"
+    true_rank: >-
+      Conservative rank equals one plus the number of decoys with score at
+      least truth_score-1e-12; use it for mean reciprocal rank and median rank.
+    true_versus_decoy_win_fraction: "fraction of 39 decoys with score < truth_score-1e-12"
+    true_score_margin: "truth score minus the maximum decoy score"
+  pose_error:
+    RP2_normal_geodesic_angle_deg: "degrees(arccos(clamp(abs(dot(n_truth,n_selected)),0,1)))"
+    sign_aligned_offset_error_um: >-
+      Align selected normal sign to truth and take absolute difference between
+      the correspondingly aligned signed offsets.
+    finite_corresponding_point_error: >-
+      Use effective_physical_ouv_ap_dv_ml_um reconstructed from each actual
+      float32 renderer state and promote it to float64. At every fixed-valid
+      target pixel x=0..W-1,y=0..H-1, use s=x/W,t=y/H and P=O+sU+tV for truth
+      and selected candidate. Compute Euclidean micrometre errors on that same
+      fixed-valid mask, RMS as sqrt(mean(e^2)) and p95 with NumPy
+      quantile(method='linear'). Candidate overlap never changes the mask.
+  reporting_strata:
+    - "orientation family"
+    - "appearance family"
+    - "damage family/severity"
+    - "outline mode"
+    - "support size"
+  statistical_unit: "base synthetic realization, never candidate pair or outline descendant"
+  uncertainty_status: >-
+    Preserve the complete score landscape, but do not call normalized scores a
+    calibrated posterior. Calibration is deferred to unseen animals after the
+    learned point method stabilizes.
+
+predeclared_go_gate:
+  exact_integrity_controls: "all exact checks pass"
+  shuffled_target_control: "both predeclared upper bounds pass"
+  primary_semantic_top1_rate_minimum: 0.80
+  primary_semantic_top1_wilson_95_lower_bound:
+    confidence: 0.95
+    z: 1.959963984540054
+    method: "two-sided Wilson score interval over the 64 base realizations"
+    minimum: 0.65
+  median_true_rank_maximum: 1
+  median_true_versus_decoy_win_fraction_minimum: 0.95
+  each_orientation_family_top1_minimum: 0.60
+  failure_action: >-
+    Pause downstream pose-model work if the semantic oracle fails and diagnose
+    geometry, candidate coverage or atlas-label ambiguity without changing the
+    gate post hoc.
+  pass_interpretation: >-
+    A pass clears only the finite-candidate representation and atlas-label
+    semantic premise. It authorizes a separately predeclared image-information
+    pilot; it neither selects nor authorizes a recurrent architecture by itself.
+
+saved_outputs:
+  - "exact base and paired-view realization IDs"
+  - "animal/specimen/experiment identifiers including nulls"
+  - "candidate set, order, IDs, physical poses and render hashes"
+  - "resolved configs, code hashes, package versions and all RNG lineages"
+  - "raw per-candidate score landscapes and validity counts"
+  - "per-case ranks, margins, physical errors and stratum labels"
+  - "control results and rejection logs"
+
+next_decision:
+  pass: >-
+    Freeze a separate small image-information pilot, informed by current
+    peer-reviewed structural-similarity literature, before screening any fresh
+    random-initialized joint pose/deformation architecture.
+  fail: "diagnose geometry, candidate coverage or atlas-label ambiguity before any learned-model build"
+
+future_validation_plan_preserved:
+  split_unit: "animal, never slice"
+  untouched_final_test_animals_required: true
+  development_data: "Allen and synthetic"
+  public_benchmark: "DeepSlice Ground Truth dataset DOI 10.25949/22802411"
+  external_validation: "separate real lab histology, ideally laboratory-held-out"
+  reference: "blinded expert alignments"
+  primary_metric: "physical anatomical landmark registration error"
+  secondary_metrics: ["plane/angle error", "regional overlap", "failure rate", "correction time"]
+  reporting: "animal-level effect sizes with 95% confidence intervals"
+  reproducibility: "save exact splits, code, configs, seeds and raw predictions"
+  probabilistic_outputs: >-
+    Later calibrate AP/plane/tilt and dense uncertainty on unseen animals,
+    verify nominal coverage and point accuracy, and propagate uncertainty to
+    trajectory volumes and region assignments.
+
+primary_sources:
+  - "Puchades MA et al. (2019), QuickNII, https://doi.org/10.1371/journal.pone.0216796"
+  - "Carey H et al. (2023), DeepSlice, https://doi.org/10.1038/s41467-023-41645-4"
+  - "Sadeghi M et al. (2023), AMBIA, https://doi.org/10.1007/s12021-023-09632-8"
+  - "Feng Z et al. (2025), STAM, https://doi.org/10.1038/s41586-025-09211-8"
+  - "Xiong J et al. (2018), robust mouse-brain histology registration, https://doi.org/10.3389/fninf.2018.00093"
+  - "Heinrich MP et al. (2012), MIND, https://doi.org/10.1016/j.media.2012.05.008"
+  - "Huszár IN et al. (2023), TIRL, https://doi.org/10.1016/j.neuroimage.2022.119792"
+  - "Iglesias JE et al. (2018), joint registration and synthesis, https://doi.org/10.1016/j.media.2018.09.002"
+  - "Zhang Z et al. (2025), SlicesMapi, https://doi.org/10.1007/s12021-025-09724-7"

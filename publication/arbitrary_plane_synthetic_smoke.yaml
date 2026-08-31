@@ -14,9 +14,9 @@ repository:
   branch: "codex/joint-registration"
   implementation_commit: "20bda7f20c9c9cce7573a9d60befde5947c3e4e4"
   implementation_commit_subject: "Add complete arbitrary-plane synthetic generator"
-  receipt_parent_commit: "20bda7f20c9c9cce7573a9d60befde5947c3e4e4"
-  remote_was_equal_to_receipt_parent_before_documentation: true
-  worktree_was_clean_before_documentation: true
+  audit_evidence_commit: "35eb10811568c7a3f568024e18b6f1e4f3deab73"
+  audit_evidence_commit_subject: "Bind arbitrary-plane synthetic smoke cases"
+  initial_receipt_commit: "aabfa5d465a348fc600627a1728d8e7ecedd6ee2"
 
 frozen_inputs:
   protocol:
@@ -39,11 +39,19 @@ frozen_inputs:
       sha256: "6ef206e210498403865ac822b59e87b5935a35029dd44ea682891ef370686abc"
   focused_test_sources:
     - path: "tests/test_arbitrary_plane_synthetic_generator.py"
-      sha256: "33816db0b737a505c19b8a68de0f69ccb0b2ecfec83a14fa5e7a7184ee0b90f1"
+      sha256: "e459bf6cf7c4f34604898fed2908d2c99289762b027786d9ccd4185bb87b934e"
     - path: "tests/test_arbitrary_plane_synthetic_ops.py"
       sha256: "c45f12cbea2d06ab7439a67de202d83e88ecc6b4923c4c215013453f02af786f"
     - path: "tests/test_arbitrary_plane_synthetic_observation.py"
       sha256: "ef938ff34b9ed44b52028c4d2ff8ff10bdbec9d82b46dbb73b2f9c94e4611a5e"
+    - path: "tests/test_synthetic_registration.py"
+      sha256: "8adea96fec1f1e8a09e9725002e3a19562cb265b5f48215866505bc43296e952"
+  audit_source:
+    path: "training/audit_arbitrary_plane_synthetic_generator.py"
+    sha256: "dfe93a393c9a831ce515896e9360b1968b3322afd4ee8983a8aed1b8292b10c7"
+  stored_audit_summary:
+    path: "publication/arbitrary_plane_synthetic_audit_result.json"
+    canonical_result_payload_sha256: "7166406b730c6ed217e82e418461c1826325e9a8f82befe1a16a9d238cf57470"
 
 runtime:
   python: "3.11.15"
@@ -57,18 +65,21 @@ model_independence:
   learned_checkpoint_dependencies: []
   previous_model_dependencies: []
   pretrained_feature_dependencies: []
-  learned_style_or_stain_model_dependencies: []
   tested_contract: >-
-    Exact replay and tamper checks require the learned-dependency lists to
-    remain empty. No previous trained model supplies weights, features,
-    pseudo-labels or architecture constraints to this generator.
+    Exact replay and tamper checks require these three artifact dependency
+    lists to remain empty. No previous trained model supplies weights,
+    features, pseudo-labels or architecture constraints to this generator.
+  learned_style_or_stain_source_audit: >-
+    The frozen generator, operations and observation sources import no learned
+    style or stain model. This is a source/dependency audit conclusion, not a
+    fourth artifact dependency-list field.
 
 evidence:
   focused_generator_tests:
     command: >-
       python -m pytest -q
       tests/test_arbitrary_plane_synthetic_generator.py
-    result: "16 passed"
+    result: "19 passed in 5.11 seconds"
   combined_arbitrary_plane_regression:
     command: >-
       python -m pytest -q
@@ -79,12 +90,33 @@ evidence:
       tests/test_arbitrary_plane_support.py
       tests/test_arbitrary_plane_manifest.py
       tests/test_arbitrary_plane_rendered_generator.py
-    result: "112 passed in 16.87 seconds"
-    rerun_on_receipt_parent: true
+      tests/test_synthetic_registration.py::test_zero_tilt_plane_preserves_native_pixels_and_full_allen_ids
+    result: "116 passed in 21.29 seconds"
+    run_against_frozen_sources_at_audit_evidence_commit: true
   deterministic_fixture_seed_audit:
-    seeds: "100 root-seed realizations"
-    failures: 0
-    maximum_g2_accepted_attempt_index: 1
+    command: "python -m training.audit_arbitrary_plane_synthetic_generator"
+    audit_source_sha256: "dfe93a393c9a831ce515896e9360b1968b3322afd4ee8983a8aed1b8292b10c7"
+    root_seed_start_inclusive: "0x0000000000000000"
+    root_seed_stop_exclusive: "0x0000000000000064"
+    root_seed_step: 1
+    completed_realizations: 100
+    failed_realizations: 0
+    raw_records_sha256: "8bfcdc654111470f8feb7a8ee0f0e483e9c70cb7b6d4c36c4f542a3375db35f6"
+    canonical_result_payload_sha256: "7166406b730c6ed217e82e418461c1826325e9a8f82befe1a16a9d238cf57470"
+    fixture:
+      finite_plane_render_id: "356450fba398f9432c4c6e9ad67eae9f1d39f8882430f3c77866cc809cba4c27"
+      finite_render_receipt_sha256: "70e2ff9e89331ea89266dc1511ffc9635fe1a572a2782bdd4a3b6d03623525ec"
+      support_index_sha256: "fad619f41e9ea39c425ea419309b7dfe71965bed62927198146d82909893dfe4"
+      split: "development"
+      parent_seed: "0x8000000000000065"
+      sample_index: 29
+      animal_id: "animal-7"
+      specimen_id: "specimen-7a"
+      experiment_id: "experiment-71"
+    maximum_accepted_attempt_index:
+      g1: 3
+      g2: 1
+      g3: 1
     default_outline_mode_counts:
       accurate: 32
       imperfect: 30
@@ -93,17 +125,49 @@ evidence:
       Engineering breadth and deterministic rejection-loop smoke on the small
       synthetic fixture only; these counts are not prevalence estimates.
   paired_outline_counterfactual_smoke:
-    modes: ["accurate", "imperfect", "absent"]
-    shared_paired_view_group_id: true
+    root_seed: "0x800000000000004d"
+    modes:
+      - "accurate-outline-black-exterior"
+      - "imperfect-outline-black-exterior"
+      - "absent-outline-acquired-background"
+    shared_paired_view_group_id: "25c5035359ac31232695813f5f4e4e45b88213b965461c6c393bc402fe7032c8"
+    shared_deformation_realization_id: "fbeaeea5d330f27c27e50ac3c370bdaaaa0f7e39ac2e88bf75697bbd82da387b"
+    shared_appearance_realization_id: "62656180a44d34aa2827eba31d6659fc6afa7d8eb1a5358338952d5d46bc5ffa"
+    shared_damage_realization_id: "2a3f6d26089fb22a4578c9787fef687e84e39dd66462449ec9365d0d237433cd"
     distinct_final_realization_ids: true
     accurate_and_imperfect_black_exterior_exact: true
     absent_retained_generated_background_exactly: true
-    sampled_imperfect_outline_iou: 0.7265
-  covered_fixture_strata:
-    - "near-AP"
-    - "near-ML"
-    - "near-DV"
-    - "oblique"
+    sampled_imperfect_outline_iou: 0.7521367521367521
+    final_realization_ids:
+      accurate: "38dabec03a45f88928361acd478493daf6faab82394ee48802166dc1670274d0"
+      imperfect: "cf57794b8c272d387d3dd6fddb5dfecc1e761e1133b4d809c2cbe2bf0f4f7548"
+      absent: "df59bab1a5213b5aa260df4990d359faad0f495a19e27617506bb19d1fdf456d"
+  pinned_complete_orientation_realizations:
+    - name: "near-AP"
+      normal_rp2_ap_dv_ml: [0.9945823289809145, -0.06536610822832127, -0.08082860121258716]
+      parent_seed: "0x000000000000033a"
+      synthetic_seed: "0x0000000000000722"
+      finite_plane_render_id: "c4503187f1b68822da91e19634b4e78e5d261ca7602ee90a42d58d407ebd6310"
+      synthetic_realization_id: "49f6626cb1f2aec6c99132896d76b9f460e7be805b09bfcb8379bab1bda98a7a"
+    - name: "near-DV"
+      normal_rp2_ap_dv_ml: [-0.05361119159352817, 0.9979538547674573, 0.0348416975862924]
+      parent_seed: "0x00000000000001a3"
+      synthetic_seed: "0x000000000000058b"
+      finite_plane_render_id: "719a8e41ec01dd6e5fbe66e00ca7118155c950037b562a58989cdf1c51bac85c"
+      synthetic_realization_id: "50dafa72bbe5fbcfa1e47159a29736723f547a23fc4064130236191f3e179f74"
+    - name: "near-ML"
+      normal_rp2_ap_dv_ml: [0.13354610805677047, -0.02415729096227914, 0.9907481326332406]
+      parent_seed: "0x0000000000000055"
+      synthetic_seed: "0x000000000000043d"
+      finite_plane_render_id: "2777610bb2280713907a5988cdbecffcdd6e43ff03a20cd91f1b1d64e11d7a45"
+      synthetic_realization_id: "f99bbaed9d80ebd06d3a921884599f9133148903c8beddeef00eed9c436c1670"
+    - name: "oblique"
+      normal_rp2_ap_dv_ml: [0.8675141764288503, -0.49422124582682003, -0.05625401202011944]
+      parent_seed: "0x8000000000000065"
+      synthetic_seed: "0x000000000000032c"
+      finite_plane_render_id: "356450fba398f9432c4c6e9ad67eae9f1d39f8882430f3c77866cc809cba4c27"
+      synthetic_realization_id: "a346d1a47473a3784beffc92c9a613c8feee03648b7ae23030bc91ff159e40f7"
+  additional_covered_fixture_branches:
     - "nondefault raster shape"
     - "tiny-support damage-disable branch"
   tested_properties:
