@@ -13,7 +13,7 @@ study:
     Determine whether one jointly trained model improves full arbitrary-plane CCF geometry,
     local anatomical correspondence, compatibility-derived failure ranking, and downstream probe mapping
     over frozen internal and published alternatives while remaining practical in the desktop GUI.
-  model_status: "implemented_development_training_active_not_qualified"
+  model_status: "arbitrary_plane_geometry_and_manifest_prototype_active_not_qualified"
   intended_scope:
     species: "Mus musculus"
     anatomy: "whole adult brain"
@@ -37,14 +37,15 @@ model:
     recurrent_shared_refinement: "prespecified ablation, not yet selected"
   deployment:
     checkpoint_count: 1
-    onnx_entry_graphs: 2
+    onnx_entry_graphs: 3
+    entry_graph_roles: ["source_initializer_encoder", "cached_coarse_candidate_scorer", "final_dense_refiner"]
     host_atlas_renderer_between_iterations: true
-    rationale: "Preserve the large 3-D atlas outside ONNX while exporting both entry graphs from one jointly trained checkpoint."
+    rationale: "Preserve the large 3-D atlas outside ONNX while exporting all three entry graphs from one jointly trained checkpoint."
   initial_iterations: "three is a hypothesis; feed-forward versus recurrent depth is selected later"
   iteration_selection: "development accuracy-latency ablation"
   public_pose_outputs:
     - "quicknii_ouv_ml_ap_dv"
-    - "structured_ccf_frame_center_rotation6d_log_scale"
+    - "structured_ccf_frame_center_rotation6d_positive_triangular_basis"
     - "credible_spatial_plane_volume_after_calibration"
     - "derived_ap_lr_dv_only_when_coronal_conversion_is_well_conditioned"
   dense_outputs:
@@ -65,7 +66,9 @@ analysis_modes:
   - id: "expert_assisted"
     information: "manual QuickNII/VisuAlign or equivalent"
 data:
-  split_unit: "animal_or_experiment"
+  split_unit: "animal"
+  experiment_role: "required provenance nested within animal; never a substitute split or inferential unit"
+  unresolved_real_animal_id: "ineligible for confirmatory claims"
   descendant_split_inheritance: true
   sources:
     - id: "allen_ccfv3_25um"
@@ -100,14 +103,16 @@ synthetic_generator:
     asset_identity_and_hash_required: true
     animal_id: null
     specimen_id: null
-    synthetic_realization_id_required: true
+    experiment_id: null
+    plane_realization_id_required: true
+    synthetic_realization_id_required: "only after frame, basis, QuickNII O/U/V, deformation, appearance, mask and rendered artifacts are hash-bound"
     exact_rng_stream_and_rejection_attempt_required: true
   pose_domain:
     orientation: "uniform surface-area normal on RP2 plus uniform in-plane roll"
     offset: "uniform over the annotation-support projection for the sampled normal"
     support: "all brain-intersecting planes; named tiny-support/tangent stress strata retained"
     serialized_geometry: "QuickNII O/U/V"
-    internal_geometry: "3-D centre plus continuous 6-D right-handed frame plus positive log scale"
+    internal_geometry: "3-D centre plus continuous 6-D right-handed frame plus positive-diagonal upper-triangular 2x2 in-plane basis"
   nuisance:
     in_plane_rotation: "arbitrary"
     scale: [0.5, 1.5]
@@ -180,14 +185,16 @@ constraints:
   hard_constraint_satisfaction_required: 1.0
   infeasible_behavior: "return conflicts and minimum violation; never silently relax"
 probabilistic_pose:
-  required_architecture_output: "equal-area antipodal normal distribution, conditional physical-offset candidates, and local tangent covariance over two normal rotations plus normal offset"
+  status: "planned candidate; not yet implemented or calibrated"
+  candidate_output: "equal-area antipodal normal distribution, conditional physical-offset candidates, and local tangent covariance over two normal rotations plus normal offset"
+  adoption_rule: "retain only if training complexity remains proportionate and point-estimate accuracy is noninferior"
   calibration_data: "held-out animals only"
   point_accuracy_noninferiority_required: true
   required_reports:
     - "proper scoring rule"
     - "50/80/90/95 percent empirical coverage and interval width"
     - "risk-coverage and failure detection"
-    - "probabilistic trajectory volume and brain-region assignment"
+    - "probabilistic trajectory volume and brain-region assignment only after in-plane and dense-map uncertainty are represented and calibrated"
   gui_wording: "uncalibrated development energy is risk/compatibility, not confidence"
 evaluation:
   tracks:
@@ -207,7 +214,7 @@ evaluation:
     - "visible_tissue_allen_id_correspondence_with_macro_dice_and_topology"
     - "recording_site_3d_ccf_error_and_hierarchy_region_accuracy"
 statistics:
-  inferential_unit: "animal_or_experiment"
+  inferential_unit: "animal"
   paired: true
   confidence_level: 0.95
   primary_method: "hierarchical_bootstrap_animals_then_slices"

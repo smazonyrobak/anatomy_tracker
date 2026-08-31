@@ -53,17 +53,21 @@ This card describes data roles for the frozen baseline and proposed unified-mode
 ## Synthetic data
 
 The frozen v2 generator covers only an oblique-coronal AP/tilt chart and is
-retained for historical diagnostics. A side-by-side v3 path generates every
-brain-intersecting plane on demand from immutable manifests. Its reference
-measure uses equal-area antipodal plane normals, uniform in-plane roll and
-uniform valid offset over projected annotation support. Each sample records a
-structured 3-D frame and exact QuickNII O/U/V, source-asset hashes, RNG stream,
-rejection attempts, support measures and synthetic-realization identity;
-animal/specimen IDs are nullable for atlas data and exact for real data.
-Samples also include forward/inverse deformation, label maps, visible/damaged
-masks and appearance metadata. Appearance is grayscale and includes clean
-through severe tone, illumination, tiling, vignette, blur, noise, speck,
-blowout, bubble, tear, missing-tissue and occlusion conditions.
+retained for historical diagnostics. The current side-by-side v3 precursor
+samples an unoriented brain-intersecting infinite plane from equal-area
+antipodal normals and uniform valid offset over projected annotation support.
+It records source/support hashes, exact RNG streams and rejection attempts,
+nullable atlas animal/specimen/experiment fields and a `plane_realization_id`;
+it deliberately does not claim a complete rendered sample.
+
+The planned complete v3 path adds a finite structured 3-D frame, uniform
+in-plane roll, basis, exact QuickNII O/U/V, forward/inverse deformation, label
+maps, visible/damaged masks and grayscale appearance. Only after those fields
+and rendered artifacts are hash-bound may it issue a
+`synthetic_realization_id`. Appearance will include clean through severe tone,
+illumination, tiling, vignette, blur, noise, speck, blowout, bubble, tear,
+missing-tissue and occlusion conditions. Exact real animal/specimen/experiment
+identifiers remain attached to every real descendant.
 
 The exact synthetic test uses independent transformation/artifact implementations. Different random seeds alone are insufficient independence.
 
@@ -71,7 +75,9 @@ The existing 8,192-case AtlasPose synthetic test has already been inspected and 
 
 ## Splitting and leakage control
 
-- Split real data by animal/experiment, never by section; synthetic atlas
+- Split real data strictly by animal, never by experiment or section; every
+  real descendant inherits its animal split, and records without resolvable
+  animal IDs are ineligible for confirmatory claims. Synthetic atlas
   realizations retain explicit source identity and disjoint hash-bound manifests.
 - Serial neighbours, channels, crops and augmented descendants inherit the parent split.
 - Hash exact files and audit perceptual near-duplicates.

@@ -71,6 +71,12 @@ On first use, choose the bundled `data\Allen Brain Atlas 25um` directory if an a
 
 Do not copy a virtual environment from another computer. Recreate `.venv` with the commands above; only the repository and the release assets are portable.
 
+The automatic-matching controls described below are the deployed legacy
+coronal workflow. Its AP/L--R/D--V chart, AP interval/order and shared-tilt rule
+do not define the arbitrary-plane model now under development; that future path
+uses full QuickNII O/U/V/frame geometry, a full-plane domain, ordered signed
+offsets along a declared stack normal and a shared 3-D plane normal.
+
 Atlas positions and exported coordinates use a bregma-centred stereotaxic convention: AP 0 is bregma, anterior AP is positive, and posterior AP is negative.
 
 Use **Add slices** to select many TIFF, PNG, JPEG, or BMP images at once. Browse them with the slice selector, the previous/next buttons, or `Ctrl+Left` and `Ctrl+Right`; points and adjustments are retained separately for each slice.

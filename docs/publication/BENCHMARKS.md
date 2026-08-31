@@ -12,7 +12,7 @@ Two diagnostic swaps isolate causality: feed each pose output into one frozen re
 
 ## Primary comparators
 
-- **DeepSlice publication release:** frozen official weights/code and its recommended model ensemble, angle integration and cutting-index processing. Compare both raw single-slice and series-assisted modes. Raw case bytes and recorded raw-frame ground truth remain immutable. Its frozen intended-preprocessing adapter performs exactly one horizontal raster flip into the expected A-to-P view; after all DeepSlice processing, the final plane is returned to the raw frame with `H(O,U,V)=(O+U,-U,V)` before scoring. A physical atlas-axis reflection is prohibited.
+- **DeepSlice publication release:** frozen official weights/code and its recommended model ensemble, angle integration and cutting-index processing. Compare both raw single-slice and series-assisted modes. Raw case bytes and recorded raw-frame ground truth remain immutable. A new hash-bound comparator adapter performs exactly one horizontal raster flip into the expected A-to-P view; after all DeepSlice processing, a `W`-pixel result is returned to the raw frame with `H_W(O,U,V)=(O+((W-1)/W)U,-U,V)` before scoring. The historical `(O+U,-U,V)` adapter remains frozen negative diagnostic evidence only. A physical atlas-axis reflection is prohibited.
 - **AMBIA:** automatic localization plus its documented deformable registration, containerized if reproducible.
 - **Xiong et al.:** sequence plane mapping and nonrigid registration when the published implementation can be reproduced on the benchmark contract.
 - **Frozen AtlasPose + AtlasWarp:** baseline implementation at commit `c668103` with checksum-pinned models.
@@ -37,11 +37,18 @@ All newly trained controls receive identical data manifests, preprocessing, seed
 
 ### Pose
 
-- official DeepSlice corresponding-pixel plane distance in CCF voxels and micrometres;
-- AP/L--R/D--V MAE, median, p95 and signed bias;
+- separately versioned QuickNII/webnutil `x/W,y/H` corresponding-pixel plane
+  distance in CCF voxels and micrometres;
+- full-domain geodesic normal, physical offset and in-plane-frame error;
+- derived AP/L--R/D--V MAE, median, p95 and signed bias only on
+  well-conditioned coronal/applicable comparator subsets;
 - plane anchor/corner TRE;
 - catastrophic errors over frozen physical thresholds;
 - per-animal and worst-stratum results.
+
+The earlier frozen `deepslice-corresponding-pixel-plane-distance-v1` used
+`(x+0.5)/W,(y+0.5)/H`. It may be reproduced only as a labelled historical
+diagnostic and is not an official-interoperability or release metric.
 
 ### Dense correspondence
 
@@ -96,7 +103,9 @@ laboratory-held-out real data can support that generalization claim.
 4. wrong-plane ranking present versus absent;
 5. bounded affine-free versus unrestricted local field;
 6. CCF synthetic only versus curated real appearance/pose supervision;
-7. independent slices versus transparent common-tilt/partial-order solver;
+7. independent slices versus transparent shared-full-plane-normal and ordered-
+   signed-offset solver, with legacy coronal common-tilt/AP-order reported
+   separately;
 8. automatic/no mask versus outline-assisted mask.
 
 Ablations are evaluated on development data and the frozen final selected set; a large post hoc factorial search is prohibited.

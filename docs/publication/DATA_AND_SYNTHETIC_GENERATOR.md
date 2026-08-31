@@ -22,7 +22,14 @@ Session 722 and any previously opened local images are development/diagnostic co
 
 ## Unit of splitting
 
-Animal/experiment is the minimum split unit. Serial sections, repeated acquisition channels, thumbnails, crops and every augmented descendant inherit that unit's split. Hash-based audits reject duplicate or near-duplicate images across splits. Laboratory-held-out and acquisition-held-out subsets are separately identified.
+Animal is the mandatory split and inferential unit for real-data validation.
+Every experiment, serial section, repeated acquisition channel, thumbnail, crop
+and augmented descendant from one animal inherits that animal's split. A real
+record without a resolvable animal identifier is ineligible for confirmatory
+claims; experiment identifiers remain required provenance but never substitute
+for animal grouping. Hash-based audits reject duplicate or near-duplicate
+images across splits. Laboratory-held-out and acquisition-held-out subsets are
+separately identified.
 
 ## Unified synthetic sample contract
 
@@ -30,7 +37,8 @@ Each generated sample records:
 
 - generator/version and manifest hashes;
 - source atlas/data hashes;
-- AP, L--R and D--V plane pose;
+- constrained full 3-D centre/frame/basis pose and exact QuickNII O/U/V, with
+  AP/L--R/D--V only as a derived coronal compatibility view;
 - in-plane rotation, scale and translation;
 - fixed template, fixed labels and brain mask;
 - moving grayscale section and pre-artifact image;
@@ -54,9 +62,12 @@ release-eligible work uses a versioned v3 arbitrary-plane contract:
   that normal, then verify actual rendered support;
 - retain named near-tangent, tiny-support and anatomically ambiguous stress
   strata without silently changing the reference validation measure;
-- store the constrained centre/frame/log-scale state and exact QuickNII O/U/V,
+- store the constrained centre/frame/positive-triangular-basis state and exact QuickNII O/U/V,
   projection bounds, offset quantile, tissue support, RNG stream, rejection
   attempt, atlas hashes and synthetic-realization identity;
+- bind raster width and height because QuickNII pixels use `x/W,y/H` and a
+  discrete flip shifts `O` by `(W-1)/W U` or `(H-1)/H V`; no new synthetic
+  renderer may use the frozen diagnostic's `+0.5` sampling rule;
 - use nullable animal/specimen IDs for atlas-derived samples and preserve exact
   animal/specimen/experiment IDs for all real descendants;
 - image scale from 0.5 to 1.5;
@@ -66,11 +77,53 @@ release-eligible work uses a versioned v3 arbitrary-plane contract:
 - positive-Jacobian forward and inverse ground truth;
 - tears, missing cortex and occlusions represented as invalid tissue rather than deformation.
 
-Wrong-plane candidates use geodesic normal perturbations, physical normal-offset
-perturbations and coupled anatomically confusing planes. Every positive and
-candidate must intersect the brain; exact O/U/V and physical candidate
-distances are hash-bound. Pose ranking must remain sensitive after an optimal
-bounded local warp.
+The plane-only sampler uses `plane_realization_id`. The name
+`synthetic_realization_id` is reserved for the later complete record that binds
+the frame, in-plane basis, QuickNII O/U/V, deformation, appearance, mask and
+rendered artifacts; it is intentionally absent from plane-only manifests.
+
+The first v3 manifest implementation is an exact small-volume geometry
+prototype. It materializes occupied voxel centres to test the reference
+measure, intersection rule, replay hashes and provenance without touching the
+frozen v2 path. That representation is deliberately not approved for full
+Allen-scale generation. A separate hash-bound compact-support backend now
+replaces its linear per-plane occupied-voxel scan at Allen scale and has passed
+development parity fixtures, but is not yet wired into the manifest sampler;
+the large training manifest therefore remains unfrozen.
+
+The implemented development-only full-scale backend uses connectivity plus a
+compact convex-support index. For each line along the AP array axis it retains the first
+and last occupied voxel centre, computes a lexicographically canonical convex
+hull of those integer endpoints, and obtains every directional projection
+bound from that hull plus the anisotropic voxel-box half extent. The pinned
+Allen annotation has 32,387,385 foreground voxels in one 6-connected component;
+the hash-bound preflight in
+[`../../publication/arbitrary_plane_geometry_preflight.yaml`](../../publication/arbitrary_plane_geometry_preflight.yaml)
+reduced 206,635 unique scan-line endpoints to 3,194 hull vertices. Because the
+closed occupied-voxel union is connected, its projection
+onto any normal is one interval, so a plane offset lies inside those bounds if
+and only if the plane intersects support. This removes both the multi-gigabyte
+point cloud and per-plane full-mask scan. The stored integer endpoint audit set,
+hull, source and Qhull/dependency identity are hash-bound; analytical and
+seeded small-mask tests plus the pinned-CCF endpoint parity audit define the numerical tolerance.
+Disconnected masks retain separate component intervals rather than using the
+single-interval fast path. This backend is not yet integrated into a complete
+rendered-sample manifest, so the large training manifest remains unfrozen.
+
+Future finite-raster wrong-plane candidates use geodesic normal perturbations,
+physical normal-offset perturbations and coupled anatomically confusing planes.
+Every positive and candidate must intersect the brain; their exact O/U/V and
+physical candidate distances must be hash-bound. Pose ranking must remain
+sensitive after an optimal bounded local warp.
+
+The current candidate prototype intentionally stops at the unoriented infinite
+plane. It uses a coordinate-free three-component RP2 log map in physical
+AP/DV/ML axes and randomizes the recorded truth slot, but does not yet claim a
+finite raster candidate: roll, centre, basis, O/U/V and reflection state are
+excluded. Before candidate images become training-eligible, the verified base
+frame is minimally rotated/parallel-transported to each candidate normal, an
+explicit roll perturbation is applied, and the final raster is required to
+contain a prespecified amount of rendered tissue.
 
 ## Appearance distribution
 

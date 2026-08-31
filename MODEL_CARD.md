@@ -2,7 +2,7 @@
 
 ## Status
 
-**Arbitrary-plane geometry implementation is active; not qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. The first joint implementation inherited both architectures and weights and is retained only as legacy-seeded diagnostic evidence. The release candidate will be trained from random initialization, must cover every brain-intersecting plane, and remains unselected until matched architecture screening, multiseed qualification, harmonized comparators, export parity and GUI validation pass. Measured evidence is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
+**Arbitrary-plane geometry and manifest prototyping is active; not qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. The first joint implementation inherited both architectures and weights and is retained only as legacy-seeded diagnostic evidence. The release candidate will be trained from random initialization, must cover every brain-intersecting plane, and remains unselected until matched architecture screening, multiseed qualification, harmonized comparators, export parity and GUI validation pass. Measured evidence is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
 
 ## Intended use
 
@@ -18,10 +18,12 @@ Intended users are neuroscience researchers who review every result. The model i
 ## Model design
 
 The model family remains unselected. The current geometry candidate uses a
-continuous 6-D right-handed 3-D frame, raster centre and positive log scale,
-with exact O/U/V conversion and a differentiable arbitrary-plane atlas
-renderer. A tractable posterior over antipodal plane normal and physical
-offset supplies uncertainty without replacing the point estimate. A recurrent
+continuous 6-D right-handed 3-D frame, QuickNII span centre and a constrained
+positive-diagonal 2-D basis for scale/anisotropy/shear, with exact O/U/V
+conversion and a differentiable arbitrary-plane atlas renderer using official
+`x/W,y/H` raster indices. A tractable posterior over antipodal plane normal and
+physical offset is planned, but is not yet implemented or calibrated; it must
+preserve point-estimate accuracy. A recurrent
 correlation or attention refiner is considered only after the revised features
 and candidates pass a small arbitrary-plane premise test. Global pose and local
 deformation remain separate so nonlinear warping cannot freely hide a wrong
@@ -42,8 +44,8 @@ The initial public coordinate contract is documented in [`docs/publication/COORD
 - QuickNII O/U/V and a constrained full 3-D slice frame;
 - AP/L--R/D--V values only as derived legacy outputs when the coronal chart is well-conditioned;
 - forward atlas-to-histology and inverse histology-to-atlas maps;
-- a point pose plus candidate-posterior/local-covariance outputs for later
-  animal-held-out calibration;
+- a point pose and, once implemented, candidate-posterior/local-covariance
+  outputs for animal-held-out calibration;
 - compatibility and a monotone risk score for ranking/abstention analysis;
 - intermediate recurrent states and audit metadata.
 
@@ -71,8 +73,10 @@ The model must pass separate pose-only, correct-plane warp-only and end-to-end t
 - Human consensus is uncertain and not an absolute geometric truth.
 - Development compatibility/risk scores are not calibrated probabilities.
 - Smart-brush-assisted results depend on user outline quality and are reported separately from fully automatic results.
-- Pose credible regions and downstream trajectory/region probabilities may be
-  shown as confidence only after animal-held-out calibration coverage passes.
+- Pose credible regions may be shown as confidence only after animal-held-out
+  calibration coverage passes. Propagated trajectory/region confidence also
+  requires calibrated uncertainty for in-plane pose and dense mapping; a
+  calibrated normal/offset distribution alone is insufficient.
 - The intended model scope includes arbitrary cutting planes, but no such performance may be claimed until dedicated cardinal/extreme-oblique synthetic and animal-held-out real qualification passes; partial fields, other species and clinical use remain outside scope.
 - A passed internal gate is not evidence of market-wide superiority. That language requires successful locked comparison with all applicable primary comparators.
 

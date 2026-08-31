@@ -32,19 +32,25 @@ execute it, but must not repeatedly inspect final-test animals.
   smart-brush-assisted track; never give only the proposed method a manually
   corrected outline in an automatic comparator claim.
 - Predefine physical landmark registration error as the primary anatomical
-  endpoint. Also report corresponding-plane distance, AP/L--R/D--V errors,
-  regional overlap and boundaries, topology, failures, abstentions and human
-  correction time.
+  endpoint. Across the full plane domain also report corresponding-plane
+  distance, geodesic normal, physical offset and in-plane-frame error; retain
+  AP/L--R/D--V summaries only for well-conditioned coronal/applicable
+  comparator subsets. Also report regional overlap and boundaries, topology,
+  failures, abstentions and human correction time.
 - Treat animals as the statistical units. Report paired effect sizes and 95%
   confidence intervals, with all attempted cases and failures retained.
 
 ## Probabilistic pose and downstream uncertainty
 
-The preferred compact design uses the existing pose-candidate energy landscape
-as a discrete multimodal posterior and predicts a small local covariance around
-each surviving mode. This adds little network capacity and preserves a precise
-point estimate. Constraints condition or truncate the same posterior rather
-than manufacturing certainty after inference.
+The preferred compact design reuses scored pose candidates as a proposal set
+for a discrete multimodal posterior and predicts a small local covariance
+around each surviving mode. The current nonuniform, truncated candidates and
+forced truth-centre insertion are not posterior mass: training must define the
+target measure and apply the required proposal correction before normalization
+and calibration. This candidate is retained only if its added complexity is
+proportionate and it preserves a precise point estimate. Constraints may
+condition or truncate a calibrated posterior, but cannot manufacture certainty
+after inference.
 
 Fit any temperature or conformal calibration only on held-out calibration
 animals. On unseen animals report negative log likelihood/proper scoring rules,
@@ -54,8 +60,9 @@ contain the blinded reference about 90% of the time. Probabilistic output is
 eligible only if point-estimate accuracy is noninferior to the matched
 deterministic head.
 
-Sample calibrated pose and deformation uncertainty through the probe solver to
-produce a centre trajectory plus a credible spatial volume and per-region
+Only after normal/offset, in-plane frame and dense-map uncertainty are all
+represented and calibrated may their joint samples propagate through the probe
+solver to produce a centre trajectory, credible spatial volume and per-region
 assignment probabilities. The GUI must label uncalibrated development scores
 as compatibility/risk, never as confidence.
 

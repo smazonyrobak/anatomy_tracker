@@ -43,12 +43,15 @@ component contains only four brains and is therefore comparator reproduction
 evidence, not a broad biological or arbitrary-plane holdout. Run the frozen
 publication DeepSlice implementation and official recommended workflow. Report
 raw single-section and series-assisted outputs separately. Preserve raw raster
-bytes and raw-frame ground truth. The frozen adapter applies exactly one
-horizontal image reparameterization into its expected A-to-P view and applies
-the inverse O/U/V transform only after all official postprocessing. Use
-DeepSlice's corresponding-pixel physical plane distance over reference brain.
+bytes and raw-frame ground truth. A new hash-bound adapter applies exactly one
+horizontal image reparameterization into its expected A-to-P view and, only
+after all official postprocessing, applies the dimension-aware inverse
+`O'=O+((W-1)/W)U, U'=-U` for a `W`-pixel raster. Use
+the separately versioned QuickNII/webnutil `x/W,y/H` corresponding-pixel
+physical plane distance over reference brain. The frozen earlier `+0.5` metric
+is reported, if needed, only as a labelled legacy diagnostic.
 
-This public dataset and the local 1,400-section comparison cohort are consumed. They may reproduce a named comparator and diagnose regressions, but cannot be used for hyperparameter selection or a new final-generalization claim. The previously tracked local comparison used the wrong horizontal view for DeepSlice and is invalid until the frozen adapter is rerun.
+This public dataset and the local 1,400-section comparison cohort are consumed. They may reproduce a named comparator and diagnose regressions, but cannot be used for hyperparameter selection or a new final-generalization claim. The previously tracked local comparison used the wrong horizontal view for DeepSlice and is invalid until the corrected official-coordinate adapter is frozen and rerun.
 
 ### B. New hidden real pose benchmark
 
@@ -57,7 +60,7 @@ acquisition/staining conditions and approximately 500--1,000 whole sections.
 Recruitment deliberately spans coronal, sagittal, horizontal and
 extreme-oblique cutting rather than assuming a coronal convenience sample. The
 final sample size is set by a preregistered pilot-based power calculation.
-Split by animal/experiment and laboratory, never by slice. Three or more
+Split strictly by animal and laboratory, never by experiment or slice. Three or more
 blinded neuroanatomists create QuickNII-compatible alignments. The consensus
 and uncertainty protocol is frozen before model evaluation. A third party
 should retain final labels when feasible.
@@ -82,7 +85,7 @@ Create exact CCF digital probe phantoms covering pose, tissue deformation, missi
 
 ## Data separation and benchmark custody
 
-- Every split unit is an animal/experiment. All images, augmented descendants and serial neighbours remain within that unit's split.
+- Every real-data split unit is an animal. All experiments, images, augmented descendants and serial neighbours remain within that animal's split; a record without a resolvable animal identifier is ineligible for confirmatory claims.
 - Development uses training and validation only. Test data are evaluated after architecture and thresholds are frozen.
 - The new hidden real benchmark is consumed once for the release decision. Any subsequent access is labelled post hoc.
 - Public DeepSlice data and previously viewed session 722 are development/diagnostic evidence only.
@@ -122,7 +125,7 @@ permits.
 
 ## Statistical analysis
 
-- The animal/experiment is the inferential unit. Slice-level pooling is descriptive only.
+- The animal is the inferential unit. Experiment- and slice-level pooling is descriptive only.
 - Comparisons are paired. Confidence intervals use hierarchical bootstrap resampling animals first and slices within animal second.
 - A mixed-effects sensitivity analysis includes method as a fixed effect and animal/laboratory as random effects.
 - Primary endpoints use two-sided 95% confidence intervals. Secondary multiplicity is controlled with Holm correction within metric families.

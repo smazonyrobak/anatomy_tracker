@@ -11,7 +11,7 @@ it is ineligible for final architecture selection.
 
 The leading hypothesis is a compact recurrent correlation pyramid. A shallow
 histology stem produces reusable multiscale structural features and a coarse
-probabilistic AP/L--R/D--V pose. The current CCF plane is rendered, encoded in
+probabilistic full 3-D plane-frame/O/U/V pose. The current CCF plane is rendered, encoded in
 the same learned structural space, and compared with the slice through local
 multiscale cost volumes. A real shared-weight ConvGRU state then emits a pose
 increment, in-plane similarity increment, compatibility energy, matchability
@@ -45,7 +45,8 @@ Inputs:
 
 Outputs:
 
-- posterior or scored candidate representation for AP, L--R tilt and D--V tilt;
+- posterior or scored candidate representation for full plane normal, physical
+  offset and finite raster frame;
 - residual global pose update;
 - residual 2-D similarity transform for nuisance rotation, scale and translation;
 - stationary velocity field integrated into forward and inverse dense maps;
@@ -67,7 +68,7 @@ Three refinement iterations are the initial default. Iteration count is selected
 
 ## Why pose and deformation stay explicit
 
-A free dense field can make a wrong AP or tilt superficially resemble the section. Therefore:
+A free dense field can make a wrong plane orientation or offset superficially resemble the section. Therefore:
 
 - plane pose remains a low-dimensional explicit state;
 - residual similarity handles only in-plane nuisance geometry;
@@ -80,9 +81,13 @@ This follows the separation of affine and non-parametric registration in Shen et
 
 ## Pose representation
 
-The public output is `[AP_um, LR_deg, DV_deg]`, but the trainable representation may combine:
+The normative public output is QuickNII O/U/V plus the constrained full 3-D
+frame. `[AP_um, LR_deg, DV_deg]` is a derived compatibility view only for
+planes where the coronal chart is well-conditioned. The trainable
+representation may combine:
 
-- coarse physical bins plus continuous residuals to avoid a broad-regression local minimum;
+- equal-area normal/physical-offset candidates plus continuous residuals to
+  avoid a broad-regression local minimum;
 - QuickNII-compatible O/U/V plane anchors for geometrically coherent loss;
 - continuous residual corrections at every recurrent step.
 
@@ -226,18 +231,39 @@ and extreme oblique sections. Frozen v2 generator and diagnostic sources will
 remain byte-identical; arbitrary-plane support is a separate versioned path.
 
 QuickNII O/U/V is the normative serialized and evaluation geometry because it
-maps raster coordinates directly to three-dimensional CCF points for any plane.
+maps raster coordinates directly to three-dimensional CCF points for any plane,
+as defined by [Puchades et al.](https://doi.org/10.1371/journal.pone.0216796).
+The new discrete renderer follows QuickNII/webnutil pixel indexing exactly:
+pixel `(x,y)` in a `W`-by-`H` raster maps to `O+(x/W)U+(y/H)V`, without a
+half-pixel term. The frozen earlier `+0.5` plane-distance diagnostic is retained
+only for historical reproducibility and cannot define future interoperability
+or release evaluation.
 The learned internal state is constrained rather than nine unconstrained
-coordinates: a 3-D raster centre, a continuous 6-D representation of a
-right-handed orthonormal frame `[u,v,n]`, and positive log scale with fixed
-raster aspect. Exact conversion uses `U = span_x u`, `V = span_y v` and
-`O = centre - U/2 - V/2`. Recurrent refinement, when later justified, composes
-a small `so(3)` rotation, local-frame 3-D translation and log-scale increment.
-The dense SVF remains affine-free. Raster flips are explicit O/U/V
-reparameterizations, never learned physical reflections.
+coordinates: a 3-D QuickNII span centre, a continuous 6-D representation of a
+right-handed orthonormal frame `[u,v,n]`, and a positive-diagonal
+upper-triangular 2-by-2 in-plane basis `A`. Exact conversion uses
+`[U V] = [u v] A` and `O = centre - (U+V)/2`. The two log-diagonal terms and
+one shear term are necessary to round-trip general O/U/V and the historical
+double-tilt raster exactly; forcing one scale would silently move shear into the
+dense field. Recurrent refinement, when later justified, composes a small
+`so(3)` rotation, local-frame 3-D translation and bounded in-plane-basis
+increment. The dense SVF remains affine-free. Raster flips are explicit O/U/V
+reparameterizations, never learned physical reflections. A discrete horizontal
+flip uses `O'=O+((W-1)/W)U, U'=-U`; its vertical counterpart uses `H` in the
+same way. Raster dimensions are therefore part of every flip contract.
 
-The reference synthetic orientation distribution samples normals uniformly on
-the antipodally identified sphere, roll uniformly, and signed plane offset
+The continuous rotation choice follows the topological and empirical argument
+of [Zhou et al.](https://doi.org/10.1109/CVPR.2019.00589): Euler and ordinary
+quaternion coordinates have unavoidable Euclidean discontinuities for global
+regression, whereas two 3-D vectors projected by Gram--Schmidt give a
+continuous 6-D representation. Quaternions remain possible inside a later
+proper directional distribution, but are not used as an unqualified global
+point-regression target.
+
+The reference synthetic orientation distribution samples normals by the
+normalized-Gaussian sphere method of
+[Muller](https://doi.org/10.1145/377939.377946), quotients antipodes, samples
+roll uniformly, and samples the coupled signed normal/plane offset
 uniformly over the annotation support projected onto that normal. Rendering
 then verifies nonempty support. Training may add named rare/tangent stress
 strata, but they cannot silently change the reference validation measure.
@@ -253,6 +279,16 @@ estimates remain explicit, and the probabilistic head is retained only if it
 does not reduce their accuracy. On unseen animals, credible spatial volumes
 will be checked for nominal coverage before their uncertainty can propagate to
 electrode trajectories or region assignments.
+
+The antipodal representation applies to an unoriented infinite plane:
+`(n,d)` and `(-n,-d)` are one object, so normal and signed offset are never
+canonicalized independently. The finite raster frame additionally retains its
+in-plane basis and explicit reflection state. A later fully continuous
+alternative may use a [Bingham distribution](https://doi.org/10.1214/AOS/1176342874).
+If the first probabilistic candidate is adopted, it will use proposal-corrected
+candidate mass plus local tangent-space residuals to preserve separated modes
+without special-function normalizers; the current forced-centre candidate set
+is a proposal, not posterior mass.
 
 Implementation proceeds in this order: geometry conversions and a general
 differentiable renderer; a provenance-bound v3 manifest and generator;
