@@ -1,0 +1,178 @@
+schema_version: "1.0"
+receipt_id: "arbitrary-plane-complete-synthetic-smoke-2026-08-31"
+date: "2026-08-31"
+status: "development_generator_gate_passed"
+claim_scope: >-
+  Small deterministic engineering smoke of the complete G1 deformation, G2
+  appearance and G3 damage/background/optional-outline generator. This is a
+  GO for using the generator in the next small arbitrary-plane oracle
+  pose-ranking premise only. It is not evidence of biological realism,
+  learned-model accuracy, calibrated uncertainty, benchmark performance,
+  qualification, final-test performance or release readiness.
+
+repository:
+  branch: "codex/joint-registration"
+  implementation_commit: "20bda7f20c9c9cce7573a9d60befde5947c3e4e4"
+  implementation_commit_subject: "Add complete arbitrary-plane synthetic generator"
+  receipt_parent_commit: "20bda7f20c9c9cce7573a9d60befde5947c3e4e4"
+  remote_was_equal_to_receipt_parent_before_documentation: true
+  worktree_was_clean_before_documentation: true
+
+frozen_inputs:
+  protocol:
+    path: "publication/arbitrary_plane_synthetic_preflight.yaml"
+    sha256: "430cfcf681325dbd7ca1ac86336d109d9caa5f69da71315beecb867851cba8a0"
+  implementation:
+    - path: "training/arbitrary_plane_synthetic_generator.py"
+      sha256: "72251e61bbf138ada7c07c6ca0c628f9dcf6a44df407b034d1825c8890ea31ce"
+    - path: "training/arbitrary_plane_synthetic_ops.py"
+      sha256: "9b0bef15df55c5f3d29974e03c8f1d8a472d161eb5024835214ce376fb183bce"
+    - path: "training/arbitrary_plane_synthetic_observation.py"
+      sha256: "b7880d0a72bf1b9d6e3fe47d9bb08a62c4d9c15640296109b2805cb8b8c9ad2d"
+    - path: "training/arbitrary_plane_rendered_generator.py"
+      sha256: "4050834dd24676bfa08350b2b290133d0ccbc3cee7b54ce91e581297f0bfa0ea"
+    - path: "training/arbitrary_plane_geometry.py"
+      sha256: "29510d226a31ad34c3143b4c3b1b28f9755db4d683a43b55d81f7a660645cf1f"
+    - path: "training/arbitrary_plane_support.py"
+      sha256: "9710525005c346450f9c541da53c10a0f97a0bc4e2e4f7b2583017d6a15c46ed"
+    - path: "training/arbitrary_plane_manifest.py"
+      sha256: "6ef206e210498403865ac822b59e87b5935a35029dd44ea682891ef370686abc"
+  focused_test_sources:
+    - path: "tests/test_arbitrary_plane_synthetic_generator.py"
+      sha256: "33816db0b737a505c19b8a68de0f69ccb0b2ecfec83a14fa5e7a7184ee0b90f1"
+    - path: "tests/test_arbitrary_plane_synthetic_ops.py"
+      sha256: "c45f12cbea2d06ab7439a67de202d83e88ecc6b4923c4c215013453f02af786f"
+    - path: "tests/test_arbitrary_plane_synthetic_observation.py"
+      sha256: "ef938ff34b9ed44b52028c4d2ff8ff10bdbec9d82b46dbb73b2f9c94e4611a5e"
+
+runtime:
+  python: "3.11.15"
+  numpy: "2.4.4"
+  scipy: "1.17.1"
+  torch: "2.11.0+cu128"
+  pyyaml: "6.0.3"
+
+model_independence:
+  initialization: "canonical random seed streams only"
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  learned_style_or_stain_model_dependencies: []
+  tested_contract: >-
+    Exact replay and tamper checks require the learned-dependency lists to
+    remain empty. No previous trained model supplies weights, features,
+    pseudo-labels or architecture constraints to this generator.
+
+evidence:
+  focused_generator_tests:
+    command: >-
+      python -m pytest -q
+      tests/test_arbitrary_plane_synthetic_generator.py
+    result: "16 passed"
+  combined_arbitrary_plane_regression:
+    command: >-
+      python -m pytest -q
+      tests/test_arbitrary_plane_synthetic_generator.py
+      tests/test_arbitrary_plane_synthetic_ops.py
+      tests/test_arbitrary_plane_synthetic_observation.py
+      tests/test_arbitrary_plane_geometry.py
+      tests/test_arbitrary_plane_support.py
+      tests/test_arbitrary_plane_manifest.py
+      tests/test_arbitrary_plane_rendered_generator.py
+    result: "112 passed in 16.87 seconds"
+    rerun_on_receipt_parent: true
+  deterministic_fixture_seed_audit:
+    seeds: "100 root-seed realizations"
+    failures: 0
+    maximum_g2_accepted_attempt_index: 1
+    default_outline_mode_counts:
+      accurate: 32
+      imperfect: 30
+      absent: 38
+    interpretation: >-
+      Engineering breadth and deterministic rejection-loop smoke on the small
+      synthetic fixture only; these counts are not prevalence estimates.
+  paired_outline_counterfactual_smoke:
+    modes: ["accurate", "imperfect", "absent"]
+    shared_paired_view_group_id: true
+    distinct_final_realization_ids: true
+    accurate_and_imperfect_black_exterior_exact: true
+    absent_retained_generated_background_exactly: true
+    sampled_imperfect_outline_iou: 0.7265
+  covered_fixture_strata:
+    - "near-AP"
+    - "near-ML"
+    - "near-DV"
+    - "oblique"
+    - "nondefault raster shape"
+    - "tiny-support damage-disable branch"
+  tested_properties:
+    - "finite physical and raster coordinate maps"
+    - "forward/inverse Jacobian, cycle and FOV acceptance gates"
+    - "integer nearest-neighbour annotation pullback"
+    - "five damage families and exact exclusive supervision-mask algebra"
+    - "optional accurate, imperfect and absent smart-brush semantics"
+    - "exact JSON-safe receipt and byte-identical deterministic replay"
+    - "source/config/subject-identifier/dependency tamper rejection"
+    - "preservation of animal, specimen and experiment identifiers"
+
+scientific_result:
+  decision: "GO_complete_generator_for_small_oracle_pose_ranking_development"
+  supported_statement: >-
+    The from-scratch generator now provides a deterministic, provenance-bound
+    arbitrary brain-intersecting plane representation with topology-screened
+    local deformation, broad procedural appearance, explicit observation
+    damage and optional smart-brush views. Its narrow engineering contract is
+    internally consistent on the tested synthetic fixtures.
+  unsupported_statements:
+    - "all arbitrary real histology planes are solved"
+    - "the engineering distributions match biological prevalence"
+    - "the generated images are perceptually realistic"
+    - "a pose or deformation model has been trained or selected"
+    - "point estimates or predictive intervals are accurate or calibrated"
+    - "DeepSlice or any expert-assisted comparator has been benchmarked"
+    - "final-test animals or qualification data have been evaluated"
+
+data_access_and_split_controls:
+  allen_or_synthetic_training_data_accessed_for_this_smoke: "synthetic unit-test fixtures only"
+  deepslice_ground_truth_accessed: false
+  real_lab_histology_accessed: false
+  final_test_manifest_created_opened_or_sampled: false
+  animal_specimen_experiment_ids_preserved: true
+  full_benchmark_run: false
+
+remaining_generator_gate:
+  required_before_broad_training: >-
+    Perform a seed-hidden montage audit stratified by plane, support size,
+    severity and outline mode, then freeze or revise the development ranges
+    and mixture weights in a new hash-bound receipt.
+  independent_deformation_holdout_still_required: true
+
+next_step:
+  name: "small arbitrary-plane oracle pose-ranking premise"
+  constraints:
+    - "use the standalone random-initialization path"
+    - "cover arbitrary brain-intersecting planes, not only coronal slices"
+    - "treat smart-brush input as optional and test all three outline modes"
+    - "do not begin full benchmarking or touch final-test animals"
+    - "preserve raw candidate scores, configs, seeds and provenance"
+  recurrent_joint_pose_deformation_model_status: "not_started_until_oracle_gate_passes"
+
+future_validation_plan:
+  split_unit: "animal, never slice"
+  untouched_final_test_animals_required: true
+  training_sources: "Allen and synthetic"
+  public_benchmark: "DeepSlice Ground Truth dataset DOI 10.25949/22802411"
+  external_validation: "separate real lab histology, ideally laboratory-held-out"
+  comparators: ["DeepSlice", "relevant expert-assisted tools"]
+  reference: "blinded expert alignments"
+  primary_metric: "physical anatomical landmark registration error"
+  secondary_metrics: ["plane/angle error", "regional overlap", "failure rate", "correction time"]
+  statistical_unit: "animal"
+  reporting: "effect sizes with 95% confidence intervals"
+  reproducibility: "save exact splits, code, configs, seeds and raw predictions"
+  probabilistic_outputs: >-
+    After the point method stabilizes, add and calibrate AP/plane/tilt and
+    dense-map uncertainty on unseen animals, test nominal interval coverage,
+    propagate uncertainty to trajectory volumes and region assignments, and
+    require no reduction in point-estimate accuracy.

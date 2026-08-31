@@ -1,11 +1,14 @@
 # Training and release protocol
 
-## Independent joint model (current development track)
+## Prior independent joint model (historical comparator, not a dependency)
 
-The current candidate is trained from random initialization as one recurrent
-pose-and-deformation model. It has no learned dependency on AtlasPose,
-AtlasWarp, DeepSlice or an ImageNet backbone; those systems remain comparators
-only. The implementation is split into the hash-bound data contract
+The earlier candidate was trained from random initialization as one recurrent
+pose-and-deformation model. Its code is retained for audit and possible fair
+comparison, but it does not constrain the architecture of the new
+arbitrary-plane track and none of its weights, features or pseudo-labels are
+used there. It has no learned dependency on AtlasPose, AtlasWarp, DeepSlice or
+an ImageNet backbone. The historical implementation is split into the
+hash-bound data contract
 (`independent_joint_data.py`), model families (`independent_joint_model.py` and
 `independent_joint_variants.py`) and audited trainer
 (`train_independent_joint.py`). No long architecture-screen result or accuracy
@@ -36,12 +39,14 @@ values are distributions produced by the model, not calibrated confidence.
 
 ## Arbitrary-plane complete synthetic generator
 
-The arbitrary-plane track now has a deterministic finite Allen CCF renderer but
-not yet a complete synthetic realization. The predeclared implementation
-protocol is
+The arbitrary-plane track now has a deterministic finite Allen CCF renderer
+and a complete, standalone G1--G3 synthetic realization. The predeclared
+implementation protocol is
 [`../publication/arbitrary_plane_synthetic_preflight.yaml`](../publication/arbitrary_plane_synthetic_preflight.yaml).
-It adds three stages without using any learned checkpoint, previous-model
-weight, pretrained feature extractor or learned style model:
+The development-only result is recorded in
+[`../publication/arbitrary_plane_synthetic_smoke.yaml`](../publication/arbitrary_plane_synthetic_smoke.yaml).
+The generator adds three stages without using any learned checkpoint,
+previous-model weight, pretrained feature extractor or learned style model:
 
 1. **G1 deformation:** two-scale, affine-free stationary velocity fields in
    physical section coordinates, integrated as `exp(v)` and `exp(-v)` by
@@ -58,14 +63,15 @@ weight, pretrained feature extractor or learned style model:
    and absent-outline descendants share the same latent sample; the smart brush
    remains optional, and its outline is never the dense-validity target.
 
-All numeric ranges and development mixtures in that protocol are predeclared
-engineering defaults pending a seed-hidden, blinded montage audit. They are not
-biological prevalence estimates, benchmark outcomes or release evidence. The
-G1--G3 checks are small deterministic smokes on train/development data only;
-they do not authorize full benchmarking or access to final-test animals. After
-stabilization, a small positive-Jacobian non-SVF holdout tests for
-generator/decoder parameterization matching before the arbitrary-plane oracle
-pose-ranking premise.
+The complete generator passed 112 combined arbitrary-plane checks and an
+additional 100-seed fixture smoke with no failures. This establishes its narrow
+engineering contract, not realism or model performance. All numeric ranges and
+development mixtures remain engineering defaults pending a seed-hidden montage
+audit. The checks use synthetic train/development fixtures only; they do not
+authorize full benchmarking or access to final-test animals. The next
+scientific gate is the small arbitrary-plane oracle pose-ranking premise. A
+separate positive-Jacobian non-SVF holdout remains required before broad model
+claims to test for generator/decoder parameterization matching.
 
 Future real validation remains strictly animal-split, with untouched final-test
 animals. Allen/synthetic data are for development; the DeepSlice Ground Truth
