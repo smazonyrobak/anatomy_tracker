@@ -102,6 +102,16 @@ pass their focused source tests, but this is contract evidence only. No model
 family is licensed or scientifically qualified until the frozen
 arbitrary-plane oracle panel has passed its live gate.
 
+The first two numerical pieces are implemented in
+`arbitrary_plane_full_frame_primitives.py` as untrained plumbing. Its physical
+state is `[centre_AP_DV_ML_um(3), rotation_6d(6), log_basis_diagonal(2),
+shear(1)]`; a local update right-composes SO(3), translates in the pre-update
+frame and right-composes the positive in-plane basis. Raster reflection remains
+a separate discrete variable. The same module renders a shared
+`[channel, AP, DV, ML]` atlas through an explicit finite boxcar or Gaussian PSF
+without per-pixel edge renormalization. This implementation status is not an
+oracle result or permission to build or train the recurrent model early.
+
 The through-plane renderer evaluates several differentiable samples along the
 current physical normal and combines them with positive weights normalized to
 unit mass. Physical thickness and the boxcar/Gaussian PSF family remain explicit
