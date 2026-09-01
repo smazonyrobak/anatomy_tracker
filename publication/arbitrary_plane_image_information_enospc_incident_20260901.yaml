@@ -1,0 +1,83 @@
+schema_version: "1.0"
+record_id: "arbitrary-plane-image-information-enospc-2026-09-01"
+date: "2026-09-01"
+status: "invalid_incomplete_run_no_scientific_result"
+
+scope:
+  runner: "python -u -m training.run_arbitrary_plane_image_information"
+  repository_head: "cda338ed50d6a4807daccae044f47bf2f35d00a4"
+  branch: "codex/joint-registration"
+  intended_case_count: 64
+  intended_file_count: 515
+  interpretation: >-
+    Model-free synthetic image-information development gate only; not training,
+    benchmarking, qualification, uncertainty calibration, or final-test evaluation.
+
+termination:
+  completed: false
+  exception: "OSError: [Errno 28] No space left on device"
+  failed_operation: "atomic packed-mask write during case streaming"
+  gpu_at_failure: {index: 0, memory_used_mib: 1415, memory_total_mib: 11264, utilization_percent: 0}
+  c_drive_free_bytes_observed: 0
+  result_json_created: false
+  global_controls_json_created: false
+
+public_verifier_first_result:
+  verifier: "training.run_arbitrary_plane_image_information.verify_written_result"
+  passed: false
+  reason: "output tree differs from the exact 515-file contract"
+  observed_file_count: 175
+  missing_file_count: 340
+  unexpected_file_count: 0
+
+partial_tree_audit:
+  source_and_context_reauthentication_passed: true
+  resolved_config_sha256: "9c02e97c91e12a700a4cf8408722729962ff9fde4218c9062c61e289b9838a75"
+  observed_file_count: 175
+  observed_total_bytes: 22464357
+  observed_inventory_sha256: "aa0f4fcd6906d9e4ed34ea30b3d92e24a14e15129137f4a9626e1021685bbabd"
+  unexpected_temporary_files: []
+  validated_primary_record_count: 22
+  validated_shuffled_record_count: 21
+  validated_control_record_count: 21
+  validated_packed_mask_count: 110
+  validated_complete_case_indices: [0, 3, 4, 8, 12, 16, 17, 20, 21, 25, 29, 33, 34, 38, 42, 46, 50, 51, 55, 59, 63]
+  validated_partial_case_indices: [37]
+  partial_case_37_state:
+    primary_record_and_five_masks_valid: true
+    shuffled_record_present: false
+    control_record_present: false
+  audit_semantics: >-
+    Every file that existed was inventoried. All 22 primary records and their
+    110 mask payloads passed schema, self-hash, byte-count, packed-payload hash,
+    unpacked Boolean-array hash, and provenance validation. All 21 shuffled and
+    21 control records passed their public validators. This authenticates only
+    partial raw bytes; it does not make the interrupted run complete.
+
+scientific_result:
+  available: false
+  gate_passed: null
+  estimator_or_descriptor_conclusion: null
+  rationale: >-
+    The global controls and result were never constructed, so the partial case
+    records cannot answer the predeclared image-information question. No
+    positive, negative, or directional scientific conclusion is permitted.
+
+preservation_and_recovery:
+  partial_tree_archived_to: "F:/CodexCache/anatomy-tracker-failed-runs/arbitrary_plane_image_information_raw_cda338e_enospc_20260901"
+  archive_is_recoverable: true
+  original_c_drive_output_removed_by_move: true
+  rerun_policy: >-
+    Do not resume, merge, or promote this partial tree. Rerun from a fresh output
+    root on a volume with adequate free space, then require the exact 515-file
+    public verification before interpreting any result.
+
+scope_guards_preserved:
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  deepslice_ground_truth_used: false
+  real_lab_histology_used: false
+  qualification_animals_used: false
+  final_test_animals_used: false
+  full_benchmark_performed: false
