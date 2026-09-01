@@ -62,10 +62,29 @@ with slide processing. The implementation may evaluate the shared 3-D field at
 requested section points rather than materializing a warped full-resolution
 volume, but the exact field identity and sampled coordinate maps remain bound.
 
-The current v2 centre/slab implementation is therefore an identity-anatomy
-acquisition and quadrature precursor. Its any-plane geometry and finite-depth
-operator remain useful, but it is not yet the complete pseudo-animal generator
-and cannot issue the final `synthetic_realization_id`.
+The v2 centre/slab implementation remains an identity-anatomy acquisition and
+quadrature precursor. A separate standalone animal stage now samples
+animal-scoped, coarse-plus-fine cubic B-spline stationary velocity fields from
+random initialization, removes the complete local affine component, keeps only
+a positive diagonal global anatomy scale, and separates
+`subject_deformation_plan_id`, `subject_deformation_realization_id` and
+`synthetic_animal_id`. Its accepted realization is bound to fixed forward and
+inverse maps, Jacobians, cycle errors, final float32 affine residuals,
+conservative continuous-field bounds, exact replay and an authoritative CCF
+domain check. A coefficient-derived global gradient bound also certifies every
+fixed-step RK4 update: for `q = ||Dv||_F / N`, accepted candidates require
+`q + q^2/2 + q^3/6 + q^4/24 < 1`, which keeps each forward and inverse step
+orientation-preserving between audit nodes. It has no learned, pretrained or
+previous-model dependency.
+
+This is still the shared-animal stage, not the complete pseudo-animal
+generator: the finite-depth coordinate pullback, section-processing warp,
+damage, appearance and brush descendants remain downstream, and only that
+complete chain may issue the final `synthetic_realization_id`. The frozen
+half-fine-knot audit grid contains 83,754 points for representative Allen bounds
+at 500-um fine spacing; the current CPU implementation exceeded 180 seconds
+even for an identity timing probe. The density contract is retained, but the
+audit must be vectorized or moved to GPU before production-scale generation.
 
 Initial animal-warp bounds are explicit engineering priors, not claimed
 population estimates: global scale `0.80--1.25`, low-frequency local Jacobian
