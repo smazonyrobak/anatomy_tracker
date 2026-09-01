@@ -171,6 +171,22 @@ tracks: automatic with no user outline, a common frozen automatic-outline
 sensitivity analysis, and smart-brush-assisted registration. The public
 automatic comparison cannot silently use a hand-corrected mask.
 
+### 2026-09-01 image-information amendment
+
+The frozen model-free pilot found context-MIND top-1 of `63/64` for the
+absent-outline/raw-background mode, `62/64` for an accurate outline on black,
+and `52/64` for an imperfect outline on black. The 11-case paired deficit
+failed the prespecified maximum of six. Training data must therefore preserve
+all three modes and must not make smart-brush selection a prerequisite.
+
+The next generator diagnostic separates accurate masks, morphology-only
+perturbations, jitter/gap/island-only perturbations, and the existing full
+imperfect perturbation on paired authenticated parents. Outline perturbations
+remain independent of anatomy, tissue damage, dense validity, and target pose;
+their exact parameters and availability mode remain provenance fields. A
+support-aware treatment may be tested only under a separately frozen contract
+and may not expose privileged truth support to the deployed model.
+
 ## Generator QA
 
 Before training:

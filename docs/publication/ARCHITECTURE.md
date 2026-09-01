@@ -301,3 +301,20 @@ adequate. Existing Product-5 and DeepSlice data remain useful coronal
 auxiliary/comparator evidence, but cannot validate arbitrary-plane
 performance; external real validation must deliberately span cardinal and
 extreme-oblique cutting planes and remain split by animal.
+
+## Evidence update: imperfect-brush gate failure
+
+The complete 64-case model-free image-information pilot passed 30 of 31 atomic
+checks but is `FAIL`. Context MIND top-1 was `63/64` without an outline,
+`62/64` with an accurate outline, and `52/64` with an imperfect outline. The
+11-case imperfect-outline deficit exceeded the frozen maximum of six.
+
+Descriptive support-aware scoring recovered all 11 paired losses, making
+candidate-support handling the leading follow-up mechanism, but privileged
+support cannot become a model input or retroactively replace the primary gate.
+Consequently the image encoder must treat outline presence explicitly, retain
+raw-background input as a complete path, and avoid interpreting black exterior
+as anatomical evidence. No learned recurrent screen is authorized by this
+result. Implementation of the probabilistic retriever, renderer, and shared
+updater may continue, while any scientific screen waits for a separately frozen
+paired mask-mechanism test with unchanged shuffled controls.
