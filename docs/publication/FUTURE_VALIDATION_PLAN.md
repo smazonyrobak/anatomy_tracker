@@ -33,9 +33,10 @@ execute it, but must not repeatedly inspect final-test animals.
   track. Report one frozen automatic-outline sensitivity track and a separate
   smart-brush-assisted track; never give only the proposed method a manually
   corrected outline in an automatic comparator claim.
-- Predefine physical landmark registration error as the primary anatomical
-  endpoint. Across the full plane domain also report corresponding-plane
-  distance, geodesic normal, physical offset and in-plane-frame error; retain
+- Predefine physical landmark registration error as the unique primary
+  anatomical endpoint. Treat corresponding-plane distance, geodesic normal,
+  physical offset and in-plane-frame error as secondary pose-track metrics
+  across the full plane domain; retain
   AP/L--R/D--V summaries only for well-conditioned coronal/applicable
   comparator subsets. Also report regional overlap and boundaries, topology,
   failures, abstentions and human correction time.
@@ -53,6 +54,13 @@ and calibration. This candidate is retained only if its added complexity is
 proportionate and it preserves a precise point estimate. Constraints may
 condition or truncate a calibrated posterior, but cannot manufacture certainty
 after inference.
+
+The initial local covariance has only three degrees of freedom: two rotations
+of the plane normal and one physical normal offset. It is not a full
+finite-frame or deformation posterior and is insufficient for trajectory or
+region-assignment confidence. Those downstream outputs remain explicitly
+uncalibrated and unavailable for confidence propagation until in-plane-frame
+and dense-deformation uncertainty are also represented and calibrated.
 
 Fit any temperature or conformal calibration only on held-out calibration
 animals. On unseen animals report negative log likelihood/proper scoring rules,

@@ -397,6 +397,13 @@ does not reduce their accuracy. On unseen animals, credible spatial volumes
 will be checked for nominal coverage before their uncertainty can propagate to
 electrode trajectories or region assignments.
 
+This initial covariance is only a three-degree-of-freedom plane posterior. It
+does not represent uncertainty in the complete finite in-plane frame/basis or
+the dense deformation, so it is insufficient for downstream trajectory volumes
+or region-assignment confidence. Those outputs remain explicitly uncalibrated
+and unavailable for confidence propagation until full finite-frame and
+deformation uncertainty are both represented and animal-held-out calibrated.
+
 Each of the initial `K=4--8` components carries a finite-frame/O/U/V mean, a
 positive-definite local tangent-space covariance, mixture mass and a discrete
 probability over equivalent raster reparameterizations, never an anatomical

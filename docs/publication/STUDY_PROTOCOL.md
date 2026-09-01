@@ -92,19 +92,20 @@ Create exact CCF digital probe phantoms covering pose, tissue deformation, missi
 - Each manifest, image tree, annotation file, comparator container, checkpoint, evaluator and result table receives SHA-256 provenance.
 - A benchmark-custody record identifies who could see hidden labels and when.
 
-## Primary endpoints
+## Primary anatomical endpoint
 
-The co-primary endpoints are:
-
-1. brain-level mean DeepSlice physical plane distance on the hidden real pose benchmark;
-2. brain-level median landmark target-registration error in micrometres on the hidden real dense benchmark;
-3. exact synthetic visible-tissue Allen-label correspondence accompanied by macro regional Dice and topology constraints;
-4. per-recording-site 3-D CCF error and hierarchy-aware region accuracy on exact probe phantoms.
+The unique primary anatomical endpoint is brain-level median landmark
+target-registration error in micrometres on the hidden real dense benchmark.
+Plane distance and angle remain prespecified secondary pose-track metrics;
+exact synthetic correspondence and downstream probe measures remain supporting
+qualification endpoints rather than additional anatomical primaries.
 
 Superiority to a comparator requires a paired brain-level confidence interval excluding no improvement on the declared endpoint and no prespecified safety/robustness regression. A model is not declared best on the market unless it beats every locked primary automatic comparator on its applicable primary endpoint. Missing or irreproducible comparators are reported as such, not treated as defeated.
 
 ## Secondary endpoints
 
+- brain-level mean DeepSlice physical plane distance on the hidden real pose
+  benchmark;
 - physical corresponding-plane error, geodesic normal error, physical offset
   error and in-plane frame error, with legacy AP/L--R/D--V summaries only for
   the coronal comparator subset;
@@ -116,6 +117,9 @@ Superiority to a comparator requires a paired brain-level confidence interval ex
   width for the pose posterior, including the prespecified check that nominal
   90% credible regions contain approximately 90% of unseen-animal references;
 - trajectory entry, angular, roll, depth and region-sequence errors;
+- exact synthetic visible-tissue Allen-label correspondence, macro regional
+  Dice and topology, plus per-recording-site 3-D CCF and hierarchy-aware region
+  accuracy on exact probe phantoms;
 - latency, peak memory, failure rate and manual interaction time.
 
 All endpoints are stratified by equal-area orientation cell, physical offset,
@@ -128,7 +132,7 @@ permits.
 - The animal is the inferential unit. Experiment- and slice-level pooling is descriptive only.
 - Comparisons are paired. Confidence intervals use hierarchical bootstrap resampling animals first and slices within animal second.
 - A mixed-effects sensitivity analysis includes method as a fixed effect and animal/laboratory as random effects.
-- Primary endpoints use two-sided 95% confidence intervals. Secondary multiplicity is controlled with Holm correction within metric families.
+- The primary endpoint uses a two-sided 95% confidence interval. Secondary multiplicity is controlled with Holm correction within metric families.
 - Report absolute effects, relative effects, confidence intervals and raw per-case outputs; do not rely on p-values alone.
 - Human noninferiority margins are defined from leave-one-rater-out variability before the hidden model evaluation.
 - At least three independent training seeds are evaluated; the model-selection rule is fixed before test access.

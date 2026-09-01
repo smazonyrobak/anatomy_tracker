@@ -74,7 +74,8 @@ data:
     - id: "allen_ccfv3_25um"
       role: ["synthetic_pose", "synthetic_flow", "template", "labels"]
     - id: "allen_product5_s2p"
-      role: ["real_pose_supervision", "real_appearance", "development_selection"]
+      role: ["historical_real_pose_supervision", "historical_real_appearance", "historical_development_selection"]
+      standalone_arbitrary_plane_release_eligible: false
     - id: "allen_product8_slide_mounted"
       role: ["diagnostic_only"]
     - id: "deepslice_public_ground_truth"
@@ -142,6 +143,10 @@ synthetic_generator:
     independent_implementation_required: true
     new_seeds_alone_sufficient: false
 training:
+  release_training_data_policy: "Allen CCF-derived synthetic arbitrary-plane views only"
+  historical_product5_mixed_real_training:
+    status: "legacy_record_only"
+    standalone_arbitrary_plane_release_eligible: false
   phases:
     - id: "freeze_and_generator_audit"
       views: 20000
@@ -170,8 +175,8 @@ training:
     legacy_seeded_runs: "development diagnostics only; never promotion eligible"
   model_selection_order:
     - "eligible_only_after_all_hard_gates"
-    - "real_validation_plane_distance"
-    - "real_validation_landmark_tre"
+    - "real_validation_landmark_tre_unique_anatomical_primary"
+    - "secondary_pose_track_plane_distance"
     - "exact_synthetic_tail_and_correspondence"
     - "compatibility_risk_ranking"
     - "runtime_and_simplicity_within_equivalence_margin"
@@ -187,6 +192,12 @@ constraints:
 probabilistic_pose:
   status: "planned candidate; not yet implemented or calibrated"
   candidate_output: "equal-area antipodal normal distribution, conditional physical-offset candidates, and local tangent covariance over two normal rotations plus normal offset"
+  current_covariance_dof: 3
+  current_covariance_scope: "two plane-normal rotations plus physical normal offset only"
+  full_finite_frame_uncertainty_represented: false
+  deformation_uncertainty_represented: false
+  downstream_confidence_propagation_allowed: false
+  downstream_propagation_prerequisite: "full finite-frame plus deformation uncertainty represented and calibrated on held-out animals"
   adoption_rule: "retain only if training complexity remains proportionate and point-estimate accuracy is noninferior"
   calibration_data: "held-out animals only"
   point_accuracy_noninferiority_required: true
@@ -208,9 +219,13 @@ evaluation:
     - "pose_only_before_warp"
     - "warp_only_at_common_exact_plane"
     - "complete_end_to_end"
-  primary_endpoints:
+  primary_anatomical_endpoint: "brain_level_median_landmark_tre_um"
+  secondary_pose_track_metrics:
     - "brain_level_mean_physical_plane_distance_um"
-    - "brain_level_median_landmark_tre_um"
+    - "geodesic_normal_error"
+    - "physical_offset_error"
+    - "in_plane_frame_error"
+  supporting_qualification_endpoints:
     - "visible_tissue_allen_id_correspondence_with_macro_dice_and_topology"
     - "recording_site_3d_ccf_error_and_hierarchy_region_accuracy"
 statistics:

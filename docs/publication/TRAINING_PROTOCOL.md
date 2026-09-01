@@ -6,10 +6,15 @@ Train one pose-and-registration network end to end for every brain-intersecting
 section plane, including coronal, sagittal, horizontal and extreme oblique
 cuts. The model must learn exact global 3-D slice-frame geometry, bounded local
 correspondence and wrong-plane rejection. Its geometry output includes a point
-estimate and a tractable probabilistic posterior over plane normal and physical
-offset; calibration is retained only if it does not reduce point-estimate
-accuracy. Compatibility remains a monotone risk score for ranking and
-abstention unless and until it separately earns probability calibration. Model
+estimate and an initial tractable probabilistic posterior over plane normal and
+physical offset. Its local covariance has only three degrees of freedom--two
+normal rotations and one normal offset--so it is not a full finite-frame or
+deformation posterior and cannot support trajectory or region-assignment
+confidence. Full in-plane-frame and deformation uncertainty must be represented
+and calibrated on held-out animals first; the probabilistic design is retained
+only if it does not reduce point-estimate accuracy. Compatibility remains a
+monotone risk score for ranking and abstention unless and until it separately
+earns probability calibration. Model
 scale, posterior complexity and iteration count are selected on development
 data under the runtime budget; no architecture is promoted merely because it
 is newer or larger.
@@ -78,7 +83,11 @@ Increase to 200k and up to 500k unique synthetic views only if learning and vali
    on exact/near-exact atlas frames across the full arbitrary-plane reference
    distribution, mild deformation, supervised O/U/V geometry and flow.
 2. **Scheduled closed loop:** a growing fraction of model-predicted poses and nearby hard negatives.
-3. **Full closed loop:** recurrent predictions, full artifact distribution, difficult anatomical negatives and mixed real/synthetic batches.
+3. **Full closed loop:** recurrent predictions, the full Allen/CCF-derived
+   synthetic artifact distribution and difficult anatomical negatives. The
+   earlier coronal joint screen mixed Product-5 real sections with synthetic
+   batches; that regimen is retained as a historical legacy record and is
+   release-ineligible for the standalone arbitrary-plane model.
 
 No prior project or external vision weights are used by the primary release
 screen. Legacy-seeded runs remain clearly labelled exploratory diagnostics and
@@ -91,16 +100,20 @@ reported separately, but it cannot determine the shipped weights.
   tangent-space pose likelihood;
 - coarse-bin/residual loss where used;
 - singleton positive-versus-hard-negative listwise ranking on exact synthetic
-  and Product-5 pairs;
+  arbitrary-plane pairs; the earlier Product-5 pair loss is a historical legacy
+  diagnostic and is release-ineligible for the standalone model;
 - sign-balanced geodesic-normal and physical-offset negatives for arbitrary
-  synthetic planes, plus the legacy six one-axis Product-5 negatives only in
-  their explicitly coronal auxiliary track;
+  synthetic planes; the legacy six one-axis Product-5 negatives are retained
+  only as historical coronal audit evidence and cannot train or select the
+  standalone release weights;
 - forward and inverse visible-pixel endpoint error on exact synthetic pairs;
 - label/hierarchy and boundary correspondence;
 - inverse and gradient-inverse consistency;
 - velocity smoothness and Jacobian/topology terms;
 - deep supervision at every recurrent state;
-- real-domain consistency/pose supervision only where its labels justify it.
+- real-domain consistency/pose supervision only in separately labelled
+  historical or diagnostic runs that are release-ineligible for the standalone
+  arbitrary-plane model.
 
 Loss weights are chosen on development data within a logged search budget. They are not altered after hidden-test access. No intensity similarity is allowed to dominate cross-modal anatomical supervision.
 
@@ -136,8 +149,8 @@ Training runs detached and resumable on the designated fast workspace. A progres
 
 There is no undisclosed composite score. Candidate eligibility first requires all safety/topology, absolute accuracy and runtime gates. Among eligible candidates, the prespecified ordering is:
 
-1. hidden-from-training real validation plane distance;
-2. real validation landmark TRE;
+1. real validation landmark TRE, the unique anatomical primary endpoint;
+2. secondary pose-track plane distance;
 3. exact synthetic correspondence and tail error;
 4. risk--coverage and error-ranking performance;
 5. runtime and model size, choosing the simpler candidate inside the practical-equivalence margin.
@@ -155,13 +168,17 @@ strictly by animal with untouched final-test animals; Allen/synthetic data are
 training sources, DeepSlice Ground Truth (DOI `10.25949/22802411`) is a public
 benchmark, and separate lab histology supplies external validation where
 available. Blinded expert alignments define the reference. The primary endpoint
-is physical landmark or corresponding-plane registration error, with plane
-angle, regional overlap, failures, correction time, effect sizes and 95%
-confidence intervals also reported using animals as statistical units. Exact
+is physical landmark registration error. Corresponding-plane distance and
+angle are secondary pose-track metrics; regional overlap, failures, correction
+time, effect sizes and 95% confidence intervals are also reported using animals
+as statistical units. Exact
 splits, code, configurations, seeds and raw predictions are retained. Nominal
 credible-set coverage is assessed on unseen animals (for example, whether 90%
-regions contain the reference about 90% of the time) before uncertainty is
-propagated into trajectory volumes or brain-region confidence. Repeated slices
+regions contain the reference about 90% of the time). The current three-DOF
+normal/offset covariance is insufficient for downstream confidence: trajectory
+volumes and brain-region probabilities remain uncalibrated and unused until
+full finite-frame and deformation uncertainty are represented and calibrated.
+Repeated slices
 are treated hierarchically rather than as exchangeable calibration cases,
 consistent with the grouped prediction-set setting of
 [Dunn et al.](https://doi.org/10.1080/01621459.2022.2060112).
