@@ -10,7 +10,6 @@ import nrrd
 import numpy as np
 
 import training.arbitrary_plane_acquisition_v2 as acquisition
-import training.arbitrary_plane_subject_deformation_v2 as deformation
 import training.arbitrary_plane_subject_slab_v2 as subject_slab
 import training.arbitrary_plane_synthetic_generator_v2 as slab
 import training.subject_deformed_slab_multiresolution_assessment_v2 as assessment
@@ -27,6 +26,13 @@ _SOURCE_FILES = (
     "subject_deformed_slab_multiresolution_assessment_v2.py",
     "run_subject_deformed_slab_multiresolution_v2.py",
     "verify_subject_deformed_slab_multiresolution_bundle_v2.py",
+    "subject_deformed_slab_qualification_v2.py",
+    "slab_refinement_gate_status_v2.py",
+    "arbitrary_plane_acquisition_v2.py",
+    "arbitrary_plane_subject_deformation_v2.py",
+    "arbitrary_plane_subject_slab_v2.py",
+    "arbitrary_plane_synthetic_generator_v2.py",
+    "arbitrary_plane_support.py",
 )
 
 
@@ -181,6 +187,7 @@ def _inventory(root: Path) -> list[dict[str, object]]:
 def write_staged_bundle_v2(
     output: str | Path,
     *,
+    repository: Mapping[str, object],
     allen_inputs: Mapping[str, object],
     failed_report: Mapping[str, object],
     plan: Mapping[str, object],
@@ -220,6 +227,7 @@ def write_staged_bundle_v2(
         "role": "immutable threshold-free fixed-case numerical assessment",
         "qualification_eligible": False,
         "acceptance_thresholds": None,
+        "repository": acquisition._json_value(repository),
         "allen_inputs": acquisition._json_value(allen_inputs),
         "documents": {
             "failed_report": "legacy-failed-report.json",
@@ -246,14 +254,52 @@ def publish_staged_bundle_v2(staging: str | Path, output: str | Path) -> None:
     os.replace(staging, output)
 
 
+def _verify_persisted_array_receipts(
+    rendered: Mapping[str, object],
+) -> None:
+    for step in assessment.AXIAL_STEPS_UM_MAX:
+        key = f"{step:g}"
+        precursor = rendered["precursors"][key]
+        precursor_arrays = slab._slab_arrays(precursor["raster"])
+        if precursor["raster"]["array_receipts"] != {
+            name: acquisition._array_receipt(array)
+            for name, array in precursor_arrays.items()
+        }:
+            raise ValueError("precursor persisted array receipt does not match")
+        for arm in assessment.ARM_NAMES:
+            artifact = rendered["renders"][arm][key]
+            coordinate = artifact["coordinate_map"]
+            samples = artifact["sample_arrays"]
+            reduced = subject_slab._reduced_arrays(artifact["raster"])
+            if (
+                coordinate["array_receipts"]
+                != {
+                    name: acquisition._array_receipt(array)
+                    for name, array in coordinate["arrays"].items()
+                }
+                or artifact["sample_array_receipts"]
+                != {
+                    name: acquisition._array_receipt(array)
+                    for name, array in samples.items()
+                }
+                or artifact["raster_array_receipts"]
+                != {
+                    name: acquisition._array_receipt(array)
+                    for name, array in reduced.items()
+                }
+            ):
+                raise ValueError("subject render persisted array receipt does not match")
+
+
 def verify_frozen_bundle_v2(
     root: str | Path,
     prepared_context: Mapping[str, object],
     allen_inputs: Mapping[str, object],
     *,
+    repository: Mapping[str, object],
     batch_size: int | None = None,
 ) -> dict[str, object]:
-    """Verify inventory, pinned inputs, full raw artifacts, replay, and measurements."""
+    """Verify staged bytes, receipts, source binding, and measurements without rerendering."""
     root = Path(root).resolve()
     manifest = _read_json(root / "bundle-manifest.json")
     actual_files = {
@@ -266,6 +312,7 @@ def verify_frozen_bundle_v2(
         manifest.get("schema_version") != BUNDLE_SCHEMA
         or manifest.get("qualification_eligible") is not False
         or manifest.get("acceptance_thresholds") is not None
+        or manifest.get("repository") != acquisition._json_value(repository)
         or manifest.get("allen_inputs") != acquisition._json_value(allen_inputs)
         or manifest.get("implementation_source_sha256") != _source_hashes()
         or manifest.get("implementation_source_sha256_canonicalization")
@@ -298,34 +345,12 @@ def verify_frozen_bundle_v2(
             for arm, levels in raw["renders"].items()
         },
     }
-    assessment.verify_fixed_case_multiresolution_plan_v2(
-        plan, failed_report, prepared_context, batch_size=batch_size
-    )
-    lower, upper = legacy_context_bounds(prepared_context)
-    deformation.verify_subject_deformation_plan_v2(
-        subject_plan,
-        expected_ccf_context_sha256=prepared_context["v2_context_sha256"],
-        expected_full_ccf_lower_um=lower,
-        expected_full_ccf_upper_um=upper,
+    assessment._verify_fixed_case_multiresolution_plan_structure_v2(
+        plan, failed_report, prepared_context
     )
     if not assessment._subject_plan_matches(plan, subject_plan):
         raise ValueError("frozen nonidentity subject plan does not match the selected animal")
-    for step in assessment.AXIAL_STEPS_UM_MAX:
-        key = f"{step:g}"
-        precursor = rendered["precursors"][key]
-        slab.verify_v2_generic_global_reference_slab_render(
-            precursor, prepared_context
-        )
-        for arm, arm_plan in (
-            ("same_nonidentity_subject_deformation", subject_plan),
-            ("identity_control", None),
-        ):
-            subject_slab.verify_subject_slab_render_v2(
-                rendered["renders"][arm][key],
-                prepared_context,
-                precursor,
-                subject_plan=arm_plan,
-            )
+    _verify_persisted_array_receipts(rendered)
     assessment.verify_fixed_case_multiresolution_assessment_v2(
         result, plan, rendered
     )
@@ -344,14 +369,3 @@ def _receipt_matches(payload: Mapping[str, object], receipt_name: str) -> bool:
     return payload.get(receipt_name) == acquisition._payload_sha256(
         {key: value for key, value in payload.items() if key != receipt_name}
     )
-
-
-def legacy_context_bounds(
-    prepared_context: Mapping[str, object],
-) -> tuple[np.ndarray, np.ndarray]:
-    support = acquisition._context_support(prepared_context)
-    lower = np.asarray(support["origin_um"], dtype=np.float64)
-    upper = lower + np.asarray(support["annotation_shape"], dtype=np.float64) * np.asarray(
-        support["voxel_size_um"], dtype=np.float64
-    )
-    return lower, upper

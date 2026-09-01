@@ -341,9 +341,9 @@ def _centre_invariance(
     return result
 
 
-def _make_subject_plan(
+def _make_subject_plan_with_mapper(
     prepared_context: Mapping[str, object], animal: Mapping[str, object]
-) -> Mapping[str, object]:
+) -> tuple[Mapping[str, object], object]:
     lower, upper = _context_bounds(prepared_context)
     plan = deformation.sample_animal_subject_deformation_plan_v2(
         lower,
@@ -355,12 +355,19 @@ def _make_subject_plan(
         ccf_context_sha256=prepared_context["v2_context_sha256"],
         **_DEFORMATION_PARAMETERS,
     )
-    deformation.verify_subject_deformation_plan_v2(
+    subject_to_ccf_mapper = deformation._verified_subject_to_ccf_mapper_v2(
         plan,
         expected_ccf_context_sha256=prepared_context["v2_context_sha256"],
         expected_full_ccf_lower_um=lower,
         expected_full_ccf_upper_um=upper,
     )
+    return plan, subject_to_ccf_mapper
+
+
+def _make_subject_plan(
+    prepared_context: Mapping[str, object], animal: Mapping[str, object]
+) -> Mapping[str, object]:
+    plan, _ = _make_subject_plan_with_mapper(prepared_context, animal)
     return plan
 
 
@@ -388,11 +395,14 @@ def _verify_support_resolution(
     bundle: Mapping[str, object],
     prepared_context: Mapping[str, object],
     subject_plan: Mapping[str, object],
+    subject_to_ccf_mapper,
+    *,
+    batch_size: int | None,
 ) -> None:
     resolution = bundle["resolution"]
     config = resolution["configuration"]
     lineage = resolution["lineage"]
-    support_resolution.verify_subject_support_resolution_v2(
+    support_resolution._verify_subject_support_resolution_with_mapper_v2(
         bundle,
         prepared_context,
         subject_plan=subject_plan,
@@ -409,6 +419,8 @@ def _verify_support_resolution(
         axial_step_um_max=config["axial_step_um_max"],
         parent_shape_h_w=tuple(config["parent_shape_h_w"]),
         max_attempts=config["max_attempts"],
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
 
 
@@ -435,11 +447,12 @@ def _evaluate_case(
     prepared_context: Mapping[str, object],
     animal: Mapping[str, object],
     subject_plan: Mapping[str, object],
+    subject_to_ccf_mapper,
     case_spec: Mapping[str, object],
     *,
     batch_size: int | None,
 ) -> dict[str, object]:
-    bundle = support_resolution.resolve_subject_support_v2(
+    bundle = support_resolution._resolve_subject_support_with_mapper_v2(
         prepared_context,
         subject_plan=subject_plan,
         master_root_seed=case_spec["support_master_root_seed_uint64"],
@@ -455,8 +468,15 @@ def _evaluate_case(
         axial_step_um_max=COARSE_AXIAL_STEP_UM_MAX,
         max_attempts=MAX_SUPPORT_ATTEMPTS,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
-    _verify_support_resolution(bundle, prepared_context, subject_plan)
+    _verify_support_resolution(
+        bundle,
+        prepared_context,
+        subject_plan,
+        subject_to_ccf_mapper,
+        batch_size=batch_size,
+    )
     resolution = bundle["resolution"]
     if resolution["status"] != "accepted":
         raise ValueError("predeclared subject-deformed slab case exhausted support attempts")
@@ -489,28 +509,31 @@ def _evaluate_case(
     )
     if not same_pose:
         raise ValueError("coarse and refined slabs do not share the accepted pose attempt")
-    coarse = subject_slab.make_subject_slab_render_v2(
+    coarse = subject_slab._make_subject_slab_render_with_mapper_v2(
         prepared_context,
         coarse_precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
-    refined = subject_slab.make_subject_slab_render_v2(
+    refined = subject_slab._make_subject_slab_render_with_mapper_v2(
         prepared_context,
         refined_precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     support_resolution.verify_accepted_subject_slab_matches_support_resolution_v2(
         bundle, coarse
     )
     for stage, precursor in ((coarse, coarse_precursor), (refined, refined_precursor)):
-        subject_slab.verify_subject_slab_render_v2(
+        subject_slab._verify_subject_slab_render_with_mapper_v2(
             stage,
             prepared_context,
             precursor,
             subject_plan=subject_plan,
             batch_size=batch_size,
+            subject_to_ccf_mapper=subject_to_ccf_mapper,
         )
     centre = _centre_invariance(coarse, refined)
     if not centre["all_centre_targets_byte_identical"]:
@@ -605,9 +628,13 @@ def _run_predeclared_panel_v2(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     panel = subject_deformed_slab_qualification_panel_v2()
     animals = {animal["animal_index"]: animal for animal in panel["animals"]}
-    plans = {
-        index: _make_subject_plan(prepared_context, animal)
+    plans_and_mappers = {
+        index: _make_subject_plan_with_mapper(prepared_context, animal)
         for index, animal in animals.items()
+    }
+    plans = {index: value[0] for index, value in plans_and_mappers.items()}
+    subject_to_ccf_mappers = {
+        index: value[1] for index, value in plans_and_mappers.items()
     }
     animal_records = [
         _animal_record(animal, plans[animal["animal_index"]])
@@ -618,6 +645,7 @@ def _run_predeclared_panel_v2(
             prepared_context,
             animals[case["animal_index"]],
             plans[case["animal_index"]],
+            subject_to_ccf_mappers[case["animal_index"]],
             case,
             batch_size=batch_size,
         )
@@ -678,6 +706,23 @@ def evaluate_subject_deformed_slab_qualification_v2(
         prepared_context, batch_size=batch_size
     )
     return _assemble_report(prepared_context, animals, cases)
+
+
+def _evaluate_subject_deformed_slab_qualification_with_capability_v2(
+    prepared_context: Mapping[str, object], *, batch_size: int | None = None
+):
+    report = acquisition._freeze_value(
+        evaluate_subject_deformed_slab_qualification_v2(
+            prepared_context, batch_size=batch_size
+        )
+    )
+
+    def require_exact_live_report(candidate: Mapping[str, object]):
+        if candidate is not report:
+            raise ValueError("live qualification capability does not match the exact report")
+        return report
+
+    return report, require_exact_live_report
 
 
 _REPORT_KEYS = {

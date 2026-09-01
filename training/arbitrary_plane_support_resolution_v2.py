@@ -264,6 +264,7 @@ def _make_verified_attempt(
     config: dict[str, object],
     attempt_seed: dict[str, object],
     batch_size: int | None,
+    subject_to_ccf_mapper,
 ) -> tuple[dict[str, object], dict[str, object]]:
     precursor = slab.make_v2_generic_global_reference_slab_render(
         prepared_context,
@@ -282,18 +283,22 @@ def _make_verified_attempt(
     slab.verify_v2_generic_global_reference_slab_render(
         precursor, prepared_context
     )
-    probe = subject_slab.make_subject_centre_support_probe_v2(
-        prepared_context,
-        precursor,
-        subject_plan=subject_plan,
-        batch_size=batch_size,
+    probe, subject_to_ccf_mapper = (
+        subject_slab._make_subject_centre_support_probe_with_mapper_v2(
+            prepared_context,
+            precursor,
+            subject_plan=subject_plan,
+            batch_size=batch_size,
+            subject_to_ccf_mapper=subject_to_ccf_mapper,
+        )
     )
-    subject_slab.verify_subject_centre_support_probe_v2(
+    subject_slab._verify_subject_centre_support_probe_with_mapper_v2(
         probe,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     return precursor, probe
 
@@ -345,7 +350,7 @@ def subject_support_resolution_receipt_v2(
     }
 
 
-def resolve_subject_support_v2(
+def _resolve_subject_support_with_mapper_v2(
     prepared_context: dict[str, object],
     *,
     subject_plan: dict[str, object] | None,
@@ -363,6 +368,7 @@ def resolve_subject_support_v2(
     parent_shape_h_w: tuple[int, int] = (256, 256),
     max_attempts: int = 8,
     batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
 ) -> dict[str, object]:
     if not isinstance(split, str) or not split or animal_id is None:
         raise ValueError("support-resolution split and animal_id must be nonempty/non-null")
@@ -416,6 +422,7 @@ def resolve_subject_support_v2(
             config=config,
             attempt_seed=attempt_seed,
             batch_size=batch_size,
+            subject_to_ccf_mapper=subject_to_ccf_mapper,
         )
         acceptance = probe["support_acceptance"]
         attempts.append(
@@ -462,6 +469,51 @@ def resolve_subject_support_v2(
         "accepted_precursor": accepted_precursor,
         "accepted_probe": accepted_probe,
     }
+
+
+def resolve_subject_support_v2(
+    prepared_context: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    master_root_seed: int | str,
+    split: str,
+    split_index: int,
+    animal_index: int,
+    animal_id: str | int,
+    section_index: int,
+    plane_stratum: str,
+    nominal_cut_thickness_um: float,
+    specimen_id: str | int | None = None,
+    experiment_id: str | int | None = None,
+    axial_step_um_max: float = 12.5,
+    parent_shape_h_w: tuple[int, int] = (256, 256),
+    max_attempts: int = 8,
+    batch_size: int | None = None,
+) -> dict[str, object]:
+    subject_to_ccf_mapper = (
+        subject_slab._verified_subject_to_ccf_mapper_for_context_v2(
+            prepared_context, subject_plan
+        )
+    )
+    return _resolve_subject_support_with_mapper_v2(
+        prepared_context,
+        subject_plan=subject_plan,
+        master_root_seed=master_root_seed,
+        split=split,
+        split_index=split_index,
+        animal_index=animal_index,
+        animal_id=animal_id,
+        section_index=section_index,
+        plane_stratum=plane_stratum,
+        nominal_cut_thickness_um=nominal_cut_thickness_um,
+        specimen_id=specimen_id,
+        experiment_id=experiment_id,
+        axial_step_um_max=axial_step_um_max,
+        parent_shape_h_w=parent_shape_h_w,
+        max_attempts=max_attempts,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
 
 
 def _contains_final_id(value: object) -> bool:
@@ -645,19 +697,20 @@ def _validate_semantics(bundle: dict[str, object]) -> None:
         raise ValueError("support-resolution live identity or receipt disagrees")
 
 
-def replay_subject_support_resolution_v2(
+def _replay_subject_support_resolution_with_mapper_v2(
     bundle: dict[str, object],
     prepared_context: dict[str, object],
     *,
     subject_plan: dict[str, object] | None,
     batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
 ) -> dict[str, object]:
     _validate_structure(bundle)
     _validate_semantics(bundle)
     resolution = bundle["resolution"]
     config = resolution["configuration"]
     lineage = resolution["lineage"]
-    return resolve_subject_support_v2(
+    return _resolve_subject_support_with_mapper_v2(
         prepared_context,
         subject_plan=subject_plan,
         master_root_seed=config["master_root_seed_uint64"],
@@ -674,7 +727,112 @@ def replay_subject_support_resolution_v2(
         parent_shape_h_w=tuple(config["parent_shape_h_w"]),
         max_attempts=config["max_attempts"],
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
+
+
+def replay_subject_support_resolution_v2(
+    bundle: dict[str, object],
+    prepared_context: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+) -> dict[str, object]:
+    subject_to_ccf_mapper = (
+        subject_slab._verified_subject_to_ccf_mapper_for_context_v2(
+            prepared_context, subject_plan
+        )
+    )
+    return _replay_subject_support_resolution_with_mapper_v2(
+        bundle,
+        prepared_context,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+
+
+def _verify_subject_support_resolution_with_mapper_v2(
+    bundle: dict[str, object],
+    prepared_context: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    master_root_seed: int | str,
+    split: str,
+    split_index: int,
+    animal_index: int,
+    animal_id: str | int,
+    section_index: int,
+    plane_stratum: str,
+    nominal_cut_thickness_um: float,
+    specimen_id: str | int | None = None,
+    experiment_id: str | int | None = None,
+    axial_step_um_max: float = 12.5,
+    parent_shape_h_w: tuple[int, int] = (256, 256),
+    max_attempts: int = 8,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
+) -> None:
+    _validate_structure(bundle)
+    _validate_semantics(bundle)
+    resolution = bundle["resolution"]
+    if (
+        resolution["schema_version"] != SUBJECT_SUPPORT_RESOLUTION_V2_SCHEMA
+        or resolution["algorithm"] != SUBJECT_SUPPORT_RESOLUTION_V2_ALGORITHM
+        or resolution["implementation_source_sha256"] != _source_hashes()
+        or resolution["implementation_source_sha256_canonicalization"]
+        != acquisition.V2_SOURCE_SHA256_CANONICALIZATION
+        or resolution["learned_dependencies"] != _learned_dependencies()
+        or resolution["context_reference"]
+        != subject_slab._context_reference(prepared_context)
+        or resolution["deformation_reference"]
+        != subject_slab._deformation_reference(subject_plan)
+    ):
+        raise ValueError("support-resolution source, context, or deformation disagrees")
+    replay = _resolve_subject_support_with_mapper_v2(
+        prepared_context,
+        subject_plan=subject_plan,
+        master_root_seed=master_root_seed,
+        split=split,
+        split_index=split_index,
+        animal_index=animal_index,
+        animal_id=animal_id,
+        section_index=section_index,
+        plane_stratum=plane_stratum,
+        nominal_cut_thickness_um=nominal_cut_thickness_um,
+        specimen_id=specimen_id,
+        experiment_id=experiment_id,
+        axial_step_um_max=axial_step_um_max,
+        parent_shape_h_w=parent_shape_h_w,
+        max_attempts=max_attempts,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+    if resolution != replay["resolution"]:
+        raise ValueError("support-resolution deterministic replay does not match")
+    if resolution["status"] == "accepted":
+        precursor = bundle["accepted_precursor"]
+        probe = bundle["accepted_probe"]
+        slab.verify_v2_generic_global_reference_slab_render(
+            precursor, prepared_context
+        )
+        subject_slab._verify_subject_centre_support_probe_with_mapper_v2(
+            probe,
+            prepared_context,
+            precursor,
+            subject_plan=subject_plan,
+            batch_size=batch_size,
+            subject_to_ccf_mapper=subject_to_ccf_mapper,
+        )
+        if (
+            _precursor_reference(precursor)
+            != resolution["accepted_precursor_reference"]
+            or _probe_reference(probe) != resolution["accepted_probe_reference"]
+            or slab.v2_generic_slab_render_receipt(precursor)
+            != slab.v2_generic_slab_render_receipt(replay["accepted_precursor"])
+            or probe != replay["accepted_probe"]
+        ):
+            raise ValueError("accepted support-resolution artifacts do not match")
 
 
 def verify_subject_support_resolution_v2(
@@ -697,23 +855,13 @@ def verify_subject_support_resolution_v2(
     max_attempts: int = 8,
     batch_size: int | None = None,
 ) -> None:
-    _validate_structure(bundle)
-    _validate_semantics(bundle)
-    resolution = bundle["resolution"]
-    if (
-        resolution["schema_version"] != SUBJECT_SUPPORT_RESOLUTION_V2_SCHEMA
-        or resolution["algorithm"] != SUBJECT_SUPPORT_RESOLUTION_V2_ALGORITHM
-        or resolution["implementation_source_sha256"] != _source_hashes()
-        or resolution["implementation_source_sha256_canonicalization"]
-        != acquisition.V2_SOURCE_SHA256_CANONICALIZATION
-        or resolution["learned_dependencies"] != _learned_dependencies()
-        or resolution["context_reference"]
-        != subject_slab._context_reference(prepared_context)
-        or resolution["deformation_reference"]
-        != subject_slab._deformation_reference(subject_plan)
-    ):
-        raise ValueError("support-resolution source, context, or deformation disagrees")
-    replay = resolve_subject_support_v2(
+    subject_to_ccf_mapper = (
+        subject_slab._verified_subject_to_ccf_mapper_for_context_v2(
+            prepared_context, subject_plan
+        )
+    )
+    _verify_subject_support_resolution_with_mapper_v2(
+        bundle,
         prepared_context,
         subject_plan=subject_plan,
         master_root_seed=master_root_seed,
@@ -730,31 +878,8 @@ def verify_subject_support_resolution_v2(
         parent_shape_h_w=parent_shape_h_w,
         max_attempts=max_attempts,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
-    if resolution != replay["resolution"]:
-        raise ValueError("support-resolution deterministic replay does not match")
-    if resolution["status"] == "accepted":
-        precursor = bundle["accepted_precursor"]
-        probe = bundle["accepted_probe"]
-        slab.verify_v2_generic_global_reference_slab_render(
-            precursor, prepared_context
-        )
-        subject_slab.verify_subject_centre_support_probe_v2(
-            probe,
-            prepared_context,
-            precursor,
-            subject_plan=subject_plan,
-            batch_size=batch_size,
-        )
-        if (
-            _precursor_reference(precursor)
-            != resolution["accepted_precursor_reference"]
-            or _probe_reference(probe) != resolution["accepted_probe_reference"]
-            or slab.v2_generic_slab_render_receipt(precursor)
-            != slab.v2_generic_slab_render_receipt(replay["accepted_precursor"])
-            or probe != replay["accepted_probe"]
-        ):
-            raise ValueError("accepted support-resolution artifacts do not match")
 
 
 def verify_accepted_subject_slab_matches_support_resolution_v2(

@@ -1640,13 +1640,13 @@ def subject_deformation_plan_receipt_v2(plan: Mapping[str, object]) -> dict[str,
     return {**payload, "receipt_sha256": _payload_sha256(payload)}
 
 
-def verify_subject_deformation_plan_v2(
+def _verified_subject_to_ccf_mapper_v2(
     plan: Mapping[str, object],
     *,
     expected_ccf_context_sha256: str,
     expected_full_ccf_lower_um: np.ndarray,
     expected_full_ccf_upper_um: np.ndarray,
-) -> None:
+) -> Callable[..., np.ndarray | tuple[np.ndarray, np.ndarray]]:
     """Verify exact structure, source binding, live receipts, and deterministic replay."""
     if set(plan) != _TOP_LEVEL_KEYS or set(plan.get("state", {})) != _STATE_KEYS:
         raise ValueError("subject deformation plan has unauthenticated structure")
@@ -1901,7 +1901,9 @@ def verify_subject_deformation_plan_v2(
         or any(audit["accepted"] for audit in audits[:accepted_index])
         or not audits[accepted_index]["accepted"]
     ):
-        raise ValueError("subject deformation candidate audit structure does not match")
+        raise ValueError(
+            "subject deformation accepted candidate audit structure does not match"
+        )
     for audit in audits:
         candidate_payload = {
             key: audit[key]
@@ -2240,6 +2242,41 @@ def verify_subject_deformation_plan_v2(
     ):
         raise ValueError("deterministic subject deformation replay does not match")
 
+    verified_plan = replayed
+
+    def map_subject_to_ccf_points(
+        points_um: np.ndarray,
+        *,
+        return_jacobian: bool = False,
+        batch_size: int | None = None,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        return _subject_to_ccf_points_from_verified_plan_v2(
+            points_um,
+            verified_plan,
+            return_jacobian=return_jacobian,
+            batch_size=batch_size,
+        )
+
+    map_subject_to_ccf_points._verified_subject_deformation_plan_v2 = plan
+    map_subject_to_ccf_points._verified_subject_deformation_snapshot_v2 = verified_plan
+    return map_subject_to_ccf_points
+
+
+def verify_subject_deformation_plan_v2(
+    plan: Mapping[str, object],
+    *,
+    expected_ccf_context_sha256: str,
+    expected_full_ccf_lower_um: np.ndarray,
+    expected_full_ccf_upper_um: np.ndarray,
+) -> None:
+    """Verify exact structure, source binding, live receipts, and deterministic replay."""
+    _verified_subject_to_ccf_mapper_v2(
+        plan,
+        expected_ccf_context_sha256=expected_ccf_context_sha256,
+        expected_full_ccf_lower_um=expected_full_ccf_lower_um,
+        expected_full_ccf_upper_um=expected_full_ccf_upper_um,
+    )
+
 
 def replay_animal_subject_deformation_plan_v2(
     plan: Mapping[str, object],
@@ -2307,14 +2344,26 @@ def _accepted_field(plan: Mapping[str, object]):
     )
 
 
-def ccf_to_subject_points_v2(
+def _verify_subject_deformation_plan_against_declared_domain_v2(
+    plan: Mapping[str, object],
+) -> None:
+    if set(plan) != _TOP_LEVEL_KEYS or set(plan.get("state", {})) != _STATE_KEYS:
+        raise ValueError("subject deformation plan has unauthenticated structure")
+    verify_subject_deformation_plan_v2(
+        plan,
+        expected_ccf_context_sha256=plan["provenance"]["ccf_context_sha256"],
+        expected_full_ccf_lower_um=plan["state"]["full_ccf_lower_um"],
+        expected_full_ccf_upper_um=plan["state"]["full_ccf_upper_um"],
+    )
+
+
+def _ccf_to_subject_points_from_verified_plan_v2(
     points_um: np.ndarray,
     plan: Mapping[str, object],
     *,
     return_jacobian: bool = False,
     batch_size: int | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    """Map arbitrary CCF points using only an accepted animal realization."""
     field = _accepted_field(plan)
     points = np.asarray(points_um)
     if plan["resolved_config"]["deformation_stratum"] == "identity":
@@ -2339,14 +2388,13 @@ def ccf_to_subject_points_v2(
     )
 
 
-def subject_to_ccf_points_v2(
+def _subject_to_ccf_points_from_verified_plan_v2(
     points_um: np.ndarray,
     plan: Mapping[str, object],
     *,
     return_jacobian: bool = False,
     batch_size: int | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-    """Map arbitrary subject plane/slab points using only an accepted realization."""
     field = _accepted_field(plan)
     points = np.asarray(points_um)
     if plan["resolved_config"]["deformation_stratum"] == "identity":
@@ -2366,6 +2414,40 @@ def subject_to_ccf_points_v2(
         state["global_scale"],
         state["frozen_center_um"],
         steps=plan["resolved_config"]["flow"]["steps"],
+        return_jacobian=return_jacobian,
+        batch_size=batch_size,
+    )
+
+
+def ccf_to_subject_points_v2(
+    points_um: np.ndarray,
+    plan: Mapping[str, object],
+    *,
+    return_jacobian: bool = False,
+    batch_size: int | None = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Authenticate a plan, then map arbitrary CCF points to subject space."""
+    _verify_subject_deformation_plan_against_declared_domain_v2(plan)
+    return _ccf_to_subject_points_from_verified_plan_v2(
+        points_um,
+        plan,
+        return_jacobian=return_jacobian,
+        batch_size=batch_size,
+    )
+
+
+def subject_to_ccf_points_v2(
+    points_um: np.ndarray,
+    plan: Mapping[str, object],
+    *,
+    return_jacobian: bool = False,
+    batch_size: int | None = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Authenticate a plan, then map arbitrary subject points to CCF space."""
+    _verify_subject_deformation_plan_against_declared_domain_v2(plan)
+    return _subject_to_ccf_points_from_verified_plan_v2(
+        points_um,
+        plan,
         return_jacobian=return_jacobian,
         batch_size=batch_size,
     )

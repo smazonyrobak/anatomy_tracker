@@ -5,6 +5,7 @@ import pytest
 import torch
 
 import training.arbitrary_plane_acquisition_v2 as acquisition
+import training.arbitrary_plane_subject_deformation_v2 as subject_deformation
 import training.arbitrary_plane_subject_slab_v2 as subject_slab
 import training.arbitrary_plane_synthetic_generator_v2 as slab
 from training.arbitrary_plane_geometry import physical_um_to_allen_index_points
@@ -240,13 +241,18 @@ def test_support_probe_maps_only_h_w_points_before_full_slab_maps_s_h_w(
         subject_slab.verify_v2_smoke_global_reference_slab_render
     )
 
-    def counted_identity_mapping(points, subject_plan, *, batch_size=None):
+    def counted_identity_mapping(
+        points, subject_plan, *, return_jacobian=False, batch_size=None
+    ):
+        assert return_jacobian is False
         values = np.asarray(points, dtype=np.float64)
         mapped_point_counts.append(int(np.prod(values.shape[:-1])))
         return np.array(values, copy=True, order="C")
 
     monkeypatch.setattr(
-        subject_slab, "subject_to_ccf_points_v2", counted_identity_mapping
+        subject_deformation,
+        "_subject_to_ccf_points_from_verified_plan_v2",
+        counted_identity_mapping,
     )
 
     def counted_precursor_verifier(candidate, context):
@@ -274,6 +280,108 @@ def test_support_probe_maps_only_h_w_points_before_full_slab_maps_s_h_w(
     )
     assert mapped_point_counts == [height * width, slab_levels * height * width]
     assert full_precursor_verifications == [precursor["slab_render_id"]]
+
+
+def test_public_slab_make_authenticates_once_and_reuses_mapper(
+    prepared, precursor, plan, monkeypatch
+):
+    verification_calls = []
+    mapping_batch_sizes = []
+    original_map = (
+        subject_deformation._subject_to_ccf_points_from_verified_plan_v2
+    )
+
+    def counted_verify(subject_plan, **kwargs):
+        verification_calls.append(True)
+
+        def mapper(points, *, return_jacobian=False, batch_size=None):
+            return subject_deformation._subject_to_ccf_points_from_verified_plan_v2(
+                points,
+                subject_plan,
+                return_jacobian=return_jacobian,
+                batch_size=batch_size,
+            )
+
+        mapper._verified_subject_deformation_plan_v2 = subject_plan
+        mapper._verified_subject_deformation_snapshot_v2 = subject_plan
+        return mapper
+
+    def counted_map(points, subject_plan, *, return_jacobian=False, batch_size=None):
+        mapping_batch_sizes.append(batch_size)
+        return original_map(
+            points,
+            subject_plan,
+            return_jacobian=return_jacobian,
+            batch_size=batch_size,
+        )
+
+    monkeypatch.setattr(
+        subject_slab, "_verified_subject_to_ccf_mapper_v2", counted_verify
+    )
+    monkeypatch.setattr(
+        subject_deformation,
+        "_subject_to_ccf_points_from_verified_plan_v2",
+        counted_map,
+    )
+    subject_slab.make_subject_slab_render_v2(
+        prepared, precursor, subject_plan=plan, batch_size=65537
+    )
+
+    assert len(verification_calls) == 1
+    assert mapping_batch_sizes == [65537, 65537]
+
+
+def test_public_slab_verify_accepts_and_propagates_explicit_batch_size(
+    prepared, precursor, plan, deformed_artifact, monkeypatch
+):
+    verification_calls = []
+    mapping_batch_sizes = []
+    original_map = (
+        subject_deformation._subject_to_ccf_points_from_verified_plan_v2
+    )
+
+    def counted_verify(subject_plan, **kwargs):
+        verification_calls.append(True)
+
+        def mapper(points, *, return_jacobian=False, batch_size=None):
+            return subject_deformation._subject_to_ccf_points_from_verified_plan_v2(
+                points,
+                subject_plan,
+                return_jacobian=return_jacobian,
+                batch_size=batch_size,
+            )
+
+        mapper._verified_subject_deformation_plan_v2 = subject_plan
+        mapper._verified_subject_deformation_snapshot_v2 = subject_plan
+        return mapper
+
+    def counted_map(points, subject_plan, *, return_jacobian=False, batch_size=None):
+        mapping_batch_sizes.append(batch_size)
+        return original_map(
+            points,
+            subject_plan,
+            return_jacobian=return_jacobian,
+            batch_size=batch_size,
+        )
+
+    monkeypatch.setattr(
+        subject_slab, "_verified_subject_to_ccf_mapper_v2", counted_verify
+    )
+    monkeypatch.setattr(
+        subject_deformation,
+        "_subject_to_ccf_points_from_verified_plan_v2",
+        counted_map,
+    )
+    subject_slab.verify_subject_slab_render_v2(
+        deformed_artifact,
+        prepared,
+        precursor,
+        subject_plan=plan,
+        batch_size=65537,
+    )
+
+    assert len(verification_calls) == 1
+    assert mapping_batch_sizes == [65537, 65537]
 
 
 def test_support_probe_rejects_structure_source_receipt_and_coherent_lineage_tamper(

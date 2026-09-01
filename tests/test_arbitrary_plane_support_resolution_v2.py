@@ -80,6 +80,7 @@ def _fake_attempt_factory(accepted_attempts):
         config,
         attempt_seed,
         batch_size,
+        subject_to_ccf_mapper,
     ):
         index = attempt_seed["attempt_index"]
         token = acquisition._payload_sha256(attempt_seed)
@@ -125,6 +126,49 @@ def _rereceipt(result):
     artifact["receipt_sha256"] = acquisition._payload_sha256(
         resolution.subject_support_resolution_receipt_v2(artifact)
     )
+
+
+def test_public_resolution_authenticates_once_across_all_attempts(
+    prepared, monkeypatch
+):
+    sentinel_mapper = object()
+    mapper_factory_calls = []
+    attempt_mappers = []
+    fake_attempt = _fake_attempt_factory({2})
+
+    def mapper_factory(context, subject_plan):
+        mapper_factory_calls.append((context, subject_plan))
+        return sentinel_mapper
+
+    def counted_attempt(*args, **kwargs):
+        attempt_mappers.append(kwargs["subject_to_ccf_mapper"])
+        return fake_attempt(*args, **kwargs)
+
+    subject_plan = {"fixture": "authenticated-plan"}
+    monkeypatch.setattr(
+        subject_slab,
+        "_verified_subject_to_ccf_mapper_for_context_v2",
+        mapper_factory,
+    )
+    monkeypatch.setattr(
+        subject_slab,
+        "_deformation_reference",
+        lambda plan: {
+            "mode": "subject_deformation",
+            "subject_deformation_plan_receipt": {"fixture": True},
+            "synthetic_animal_id": "fixture-animal",
+        },
+    )
+    monkeypatch.setattr(resolution, "_make_verified_attempt", counted_attempt)
+
+    result = resolution.resolve_subject_support_v2(
+        prepared, **_arguments(subject_plan=subject_plan)
+    )
+
+    assert result["resolution"]["accepted_attempt_index"] == 2
+    assert len(mapper_factory_calls) == 1
+    assert mapper_factory_calls[0][1] is subject_plan
+    assert attempt_mappers == [sentinel_mapper] * 3
 
 
 def test_attempt_root_uses_numeric_coordinates_not_animal_labels(prepared, monkeypatch):

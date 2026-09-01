@@ -15,11 +15,11 @@ from training.arbitrary_plane_support import build_annotation_support_index
 import training.arbitrary_plane_semantic_oracle_null_gate_v2 as null_gate_v2
 from training.arbitrary_plane_semantic_oracle_panel_v2 import (
     SEMANTIC_ORACLE_PANEL_V2_SCHEMA,
+    _evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2,
+    _make_development_panel_subject_plan_with_mapper_v2,
     arbitrary_plane_semantic_oracle_development_panel_v2,
     adapt_development_panel_records_to_semantic_gate_v2,
-    evaluate_arbitrary_plane_semantic_oracle_development_case_v2,
     make_arbitrary_plane_semantic_oracle_failure_record_v2,
-    make_development_panel_subject_plan_v2,
     verify_arbitrary_plane_semantic_oracle_case_record_v2,
     verify_arbitrary_plane_semantic_oracle_development_panel_v2,
 )
@@ -134,6 +134,78 @@ def _atomic_immutable_json(path: Path, value: object) -> str:
 
 def _load_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _emit_milestone(payload: Mapping[str, object]) -> None:
+    print(
+        json.dumps(
+            acquisition._json_value(payload),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ),
+        flush=True,
+    )
+
+
+def _emit_case_milestone(
+    event: str,
+    case_spec: Mapping[str, object],
+    case_count: int,
+    execution_mode: str,
+    *,
+    record: Mapping[str, object] | None = None,
+    caught_error: Exception | None = None,
+) -> None:
+    payload = {
+        "event": event,
+        "case_index": int(case_spec["case_index"]),
+        "case_number": int(case_spec["case_index"]) + 1,
+        "case_count": int(case_count),
+        "case_id": case_spec["case_id"],
+        "plane_stratum": case_spec["plane_stratum"],
+        "execution_mode": execution_mode,
+    }
+    if record is None:
+        payload.update(
+            {
+                "verification_status": "running",
+                "record_status": None,
+                "scientific_outcome": "pending",
+                "caught_exception_type": None,
+                "caught_exception_status": "none",
+                "recorded_failure_exception_type": None,
+            }
+        )
+    else:
+        record_status = str(record["status"])
+        payload.update(
+            {
+                "verification_status": "verified",
+                "record_status": record_status,
+                "scientific_outcome": (
+                    "failure-adverse-pipeline-failure"
+                    if record_status == "failed"
+                    else "complete-evaluable"
+                    if record["later_gate_policy"]["evaluable"]
+                    else "complete-unevaluable"
+                ),
+                "caught_exception_type": (
+                    None if caught_error is None else type(caught_error).__name__
+                ),
+                "caught_exception_status": (
+                    "none"
+                    if caught_error is None
+                    else "converted-to-failure-adverse-record"
+                ),
+                "recorded_failure_exception_type": (
+                    record.get("failure", {}).get("exception_type")
+                    if record_status == "failed"
+                    else None
+                ),
+            }
+        )
+    _emit_milestone(payload)
 
 
 def _live_qualification_evidence(
@@ -331,14 +403,41 @@ def run_arbitrary_plane_semantic_oracle_development_panel_v2(
             "incomplete frozen live-qualification/gate/result outputs require audit"
         )
     frozen_qualification_exists = all(frozen_presence)
+    case_count = len(panel["cases"])
+    _emit_milestone(
+        {
+            "event": "arbitrary-plane-semantic-oracle-panel-v2-started",
+            "output_folder": str(output.resolve()),
+            "panel_receipt_sha256": panel["panel_receipt_sha256"],
+            "case_count": case_count,
+            "batch_size": batch_size,
+            "strict_replay_existing": bool(strict_replay_existing),
+            "frozen_summary_present": frozen_qualification_exists,
+        }
+    )
     animal_specs = {
         animal["animal_index"]: animal for animal in panel["animals"]
     }
     subject_plans: dict[int, Mapping[str, object]] = {}
+    subject_to_ccf_mappers: dict[int, object] = {}
     records = []
     live_verification_modes: dict[str, str] = {}
     for case_spec in panel["cases"]:
         case_path = output / "cases" / f"case-{case_spec['case_index']:03d}.json"
+        execution_mode = (
+            "strict-replayed"
+            if case_path.exists() and strict_replay_existing
+            else "verified-existing"
+            if case_path.exists()
+            else "newly-evaluated"
+        )
+        _emit_case_milestone(
+            "arbitrary-plane-semantic-oracle-panel-v2-case-started",
+            case_spec,
+            case_count,
+            execution_mode,
+        )
+        caught_error = None
         if case_path.exists():
             record = _load_json(case_path)
             verify_arbitrary_plane_semantic_oracle_case_record_v2(
@@ -349,17 +448,23 @@ def run_arbitrary_plane_semantic_oracle_development_panel_v2(
                 try:
                     animal_index = int(case_spec["animal_index"])
                     if animal_index not in subject_plans:
-                        subject_plans[animal_index] = make_development_panel_subject_plan_v2(
-                            prepared_context, animal_specs[animal_index]
+                        (
+                            subject_plans[animal_index],
+                            subject_to_ccf_mappers[animal_index],
+                        ) = _make_development_panel_subject_plan_with_mapper_v2(
+                            prepared_context,
+                            animal_specs[animal_index],
                         )
-                    replay = evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
+                    replay = _evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2(
                         prepared_context,
                         panel,
                         case_spec,
                         subject_plans[animal_index],
                         batch_size=batch_size,
+                        subject_to_ccf_mapper=subject_to_ccf_mappers[animal_index],
                     )
                 except Exception as error:
+                    caught_error = error
                     replay = make_arbitrary_plane_semantic_oracle_failure_record_v2(
                         panel, case_spec, error
                     )
@@ -377,17 +482,23 @@ def run_arbitrary_plane_semantic_oracle_development_panel_v2(
             try:
                 animal_index = int(case_spec["animal_index"])
                 if animal_index not in subject_plans:
-                    subject_plans[animal_index] = make_development_panel_subject_plan_v2(
-                        prepared_context, animal_specs[animal_index]
+                    (
+                        subject_plans[animal_index],
+                        subject_to_ccf_mappers[animal_index],
+                    ) = _make_development_panel_subject_plan_with_mapper_v2(
+                        prepared_context,
+                        animal_specs[animal_index],
                     )
-                record = evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
+                record = _evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2(
                     prepared_context,
                     panel,
                     case_spec,
                     subject_plans[animal_index],
                     batch_size=batch_size,
+                    subject_to_ccf_mapper=subject_to_ccf_mappers[animal_index],
                 )
             except Exception as error:
+                caught_error = error
                 record = make_arbitrary_plane_semantic_oracle_failure_record_v2(
                     panel, case_spec, error
                 )
@@ -398,6 +509,14 @@ def run_arbitrary_plane_semantic_oracle_development_panel_v2(
             live_verification_modes[case_spec["case_id"]] = "newly-evaluated"
         verify_arbitrary_plane_semantic_oracle_case_record_v2(record, panel, case_spec)
         records.append(record)
+        _emit_case_milestone(
+            "arbitrary-plane-semantic-oracle-panel-v2-case-verified",
+            case_spec,
+            case_count,
+            execution_mode,
+            record=record,
+            caught_error=caught_error,
+        )
     planned_cases, gate_records = adapt_development_panel_records_to_semantic_gate_v2(
         panel, records
     )
@@ -481,20 +600,28 @@ def main() -> None:
         batch_size=batch_size,
         strict_replay_existing=strict_replay_value == "1",
     )
-    print(
-        json.dumps(
-            {
-                "event": "arbitrary-plane-semantic-oracle-panel-v2-frozen",
-                "output_folder": str(output_folder),
-                "panel_receipt_sha256": result["panel_receipt_sha256"],
-                "semantic_gate_summary_passed": result[
-                    "semantic_gate_summary_passed"
-                ],
-                "strict_replay_existing": strict_replay_value == "1",
-            },
-            sort_keys=True,
-        ),
-        flush=True,
+    _emit_milestone(
+        {
+            "event": "arbitrary-plane-semantic-oracle-panel-v2-frozen",
+            "output_folder": str(output_folder),
+            "panel_receipt_sha256": result["panel_receipt_sha256"],
+            "scheduled_case_count": result["scheduled_case_count"],
+            "completed_case_count": result["completed_case_count"],
+            "failed_case_count": result["failed_case_count"],
+            "unevaluable_or_failed_case_count": result[
+                "unevaluable_or_failed_case_count"
+            ],
+            "semantic_gate_summary_passed": result[
+                "semantic_gate_summary_passed"
+            ],
+            "all_cases_live_verified_when_gate_frozen": result[
+                "all_cases_live_verified_when_gate_frozen"
+            ],
+            "live_verification_mode_counts": result[
+                "live_qualification_evidence"
+            ]["live_verification_mode_counts"],
+            "strict_replay_existing": strict_replay_value == "1",
+        }
     )
 
 

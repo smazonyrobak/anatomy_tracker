@@ -1,4 +1,6 @@
+import ast
 import copy
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -610,6 +612,30 @@ def test_fixed_case_plan_binds_first_failure_and_has_no_thresholds(
         )
 
 
+def test_live_report_capability_builds_and_structurally_verifies_without_panel_replay(
+    prepared, stubbed_panel, monkeypatch
+):
+    report = acquisition._freeze_value(_failed_legacy_report(prepared, monkeypatch))
+
+    def capability(candidate):
+        assert candidate is report
+        return report
+
+    monkeypatch.setattr(
+        multiresolution.legacy,
+        "evaluate_subject_deformed_slab_qualification_v2",
+        lambda *args, **kwargs: pytest.fail("live report path replayed the panel"),
+    )
+    plan = multiresolution._make_fixed_case_multiresolution_plan_from_live_report_v2(
+        report,
+        prepared,
+        live_report_capability=capability,
+    )
+    multiresolution._verify_fixed_case_multiresolution_plan_structure_v2(
+        plan, report, prepared
+    )
+
+
 def test_eight_render_orchestrator_reuses_pose_attempt_and_has_identity_control(
     prepared, stubbed_panel, monkeypatch
 ):
@@ -634,6 +660,14 @@ def test_eight_render_orchestrator_reuses_pose_attempt_and_has_identity_control(
         multiresolution.deformation,
         "subject_deformation_plan_receipt_v2",
         lambda value: copy.deepcopy(public_receipt),
+    )
+    subject_to_ccf_mapper = lambda *args, **kwargs: None
+    subject_to_ccf_mapper._verified_subject_deformation_plan_v2 = subject_plan
+    subject_to_ccf_mapper._verified_subject_deformation_snapshot_v2 = subject_plan
+    monkeypatch.setattr(
+        multiresolution.deformation,
+        "_verified_subject_to_ccf_mapper_v2",
+        lambda *args, **kwargs: subject_to_ccf_mapper,
     )
 
     def make_precursor(context, split, root_seed, sample_index, stratum, **kwargs):
@@ -672,7 +706,14 @@ def test_eight_render_orchestrator_reuses_pose_attempt_and_has_identity_control(
         precursor_receipt,
     )
 
-    def make_subject(context, precursor, *, subject_plan, batch_size=None):
+    def make_subject(
+        context,
+        precursor,
+        *,
+        subject_plan,
+        batch_size=None,
+        subject_to_ccf_mapper=None,
+    ):
         step = precursor["slab_recipe"]["axial_step_um_max"]
         arm_index = int(subject_plan is None)
         calls.append(("subject", step, arm_index))
@@ -683,11 +724,13 @@ def test_eight_render_orchestrator_reuses_pose_attempt_and_has_identity_control(
         )
 
     monkeypatch.setattr(
-        multiresolution.subject_slab, "make_subject_slab_render_v2", make_subject
+        multiresolution.subject_slab,
+        "_make_subject_slab_render_with_mapper_v2",
+        make_subject,
     )
     monkeypatch.setattr(
         multiresolution.subject_slab,
-        "verify_subject_slab_render_v2",
+        "_verify_subject_slab_render_with_mapper_v2",
         lambda *args, **kwargs: None,
     )
     rendered = multiresolution.render_fixed_case_multiresolution_v2(
@@ -842,6 +885,71 @@ def test_replacement_runner_is_the_only_authorized_legacy_gate_exception(
     assert calls == []
 
 
+def _mock_repository_git(monkeypatch, module, *, status="", head="a" * 40):
+    values = {
+        ("rev-parse", "--show-toplevel"): str(module.ROOT),
+        ("rev-parse", "HEAD"): head,
+        ("branch", "--show-current"): module.EXPECTED_BRANCH,
+        ("rev-parse", module.UPSTREAM_REF): head,
+        ("status", "--porcelain=v1", "--untracked-files=all"): status,
+    }
+    monkeypatch.setattr(module, "_git_output", lambda *arguments: values[arguments])
+    monkeypatch.setenv(module.EXPECTED_COMMIT_ENVIRONMENT, head)
+
+
+def test_replacement_runner_repository_state_binds_exact_clean_pushed_commit(monkeypatch):
+    _mock_repository_git(monkeypatch, replacement_runner)
+    state = replacement_runner.repository_state_v2()
+    assert state == {
+        "branch": replacement_runner.EXPECTED_BRANCH,
+        "head": "a" * 40,
+        "expected_commit": "a" * 40,
+        "upstream_ref": replacement_runner.UPSTREAM_REF,
+        "upstream_head": "a" * 40,
+        "clean_tracked_staged_untracked": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "status",
+    [" M training/file.py", "M  training/file.py", "?? untracked.txt"],
+)
+def test_replacement_runner_repository_state_rejects_dirty_worktree(
+    monkeypatch, status
+):
+    _mock_repository_git(monkeypatch, replacement_runner, status=status)
+    with pytest.raises(RuntimeError, match="clean tracked, staged, and untracked"):
+        replacement_runner.repository_state_v2()
+
+
+def test_replacement_runner_repository_state_rejects_wrong_expected_commit(monkeypatch):
+    _mock_repository_git(monkeypatch, replacement_runner)
+    monkeypatch.setenv(replacement_runner.EXPECTED_COMMIT_ENVIRONMENT, "b" * 40)
+    with pytest.raises(RuntimeError, match="explicit expected pushed commit"):
+        replacement_runner.repository_state_v2()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [" M training/file.py", "M  training/file.py", "?? untracked.txt"],
+)
+def test_independent_verifier_repository_state_rejects_dirty_worktree(
+    monkeypatch, status
+):
+    _mock_repository_git(monkeypatch, independent_verifier, status=status)
+    with pytest.raises(RuntimeError, match="clean tracked, staged, and untracked"):
+        independent_verifier.repository_state_v2()
+
+
+def test_independent_verifier_repository_state_rejects_wrong_expected_commit(
+    monkeypatch,
+):
+    _mock_repository_git(monkeypatch, independent_verifier)
+    monkeypatch.setenv(independent_verifier.EXPECTED_COMMIT_ENVIRONMENT, "b" * 40)
+    with pytest.raises(RuntimeError, match="explicit expected pushed commit"):
+        independent_verifier.repository_state_v2()
+
+
 def test_replacement_runner_mocked_operational_order(monkeypatch, tmp_path):
     output = tmp_path / "frozen"
     staging = tmp_path / ".frozen.partial"
@@ -853,8 +961,21 @@ def test_replacement_runner_mocked_operational_order(monkeypatch, tmp_path):
     rendered = {"raw": True}
     result = {"assessment": True}
     calls = []
+    repository = {
+        "branch": "codex/arbitrary-plane-joint-model",
+        "head": "a" * 40,
+        "expected_commit": "a" * 40,
+        "upstream_ref": "origin/codex/arbitrary-plane-joint-model",
+        "upstream_head": "a" * 40,
+        "clean_tracked_staged_untracked": True,
+    }
     monkeypatch.setenv(replacement_runner.OPT_IN_ENVIRONMENT, "1")
     monkeypatch.setenv(replacement_runner.OUTPUT_ENVIRONMENT, str(output))
+    monkeypatch.setattr(
+        replacement_runner,
+        "repository_state_v2",
+        lambda: calls.append("repository") or repository,
+    )
     monkeypatch.setattr(
         replacement_runner.bundle,
         "load_pinned_allen_context",
@@ -862,23 +983,26 @@ def test_replacement_runner_mocked_operational_order(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         replacement_runner.legacy,
-        "evaluate_subject_deformed_slab_qualification_v2",
-        lambda value: calls.append("legacy-report") or report,
+        "_evaluate_subject_deformed_slab_qualification_with_capability_v2",
+        lambda value: calls.append("legacy-report") or (report, object()),
     )
     monkeypatch.setattr(
         replacement_runner.assessment,
-        "make_fixed_case_multiresolution_plan_v2",
-        lambda failed, prepared: calls.append("plan") or plan,
+        "_make_fixed_case_multiresolution_plan_from_live_report_v2",
+        lambda failed, prepared, **kwargs: calls.append("plan") or plan,
     )
     monkeypatch.setattr(
         replacement_runner.legacy,
-        "_make_subject_plan",
-        lambda prepared, animal: calls.append("subject-plan") or subject_plan,
+        "_make_subject_plan_with_mapper",
+        lambda prepared, animal: calls.append("subject-plan")
+        or (subject_plan, object()),
     )
     monkeypatch.setattr(
         replacement_runner.assessment,
-        "render_fixed_case_multiresolution_v2",
-        lambda prepared, frozen_plan, deformation: calls.append("eight-renders")
+        "_render_fixed_case_multiresolution_with_mapper_v2",
+        lambda prepared, frozen_plan, deformation, **kwargs: calls.append(
+            "eight-renders"
+        )
         or rendered,
     )
     monkeypatch.setattr(
@@ -894,7 +1018,7 @@ def test_replacement_runner_mocked_operational_order(monkeypatch, tmp_path):
     monkeypatch.setattr(
         replacement_runner.bundle,
         "verify_frozen_bundle_v2",
-        lambda path, prepared, inputs: calls.append("independent-verify")
+        lambda path, prepared, inputs, **kwargs: calls.append("independent-verify")
         or {
             "bundle_receipt_sha256": "1" * 64,
             "plan_receipt_sha256": "2" * 64,
@@ -912,16 +1036,103 @@ def test_replacement_runner_mocked_operational_order(monkeypatch, tmp_path):
     monkeypatch.setattr(replacement_runner, "print", lambda *a, **k: None, raising=False)
     replacement_runner.main()
     assert calls == [
+        "repository",
         "inputs",
         "legacy-report",
         "plan",
         "subject-plan",
         "eight-renders",
         "assessment",
+        "repository",
         "write-staging",
         "independent-verify",
+        "repository",
         "atomic-publish",
     ]
+
+
+@pytest.mark.parametrize(
+    ("change_on_call", "message", "expected_events"),
+    [
+        (2, "before bundle write", []),
+        (3, "before bundle publish", ["write", "verify"]),
+    ],
+)
+def test_replacement_runner_rejects_repository_change_during_run(
+    monkeypatch, tmp_path, change_on_call, message, expected_events
+):
+    output = tmp_path / "frozen"
+    staging = tmp_path / ".frozen.partial"
+    repository = {
+        "branch": replacement_runner.EXPECTED_BRANCH,
+        "head": "a" * 40,
+        "expected_commit": "a" * 40,
+        "upstream_ref": replacement_runner.UPSTREAM_REF,
+        "upstream_head": "a" * 40,
+        "clean_tracked_staged_untracked": True,
+    }
+    changed = {**repository, "head": "b" * 40}
+    state_calls = []
+    events = []
+
+    def repository_state():
+        state_calls.append(None)
+        return changed if len(state_calls) == change_on_call else repository
+
+    monkeypatch.setenv(replacement_runner.OPT_IN_ENVIRONMENT, "1")
+    monkeypatch.setenv(replacement_runner.OUTPUT_ENVIRONMENT, str(output))
+    monkeypatch.setattr(replacement_runner, "repository_state_v2", repository_state)
+    monkeypatch.setattr(
+        replacement_runner.bundle,
+        "load_pinned_allen_context",
+        lambda path: (object(), {"pinned": True}),
+    )
+    monkeypatch.setattr(
+        replacement_runner.legacy,
+        "_evaluate_subject_deformed_slab_qualification_with_capability_v2",
+        lambda context: ({"failed": True}, object()),
+    )
+    monkeypatch.setattr(
+        replacement_runner.assessment,
+        "_make_fixed_case_multiresolution_plan_from_live_report_v2",
+        lambda *args, **kwargs: {
+            "selected_first_failure": {"animal_manifest": {"animal": 1}}
+        },
+    )
+    monkeypatch.setattr(
+        replacement_runner.legacy,
+        "_make_subject_plan_with_mapper",
+        lambda *args: ({"subject": True}, object()),
+    )
+    monkeypatch.setattr(
+        replacement_runner.assessment,
+        "_render_fixed_case_multiresolution_with_mapper_v2",
+        lambda *args, **kwargs: {"raw": True},
+    )
+    monkeypatch.setattr(
+        replacement_runner.assessment,
+        "assemble_fixed_case_multiresolution_assessment_v2",
+        lambda *args: {"assessment": True},
+    )
+    monkeypatch.setattr(
+        replacement_runner.bundle,
+        "write_staged_bundle_v2",
+        lambda *args, **kwargs: events.append("write") or staging,
+    )
+    monkeypatch.setattr(
+        replacement_runner.bundle,
+        "verify_frozen_bundle_v2",
+        lambda *args, **kwargs: events.append("verify") or {},
+    )
+    monkeypatch.setattr(
+        replacement_runner.bundle,
+        "publish_staged_bundle_v2",
+        lambda *args: events.append("publish"),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        replacement_runner.main()
+    assert events == expected_events
 
 
 def test_atomic_bundle_roundtrip_recomputes_assessment_from_raw_arrays(
@@ -942,9 +1153,18 @@ def test_atomic_bundle_roundtrip_recomputes_assessment_from_raw_arrays(
         "template": {"sha256": "a" * 64},
         "annotation": {"sha256": "b" * 64},
     }
+    repository = {
+        "branch": "codex/arbitrary-plane-joint-model",
+        "head": "a" * 40,
+        "expected_commit": "a" * 40,
+        "upstream_ref": "origin/codex/arbitrary-plane-joint-model",
+        "upstream_head": "a" * 40,
+        "clean_tracked_staged_untracked": True,
+    }
     output = tmp_path / "frozen-bundle"
     staging = multiresolution_bundle.write_staged_bundle_v2(
         output,
+        repository=repository,
         allen_inputs=allen_inputs,
         failed_report=report,
         plan=plan,
@@ -954,9 +1174,9 @@ def test_atomic_bundle_roundtrip_recomputes_assessment_from_raw_arrays(
     )
     assert staging.exists() and not output.exists()
     monkeypatch.setattr(
-        multiresolution_bundle.deformation,
-        "verify_subject_deformation_plan_v2",
-        lambda *args, **kwargs: None,
+        multiresolution_bundle.assessment,
+        "verify_fixed_case_multiresolution_plan_v2",
+        lambda *args, **kwargs: pytest.fail("staging verification replayed the panel"),
     )
     monkeypatch.setattr(
         multiresolution_bundle.assessment,
@@ -966,15 +1186,15 @@ def test_atomic_bundle_roundtrip_recomputes_assessment_from_raw_arrays(
     monkeypatch.setattr(
         multiresolution_bundle.slab,
         "verify_v2_generic_global_reference_slab_render",
-        lambda *args, **kwargs: None,
+        lambda *args, **kwargs: pytest.fail("staging verification replayed a precursor"),
     )
     monkeypatch.setattr(
         multiresolution_bundle.subject_slab,
-        "verify_subject_slab_render_v2",
-        lambda *args, **kwargs: None,
+        "_verify_subject_slab_render_with_mapper_v2",
+        lambda *args, **kwargs: pytest.fail("staging verification rerendered a slab"),
     )
     verified = multiresolution_bundle.verify_frozen_bundle_v2(
-        staging, prepared, allen_inputs
+        staging, prepared, allen_inputs, repository=repository
     )
     assert verified["raw_render_count"] == 8
     assert verified["qualification_eligible"] is False
@@ -982,11 +1202,12 @@ def test_atomic_bundle_roundtrip_recomputes_assessment_from_raw_arrays(
     multiresolution_bundle.publish_staged_bundle_v2(staging, output)
     assert output.exists() and not staging.exists()
     assert multiresolution_bundle.verify_frozen_bundle_v2(
-        output, prepared, allen_inputs
+        output, prepared, allen_inputs, repository=repository
     ) == verified
     with pytest.raises(FileExistsError):
         multiresolution_bundle.write_staged_bundle_v2(
             output,
+            repository=repository,
             allen_inputs=allen_inputs,
             failed_report=report,
             plan=plan,
@@ -997,7 +1218,7 @@ def test_atomic_bundle_roundtrip_recomputes_assessment_from_raw_arrays(
     (output / "unexpected.txt").write_text("tamper", encoding="utf-8")
     with pytest.raises(ValueError, match="inventory or provenance"):
         multiresolution_bundle.verify_frozen_bundle_v2(
-            output, prepared, allen_inputs
+            output, prepared, allen_inputs, repository=repository
         )
 
 
@@ -1011,13 +1232,13 @@ def test_independent_verifier_loads_pinned_inputs_and_frozen_output(
     calls = []
     monkeypatch.setenv(independent_verifier.OUTPUT_ENVIRONMENT, str(output))
     monkeypatch.setattr(
-        independent_verifier.bundle,
+        independent_verifier,
         "load_pinned_allen_context",
         lambda path: calls.append("inputs") or (context, inputs),
     )
     monkeypatch.setattr(
-        independent_verifier.bundle,
-        "verify_frozen_bundle_v2",
+        independent_verifier,
+        "verify_frozen_bundle_independently_v2",
         lambda path, prepared, allen: calls.append((path, prepared, allen))
         or {
             "bundle_receipt_sha256": "1" * 64,
@@ -1031,3 +1252,281 @@ def test_independent_verifier_loads_pinned_inputs_and_frozen_output(
     monkeypatch.setattr(independent_verifier, "print", lambda *a, **k: None, raising=False)
     independent_verifier.main()
     assert calls == ["inputs", (output.resolve(), context, inputs)]
+
+
+def _write_independent_verifier_fixture(prepared, monkeypatch, output):
+    report = _failed_legacy_report(prepared, monkeypatch)
+    plan = multiresolution.make_fixed_case_multiresolution_plan_v2(report, prepared)
+    rendered = _fixture_multiresolution_renders(plan)
+    result = multiresolution.assemble_fixed_case_multiresolution_assessment_v2(
+        plan, rendered
+    )
+    subject_plan = {
+        "subject_deformation_plan_id": "fixture-plan",
+        "state": {"raw_coefficients": np.arange(6, dtype=np.float32).reshape(2, 3)},
+    }
+    allen_inputs = {
+        "decoder": "fixture decoder",
+        "index_order": "F",
+        "template": {"path": "fixture-template", "sha256": "a" * 64, "byte_count": 1},
+        "annotation": {"path": "fixture-annotation", "sha256": "b" * 64, "byte_count": 1},
+    }
+    repository = {
+        "branch": "codex/arbitrary-plane-joint-model",
+        "head": "a" * 40,
+        "expected_commit": "a" * 40,
+        "upstream_ref": "origin/codex/arbitrary-plane-joint-model",
+        "upstream_head": "a" * 40,
+        "clean_tracked_staged_untracked": True,
+    }
+    monkeypatch.setattr(
+        independent_verifier, "repository_state_v2", lambda: repository
+    )
+    staging = multiresolution_bundle.write_staged_bundle_v2(
+        output,
+        repository=repository,
+        allen_inputs=allen_inputs,
+        failed_report=report,
+        plan=plan,
+        subject_plan=subject_plan,
+        rendered=rendered,
+        result=result,
+    )
+    return staging, allen_inputs
+
+
+def test_independent_verifier_rejects_manifest_repository_mismatch(
+    prepared, stubbed_panel, monkeypatch, tmp_path
+):
+    staging, allen_inputs = _write_independent_verifier_fixture(
+        prepared, monkeypatch, tmp_path / "frozen"
+    )
+    monkeypatch.setattr(
+        independent_verifier,
+        "repository_state_v2",
+        lambda: {
+            "branch": independent_verifier.EXPECTED_BRANCH,
+            "head": "b" * 40,
+            "expected_commit": "b" * 40,
+            "upstream_ref": independent_verifier.UPSTREAM_REF,
+            "upstream_head": "b" * 40,
+            "clean_tracked_staged_untracked": True,
+        },
+    )
+    with pytest.raises(ValueError, match="manifest or inventory"):
+        independent_verifier.verify_frozen_bundle_independently_v2(
+            staging, prepared, allen_inputs
+        )
+
+
+def _stub_independent_scientific_replay(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        independent_verifier.assessment,
+        "verify_fixed_case_multiresolution_plan_v2",
+        lambda *args, **kwargs: calls.append("plan"),
+    )
+    monkeypatch.setattr(
+        independent_verifier.deformation,
+        "_verified_subject_to_ccf_mapper_v2",
+        lambda *args, **kwargs: calls.append("deformation") or object(),
+    )
+    monkeypatch.setattr(
+        independent_verifier.assessment,
+        "_subject_plan_matches",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        independent_verifier.slab,
+        "verify_v2_generic_global_reference_slab_render",
+        lambda *args, **kwargs: calls.append("precursor"),
+    )
+    monkeypatch.setattr(
+        independent_verifier.subject_slab,
+        "_verify_subject_slab_render_with_mapper_v2",
+        lambda *args, **kwargs: calls.append("subject-render"),
+    )
+    monkeypatch.setattr(
+        independent_verifier.assessment,
+        "verify_fixed_case_multiresolution_assessment_v2",
+        lambda *args, **kwargs: calls.append("assessment"),
+    )
+    return calls
+
+
+def _refresh_fixture_manifest(root):
+    path = root / "bundle-manifest.json"
+    manifest = multiresolution_bundle._read_json(path)
+    manifest["file_inventory"] = multiresolution_bundle._inventory(root)
+    manifest["bundle_receipt_sha256"] = acquisition._payload_sha256(
+        {
+            key: value
+            for key, value in manifest.items()
+            if key != "bundle_receipt_sha256"
+        }
+    )
+    multiresolution_bundle._write_json(path, manifest)
+
+
+def test_independent_verifier_has_no_writer_import_and_replays_once(
+    prepared, stubbed_panel, monkeypatch, tmp_path
+):
+    staging, allen_inputs = _write_independent_verifier_fixture(
+        prepared, monkeypatch, tmp_path / "frozen"
+    )
+    calls = _stub_independent_scientific_replay(monkeypatch)
+    verified = independent_verifier.verify_frozen_bundle_independently_v2(
+        staging, prepared, allen_inputs
+    )
+    source = (independent_verifier.ROOT / "training" / Path(independent_verifier.__file__).name).read_text(
+        encoding="utf-8"
+    )
+    imported = {
+        alias.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {
+        node.module
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom)
+    }
+    assert (
+        "training.subject_deformed_slab_multiresolution_bundle_v2"
+        not in imported
+    )
+    assert len(independent_verifier._expected_files()) == 30
+    expected_calls = ["plan", "deformation"]
+    for _ in range(4):
+        expected_calls.extend(("precursor", "subject-render", "subject-render"))
+    expected_calls.append("assessment")
+    assert calls == expected_calls
+    assert verified["raw_render_count"] == 8
+    assert verified["legacy_gate_decision"] == "reject_legacy_universal_gate"
+
+
+@pytest.mark.parametrize("corruption", ["traversal", "absolute", "duplicate"])
+def test_independent_verifier_rejects_unsafe_or_duplicate_manifest_references(
+    prepared, stubbed_panel, monkeypatch, tmp_path, corruption
+):
+    staging, allen_inputs = _write_independent_verifier_fixture(
+        prepared, monkeypatch, tmp_path / "frozen"
+    )
+    _stub_independent_scientific_replay(monkeypatch)
+    manifest_path = staging / "bundle-manifest.json"
+    manifest = multiresolution_bundle._read_json(manifest_path)
+    if corruption == "traversal":
+        manifest["raw_artifacts"]["subject_deformation_plan"]["metadata"] = (
+            "../outside.metadata.json"
+        )
+    elif corruption == "absolute":
+        manifest["raw_artifacts"]["subject_deformation_plan"]["arrays"] = (
+            str((tmp_path / "outside.arrays.npz").resolve())
+        )
+    else:
+        manifest["raw_artifacts"]["precursors"]["6.25"] = copy.deepcopy(
+            manifest["raw_artifacts"]["precursors"]["12.5"]
+        )
+    manifest["bundle_receipt_sha256"] = acquisition._payload_sha256(
+        {
+            key: value
+            for key, value in manifest.items()
+            if key != "bundle_receipt_sha256"
+        }
+    )
+    multiresolution_bundle._write_json(manifest_path, manifest)
+    with pytest.raises(ValueError, match="manifest or inventory"):
+        independent_verifier.verify_frozen_bundle_independently_v2(
+            staging, prepared, allen_inputs
+        )
+
+
+def test_independent_verifier_rejects_extra_file_and_extra_npz_array(
+    prepared, stubbed_panel, monkeypatch, tmp_path
+):
+    extra_file_root, allen_inputs = _write_independent_verifier_fixture(
+        prepared, monkeypatch, tmp_path / "extra-file"
+    )
+    _stub_independent_scientific_replay(monkeypatch)
+    (extra_file_root / "unexpected.txt").write_text("extra", encoding="utf-8")
+    with pytest.raises(ValueError, match="tree has missing or extra"):
+        independent_verifier.verify_frozen_bundle_independently_v2(
+            extra_file_root, prepared, allen_inputs
+        )
+
+    extra_array_root, allen_inputs = _write_independent_verifier_fixture(
+        prepared, monkeypatch, tmp_path / "extra-array"
+    )
+    arrays_path = extra_array_root / "raw" / "precursors" / "12.5.arrays.npz"
+    with np.load(arrays_path, allow_pickle=False) as archive:
+        arrays = {name: np.array(archive[name], copy=True) for name in archive.files}
+    arrays["array_9999"] = np.asarray([1], dtype=np.int8)
+    with arrays_path.open("wb") as stream:
+        np.savez(stream, **arrays)
+    _refresh_fixture_manifest(extra_array_root)
+    with pytest.raises(ValueError, match="raw NPZ"):
+        independent_verifier.verify_frozen_bundle_independently_v2(
+            extra_array_root, prepared, allen_inputs
+        )
+
+
+def test_independent_verifier_rejects_junction_or_reparse_member(
+    monkeypatch, tmp_path
+):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    monkeypatch.setattr(
+        Path, "is_junction", lambda self: self.name == "raw", raising=False
+    )
+    with pytest.raises(ValueError, match="link or reparse point"):
+        independent_verifier._verify_exact_tree(tmp_path)
+
+
+def test_independent_verifier_rejects_a_root_junction(monkeypatch, tmp_path):
+    root = tmp_path / "frozen"
+    root.mkdir()
+    monkeypatch.setattr(
+        Path, "is_junction", lambda self: self.absolute() == root.absolute(), raising=False
+    )
+    with pytest.raises(ValueError, match="root is a link or reparse point"):
+        independent_verifier.verify_frozen_bundle_independently_v2(root, {}, {})
+
+
+def test_independent_verifier_rejects_noncanonical_json(
+    prepared, stubbed_panel, monkeypatch, tmp_path
+):
+    staging, allen_inputs = _write_independent_verifier_fixture(
+        prepared, monkeypatch, tmp_path / "frozen"
+    )
+    _stub_independent_scientific_replay(monkeypatch)
+    assessment_path = staging / "assessment.json"
+    assessment_path.write_bytes(b" " + assessment_path.read_bytes())
+    _refresh_fixture_manifest(staging)
+    with pytest.raises(ValueError, match="not canonical"):
+        independent_verifier.verify_frozen_bundle_independently_v2(
+            staging, prepared, allen_inputs
+        )
+
+
+def test_independent_verifier_recomputes_persisted_array_receipts(
+    prepared, stubbed_panel, monkeypatch, tmp_path
+):
+    staging, allen_inputs = _write_independent_verifier_fixture(
+        prepared, monkeypatch, tmp_path / "frozen"
+    )
+    _stub_independent_scientific_replay(monkeypatch)
+    arrays_path = staging / "raw" / "precursors" / "12.5.arrays.npz"
+    with np.load(arrays_path, allow_pickle=False) as archive:
+        arrays = {name: np.array(archive[name], copy=True) for name in archive.files}
+    first = arrays["array_0000"]
+    if first.dtype == np.bool_:
+        first.reshape(-1)[0] = ~first.reshape(-1)[0]
+    else:
+        first.reshape(-1)[0] += 1
+    with arrays_path.open("wb") as stream:
+        np.savez(stream, **arrays)
+    _refresh_fixture_manifest(staging)
+    with pytest.raises(ValueError, match="persisted array receipt"):
+        independent_verifier.verify_frozen_bundle_independently_v2(
+            staging, prepared, allen_inputs
+        )

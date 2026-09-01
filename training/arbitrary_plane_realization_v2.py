@@ -11,8 +11,8 @@ import numpy as np
 
 import training.arbitrary_plane_acquisition_v2 as acquisition
 from training.arbitrary_plane_observation_v2 import (
+    _verify_arbitrary_plane_observation_with_mapper_v2,
     observation_bundle_receipt_v2,
-    verify_arbitrary_plane_observation_v2,
 )
 from training.arbitrary_plane_section_processing_v2 import (
     section_processing_plan_receipt_v2,
@@ -20,12 +20,13 @@ from training.arbitrary_plane_section_processing_v2 import (
 )
 from training.arbitrary_plane_subject_slab_v2 import (
     _precursor_contract_and_receipt,
+    _verified_subject_to_ccf_mapper_for_context_v2,
     subject_slab_render_receipt_v2,
 )
 from training.arbitrary_plane_support_resolution_v2 import (
+    _verify_subject_support_resolution_with_mapper_v2,
     subject_support_resolution_receipt_v2,
     verify_accepted_subject_slab_matches_support_resolution_v2,
-    verify_subject_support_resolution_v2,
 )
 
 
@@ -430,12 +431,15 @@ def _verify_upstream(
     processed_render: dict[str, object],
     observation_bundle: dict[str, object],
     subject_plan: dict[str, object] | None,
+    *,
+    batch_size: int | None,
+    subject_to_ccf_mapper,
 ) -> None:
     provenance = observation_bundle["provenance"]
     resolution = support_resolution["resolution"]
     config = resolution["configuration"]
     lineage = resolution["lineage"]
-    verify_subject_support_resolution_v2(
+    _verify_subject_support_resolution_with_mapper_v2(
         support_resolution,
         prepared_context,
         subject_plan=subject_plan,
@@ -452,6 +456,8 @@ def _verify_upstream(
         axial_step_um_max=config["axial_step_um_max"],
         parent_shape_h_w=tuple(config["parent_shape_h_w"]),
         max_attempts=config["max_attempts"],
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     verify_accepted_subject_slab_matches_support_resolution_v2(
         support_resolution, subject_slab_render
@@ -483,7 +489,7 @@ def _verify_upstream(
         or precursor["receipt_sha256"] != accepted_precursor["receipt_sha256"]
     ):
         raise ValueError("precursor is not the accepted support-resolution attempt")
-    verify_arbitrary_plane_observation_v2(
+    _verify_arbitrary_plane_observation_with_mapper_v2(
         observation_bundle,
         processed_render,
         subject_slab_render,
@@ -499,6 +505,8 @@ def _verify_upstream(
         section_index=provenance["section_index"],
         observation_index=provenance["observation_index"],
         modality=observation_bundle["modality"],
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     if any(
         _count_synthetic_realization_ids(value)
@@ -871,6 +879,44 @@ def _build_realization(
     return acquisition._freeze_value(realization)
 
 
+def _make_arbitrary_plane_realization_with_mapper_v2(
+    prepared_context: dict[str, object],
+    support_resolution: dict[str, object],
+    precursor: dict[str, object],
+    subject_slab_render: dict[str, object],
+    section_processing_plan: dict[str, object],
+    processed_render: dict[str, object],
+    observation_bundle: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    realization_index: int,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
+) -> dict[str, object]:
+    _verify_upstream(
+        prepared_context,
+        support_resolution,
+        precursor,
+        subject_slab_render,
+        section_processing_plan,
+        processed_render,
+        observation_bundle,
+        subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+    return _build_realization(
+        prepared_context,
+        support_resolution,
+        precursor,
+        subject_slab_render,
+        section_processing_plan,
+        processed_render,
+        observation_bundle,
+        _schedule_uint64(realization_index, "realization_index"),
+    )
+
+
 def make_arbitrary_plane_realization_v2(
     prepared_context: dict[str, object],
     support_resolution: dict[str, object],
@@ -882,19 +928,13 @@ def make_arbitrary_plane_realization_v2(
     *,
     subject_plan: dict[str, object] | None,
     realization_index: int,
+    batch_size: int | None = None,
 ) -> dict[str, object]:
     """Verify every upstream stage and emit the only final synthetic realization ID."""
-    _verify_upstream(
-        prepared_context,
-        support_resolution,
-        precursor,
-        subject_slab_render,
-        section_processing_plan,
-        processed_render,
-        observation_bundle,
-        subject_plan,
+    subject_to_ccf_mapper = _verified_subject_to_ccf_mapper_for_context_v2(
+        prepared_context, subject_plan
     )
-    return _build_realization(
+    return _make_arbitrary_plane_realization_with_mapper_v2(
         prepared_context,
         support_resolution,
         precursor,
@@ -902,7 +942,39 @@ def make_arbitrary_plane_realization_v2(
         section_processing_plan,
         processed_render,
         observation_bundle,
-        _schedule_uint64(realization_index, "realization_index"),
+        subject_plan=subject_plan,
+        realization_index=realization_index,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+
+
+def _replay_arbitrary_plane_realization_with_mapper_v2(
+    realization: dict[str, object],
+    prepared_context: dict[str, object],
+    support_resolution: dict[str, object],
+    precursor: dict[str, object],
+    subject_slab_render: dict[str, object],
+    section_processing_plan: dict[str, object],
+    processed_render: dict[str, object],
+    observation_bundle: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
+) -> dict[str, object]:
+    return _make_arbitrary_plane_realization_with_mapper_v2(
+        prepared_context,
+        support_resolution,
+        precursor,
+        subject_slab_render,
+        section_processing_plan,
+        processed_render,
+        observation_bundle,
+        subject_plan=subject_plan,
+        realization_index=realization["provenance"]["realization_index"],
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
 
 
@@ -917,8 +989,13 @@ def replay_arbitrary_plane_realization_v2(
     observation_bundle: dict[str, object],
     *,
     subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
 ) -> dict[str, object]:
-    return make_arbitrary_plane_realization_v2(
+    subject_to_ccf_mapper = _verified_subject_to_ccf_mapper_for_context_v2(
+        prepared_context, subject_plan
+    )
+    return _replay_arbitrary_plane_realization_with_mapper_v2(
+        realization,
         prepared_context,
         support_resolution,
         precursor,
@@ -927,7 +1004,8 @@ def replay_arbitrary_plane_realization_v2(
         processed_render,
         observation_bundle,
         subject_plan=subject_plan,
-        realization_index=realization["provenance"]["realization_index"],
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
 
 
@@ -1018,8 +1096,12 @@ def verify_arbitrary_plane_realization_v2(
     observation_bundle: dict[str, object],
     *,
     subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
 ) -> None:
     """Verify upstream lineage, strict input separation, receipts, algebra, and replay."""
+    subject_to_ccf_mapper = _verified_subject_to_ccf_mapper_for_context_v2(
+        prepared_context, subject_plan
+    )
     _verify_upstream(
         prepared_context,
         support_resolution,
@@ -1029,6 +1111,8 @@ def verify_arbitrary_plane_realization_v2(
         processed_render,
         observation_bundle,
         subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     _strict_structure(realization)
     expected = _build_realization(

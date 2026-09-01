@@ -288,6 +288,8 @@ def _verify_fake_processing_chain(
     precursor,
     *,
     subject_plan,
+    batch_size=None,
+    subject_to_ccf_mapper=None,
 ):
     live_receipts = {
         name: acquisition._array_receipt(value)
@@ -328,7 +330,7 @@ def patched_processing_contract():
     patch = pytest.MonkeyPatch()
     patch.setattr(
         observation,
-        "verify_section_processing_render_v2",
+        "_verify_section_processing_render_with_mapper_v2",
         _verify_fake_processing_chain,
     )
     patch.setattr(

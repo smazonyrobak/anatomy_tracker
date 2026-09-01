@@ -651,7 +651,15 @@ def test_public_maker_authenticates_subject_slab_before_render(monkeypatch, stan
     raster, coordinates = _source(finite_invalid_coordinate=False)
     calls = []
 
-    def authenticated(source, context, precursor, *, subject_plan):
+    def authenticated(
+        source,
+        context,
+        precursor,
+        *,
+        subject_plan,
+        batch_size=None,
+        subject_to_ccf_mapper=None,
+    ):
         calls.append((source, context, precursor, subject_plan))
 
     source = {
@@ -662,7 +670,11 @@ def test_public_maker_authenticates_subject_slab_before_render(monkeypatch, stan
             "animal_id": "animal-A",
         }
     }
-    monkeypatch.setattr(subject_slab, "verify_subject_slab_render_v2", authenticated)
+    monkeypatch.setattr(
+        subject_slab,
+        "_verify_subject_slab_render_with_mapper_v2",
+        authenticated,
+    )
     monkeypatch.setattr(
         processing,
         "_subject_slab_inputs",

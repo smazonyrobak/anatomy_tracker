@@ -2381,7 +2381,7 @@ def _verify_subject_slab_processing_lineage(
     )
 
 
-def make_section_processing_render_v2(
+def _make_section_processing_render_with_mapper_v2(
     subject_slab_render: Mapping[str, object],
     plan: Mapping[str, object],
     prepared_context: Mapping[str, object],
@@ -2389,15 +2389,19 @@ def make_section_processing_render_v2(
     *,
     subject_plan: Mapping[str, object] | None,
     batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
 ) -> Mapping[str, object]:
-    """Verify the upstream subject slab, then create its processing render."""
-    from training.arbitrary_plane_subject_slab_v2 import verify_subject_slab_render_v2
+    from training.arbitrary_plane_subject_slab_v2 import (
+        _verify_subject_slab_render_with_mapper_v2,
+    )
 
-    verify_subject_slab_render_v2(
+    _verify_subject_slab_render_with_mapper_v2(
         subject_slab_render,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     raster, mapped, source_receipt, pose_reference = _subject_slab_inputs(
         subject_slab_render, plan
@@ -2413,6 +2417,49 @@ def make_section_processing_render_v2(
     )
 
 
+def make_section_processing_render_v2(
+    subject_slab_render: Mapping[str, object],
+    plan: Mapping[str, object],
+    prepared_context: Mapping[str, object],
+    precursor: Mapping[str, object],
+    *,
+    subject_plan: Mapping[str, object] | None,
+    batch_size: int | None = None,
+) -> Mapping[str, object]:
+    """Verify the upstream subject slab, then create its processing render."""
+    return _make_section_processing_render_with_mapper_v2(
+        subject_slab_render,
+        plan,
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=None,
+    )
+
+
+def _replay_section_processing_render_with_mapper_v2(
+    render: Mapping[str, object],
+    subject_slab_render: Mapping[str, object],
+    plan: Mapping[str, object],
+    prepared_context: Mapping[str, object],
+    precursor: Mapping[str, object],
+    *,
+    subject_plan: Mapping[str, object] | None,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
+) -> Mapping[str, object]:
+    return _make_section_processing_render_with_mapper_v2(
+        subject_slab_render,
+        plan,
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+
+
 def replay_section_processing_render_v2(
     render: Mapping[str, object],
     subject_slab_render: Mapping[str, object],
@@ -2423,17 +2470,19 @@ def replay_section_processing_render_v2(
     subject_plan: Mapping[str, object] | None,
     batch_size: int | None = None,
 ) -> Mapping[str, object]:
-    return make_section_processing_render_v2(
+    return _replay_section_processing_render_with_mapper_v2(
+        render,
         subject_slab_render,
         plan,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=None,
     )
 
 
-def verify_section_processing_render_v2(
+def _verify_section_processing_render_with_mapper_v2(
     render: Mapping[str, object],
     subject_slab_render: Mapping[str, object],
     plan: Mapping[str, object],
@@ -2441,15 +2490,20 @@ def verify_section_processing_render_v2(
     precursor: Mapping[str, object],
     *,
     subject_plan: Mapping[str, object] | None,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
 ) -> None:
-    """Verify the full authenticated subject-slab -> processing-render chain."""
-    from training.arbitrary_plane_subject_slab_v2 import verify_subject_slab_render_v2
+    from training.arbitrary_plane_subject_slab_v2 import (
+        _verify_subject_slab_render_with_mapper_v2,
+    )
 
-    verify_subject_slab_render_v2(
+    _verify_subject_slab_render_with_mapper_v2(
         subject_slab_render,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     raster, mapped, source_receipt, pose_reference = _subject_slab_inputs(
         subject_slab_render, plan
@@ -2462,6 +2516,29 @@ def verify_section_processing_render_v2(
         plan,
         source_stage_receipt=source_receipt,
         pose_anatomy_reference=pose_reference,
+    )
+
+
+def verify_section_processing_render_v2(
+    render: Mapping[str, object],
+    subject_slab_render: Mapping[str, object],
+    plan: Mapping[str, object],
+    prepared_context: Mapping[str, object],
+    precursor: Mapping[str, object],
+    *,
+    subject_plan: Mapping[str, object] | None,
+    batch_size: int | None = None,
+) -> None:
+    """Verify the full authenticated subject-slab -> processing-render chain."""
+    _verify_section_processing_render_with_mapper_v2(
+        render,
+        subject_slab_render,
+        plan,
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=None,
     )
 
 

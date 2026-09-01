@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -16,9 +17,8 @@ from training.arbitrary_plane_geometry import (
 )
 from training.arbitrary_plane_rendered_generator import effective_renderer_sampling_arrays
 from training.arbitrary_plane_subject_deformation_v2 import (
+    _verified_subject_to_ccf_mapper_v2,
     subject_deformation_plan_receipt_v2,
-    subject_to_ccf_points_v2,
-    verify_subject_deformation_plan_v2,
 )
 from training.arbitrary_plane_subject_section_v2 import (
     fit_subject_centre_plane_and_residual_v2,
@@ -114,6 +114,26 @@ def _context_reference(prepared_context: dict[str, object]) -> dict[str, object]
             acquisition._json_value(prepared_context["receipt"])
         ),
     }
+
+
+def _verified_subject_to_ccf_mapper_for_context_v2(
+    prepared_context: dict[str, object],
+    subject_plan: dict[str, object] | None,
+) -> Callable[..., np.ndarray] | None:
+    if subject_plan is None:
+        return None
+    acquisition._validate_v2_context(prepared_context)
+    support = acquisition._context_support(prepared_context)
+    lower = np.asarray(support["origin_um"], dtype=np.float64)
+    upper = lower + np.asarray(
+        support["annotation_shape"], dtype=np.float64
+    ) * np.asarray(support["voxel_size_um"], dtype=np.float64)
+    return _verified_subject_to_ccf_mapper_v2(
+        subject_plan,
+        expected_ccf_context_sha256=prepared_context["v2_context_sha256"],
+        expected_full_ccf_lower_um=lower,
+        expected_full_ccf_upper_um=upper,
+    )
 
 
 def _precursor_contract_and_receipt(
@@ -429,18 +449,42 @@ def _map_subject_physical_points(
     *,
     subject_plan: dict[str, object] | None,
     batch_size: int | None,
-) -> tuple[np.ndarray, np.ndarray, str | None]:
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    str | None,
+    Callable[..., np.ndarray] | None,
+]:
     if subject_plan is None:
         mapped_physical = np.array(subject_physical, copy=True, order="C")
         mapped_allen = np.array(subject_allen, copy=True, order="C")
-        return mapped_physical, mapped_allen, None
+        return mapped_physical, mapped_allen, None, None
 
-    verify_subject_deformation_plan_v2(
-        subject_plan,
-        expected_ccf_context_sha256=prepared_context["v2_context_sha256"],
-        expected_full_ccf_lower_um=domain["lower"],
-        expected_full_ccf_upper_um=domain["upper"],
+    if subject_to_ccf_mapper is None:
+        subject_to_ccf_mapper = _verified_subject_to_ccf_mapper_v2(
+            subject_plan,
+            expected_ccf_context_sha256=prepared_context["v2_context_sha256"],
+            expected_full_ccf_lower_um=domain["lower"],
+            expected_full_ccf_upper_um=domain["upper"],
+        )
+    verified_snapshot = getattr(
+        subject_to_ccf_mapper,
+        "_verified_subject_deformation_snapshot_v2",
+        None,
     )
+    if (
+        getattr(
+            subject_to_ccf_mapper,
+            "_verified_subject_deformation_plan_v2",
+            None,
+        )
+        is not subject_plan
+        or verified_snapshot is None
+        or subject_deformation_plan_receipt_v2(verified_snapshot)
+        != subject_deformation_plan_receipt_v2(subject_plan)
+    ):
+        raise ValueError("verified subject mapper does not capture the exact plan")
     plan_provenance = subject_plan["provenance"]
     precursor_provenance = precursor["provenance"]
     precursor_config = precursor["generator"]["resolved_config"]
@@ -451,9 +495,7 @@ def _map_subject_physical_points(
     ):
         raise ValueError("subject slab precursor and deformation animal lineage disagree")
     mapped_physical = np.ascontiguousarray(
-        subject_to_ccf_points_v2(
-            subject_physical, subject_plan, batch_size=batch_size
-        ),
+        subject_to_ccf_mapper(subject_physical, batch_size=batch_size),
         dtype=np.float64,
     )
     mapped_allen = np.ascontiguousarray(
@@ -466,7 +508,12 @@ def _map_subject_physical_points(
         .numpy(),
         dtype=np.float32,
     )
-    return mapped_physical, mapped_allen, subject_plan["synthetic_animal_id"]
+    return (
+        mapped_physical,
+        mapped_allen,
+        subject_plan["synthetic_animal_id"],
+        subject_to_ccf_mapper,
+    )
 
 
 def _subject_centre_grid(
@@ -517,6 +564,7 @@ def _subject_centre_support_state(
     *,
     subject_plan: dict[str, object] | None,
     batch_size: int | None,
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None = None,
 ) -> dict[str, object]:
     domain = _subject_domain_state(
         prepared_context, precursor, full_precursor_verification=False
@@ -532,14 +580,17 @@ def _subject_centre_support_state(
         ).numpy(),
         dtype=np.float64,
     )
-    _, mapped_allen, synthetic_animal_id = _map_subject_physical_points(
-        subject_physical,
-        subject_allen,
-        prepared_context,
-        precursor,
-        domain,
-        subject_plan=subject_plan,
-        batch_size=batch_size,
+    _, mapped_allen, synthetic_animal_id, subject_to_ccf_mapper = (
+        _map_subject_physical_points(
+            subject_physical,
+            subject_allen,
+            prepared_context,
+            precursor,
+            domain,
+            subject_plan=subject_plan,
+            batch_size=batch_size,
+            subject_to_ccf_mapper=subject_to_ccf_mapper,
+        )
     )
     return {
         "annotation_volume": domain["annotation_volume"],
@@ -550,6 +601,7 @@ def _subject_centre_support_state(
         "precursor_reference": _precursor_reference(precursor),
         "deformation_reference": _deformation_reference(subject_plan),
         "synthetic_animal_id": synthetic_animal_id,
+        "subject_to_ccf_mapper": subject_to_ccf_mapper,
     }
 
 
@@ -559,6 +611,7 @@ def _subject_coordinate_state(
     *,
     subject_plan: dict[str, object] | None,
     batch_size: int | None,
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None = None,
 ) -> dict[str, object]:
     domain = _subject_domain_state(
         prepared_context, precursor, full_precursor_verification=True
@@ -574,7 +627,7 @@ def _subject_coordinate_state(
         dtype=np.float64,
     )
     identity = subject_plan is None
-    mapped_physical, mapped_allen, synthetic_animal_id = (
+    mapped_physical, mapped_allen, synthetic_animal_id, _ = (
         _map_subject_physical_points(
             subject_physical,
             subject_allen,
@@ -583,6 +636,7 @@ def _subject_coordinate_state(
             domain,
             subject_plan=subject_plan,
             batch_size=batch_size,
+            subject_to_ccf_mapper=subject_to_ccf_mapper,
         )
     )
 
@@ -781,6 +835,29 @@ def _make_subject_centre_support_probe_from_state(
     return artifact
 
 
+def _make_subject_centre_support_probe_with_mapper_v2(
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None = None,
+) -> tuple[dict[str, object], Callable[..., np.ndarray] | None]:
+    state = _subject_centre_support_state(
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+    return (
+        _make_subject_centre_support_probe_from_state(
+            state, precursor, subject_plan
+        ),
+        state["subject_to_ccf_mapper"],
+    )
+
+
 def make_subject_centre_support_probe_v2(
     prepared_context: dict[str, object],
     precursor: dict[str, object],
@@ -789,15 +866,32 @@ def make_subject_centre_support_probe_v2(
     batch_size: int | None = None,
 ) -> dict[str, object]:
     """Authenticate post-deformation centre support without sampling scalar appearance."""
-    state = _subject_centre_support_state(
+    artifact, _ = _make_subject_centre_support_probe_with_mapper_v2(
         prepared_context,
         precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
     )
-    return _make_subject_centre_support_probe_from_state(
-        state, precursor, subject_plan
+    return artifact
+
+
+def _replay_subject_centre_support_probe_with_mapper_v2(
+    artifact: dict[str, object],
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None = None,
+) -> dict[str, object]:
+    replay, _ = _make_subject_centre_support_probe_with_mapper_v2(
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
+    return replay
 
 
 def replay_subject_centre_support_probe_v2(
@@ -808,7 +902,8 @@ def replay_subject_centre_support_probe_v2(
     subject_plan: dict[str, object] | None,
     batch_size: int | None = None,
 ) -> dict[str, object]:
-    return make_subject_centre_support_probe_v2(
+    return _replay_subject_centre_support_probe_with_mapper_v2(
+        artifact,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
@@ -892,21 +987,23 @@ def _validate_support_probe_structure(artifact: dict[str, object]) -> None:
         raise ValueError("subject centre support probe has missing or extra fields")
 
 
-def verify_subject_centre_support_probe_v2(
+def _verify_subject_centre_support_probe_with_mapper_v2(
     artifact: dict[str, object],
     prepared_context: dict[str, object],
     precursor: dict[str, object],
     *,
     subject_plan: dict[str, object] | None,
     batch_size: int | None = None,
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None = None,
 ) -> None:
     _validate_support_probe_structure(artifact)
-    replay = replay_subject_centre_support_probe_v2(
+    replay = _replay_subject_centre_support_probe_with_mapper_v2(
         artifact,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     if (
         artifact["schema_version"] != SUBJECT_CENTRE_SUPPORT_PROBE_V2_SCHEMA
@@ -936,6 +1033,23 @@ def verify_subject_centre_support_probe_v2(
         raise ValueError("subject centre support probe source or live receipt does not match")
     if artifact != replay:
         raise ValueError("subject centre support probe deterministic replay does not match")
+
+
+def verify_subject_centre_support_probe_v2(
+    artifact: dict[str, object],
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+) -> None:
+    _verify_subject_centre_support_probe_with_mapper_v2(
+        artifact,
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+    )
 
 
 def _render_identity_payload(stage: dict[str, object]) -> dict[str, object]:
@@ -970,19 +1084,23 @@ def subject_slab_render_receipt_v2(stage: dict[str, object]) -> dict[str, object
     }
 
 
-def make_subject_slab_render_v2(
+def _make_subject_slab_render_with_mapper_v2(
     prepared_context: dict[str, object],
     precursor: dict[str, object],
     *,
     subject_plan: dict[str, object] | None,
     batch_size: int | None = None,
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None,
 ) -> dict[str, object]:
-    """Map every immutable subject slab pixel to CCF and sample frozen assets."""
-    support_probe = make_subject_centre_support_probe_v2(
+    support_state = _subject_centre_support_state(
         prepared_context,
         precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+    support_probe = _make_subject_centre_support_probe_from_state(
+        support_state, precursor, subject_plan
     )
     support_acceptance = support_probe["support_acceptance"]
     if not support_acceptance["accepted"]:
@@ -993,6 +1111,7 @@ def make_subject_slab_render_v2(
         precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=support_state["subject_to_ccf_mapper"],
     )
     support = state["support"]
     parent = prepared_context["opaque_v1_context"]
@@ -1109,6 +1228,41 @@ def make_subject_slab_render_v2(
     return render
 
 
+def make_subject_slab_render_v2(
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+) -> dict[str, object]:
+    """Authenticate a plan, then map and sample an immutable subject slab."""
+    return _make_subject_slab_render_with_mapper_v2(
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=None,
+    )
+
+
+def _replay_subject_slab_render_with_mapper_v2(
+    artifact: dict[str, object],
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None,
+) -> dict[str, object]:
+    return _make_subject_slab_render_with_mapper_v2(
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+
+
 def replay_subject_slab_render_v2(
     artifact: dict[str, object],
     prepared_context: dict[str, object],
@@ -1117,11 +1271,13 @@ def replay_subject_slab_render_v2(
     subject_plan: dict[str, object] | None,
     batch_size: int | None = None,
 ) -> dict[str, object]:
-    return make_subject_slab_render_v2(
+    return _replay_subject_slab_render_with_mapper_v2(
+        artifact,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=None,
     )
 
 
@@ -1241,12 +1397,14 @@ def _validate_structure(artifact: dict[str, object]) -> None:
         raise ValueError("subject slab contains missing or unauthenticated extra fields")
 
 
-def verify_subject_slab_render_v2(
+def _verify_subject_slab_render_with_mapper_v2(
     artifact: dict[str, object],
     prepared_context: dict[str, object],
     precursor: dict[str, object],
     *,
     subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper: Callable[..., np.ndarray] | None,
 ) -> None:
     acquisition._validate_v2_context(prepared_context)
     _precursor_contract_and_receipt(precursor, prepared_context)
@@ -1316,11 +1474,13 @@ def verify_subject_slab_render_v2(
         != acquisition._payload_sha256(subject_slab_render_receipt_v2(artifact))
     ):
         raise ValueError("subject slab live array receipt or identity does not match")
-    replay = replay_subject_slab_render_v2(
+    replay = _replay_subject_slab_render_with_mapper_v2(
         artifact,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     if subject_slab_render_receipt_v2(artifact) != subject_slab_render_receipt_v2(
         replay
@@ -1333,3 +1493,21 @@ def verify_subject_slab_render_v2(
     ):
         if any(not _byte_equal(left[name], right[name]) for name in left):
             raise ValueError("subject slab deterministic replay arrays do not match")
+
+
+def verify_subject_slab_render_v2(
+    artifact: dict[str, object],
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    batch_size: int | None = None,
+) -> None:
+    _verify_subject_slab_render_with_mapper_v2(
+        artifact,
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=None,
+    )

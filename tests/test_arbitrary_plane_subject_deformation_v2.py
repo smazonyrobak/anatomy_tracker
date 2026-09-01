@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from scipy.linalg import expm
 
+import training.arbitrary_plane_subject_deformation_v2 as deformation
 from training.arbitrary_plane_subject_deformation_v2 import (
     SUBJECT_DEFORMATION_V2_CANDIDATE_FACTORS,
     SUBJECT_DEFORMATION_V2_RK4_ORIENTATION_CERTIFICATE,
@@ -609,6 +610,56 @@ def test_standard_mapping_is_batch_and_order_invariant(standard_plan):
     assert np.max(np.linalg.norm(recovered - points, axis=1)) < 1e-5
 
 
+def test_verified_mapper_is_byte_identical_to_public_mapping(standard_plan):
+    points = np.random.Generator(np.random.PCG64DXSM(29)).uniform(
+        LOWER + 50.0, UPPER - 50.0, size=(31, 3)
+    )
+    assert (
+        verify_subject_deformation_plan_v2(
+            standard_plan,
+            expected_ccf_context_sha256=CCF_CONTEXT,
+            expected_full_ccf_lower_um=LOWER,
+            expected_full_ccf_upper_um=UPPER,
+        )
+        is None
+    )
+    mapper = deformation._verified_subject_to_ccf_mapper_v2(
+        standard_plan,
+        expected_ccf_context_sha256=CCF_CONTEXT,
+        expected_full_ccf_lower_um=LOWER,
+        expected_full_ccf_upper_um=UPPER,
+    )
+    scoped = mapper(points, batch_size=7)
+    public = subject_to_ccf_points_v2(points, standard_plan, batch_size=7)
+
+    assert scoped.dtype == public.dtype
+    assert scoped.shape == public.shape
+    assert scoped.tobytes(order="C") == public.tobytes(order="C")
+
+
+def test_verified_mapper_uses_an_immutable_snapshot_of_a_mutable_plan(standard_plan):
+    mutable_plan = dict(standard_plan)
+    points = np.random.Generator(np.random.PCG64DXSM(31)).uniform(
+        LOWER + 50.0, UPPER - 50.0, size=(17, 3)
+    )
+    mapper = deformation._verified_subject_to_ccf_mapper_v2(
+        mutable_plan,
+        expected_ccf_context_sha256=CCF_CONTEXT,
+        expected_full_ccf_lower_um=LOWER,
+        expected_full_ccf_upper_um=UPPER,
+    )
+    expected = mapper(points, batch_size=5)
+    snapshot = mapper._verified_subject_deformation_snapshot_v2
+
+    mutable_plan["state"] = {}
+    observed = mapper(points, batch_size=5)
+
+    assert observed.tobytes(order="C") == expected.tobytes(order="C")
+    assert snapshot is not mutable_plan
+    with pytest.raises(TypeError):
+        snapshot["state"] = {}
+
+
 def test_default_large_mapping_is_byte_identical_to_explicit_single_batch(standard_plan):
     rng = np.random.Generator(np.random.PCG64DXSM(23))
     points = rng.uniform(LOWER + 50.0, UPPER - 50.0, size=(8193, 3))
@@ -692,6 +743,7 @@ def test_verifier_rejects_mismatched_authoritative_ccf_context_and_bounds(standa
 
 def test_verifier_rejects_coherently_reidentified_orientation_diagnostic_tamper(
     standard_plan,
+    monkeypatch,
 ):
     tampered = dict(standard_plan)
     realization = dict(standard_plan["realization"])
@@ -721,7 +773,31 @@ def test_verifier_rejects_coherently_reidentified_orientation_diagnostic_tamper(
     )
     audits[accepted_index] = accepted
     realization["candidate_audits"] = tuple(audits)
+    realization["accepted_candidate_id"] = accepted["candidate_id"]
     tampered["realization"] = realization
+    tampered["subject_deformation_plan_id"] = _domain_id(
+        "anatomy-tracker.subject-deformation-plan/v2",
+        deformation._plan_id_payload(tampered),
+    )
+    tampered["subject_deformation_realization_id"] = _domain_id(
+        "anatomy-tracker.subject-deformation-realization/v2",
+        deformation._realization_id_payload(tampered),
+    )
+    tampered["synthetic_animal_id"] = _domain_id(
+        "anatomy-tracker.synthetic-animal/v2",
+        {
+            "subject_deformation_plan_id": tampered[
+                "subject_deformation_plan_id"
+            ],
+            "subject_deformation_realization_id": tampered[
+                "subject_deformation_realization_id"
+            ],
+            "animal_provenance": _json_value(tampered["provenance"]),
+        },
+    )
+    tampered["receipt_sha256"] = deformation._payload_sha256(
+        deformation._receipt_payload(tampered)
+    )
 
     with pytest.raises(ValueError, match="orientation certificate"):
         verify_subject_deformation_plan_v2(
@@ -730,3 +806,18 @@ def test_verifier_rejects_coherently_reidentified_orientation_diagnostic_tamper(
             expected_full_ccf_lower_um=LOWER,
             expected_full_ccf_upper_um=UPPER,
         )
+
+    mapped = []
+
+    def forbidden_map(*args, **kwargs):
+        mapped.append(True)
+        raise AssertionError("target coordinates were mapped before authentication")
+
+    monkeypatch.setattr(
+        deformation,
+        "_subject_to_ccf_points_from_verified_plan_v2",
+        forbidden_map,
+    )
+    with pytest.raises(ValueError, match="orientation certificate"):
+        subject_to_ccf_points_v2(np.zeros((1, 3)), tampered)
+    assert mapped == []

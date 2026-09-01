@@ -32,6 +32,7 @@ _SOURCE_FILES = (
     "arbitrary_plane_subject_deformation_v2.py",
     "arbitrary_plane_synthetic_generator_v2.py",
     "arbitrary_plane_acquisition_v2.py",
+    "slab_refinement_gate_status_v2.py",
 )
 
 
@@ -48,15 +49,15 @@ def _step_key(step: float) -> str:
 
 def _receipt_matches(payload: Mapping[str, object], receipt_name: str) -> bool:
     return payload.get(receipt_name) == acquisition._payload_sha256(
-        {key: value for key, value in payload.items() if key != receipt_name}
+        acquisition._json_value(
+            {key: value for key, value in payload.items() if key != receipt_name}
+        )
     )
 
 
-def _verify_failed_legacy_report(
+def _validate_failed_legacy_report_structure_v2(
     report: Mapping[str, object],
     prepared_context: Mapping[str, object],
-    *,
-    batch_size: int | None,
 ) -> None:
     acquisition._validate_v2_context(prepared_context)
     if (
@@ -67,6 +68,15 @@ def _verify_failed_legacy_report(
         or not any(case.get("passed") is False for case in report.get("cases", []))
     ):
         raise ValueError("failed subject-slab report is not authentic rejected evidence")
+
+
+def _verify_failed_legacy_report(
+    report: Mapping[str, object],
+    prepared_context: Mapping[str, object],
+    *,
+    batch_size: int | None,
+) -> None:
+    _validate_failed_legacy_report_structure_v2(report, prepared_context)
     replay = legacy.evaluate_subject_deformed_slab_qualification_v2(
         prepared_context, batch_size=batch_size
     )
@@ -74,16 +84,9 @@ def _verify_failed_legacy_report(
         raise ValueError("failed subject-slab report does not replay exactly")
 
 
-def make_fixed_case_multiresolution_plan_v2(
+def _make_fixed_case_multiresolution_plan_from_validated_report_v2(
     failed_report: Mapping[str, object],
-    prepared_context: Mapping[str, object],
-    *,
-    batch_size: int | None = None,
 ) -> dict[str, object]:
-    """Bind the first failed legacy case without selecting or redrawing a new pose."""
-    _verify_failed_legacy_report(
-        failed_report, prepared_context, batch_size=batch_size
-    )
     selected_index, selected = next(
         (index, case)
         for index, case in enumerate(failed_report["cases"])
@@ -200,6 +203,34 @@ def make_fixed_case_multiresolution_plan_v2(
     return payload
 
 
+def make_fixed_case_multiresolution_plan_v2(
+    failed_report: Mapping[str, object],
+    prepared_context: Mapping[str, object],
+    *,
+    batch_size: int | None = None,
+) -> dict[str, object]:
+    """Bind the first failed legacy case after an independent full report replay."""
+    _verify_failed_legacy_report(
+        failed_report, prepared_context, batch_size=batch_size
+    )
+    return _make_fixed_case_multiresolution_plan_from_validated_report_v2(
+        failed_report
+    )
+
+
+def _make_fixed_case_multiresolution_plan_from_live_report_v2(
+    failed_report: Mapping[str, object],
+    prepared_context: Mapping[str, object],
+    *,
+    live_report_capability,
+) -> dict[str, object]:
+    exact_report = live_report_capability(failed_report)
+    _validate_failed_legacy_report_structure_v2(exact_report, prepared_context)
+    return _make_fixed_case_multiresolution_plan_from_validated_report_v2(
+        exact_report
+    )
+
+
 def verify_fixed_case_multiresolution_plan_v2(
     plan: Mapping[str, object],
     failed_report: Mapping[str, object],
@@ -212,6 +243,19 @@ def verify_fixed_case_multiresolution_plan_v2(
     )
     if acquisition._canonical_json(plan) != acquisition._canonical_json(expected):
         raise ValueError("fixed-case multiresolution plan does not match")
+
+
+def _verify_fixed_case_multiresolution_plan_structure_v2(
+    plan: Mapping[str, object],
+    failed_report: Mapping[str, object],
+    prepared_context: Mapping[str, object],
+) -> None:
+    _validate_failed_legacy_report_structure_v2(failed_report, prepared_context)
+    expected = _make_fixed_case_multiresolution_plan_from_validated_report_v2(
+        failed_report
+    )
+    if acquisition._canonical_json(plan) != acquisition._canonical_json(expected):
+        raise ValueError("fixed-case multiresolution plan structure does not match")
 
 
 def _verify_plan_receipt(plan: Mapping[str, object]) -> None:
@@ -253,12 +297,13 @@ def _subject_plan_matches(plan: Mapping[str, object], subject_plan: Mapping[str,
     )
 
 
-def render_fixed_case_multiresolution_v2(
+def _render_fixed_case_multiresolution_with_mapper_v2(
     prepared_context: Mapping[str, object],
     plan: Mapping[str, object],
     subject_plan: Mapping[str, object],
     *,
     batch_size: int | None = None,
+    subject_to_ccf_mapper,
 ) -> dict[str, object]:
     """Render the frozen eight records; callers retain the returned raw artifacts."""
     _verify_plan_receipt(plan)
@@ -320,20 +365,49 @@ def render_fixed_case_multiresolution_v2(
             ("same_nonidentity_subject_deformation", subject_plan),
             ("identity_control", None),
         ):
-            artifact = subject_slab.make_subject_slab_render_v2(
+            arm_mapper = (
+                subject_to_ccf_mapper if arm_plan is subject_plan else None
+            )
+            artifact = subject_slab._make_subject_slab_render_with_mapper_v2(
                 prepared_context,
                 precursor,
                 subject_plan=arm_plan,
                 batch_size=batch_size,
+                subject_to_ccf_mapper=arm_mapper,
             )
-            subject_slab.verify_subject_slab_render_v2(
+            subject_slab._verify_subject_slab_render_with_mapper_v2(
                 artifact,
                 prepared_context,
                 precursor,
                 subject_plan=arm_plan,
+                batch_size=batch_size,
+                subject_to_ccf_mapper=arm_mapper,
             )
             renders[arm][key] = artifact
     return {"precursors": precursors, "renders": renders}
+
+
+def render_fixed_case_multiresolution_v2(
+    prepared_context: Mapping[str, object],
+    plan: Mapping[str, object],
+    subject_plan: Mapping[str, object],
+    *,
+    batch_size: int | None = None,
+) -> dict[str, object]:
+    lower, upper = legacy._context_bounds(prepared_context)
+    subject_to_ccf_mapper = deformation._verified_subject_to_ccf_mapper_v2(
+        subject_plan,
+        expected_ccf_context_sha256=prepared_context["v2_context_sha256"],
+        expected_full_ccf_lower_um=lower,
+        expected_full_ccf_upper_um=upper,
+    )
+    return _render_fixed_case_multiresolution_with_mapper_v2(
+        prepared_context,
+        plan,
+        subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
 
 
 def _checked_receipts(

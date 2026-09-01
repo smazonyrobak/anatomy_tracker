@@ -287,6 +287,8 @@ def chain(monkeypatch):
             "axial_step_um_max": config["axial_step_um_max"],
             "parent_shape_h_w": tuple(config["parent_shape_h_w"]),
             "max_attempts": config["max_attempts"],
+            "batch_size": None,
+            "subject_to_ccf_mapper": verified_mapper,
         }
         if (
             resolution["subject_support_resolution_id"] != "support-resolution-id"
@@ -299,10 +301,20 @@ def chain(monkeypatch):
         if artifact["subject_slab_render_id"] != "subject-slab-id":
             raise ValueError("accepted subject slab stub changed")
 
-    monkeypatch.setattr(realization, "verify_arbitrary_plane_observation_v2", verified)
+    verified_mapper = object()
     monkeypatch.setattr(
         realization,
-        "verify_subject_support_resolution_v2",
+        "_verified_subject_to_ccf_mapper_for_context_v2",
+        lambda context, subject_plan: verified_mapper,
+    )
+    monkeypatch.setattr(
+        realization,
+        "_verify_arbitrary_plane_observation_with_mapper_v2",
+        verified,
+    )
+    monkeypatch.setattr(
+        realization,
+        "_verify_subject_support_resolution_with_mapper_v2",
         verified_support,
     )
     monkeypatch.setattr(

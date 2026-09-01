@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import training.slab_refinement_gate_status_v2 as gate_status
@@ -18,6 +19,48 @@ ATLAS_FOLDER = Path(
         "ANATOMY_TRACKER_ATLAS_FOLDER", str(ROOT / "data" / "Allen Brain Atlas 25um")
     )
 ).resolve()
+EXPECTED_COMMIT_ENVIRONMENT = "ANATOMY_TRACKER_EXPECTED_SOURCE_COMMIT"
+EXPECTED_BRANCH = "codex/arbitrary-plane-joint-model"
+UPSTREAM_REF = f"origin/{EXPECTED_BRANCH}"
+
+
+def _git_output(*arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def repository_state_v2() -> dict[str, object]:
+    expected_commit = os.environ.get(EXPECTED_COMMIT_ENVIRONMENT, "").strip()
+    repository_root = Path(_git_output("rev-parse", "--show-toplevel")).resolve()
+    head = _git_output("rev-parse", "HEAD")
+    branch = _git_output("branch", "--show-current")
+    upstream_head = _git_output("rev-parse", UPSTREAM_REF)
+    status = _git_output("status", "--porcelain=v1", "--untracked-files=all")
+    if (
+        not expected_commit
+        or repository_root != ROOT
+        or head != expected_commit
+        or branch != EXPECTED_BRANCH
+        or upstream_head != head
+        or status
+    ):
+        raise RuntimeError(
+            "multiresolution execution requires the explicit expected pushed commit "
+            "and a clean tracked, staged, and untracked worktree"
+        )
+    return {
+        "branch": branch,
+        "head": head,
+        "expected_commit": expected_commit,
+        "upstream_ref": UPSTREAM_REF,
+        "upstream_head": upstream_head,
+        "clean_tracked_staged_untracked": True,
+    }
 
 
 def _external_output() -> Path:
@@ -44,22 +87,36 @@ def main() -> None:
     ):
         raise RuntimeError("legacy gate status does not authorize the replacement path")
     output = _external_output()
+    repository = repository_state_v2()
     context, allen_inputs = bundle.load_pinned_allen_context(ATLAS_FOLDER)
-    failed_report = legacy.evaluate_subject_deformed_slab_qualification_v2(context)
-    plan = assessment.make_fixed_case_multiresolution_plan_v2(
-        failed_report, context
+    (
+        failed_report,
+        live_report_capability,
+    ) = legacy._evaluate_subject_deformed_slab_qualification_with_capability_v2(
+        context
     )
-    subject_plan = legacy._make_subject_plan(
+    plan = assessment._make_fixed_case_multiresolution_plan_from_live_report_v2(
+        failed_report,
+        context,
+        live_report_capability=live_report_capability,
+    )
+    subject_plan, subject_to_ccf_mapper = legacy._make_subject_plan_with_mapper(
         context, plan["selected_first_failure"]["animal_manifest"]
     )
-    rendered = assessment.render_fixed_case_multiresolution_v2(
-        context, plan, subject_plan
+    rendered = assessment._render_fixed_case_multiresolution_with_mapper_v2(
+        context,
+        plan,
+        subject_plan,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     result = assessment.assemble_fixed_case_multiresolution_assessment_v2(
         plan, rendered
     )
+    if repository_state_v2() != repository:
+        raise RuntimeError("repository state changed before bundle write")
     staging = bundle.write_staged_bundle_v2(
         output,
+        repository=repository,
         allen_inputs=allen_inputs,
         failed_report=failed_report,
         plan=plan,
@@ -68,8 +125,10 @@ def main() -> None:
         result=result,
     )
     verified = bundle.verify_frozen_bundle_v2(
-        staging, context, allen_inputs
+        staging, context, allen_inputs, repository=repository
     )
+    if repository_state_v2() != repository:
+        raise RuntimeError("repository state changed before bundle publish")
     bundle.publish_staged_bundle_v2(staging, output)
     print(
         json.dumps(

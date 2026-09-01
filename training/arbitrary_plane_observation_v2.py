@@ -12,8 +12,8 @@ from scipy import ndimage
 
 import training.arbitrary_plane_acquisition_v2 as acquisition
 from training.arbitrary_plane_section_processing_v2 import (
+    _verify_section_processing_render_with_mapper_v2,
     section_processing_render_receipt_v2,
-    verify_section_processing_render_v2,
 )
 
 
@@ -1203,7 +1203,7 @@ def observation_bundle_receipt_v2(artifact: dict[str, object]) -> dict[str, obje
     }
 
 
-def make_arbitrary_plane_observation_v2(
+def _make_arbitrary_plane_observation_with_mapper_v2(
     processed_render: dict[str, object],
     subject_slab_render: dict[str, object],
     section_processing_plan: dict[str, object],
@@ -1219,8 +1219,9 @@ def make_arbitrary_plane_observation_v2(
     section_index: int,
     observation_index: int,
     modality: str,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
 ) -> dict[str, object]:
-    """Create one acquired observation plus paired raw/brush input descendants."""
     root_seed_value = _root_seed_uint64(root_seed)
     if not isinstance(split, str) or not split:
         raise ValueError("observation split must be a nonempty string")
@@ -1228,13 +1229,15 @@ def make_arbitrary_plane_observation_v2(
     animal_index = _nonnegative_integer(animal_index, "animal_index")
     section_index = _nonnegative_integer(section_index, "section_index")
     observation_index = _nonnegative_integer(observation_index, "observation_index")
-    verify_section_processing_render_v2(
+    _verify_section_processing_render_with_mapper_v2(
         processed_render,
         subject_slab_render,
         section_processing_plan,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     upstream_provenance = section_processing_plan["provenance"]
     animal_id = acquisition._json_value(animal_id)
@@ -1459,6 +1462,85 @@ def make_arbitrary_plane_observation_v2(
     return artifact
 
 
+def make_arbitrary_plane_observation_v2(
+    processed_render: dict[str, object],
+    subject_slab_render: dict[str, object],
+    section_processing_plan: dict[str, object],
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    root_seed: int | str,
+    split: str,
+    split_index: int,
+    animal_index: int,
+    animal_id: str | int,
+    section_index: int,
+    observation_index: int,
+    modality: str,
+    batch_size: int | None = None,
+) -> dict[str, object]:
+    """Create one acquired observation plus paired raw/brush input descendants."""
+    return _make_arbitrary_plane_observation_with_mapper_v2(
+        processed_render,
+        subject_slab_render,
+        section_processing_plan,
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        root_seed=root_seed,
+        split=split,
+        split_index=split_index,
+        animal_index=animal_index,
+        animal_id=animal_id,
+        section_index=section_index,
+        observation_index=observation_index,
+        modality=modality,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=None,
+    )
+
+
+def _replay_arbitrary_plane_observation_with_mapper_v2(
+    artifact: dict[str, object],
+    processed_render: dict[str, object],
+    subject_slab_render: dict[str, object],
+    section_processing_plan: dict[str, object],
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    root_seed: int | str,
+    split: str,
+    split_index: int,
+    animal_index: int,
+    animal_id: str | int,
+    section_index: int,
+    observation_index: int,
+    modality: str,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
+) -> dict[str, object]:
+    return _make_arbitrary_plane_observation_with_mapper_v2(
+        processed_render,
+        subject_slab_render,
+        section_processing_plan,
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        root_seed=root_seed,
+        split=split,
+        split_index=split_index,
+        animal_index=animal_index,
+        animal_id=animal_id,
+        section_index=section_index,
+        observation_index=observation_index,
+        modality=modality,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
+
+
 def replay_arbitrary_plane_observation_v2(
     artifact: dict[str, object],
     processed_render: dict[str, object],
@@ -1476,8 +1558,10 @@ def replay_arbitrary_plane_observation_v2(
     section_index: int,
     observation_index: int,
     modality: str,
+    batch_size: int | None = None,
 ) -> dict[str, object]:
-    return make_arbitrary_plane_observation_v2(
+    return _replay_arbitrary_plane_observation_with_mapper_v2(
+        artifact,
         processed_render,
         subject_slab_render,
         section_processing_plan,
@@ -1492,6 +1576,8 @@ def replay_arbitrary_plane_observation_v2(
         section_index=section_index,
         observation_index=observation_index,
         modality=modality,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=None,
     )
 
 
@@ -1875,7 +1961,7 @@ def _validate_mask_and_descendant_algebra(artifact: dict[str, object]) -> None:
         raise ValueError("raw or smart-brush descendant algebra does not match")
 
 
-def verify_arbitrary_plane_observation_v2(
+def _verify_arbitrary_plane_observation_with_mapper_v2(
     artifact: dict[str, object],
     processed_render: dict[str, object],
     subject_slab_render: dict[str, object],
@@ -1892,6 +1978,8 @@ def verify_arbitrary_plane_observation_v2(
     section_index: int,
     observation_index: int,
     modality: str,
+    batch_size: int | None = None,
+    subject_to_ccf_mapper=None,
 ) -> None:
     root_seed_value = _root_seed_uint64(root_seed)
     if not isinstance(split, str) or not split:
@@ -1900,13 +1988,15 @@ def verify_arbitrary_plane_observation_v2(
     animal_index = _nonnegative_integer(animal_index, "animal_index")
     section_index = _nonnegative_integer(section_index, "section_index")
     observation_index = _nonnegative_integer(observation_index, "observation_index")
-    verify_section_processing_render_v2(
+    _verify_section_processing_render_with_mapper_v2(
         processed_render,
         subject_slab_render,
         section_processing_plan,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     upstream_provenance = section_processing_plan["provenance"]
     if (
@@ -1983,7 +2073,7 @@ def verify_arbitrary_plane_observation_v2(
     ):
         raise ValueError("observation bundle receipt does not match")
     _validate_mask_and_descendant_algebra(artifact)
-    replay = replay_arbitrary_plane_observation_v2(
+    replay = _replay_arbitrary_plane_observation_with_mapper_v2(
         artifact,
         processed_render,
         subject_slab_render,
@@ -1999,6 +2089,8 @@ def verify_arbitrary_plane_observation_v2(
         section_index=section_index,
         observation_index=observation_index,
         modality=modality,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     if observation_bundle_receipt_v2(artifact) != observation_bundle_receipt_v2(
         replay
@@ -2014,6 +2106,46 @@ def verify_arbitrary_plane_observation_v2(
                 replay["descendants"][mode]["arrays"][name],
             ):
                 raise ValueError("observation descendant replay arrays do not match")
+
+
+def verify_arbitrary_plane_observation_v2(
+    artifact: dict[str, object],
+    processed_render: dict[str, object],
+    subject_slab_render: dict[str, object],
+    section_processing_plan: dict[str, object],
+    prepared_context: dict[str, object],
+    precursor: dict[str, object],
+    *,
+    subject_plan: dict[str, object] | None,
+    root_seed: int | str,
+    split: str,
+    split_index: int,
+    animal_index: int,
+    animal_id: str | int,
+    section_index: int,
+    observation_index: int,
+    modality: str,
+    batch_size: int | None = None,
+) -> None:
+    _verify_arbitrary_plane_observation_with_mapper_v2(
+        artifact,
+        processed_render,
+        subject_slab_render,
+        section_processing_plan,
+        prepared_context,
+        precursor,
+        subject_plan=subject_plan,
+        root_seed=root_seed,
+        split=split,
+        split_index=split_index,
+        animal_index=animal_index,
+        animal_id=animal_id,
+        section_index=section_index,
+        observation_index=observation_index,
+        modality=modality,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=None,
+    )
 
 
 if "animal_id" in signature(derive_observation_seed_v2).parameters:

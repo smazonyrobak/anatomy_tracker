@@ -324,9 +324,9 @@ def _context_bounds(prepared_context: Mapping[str, object]) -> tuple[np.ndarray,
     return lower, upper
 
 
-def make_development_panel_subject_plan_v2(
+def _make_development_panel_subject_plan_with_mapper_v2(
     prepared_context: Mapping[str, object], animal_spec: Mapping[str, object]
-) -> Mapping[str, object]:
+) -> tuple[Mapping[str, object], object]:
     """Make one independently randomized development synthetic-animal deformation."""
     lower, upper = _context_bounds(prepared_context)
     plan = subject_deformation_v2.sample_animal_subject_deformation_plan_v2(
@@ -339,11 +339,20 @@ def make_development_panel_subject_plan_v2(
         ccf_context_sha256=prepared_context["v2_context_sha256"],
         deformation_stratum="standard",
     )
-    subject_deformation_v2.verify_subject_deformation_plan_v2(
+    subject_to_ccf_mapper = subject_deformation_v2._verified_subject_to_ccf_mapper_v2(
         plan,
         expected_ccf_context_sha256=prepared_context["v2_context_sha256"],
         expected_full_ccf_lower_um=lower,
         expected_full_ccf_upper_um=upper,
+    )
+    return plan, subject_to_ccf_mapper
+
+
+def make_development_panel_subject_plan_v2(
+    prepared_context: Mapping[str, object], animal_spec: Mapping[str, object]
+) -> Mapping[str, object]:
+    plan, _ = _make_development_panel_subject_plan_with_mapper_v2(
+        prepared_context, animal_spec
     )
     return plan
 
@@ -474,19 +483,20 @@ def _resolved_configurations(
     }
 
 
-def evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
+def _evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2(
     prepared_context: Mapping[str, object],
     panel: Mapping[str, object],
     case_spec: Mapping[str, object],
     subject_plan: Mapping[str, object],
     *,
     batch_size: int | None = None,
+    subject_to_ccf_mapper,
 ) -> dict[str, object]:
     """Run one scheduled case through the random-only v2 generator and oracle."""
     verify_arbitrary_plane_semantic_oracle_development_panel_v2(panel)
     if acquisition._json_value(case_spec) not in panel["cases"]:
         raise ValueError("case is not in the frozen development panel")
-    support_bundle = support_resolution_v2.resolve_subject_support_v2(
+    support_bundle = support_resolution_v2._resolve_subject_support_with_mapper_v2(
         prepared_context,
         subject_plan=subject_plan,
         master_root_seed=case_spec["root_seeds_uint64"]["support_resolution"],
@@ -503,15 +513,17 @@ def evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
         parent_shape_h_w=PARENT_SHAPE_H_W,
         max_attempts=MAXIMUM_SUPPORT_ATTEMPTS,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     if support_bundle["resolution"]["status"] != "accepted":
         raise RuntimeError("predeclared case exhausted its bounded support attempts")
     precursor = support_bundle["accepted_precursor"]
-    subject_slab = subject_slab_v2.make_subject_slab_render_v2(
+    subject_slab = subject_slab_v2._make_subject_slab_render_with_mapper_v2(
         prepared_context,
         precursor,
         subject_plan=subject_plan,
         batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     centre_index = int(subject_slab["coordinate_map"]["kernel"]["centre_index"])
     subject_physical = np.asarray(
@@ -533,14 +545,16 @@ def evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
         section_id=case_spec["section_id"],
         deformation_mode="standard",
     )
-    section_render = section_processing_v2.make_section_processing_render_v2(
+    section_render = section_processing_v2._make_section_processing_render_with_mapper_v2(
         subject_slab,
         section_plan,
         prepared_context,
         precursor,
         subject_plan=subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
-    observation = observation_v2.make_arbitrary_plane_observation_v2(
+    observation = observation_v2._make_arbitrary_plane_observation_with_mapper_v2(
         section_render,
         subject_slab,
         section_plan,
@@ -555,8 +569,10 @@ def evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
         section_index=case_spec["section_index"],
         observation_index=case_spec["observation_index"],
         modality=case_spec["modality"],
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
-    final = realization_v2.make_arbitrary_plane_realization_v2(
+    final = realization_v2._make_arbitrary_plane_realization_with_mapper_v2(
         prepared_context,
         support_bundle,
         precursor,
@@ -566,6 +582,8 @@ def evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
         observation,
         subject_plan=subject_plan,
         realization_index=case_spec["realization_index"],
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
     )
     if final["mode_selection"]["selected_mode"] != case_spec[
         "selected_trainable_input_mode"
@@ -666,6 +684,31 @@ def evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
     }
     payload["case_receipt_sha256"] = acquisition._payload_sha256(payload)
     return payload
+
+
+def evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
+    prepared_context: Mapping[str, object],
+    panel: Mapping[str, object],
+    case_spec: Mapping[str, object],
+    subject_plan: Mapping[str, object],
+    *,
+    batch_size: int | None = None,
+) -> dict[str, object]:
+    lower, upper = _context_bounds(prepared_context)
+    subject_to_ccf_mapper = subject_deformation_v2._verified_subject_to_ccf_mapper_v2(
+        subject_plan,
+        expected_ccf_context_sha256=prepared_context["v2_context_sha256"],
+        expected_full_ccf_lower_um=lower,
+        expected_full_ccf_upper_um=upper,
+    )
+    return _evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2(
+        prepared_context,
+        panel,
+        case_spec,
+        subject_plan,
+        batch_size=batch_size,
+        subject_to_ccf_mapper=subject_to_ccf_mapper,
+    )
 
 
 def make_arbitrary_plane_semantic_oracle_failure_record_v2(

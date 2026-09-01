@@ -259,8 +259,16 @@ def test_case_evaluator_uses_existing_generator_pose_candidate_and_oracle_apis(m
         calls.append(("null", kwargs))
         return null
 
-    monkeypatch.setattr(panel_v2.support_resolution_v2, "resolve_subject_support_v2", resolve)
-    monkeypatch.setattr(panel_v2.subject_slab_v2, "make_subject_slab_render_v2", make_subject)
+    monkeypatch.setattr(
+        panel_v2.support_resolution_v2,
+        "_resolve_subject_support_with_mapper_v2",
+        resolve,
+    )
+    monkeypatch.setattr(
+        panel_v2.subject_slab_v2,
+        "_make_subject_slab_render_with_mapper_v2",
+        make_subject,
+    )
     monkeypatch.setattr(
         panel_v2.section_processing_v2,
         "_orthogonal_section_pixel_metric",
@@ -273,14 +281,18 @@ def test_case_evaluator_uses_existing_generator_pose_candidate_and_oracle_apis(m
     )
     monkeypatch.setattr(
         panel_v2.section_processing_v2,
-        "make_section_processing_render_v2",
+        "_make_section_processing_render_with_mapper_v2",
         make_section_render,
     )
     monkeypatch.setattr(
-        panel_v2.observation_v2, "make_arbitrary_plane_observation_v2", make_observation
+        panel_v2.observation_v2,
+        "_make_arbitrary_plane_observation_with_mapper_v2",
+        make_observation,
     )
     monkeypatch.setattr(
-        panel_v2.realization_v2, "make_arbitrary_plane_realization_v2", make_final
+        panel_v2.realization_v2,
+        "_make_arbitrary_plane_realization_with_mapper_v2",
+        make_final,
     )
     monkeypatch.setattr(panel_v2.pose_v2, "make_arbitrary_plane_pose_truth_v2", make_pose)
     monkeypatch.setattr(
@@ -307,8 +319,13 @@ def test_case_evaluator_uses_existing_generator_pose_candidate_and_oracle_apis(m
         lambda *args, **kwargs: calls.append(("null-verify", kwargs)),
     )
 
-    record = panel_v2.evaluate_arbitrary_plane_semantic_oracle_development_case_v2(
-        context, panel, case, subject_plan
+    mapper = object()
+    record = panel_v2._evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2(
+        context,
+        panel,
+        case,
+        subject_plan,
+        subject_to_ccf_mapper=mapper,
     )
 
     assert [name for name, _ in calls] == [
@@ -330,6 +347,11 @@ def test_case_evaluator_uses_existing_generator_pose_candidate_and_oracle_apis(m
     assert support_kwargs["specimen_id"] == case["specimen_id"]
     assert support_kwargs["experiment_id"] == case["experiment_id"]
     assert support_kwargs["plane_stratum"] == case["plane_stratum"]
+    assert support_kwargs["subject_to_ccf_mapper"] is mapper
+    assert calls[1][1]["subject_to_ccf_mapper"] is mapper
+    assert calls[3][1]["subject_to_ccf_mapper"] is mapper
+    assert calls[4][1]["subject_to_ccf_mapper"] is mapper
+    assert calls[5][1]["subject_to_ccf_mapper"] is mapper
     assert calls[7][1]["candidate_root_seed"] == case["root_seeds_uint64"][
         "candidate_bank"
     ]
@@ -397,33 +419,77 @@ def test_all_failure_adapter_is_exact_and_gate_summary_is_failure_adverse():
         )
 
 
+def test_case_milestone_reports_completed_evaluable_success(capsys):
+    case = panel_v2.arbitrary_plane_semantic_oracle_development_panel_v2()["cases"][0]
+    runner_v2._emit_case_milestone(
+        "arbitrary-plane-semantic-oracle-panel-v2-case-verified",
+        case,
+        24,
+        "newly-evaluated",
+        record={
+            "status": "complete",
+            "later_gate_policy": {"evaluable": True},
+        },
+    )
+
+    event = json.loads(capsys.readouterr().out)
+    assert event == {
+        "event": "arbitrary-plane-semantic-oracle-panel-v2-case-verified",
+        "case_index": 0,
+        "case_number": 1,
+        "case_count": 24,
+        "case_id": case["case_id"],
+        "plane_stratum": case["plane_stratum"],
+        "execution_mode": "newly-evaluated",
+        "verification_status": "verified",
+        "record_status": "complete",
+        "scientific_outcome": "complete-evaluable",
+        "caught_exception_type": None,
+        "caught_exception_status": "none",
+        "recorded_failure_exception_type": None,
+    }
+
+
 def test_atomic_runner_records_failures_and_resumes_without_reexecution(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ):
     monkeypatch.setattr(runner_v2.acquisition, "_validate_v2_context", lambda value: None)
     plan_calls = []
     case_calls = []
+    subject_mappers = {}
 
     def subject_plan(context, animal):
         plan_calls.append(animal["animal_index"])
-        return {"animal_index": animal["animal_index"]}
+        subject_mappers[animal["animal_index"]] = object()
+        return (
+            {"animal_index": animal["animal_index"]},
+            subject_mappers[animal["animal_index"]],
+        )
 
     def fail_case(context, panel, case, plan, **kwargs):
         case_calls.append(case["case_index"])
+        assert kwargs["subject_to_ccf_mapper"] is subject_mappers[
+            case["animal_index"]
+        ]
         raise RuntimeError(f"scheduled-{case['case_index']}")
 
     monkeypatch.setattr(
-        runner_v2, "make_development_panel_subject_plan_v2", subject_plan
+        runner_v2,
+        "_make_development_panel_subject_plan_with_mapper_v2",
+        subject_plan,
     )
     monkeypatch.setattr(
         runner_v2,
-        "evaluate_arbitrary_plane_semantic_oracle_development_case_v2",
+        "_evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2",
         fail_case,
     )
     output = tmp_path / "panel"
     result = runner_v2.run_arbitrary_plane_semantic_oracle_development_panel_v2(
         {}, output
     )
+    first_events = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+    ]
 
     assert result["scheduled_case_count"] == 24
     assert result["recorded_case_count"] == 24
@@ -439,6 +505,47 @@ def test_atomic_runner_records_failures_and_resumes_without_reexecution(
     assert plan_calls == [2101, 2102, 2103, 2104]
     assert case_calls == list(range(24))
     assert len(list((output / "cases").glob("case-*.json"))) == 24
+    assert first_events[0] == {
+        "event": "arbitrary-plane-semantic-oracle-panel-v2-started",
+        "output_folder": str(output.resolve()),
+        "panel_receipt_sha256": result["panel_receipt_sha256"],
+        "case_count": 24,
+        "batch_size": None,
+        "strict_replay_existing": False,
+        "frozen_summary_present": False,
+    }
+    first_started = [
+        event
+        for event in first_events
+        if event["event"]
+        == "arbitrary-plane-semantic-oracle-panel-v2-case-started"
+    ]
+    first_verified = [
+        event
+        for event in first_events
+        if event["event"]
+        == "arbitrary-plane-semantic-oracle-panel-v2-case-verified"
+    ]
+    assert len(first_started) == len(first_verified) == 24
+    assert [event["case_index"] for event in first_started] == list(range(24))
+    assert all(event["case_count"] == 24 for event in first_started)
+    assert all(event["execution_mode"] == "newly-evaluated" for event in first_started)
+    assert all(
+        event["record_status"] == "failed"
+        and event["scientific_outcome"] == "failure-adverse-pipeline-failure"
+        and event["caught_exception_type"] == "RuntimeError"
+        and event["caught_exception_status"]
+        == "converted-to-failure-adverse-record"
+        and event["recorded_failure_exception_type"] == "RuntimeError"
+        and event["verification_status"] == "verified"
+        for event in first_verified
+    )
+    assert [event["plane_stratum"] for event in first_started] == [
+        case["plane_stratum"]
+        for case in panel_v2.arbitrary_plane_semantic_oracle_development_panel_v2()[
+            "cases"
+        ]
+    ]
     gate_summary_bytes = (output / "gate-summary.json").read_bytes()
     qualification_bytes = (output / "live-qualification.json").read_bytes()
     result_bytes = (output / "result.json").read_bytes()
@@ -446,42 +553,81 @@ def test_atomic_runner_records_failures_and_resumes_without_reexecution(
 
     monkeypatch.setattr(
         runner_v2,
-        "make_development_panel_subject_plan_v2",
+        "_make_development_panel_subject_plan_with_mapper_v2",
         lambda *args, **kwargs: pytest.fail("resume remade an animal plan"),
     )
     monkeypatch.setattr(
         runner_v2,
-        "evaluate_arbitrary_plane_semantic_oracle_development_case_v2",
+        "_evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2",
         lambda *args, **kwargs: pytest.fail("resume re-executed a frozen case"),
     )
     replay = runner_v2.run_arbitrary_plane_semantic_oracle_development_panel_v2(
         {}, output
     )
+    existing_events = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+    ]
     assert replay == result
     assert (output / "gate-summary.json").read_bytes() == gate_summary_bytes
     assert (output / "live-qualification.json").read_bytes() == qualification_bytes
     assert (output / "result.json").read_bytes() == result_bytes
+    existing_verified = [
+        event
+        for event in existing_events
+        if event["event"]
+        == "arbitrary-plane-semantic-oracle-panel-v2-case-verified"
+    ]
+    assert len(existing_verified) == 24
+    assert all(
+        event["execution_mode"] == "verified-existing"
+        and event["caught_exception_type"] is None
+        and event["caught_exception_status"] == "none"
+        and event["recorded_failure_exception_type"] == "RuntimeError"
+        for event in existing_verified
+    )
 
     strict_calls = []
     monkeypatch.setattr(
-        runner_v2, "make_development_panel_subject_plan_v2", subject_plan
+        runner_v2,
+        "_make_development_panel_subject_plan_with_mapper_v2",
+        subject_plan,
     )
 
     def replay_failure(context, panel, case, plan, **kwargs):
         strict_calls.append(case["case_index"])
+        assert kwargs["subject_to_ccf_mapper"] is subject_mappers[
+            case["animal_index"]
+        ]
         raise RuntimeError(f"scheduled-{case['case_index']}")
 
     monkeypatch.setattr(
         runner_v2,
-        "evaluate_arbitrary_plane_semantic_oracle_development_case_v2",
+        "_evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2",
         replay_failure,
     )
     strict = runner_v2.run_arbitrary_plane_semantic_oracle_development_panel_v2(
         {}, output, strict_replay_existing=True
     )
+    strict_events = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+    ]
     assert strict == result
     assert strict_calls == list(range(24))
     assert (output / "gate-summary.json").read_bytes() == gate_summary_bytes
+    strict_verified = [
+        event
+        for event in strict_events
+        if event["event"]
+        == "arbitrary-plane-semantic-oracle-panel-v2-case-verified"
+    ]
+    assert len(strict_verified) == 24
+    assert all(
+        event["execution_mode"] == "strict-replayed"
+        and event["caught_exception_type"] == "RuntimeError"
+        and event["caught_exception_status"]
+        == "converted-to-failure-adverse-record"
+        for event in strict_verified
+    )
 
     evidence = deepcopy(result["live_qualification_evidence"])
     evidence["case_evidence"][0]["case_receipt_sha256"] = "0" * 64
@@ -519,8 +665,11 @@ def test_partial_default_resume_refuses_gate_then_strict_replay_qualifies(
 
     monkeypatch.setattr(
         runner_v2,
-        "make_development_panel_subject_plan_v2",
-        lambda context, animal: {"animal_index": animal["animal_index"]},
+        "_make_development_panel_subject_plan_with_mapper_v2",
+        lambda context, animal: (
+            {"animal_index": animal["animal_index"]},
+            object(),
+        ),
     )
 
     def fail_case(context, panel, case, plan, **kwargs):
@@ -529,7 +678,7 @@ def test_partial_default_resume_refuses_gate_then_strict_replay_qualifies(
 
     monkeypatch.setattr(
         runner_v2,
-        "evaluate_arbitrary_plane_semantic_oracle_development_case_v2",
+        "_evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2",
         fail_case,
     )
     with pytest.raises(RuntimeError, match="rerun with strict_replay_existing=True"):
@@ -718,7 +867,18 @@ def test_environment_runner_requires_external_output_and_forwards_strict_replay(
     context = {"prepared": True}
     result = {
         "panel_receipt_sha256": "a" * 64,
+        "scheduled_case_count": 24,
+        "completed_case_count": 0,
+        "failed_case_count": 24,
+        "unevaluable_or_failed_case_count": 24,
         "semantic_gate_summary_passed": False,
+        "all_cases_live_verified_when_gate_frozen": True,
+        "live_qualification_evidence": {
+            "live_verification_mode_counts": {
+                "newly-evaluated": 0,
+                "strict-replayed": 24,
+            }
+        },
     }
     monkeypatch.setenv(runner_v2._RUN_ENV, "1")
     monkeypatch.setenv(runner_v2._OUTPUT_ENV, str(output.resolve()))
@@ -751,7 +911,15 @@ def test_environment_runner_requires_external_output_and_forwards_strict_replay(
         ),
     ]
     report = json.loads(capsys.readouterr().out)
+    assert report["event"] == "arbitrary-plane-semantic-oracle-panel-v2-frozen"
     assert report["panel_receipt_sha256"] == "a" * 64
+    assert report["scheduled_case_count"] == 24
+    assert report["failed_case_count"] == 24
+    assert report["all_cases_live_verified_when_gate_frozen"] is True
+    assert report["live_verification_mode_counts"] == {
+        "newly-evaluated": 0,
+        "strict-replayed": 24,
+    }
     assert report["strict_replay_existing"] is True
 
     monkeypatch.delenv(runner_v2._OUTPUT_ENV)
@@ -772,8 +940,11 @@ def test_independent_verifier_checks_exact_frozen_tree_and_provenance(
     monkeypatch.setattr(runner_v2.acquisition, "_validate_v2_context", lambda value: None)
     monkeypatch.setattr(
         runner_v2,
-        "make_development_panel_subject_plan_v2",
-        lambda context, animal: {"animal_index": animal["animal_index"]},
+        "_make_development_panel_subject_plan_with_mapper_v2",
+        lambda context, animal: (
+            {"animal_index": animal["animal_index"]},
+            object(),
+        ),
     )
 
     def fail_case(context, panel, case, plan, **kwargs):
@@ -781,11 +952,12 @@ def test_independent_verifier_checks_exact_frozen_tree_and_provenance(
 
     monkeypatch.setattr(
         runner_v2,
-        "evaluate_arbitrary_plane_semantic_oracle_development_case_v2",
+        "_evaluate_arbitrary_plane_semantic_oracle_development_case_with_mapper_v2",
         fail_case,
     )
     output = tmp_path / "frozen-panel"
     runner_v2.run_arbitrary_plane_semantic_oracle_development_panel_v2({}, output)
+    capsys.readouterr()
 
     report = verifier_v2.verify_frozen_arbitrary_plane_semantic_oracle_panel_v2(
         output
