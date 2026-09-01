@@ -97,10 +97,10 @@ become replicated edge intensity. For tangent or partial sections, affine
 removal is evaluated over the correspondence-support domain rather than only
 the whole canvas. A fresh training lineage starts in a new empty run directory;
 same-lineage checkpoint resume may be enabled only after that cold start is
-recorded. The existing arbitrary-plane geometry and pose contracts currently
-pass their focused source tests, but this is contract evidence only. No model
-family is licensed or scientifically qualified until the frozen
-arbitrary-plane oracle panel has passed its live gate.
+recorded. The arbitrary-plane geometry contracts and the model-free semantic
+oracle passed their focused gates, but the later image-information pilot
+failed its imperfect-outline consistency gate. This is contract and diagnostic
+evidence only; no learned model family is licensed or scientifically qualified.
 
 The first two numerical pieces are implemented in
 `arbitrary_plane_full_frame_primitives.py` as untrained plumbing. Its physical
@@ -110,7 +110,8 @@ frame and right-composes the positive in-plane basis. Raster reflection remains
 a separate discrete variable. The same module renders a shared
 `[channel, AP, DV, ML]` atlas through an explicit finite boxcar or Gaussian PSF
 without per-pixel edge renormalization. This implementation status is not an
-oracle result or permission to build or train the recurrent model early.
+accuracy result or permission to train or screen a model on the failed
+image-information result.
 
 The through-plane renderer evaluates several differentiable samples along the
 current physical normal and combines them with positive weights normalized to
@@ -443,11 +444,50 @@ oracle ranking premise test. The arbitrary-plane generator v2 source path now
 covers subject deformation, finite thickness, section
 processing, appearance, damage, accurate/imperfect/absent smart-brush modes,
 final provenance-bound realizations, finite wrong-plane candidates and an
-independently verifiable oracle-panel runner. This establishes source and unit
-contracts, not a scientific result: the frozen live panel and its null gate
-must still complete before recurrence is built. Existing Product-5 data are
+independently verifiable oracle-panel runner. The semantic oracle passed, while
+the image-information pilot failed the imperfect-outline consistency gate.
+This establishes source, unit and diagnostic contracts, not a learned-model
+result. Existing Product-5 data are
 historical coronal audit evidence only and cannot enter release training,
 validation, features or pseudolabels. DeepSlice Ground Truth (DOI
 `10.25949/22802411`) remains benchmark-only. Neither validates arbitrary-plane
 performance; external real validation must deliberately span cardinal and
 extreme-oblique cutting planes and remain split by animal.
+
+## Evidence update: imperfect-brush gate failure
+
+The complete 64-case model-free image-information pilot passed 30 of 31 atomic
+checks but is `FAIL`. Context MIND top-1 was `63/64` without an outline,
+`62/64` with an accurate outline, and `52/64` with an imperfect outline. The
+11-case imperfect-outline deficit exceeded the frozen maximum of six.
+
+Descriptive support-aware scoring recovered all 11 paired losses, making
+candidate-support handling the leading follow-up mechanism, but privileged
+support cannot become a model input or retroactively replace the primary gate.
+Consequently the image encoder must treat outline presence explicitly, retain
+raw-background input as a complete path, and avoid interpreting black exterior
+as anatomical evidence. No learned recurrent screen is authorized by this
+result. Implementation of the probabilistic retriever, renderer, and shared
+updater may continue, while any scientific screen waits for a separately frozen
+paired mask-mechanism test with unchanged shuffled controls.
+
+## Implementation update: canonical-cell recurrent pose scaffold
+
+`training/arbitrary_plane_recurrent_model.py` now implements an untrained,
+randomly initialized pose-only scaffold. It scores declared raster
+representations inside each physical antipodal cell, adds cell measure once
+after marginalization, and normalizes only after a verifier proves that every
+expected unique cell ID is present. Top-K therefore selects physical cells,
+not duplicate raster encodings. Exact omitted mass is retrieval-time only;
+post-refinement masses are explicitly conditional within the retrieved beam.
+
+Every selected cell carries one canonical 12-value continuous state. Discrete
+finite-grid raster transformations are applied to fresh renders and
+marginalized before one shared-weight recurrent update is composed. They are
+not evolved as independently reflected continuous states, because exact
+`x/W,y/H` flips include state-dependent finite-grid centre corrections. The
+initial three-coordinate plane covariance is positive definite but explicitly
+uncalibrated. The raw image is never replaced by the optional outline, and the
+module contains no deformation decoder, checkpoint loader, pretrained feature
+path or legacy-model dependency. Passing source tests establish implementation
+plumbing only; they do not rescue the failed image gate or authorize training.

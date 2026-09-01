@@ -1,0 +1,155 @@
+schema_version: "1.0"
+receipt_id: "arbitrary-plane-image-information-result-2026-09-01"
+date: "2026-09-01"
+status: "development_image_information_gate_fail"
+
+claim_scope: >-
+  Frozen 64-case, model-free synthetic arbitrary-plane finite-bank
+  image-information diagnostic. Exact deformation and visibility are oracle
+  inputs. This is not model training, architecture selection, uncertainty
+  calibration, animal-level validation, a real-histology result, qualification,
+  final-test evaluation, or a benchmark.
+
+decision:
+  gate: "FAIL"
+  atomic_checks_passed: 30
+  atomic_checks_total: 31
+  failed_gate:
+    gate_id: "brush-imperfect-outline-black-exterior-deficit"
+    observed_success_count_deficit: 11
+    required_maximum_success_count_deficit: 6
+  interpretation: >-
+    The exact frozen pixels strongly identify the finite candidate bank when
+    the outline is absent or accurate, but the predeclared paired consistency
+    requirement for imperfect smart-brush masks failed. Smart-brush assistance
+    therefore cannot be assumed harmless, and absent/raw-background input must
+    remain a first-class mode.
+  authorized_next_steps:
+    - >-
+      Continue implementation-only work on the standalone randomly initialized
+      arbitrary-plane retriever, finite-thickness renderer, and recurrent
+      pose/deformation updater without training or promoting a model from this
+      result.
+    - >-
+      Freeze a separate paired mask-mechanism replay before execution, using the
+      same authenticated parents and candidate banks with accurate,
+      morphology-only, jitter/gap/island-only, and full-imperfect masks.
+  not_authorized:
+    - "learned architecture screening or promotion on this result alone"
+    - "assuming that smart-brush preprocessing improves or preserves pose information"
+    - "reusing previous learned weights, features, embeddings, predictions, or pseudolabels"
+    - "benchmark, qualification, uncertainty-calibration, or final-test claims"
+
+repository:
+  branch: "codex/joint-registration"
+  execution_commit: "ed13b2a8696c96c8eeef2434299045cf6b7fc72c"
+  origin_commit_at_execution: "ed13b2a8696c96c8eeef2434299045cf6b7fc72c"
+  preflight: "publication/arbitrary_plane_image_information_preflight.yaml"
+  preflight_checkout_sha256: "73eb7f0fe6bb4f1c80a31001e7366708e71bb273051d9177732b90cc6b0f03ec"
+
+frozen_output:
+  current_directory: "I:/AnatomyTracker/runs/arbitrary_plane_image_information_raw_ed13b2a"
+  previous_storage_directory: "F:/CodexCache/anatomy-tracker-runs/arbitrary_plane_image_information_raw_ed13b2a"
+  storage_migration: >-
+    The complete directory was moved without scientific mutation. A post-move
+    audit rehashed every one of the 514 pre-result files against the inventory
+    embedded in result.json; all paths, sizes, and SHA-256 values matched.
+  file_count_including_result: 515
+  total_bytes_including_result: 66952904
+  pre_result_file_count: 514
+  pre_result_total_bytes: 66832147
+  pre_result_inventory_sha256: "c5532bba21aaf1cda23663d6ae40724e5b8c10183588cd79e0167279c63604c9"
+  result_json_sha256: "c9bcc6b6b30358c237f357caf8d84b170b33a226b6be31769d206e77e7273cc3"
+  result_payload_sha256: "c11b65f2497b15d33857a7990a3728e9608d634d924fb7542ed315433f48d6fc"
+  resolved_config_file_sha256: "fd27fbdf6d1ec1ba901bb4873da27e870d9024a9a35d626d24d74b616f8f028d"
+  resolved_config_payload_sha256: "923bbc2eb1c3517988e9c13b33a98329374cff4dc67d02a67aaa3f24624d88db"
+  global_controls_json_sha256: "b624af97514b1f1504684946a48e814d7d10524e300de05c412452395645d3ed"
+  mutation_policy: "immutable; do not repair, resume, or overwrite in place"
+
+primary_context_mind_results:
+  accurate_outline_black_exterior:
+    top1_successes: 62
+    base_count: 64
+    mean_reciprocal_rank: 0.9817708333333334
+    wilson_95: [0.8930270822904169, 0.9913878616538281]
+  imperfect_outline_black_exterior:
+    top1_successes: 52
+    base_count: 64
+    mean_reciprocal_rank: 0.8811383928571428
+    wilson_95: [0.7002563943589847, 0.8893535682705119]
+  absent_outline_acquired_background:
+    top1_successes: 63
+    base_count: 64
+    mean_reciprocal_rank: 0.9921875
+    wilson_95: [0.9166589839990573, 0.9972364580766624]
+
+failure_diagnosis:
+  failed_base_case_indices: [6, 11, 24, 25, 28, 33, 35, 43, 51, 54, 60]
+  wrong_winner_class: "nearest 100-um offset or 1-degree angle decoy in all 11 cases"
+  imperfect_mask_iou_range: [0.8082, 0.9524]
+  core_pixel_count_range: [2308, 15436]
+  context_pixel_count_range: [7591, 35264]
+  descriptive_recovery:
+    support_penalized_context_mind: "11 of 11"
+    core_mind: "6 of 11"
+    context_hog: "3 of 11"
+    context_ngf: "3 of 11"
+  descriptive_support_finding: >-
+    The truth exterior deficit was zero, whereas wrong winners omitted between
+    0.21 and 8.52 percent of tissue support. Support-penalized MIND recovered all
+    11 failures, but it is descriptive and non-gating because it uses
+    privileged candidate support.
+  descriptor_specificity: >-
+    HOG and NGF diagnostics showed the same outline-mode effect, so the failure
+    is not specific to MIND.
+  localization_limit: >-
+    Adequate mask sizes and failures spanning orientation, appearance, and
+    damage strata make context/candidate-support handling the leading follow-up
+    mechanism. This is diagnostic localization, not causal proof or a
+    retroactive rescue of the failed gate.
+
+shuffled_context_controls:
+  accurate_outline_black_exterior_top1: "0 of 64"
+  imperfect_outline_black_exterior_top1: "0 of 64"
+  absent_outline_acquired_background_top1: "0 of 64"
+
+verification:
+  completed_tree_static_audit:
+    result: "PASS"
+    method: >-
+      Rehash all 514 inventory-bound files after migration and require exact
+      path, byte-count, and SHA-256 equality, plus the separate result.json hash.
+    mismatches: 0
+  separate_public_full_scientific_replay:
+    result: "INCOMPLETE"
+    reason: >-
+      The operator interrupted the replay during repeated MIND landscape
+      scoring after pathological runtime and no progress output. The traceback
+      showed active descriptor computation rather than a scientific exception.
+    consequence: >-
+      Do not claim that the separate exhaustive verifier passed. The frozen
+      FAIL is retained conservatively and is not promoted; static integrity is
+      established, but full independent scientific replay remains incomplete.
+
+independence:
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  legacy_descriptor_dependencies: []
+  model_training: false
+
+data_access:
+  allen_template_and_annotation: true
+  synthetic_development: true
+  deepslice_ground_truth: false
+  real_lab_histology: false
+  calibration_animals: false
+  qualification_animals: false
+  final_test_animals: false
+  full_benchmark: false
+
+future_validation_guards:
+  split_unit: "animal, never slice"
+  untouched_final_test_animals: true
+  preserve_ids: ["animal_id", "specimen_id", "experiment_id"]
+  probabilistic_pose_calibration_deferred_until_method_stabilizes: true

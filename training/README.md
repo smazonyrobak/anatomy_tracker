@@ -68,12 +68,25 @@ additional 100-seed fixture smoke with no failures. This establishes its narrow
 engineering contract, not realism or model performance. All numeric ranges and
 development mixtures remain engineering defaults pending a seed-hidden montage
 audit. The checks use synthetic train/development fixtures only; they do not
-authorize full benchmarking or access to final-test animals. The next
-scientific gate is the small arbitrary-plane oracle pose-ranking premise. A
-separate positive-Jacobian non-SVF holdout remains required before broad model
-claims to test for generator/decoder parameterization matching.
+authorize full benchmarking or access to final-test animals. The semantic
+arbitrary-plane oracle subsequently passed, but the 64-case model-free
+image-information pilot failed its imperfect-outline consistency gate: context
+MIND top-1 was 63/64 absent, 62/64 accurate and 52/64 imperfect. The standalone
+probabilistic retriever and recurrent pose updater may therefore be implemented
+and source-tested, but learned screening remains unauthorized until a separate
+paired mask-mechanism contract is frozen. A separate positive-Jacobian non-SVF
+holdout also remains required before broad model claims to test for
+generator/decoder parameterization matching.
 The model-free oracle protocol is predeclared in
 [`../publication/arbitrary_plane_oracle_pose_ranking_preflight.yaml`](../publication/arbitrary_plane_oracle_pose_ranking_preflight.yaml).
+
+`arbitrary_plane_recurrent_model.py` is the current untrained implementation
+scaffold. It keeps one canonical continuous state per physical cell, derives
+and marginalizes declared raster nuisance representations at every render,
+normalizes only a verifier-complete catalogue, and rerenders after each shared
+recurrent update. Its initial three-coordinate covariance is uncalibrated, its
+post-refinement masses are conditional within top-K, and it intentionally has
+no deformation decoder or checkpoint-loading path.
 
 Future real validation remains strictly animal-split, with untouched final-test
 animals. Allen/synthetic data are for development; the DeepSlice Ground Truth

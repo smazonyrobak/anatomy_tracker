@@ -2,7 +2,7 @@
 
 ## Status
 
-**Arbitrary-plane geometry and manifest prototyping is active; not qualified or released.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. The first joint implementation inherited both architectures and weights and is retained only as legacy-seeded diagnostic evidence. The release candidate will be trained from random initialization, must cover every brain-intersecting plane, and remains unselected until matched architecture screening, multiseed qualification, harmonized comparators, export parity and GUI validation pass. Measured evidence is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
+**Standalone arbitrary-plane implementation is active; untrained, unqualified and unreleased.** The deployed repository at baseline commit `c6681039e0b7acf35c9cdbee43040a3dca29cdab` contains separate AtlasPose and dense-registration candidates. The first joint implementation inherited both architectures and weights and is retained only as legacy-seeded diagnostic evidence. The new path has fresh geometry, generator, finite-thickness renderer and pose-only recurrent retrieval plumbing with no learned dependency on those systems. Its frozen image-information pilot failed the imperfect-outline consistency gate, so no learned architecture has been selected or screened. A release candidate must start randomly, cover every brain-intersecting plane, and pass later animal-split qualification, harmonized comparators, export parity and GUI validation. Measured evidence is recorded in [`docs/publication/BASELINE_LEDGER.md`](docs/publication/BASELINE_LEDGER.md).
 
 ## Intended use
 
@@ -21,14 +21,17 @@ The model family remains unselected. The current geometry candidate uses a
 continuous 6-D right-handed 3-D frame, QuickNII span centre and a constrained
 positive-diagonal 2-D basis for scale/anisotropy/shear, with exact O/U/V
 conversion and a differentiable arbitrary-plane atlas renderer using official
-`x/W,y/H` raster indices. A tractable posterior over antipodal plane normal and
-physical offset is planned, but is not yet implemented or calibrated; it must
-preserve point-estimate accuracy. A recurrent
-correlation or attention refiner is considered only after the revised features
-and candidates pass a small arbitrary-plane premise test. Global pose and local
+`x/W,y/H` raster indices. An untrained scaffold now marginalizes declared
+raster representations inside physical antipodal cells, verifies complete
+catalogue coverage before normalization, predicts an initial local covariance
+over two normal-tangent coordinates plus normal offset, and applies
+shared-weight recurrent full-frame updates. Its exact omitted mass is
+retrieval-time only; refined masses are conditional within the retrieved beam,
+and all probabilities remain uncalibrated. Global pose and local
 deformation remain separate so nonlinear warping cannot freely hide a wrong
-atlas section. No previous trained weights initialize a release-eligible
-candidate. See [`docs/publication/ARCHITECTURE.md`](docs/publication/ARCHITECTURE.md).
+atlas section; the current scaffold has no deformation decoder. No previous
+trained weights initialize a release-eligible candidate. See
+[`docs/publication/ARCHITECTURE.md`](docs/publication/ARCHITECTURE.md).
 
 ## Inputs
 
@@ -44,8 +47,8 @@ The initial public coordinate contract is documented in [`docs/publication/COORD
 - QuickNII O/U/V and a constrained full 3-D slice frame;
 - AP/L--R/D--V values only as derived legacy outputs when the coronal chart is well-conditioned;
 - forward atlas-to-histology and inverse histology-to-atlas maps;
-- a point pose and, once implemented, candidate-posterior/local-covariance
-  outputs for animal-held-out calibration;
+- a point pose plus implementation-stage cell masses and initial local
+  covariance, all explicitly uncalibrated pending animal-held-out calibration;
 - compatibility and a monotone risk score for ranking/abstention analysis;
 - intermediate recurrent states and audit metadata.
 

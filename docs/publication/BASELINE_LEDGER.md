@@ -985,3 +985,45 @@ and revised features/candidates before any recurrent model is built. Exact
 source, config, training, qualification, receipt, artifact and audit hashes are
 recorded in `publication/atlas_pair_topology_diagnostic.yaml`; the frozen v2
 sources and run artifacts remain unchanged.
+
+### Arbitrary-plane image-information diagnostic
+
+The frozen 64-case, 40-candidate model-free image-information diagnostic ran
+from pushed commit `ed13b2a8696c96c8eeef2434299045cf6b7fc72c`. Context MIND
+selected the exact candidate in `63 / 64` absent-outline/raw-background cases,
+`62 / 64` accurate-outline/black-exterior cases, and `52 / 64`
+imperfect-outline/black-exterior cases. Thirty of 31 atomic checks passed. The
+sole failure was the predeclared imperfect-outline deficit: 11 successes were
+lost relative to the absent-outline mode, exceeding the allowed six. The
+terminal decision is therefore `FAIL`.
+
+All 11 wrong winners were the nearest 100-um offset or 1-degree angle decoy.
+Support-penalized context MIND descriptively restored all 11, while core MIND
+restored six and context HOG/NGF restored three each. Adequate mask sizes,
+IoU `0.8082--0.9524`, and failures spanning orientations, appearances and
+damage strata localize the follow-up hypothesis to context/candidate-support
+handling. This is not causal proof or a retroactive gate rescue. The correct
+response is to keep raw/no-brush input mandatory and freeze a paired
+mask-mechanism replay that separates morphology loss from jitter, gaps and
+islands.
+
+The immutable output now resides at
+`I:/AnatomyTracker/runs/arbitrary_plane_image_information_raw_ed13b2a`.
+Post-move auditing matched every one of the 514 pre-result files to the embedded
+path, size and SHA-256 inventory; with `result.json`, the tree contains 515
+files and 66,952,904 bytes. The result file SHA-256 is
+`c9bcc6b6b30358c237f357caf8d84b170b33a226b6be31769d206e77e7273cc3`.
+The separate exhaustive public replay was manually interrupted during repeated
+MIND landscape scoring after pathological runtime and no progress output, so
+it is explicitly not reported as passing. The static integrity audit supports
+preserving the negative gate, not promoting it.
+
+This result used only Allen/synthetic development data and no learned weights,
+prior-model features, pseudolabels, DeepSlice Ground Truth, real-lab histology,
+qualification animals or final-test animals. It is not a benchmark, accuracy
+claim, uncertainty-calibration result or authorization for learned screening.
+Implementation-only work may continue on the standalone probabilistic
+arbitrary-plane retriever, finite-thickness renderer and recurrent
+pose/deformation updater. Exact metrics, hashes, scope guards and the verifier
+limitation are recorded in
+`publication/arbitrary_plane_image_information_result.yaml`.

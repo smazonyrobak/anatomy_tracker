@@ -49,8 +49,13 @@ Sample the reference plane distribution with equal-area antipodal normals,
 uniform in-plane roll and uniform valid annotation-support offset; keep named
 tiny-support and tangent-plane stress strata separate. Perturb normals by
 geodesic angle and offsets in physical distance, then test whether candidate
-features rank the true plane. Failure prevents recurrence and prevents
-describing warp residual as pose confidence.
+features rank the true plane. Failure prevents learned recurrence screening
+and prevents describing warp residual as pose confidence. A failed image-information gate
+blocks learned recurrent screening, but does not block implementation-only
+source work on the randomly initialized retriever, renderer and updater. The
+2026-09-01 image pilot failed only its imperfect-outline consistency gate
+(`52/64` imperfect versus `63/64` absent and `62/64` accurate); a separately
+frozen paired mask-mechanism test is required before Stage 2 begins.
 
 ## Stage 2: 20k--50k controlled experiments
 
