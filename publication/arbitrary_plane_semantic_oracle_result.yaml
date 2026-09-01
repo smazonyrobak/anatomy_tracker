@@ -1,0 +1,309 @@
+schema_version: "1.0"
+receipt_id: "arbitrary-plane-semantic-oracle-result-2026-09-01"
+date: "2026-09-01"
+status: "development_semantic_premise_go"
+claim_scope: >-
+  Result of the frozen 64-case, model-free arbitrary-plane semantic
+  pose-ranking development gate. This tests whether exact Allen annotation
+  content can discriminate a finite bank of normal, offset and roll
+  perturbations when deformation and visibility are known. It is not evidence
+  that histological image appearance contains recoverable pose information,
+  model training, architecture selection, uncertainty calibration, a real-data
+  benchmark, qualification or final-test evaluation.
+
+decision:
+  gate: "PASS"
+  supported: >-
+    The arbitrary-plane physical representation, fixed-canvas candidate
+    transport and Allen-label semantic premise cleared their predeclared gate
+    across near-AP, near-DV, near-ML and general-oblique development strata.
+  authorized_next_step: >-
+    Freeze and run a separate small image-information pose-ranking pilot before
+    screening a fresh randomly initialized joint pose/deformation model.
+  not_authorized:
+    - "claiming that synthetic or real image appearance supports pose recovery"
+    - "selecting an architecture from this semantic result"
+    - "training or reusing any previous learned model"
+    - "uncertainty-calibration, benchmark, qualification or final-test claims"
+
+repository:
+  branch: "codex/joint-registration"
+  source_commit: "27c4ba644c7b75ab6f676d944e917811df961b05"
+  source_commit_subject: "Clamp semantic oracle scores to their theoretical range"
+  upstream: "origin/codex/joint-registration"
+  pushed_before_execution: true
+  upstream_equal_before_execution: true
+  worktree_clean_before_execution: true
+  preflight: "publication/arbitrary_plane_oracle_pose_ranking_preflight.yaml"
+  preflight_sha256: "028e7cebf6dfa0535d9324b04351aba994f067dec0c5910f071f042c3ca8ac52"
+  bound_source_sha256:
+    training/run_arbitrary_plane_semantic_oracle.py: "6c631fc0ebf99bd8b6b905e295d39ab060d0ffbd16c786c6f567dbc4520006e4"
+    training/arbitrary_plane_semantic_oracle.py: "4297e78a8a21785b570ad652af992d12363033ae3cc7dff324c549037e7aaf58"
+    training/arbitrary_plane_finite_candidates.py: "b34b7329896e663a25f510e58bf97d4e903b8f2bf1ec2248f4d2abfbabcacb86"
+    training/arbitrary_plane_synthetic_generator.py: "1c71cab6ffbd861fbc9246b3c8003eefe2cf3aeb0a456eac8cacb556dd285561"
+    training/arbitrary_plane_rendered_generator.py: "4050834dd24676bfa08350b2b290133d0ccbc3cee7b54ce91e581297f0bfa0ea"
+
+frozen_output:
+  directory: "build/arbitrary_plane_semantic_oracle_raw_27c4ba6"
+  file_count: 514
+  total_bytes: 63939690
+  audit_inventory_sha256: "3c611f6296e950e7c1b3582e55268838e1922c595775b0217d697d8350191cd3"
+  result_json_sha256: "dee90febea4faf9a8ae92c27eea7907cf0ecdc27e6a7e7be19e59023df29794a"
+  result_payload_sha256: "d60703b5d04cbc58e9e0060f020e82c43699c4c686bffc26171a44ea7ba90ad8"
+  resolved_config_file_sha256: "453f961f771a2c7b0608a87de5110fcb7e64551ff3fb1e10abd8c53e99bcde6a"
+  resolved_config_payload_sha256: "72312591a83e6c6250399017bb093fb323ff12b6ed745b2baba19704f94fe9b2"
+  support_index_sha256: "0f6d8325ff1aa1965b28e4c5edb1327ae58129a78fe41d6f2ccf1896f449f65c"
+  prepared_render_context_sha256: "04c387c1a778bfd0962cea972047b5eadc84f8cd2bce92ff74e9656f0af63b47"
+  prepared_candidate_annotation_context_sha256: "9e7e241b1b72bee571dffad53ea817d8221564c5827837f053490d29370eed88"
+  mutation_policy: "immutable; no resume or repair in place"
+
+atlas_sources:
+  atlas: "Allen CCFv3 2017 25 um"
+  template_path: "data/Allen Brain Atlas 25um/average_template_25.nrrd"
+  template_raw_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+  annotation_path: "data/Allen Brain Atlas 25um/annotation_25.nrrd"
+  annotation_raw_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+
+environment:
+  python: "3.11.15, Anaconda build"
+  numpy: "2.4.4"
+  scipy: "1.17.1"
+  torch: "2.11.0+cu128"
+  pynrrd: "1.1.3"
+
+independence:
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  model_training: false
+  initialization: "deterministic case and candidate random streams only"
+  animal_id: null
+  specimen_id: null
+  experiment_id: null
+
+verification:
+  pre_execution_regression: "181 passed"
+  mandatory_in_run_write_then_verify: "PASS"
+  separate_public_post_exit_verification:
+    result: "PASS"
+    method: >-
+      Reload the frozen tree, rebuild the authenticated Allen support index from
+      the raw hash-checked annotation, independently regenerate all 64 cases and
+      40-candidate banks, replay 5,120 primary and shuffled RP2 transports, and
+      recompute every score, ranking, physical error, control and gate.
+  aggregate_and_control_file_checks: "645 of 645 passed"
+  independent_artifact_audit: "PASS; no P1 or P2 findings"
+  independent_scientific_audit: "PASS; no P1 finding"
+  exact_controls:
+    candidate_order_permutation_equivariance:
+      passed: true
+      evidence_receipt_sha256: "a11fd31e27b94c0d3aff9b6f5cc9c427baa6e4bfa7f1d381444d54cad58ac5f1"
+    exact_replay:
+      passed: true
+      evidence_receipt_sha256: "64147207f5fa2c581dea7ff96379a11372ab3a7ba09b15945a3f76f684d5c4bb"
+    rp2_sign_equivalence:
+      passed: true
+      evidence_receipt_sha256: "ac6e22f07382fc207a9b2a0899ecea240c6bafb428c05f2733d0fb78a5a0423f"
+    truth_metadata_coordinate_channel_exclusion:
+      passed: true
+      evidence_receipt_sha256: "091fc8fc48c0f53b3cfece912e4a5452ca9406eb8fd27457d211d9fd97aa8a10"
+    xy_over_wh_coordinate_contract:
+      passed: true
+      evidence_receipt_sha256: "1aa0255b2fea51f7e31b8b08b0709a5330534ed1343a6a975731fbea8ce0f2af"
+
+primary_result:
+  statistical_unit: "base synthetic plane realization"
+  base_count: 64
+  candidates_per_case: 40
+  top1_successes: 64
+  top1_rate: 1.0
+  top1_wilson_95: [0.9433759402071946, 1.0]
+  mean_reciprocal_rank: 1.0
+  median_true_rank: 1.0
+  median_true_versus_decoy_win_fraction: 1.0
+  truth_score:
+    minimum: 0.9948290838135563
+    median: 0.9990645218844092
+    maximum: 1.0
+  truth_score_margin:
+    minimum: 0.02195904984198327
+    median: 0.04801042876301587
+    maximum: 0.16428680785583993
+  hardest_decoy_class:
+    normal_angle_only: 64
+  selected_pose_errors:
+    rp2_normal_angle_deg: 0.0
+    sign_aligned_offset_um: 0.0
+    corresponding_point_rms_um: 0.0
+    corresponding_point_p95_um: 0.0
+    interpretation: "all selected candidates were the exact truth candidate"
+  ablations:
+    raw_ID_agreement:
+      unique_truth_top1: "64 of 64"
+      median_truth_margin: 0.12575
+    mask_only_Dice:
+      unique_truth_top1: "55 of 64"
+      top1_rate: 0.859375
+      median_truth_margin: 0.00156
+    interpretation: >-
+      Silhouette alone carries pose information in this synthetic setting, but
+      regional identity separates the frozen candidates much more clearly.
+
+orientation_strata:
+  near_AP: {count: 12, top1_rate: 1.0}
+  near_DV: {count: 12, top1_rate: 1.0}
+  near_ML: {count: 12, top1_rate: 1.0}
+  general_oblique: {count: 28, top1_rate: 1.0}
+
+shuffled_target_negative_control:
+  mapping: "target case (i+17) modulo 64"
+  original_truth_top1_rate: 0.0
+  original_truth_mean_reciprocal_rank: 0.05828697526629126
+  rank_minimum: 4
+  rank_median: 21
+  rank_maximum: 40
+  note: >-
+    Case 20 is a 40-way tie under the predeclared absolute 1e-12 tolerance;
+    therefore its original truth is not top-1 and its conservative rank is 40.
+
+case_generation:
+  output_shape_h_w: [192, 256]
+  accepted_attempt_index:
+    minimum: 0
+    median: 1
+    mean: 4.828125
+    maximum: 28
+  rejected_attempts:
+    total: 309
+    orientation_stratum: 302
+    finite_parent: 4
+    finite_candidate_bank: 3
+    synthetic_eligibility: 0
+  fixed_valid_pixel_count:
+    minimum: 1565
+    median: 14564
+    maximum: 25743
+  parent_brain_pixel_count:
+    minimum: 1675
+    median: 14585
+    maximum: 26231
+  appearance_family_counts:
+    identity: 9
+    label-conditioned: 10
+    template-derived: 33
+    template-label-mixture: 12
+  damage_event_count_distribution: {0: 37, 1: 21, 2: 6}
+  damage_event_type_counts:
+    blackout-or-occluding-polygon: 6
+    boundary-bite-or-missing-cortex: 3
+    fold-like-bright-or-doubled-strip: 8
+    internal-hole: 6
+    tear-or-crack: 10
+  damage_union_fraction:
+    minimum: 0.0
+    median: 0.004310451184181915
+    maximum: 0.1608860390556689
+  paired_outline_descendants:
+    modes_per_case:
+      - "accurate-outline-black-exterior"
+      - "imperfect-outline-black-exterior"
+      - "absent-outline-acquired-background"
+    count_per_mode: 64
+    semantic_invariance: "PASS"
+    interpretation: >-
+      Smart-brush input remains optional. The semantic gate cannot estimate its
+      effect because the exact labels and geometry are shared across the three
+      paired image descendants; the image-information pilot must compare them.
+
+all_predeclared_gates:
+  exact_controls: true
+  shuffled_top1: true
+  shuffled_mrr: true
+  primary_top1_rate: true
+  primary_top1_wilson_lower: true
+  median_true_rank: true
+  median_win_fraction: true
+  orientation_rates: true
+
+development_audit_trail:
+  - source_commit: "73c82ca"
+    output: "build/arbitrary_plane_semantic_oracle_raw"
+    state: "one resolved config file; no cases and no result"
+    finding: >-
+      The candidate generator compared an externally bound source commit with a
+      legacy implicit null. Execution stopped before case zero. Commit identity
+      was then threaded explicitly; the directory was not resumed.
+  - source_commit: "c492957"
+    output: "build/arbitrary_plane_semantic_oracle_raw_c492957"
+    state: "one resolved config file; no cases and no result"
+    finding: >-
+      The same implicit-null source-commit defect remained in the synthetic
+      generator. It was corrected systematically and the directory was not
+      resumed.
+  - source_commit: "4a53a30"
+    output: "build/arbitrary_plane_semantic_oracle_raw_4a53a30"
+    state: "immutable 513-file pre-result tree; no result.json"
+    finding: >-
+      All 64 cases and 320 control sidecars passed, but the final score-domain
+      gate rejected semantic truth scores of 1.0000000000000002 in cases 31,
+      36 and 42. The theoretically bounded score families were clamped at the
+      scorer boundary and a fresh run was started under commit 27c4ba6.
+development_audit_trail_interpretation: >-
+  These were fail-closed implementation findings, not altered scientific
+  thresholds or post-hoc changes to the predeclared gate.
+
+scientific_interpretation:
+  supported_statement: >-
+    Within this finite perturbation bank and exact deformation/visibility
+    oracle, Allen annotation structure uniquely identifies the true physical
+    arbitrary plane in all 64 synthetic development cases. The negative
+    control and exact replay checks argue against target-independent truth
+    preference, candidate-order leakage or coordinate-metadata leakage.
+  limitations:
+    - "Only 64 synthetic development realizations were used."
+    - "The scorer sees exact categorical anatomy, not raw histological pixels."
+    - "The candidate bank is finite; it does not prove global continuous-pose identifiability."
+    - "Exact deformation and visibility are supplied to the oracle."
+    - "No animal-level, public, external-lab or blinded-expert validation occurred."
+    - "No learned point estimate or calibrated probability distribution was evaluated."
+
+data_access:
+  allen_template_and_annotation: true
+  synthetic_development: true
+  deepslice_ground_truth: false
+  real_lab_histology: false
+  calibration_animals: false
+  qualification_animals: false
+  final_test_animals: false
+  full_benchmark: false
+
+next_step_constraints:
+  image_information_pilot: >-
+    Predeclare exact masks, normalization, structural descriptors, candidate
+    scoring, gates and paired outline comparisons before inspecting scores.
+  learned_model_after_pilot: >-
+    If image information is adequate, build a standalone randomly initialized
+    arbitrary-plane joint pose/deformation method. Treat coarse-to-fine and
+    recurrent designs as candidates, not inherited commitments, and do not use
+    old checkpoints, learned features, pseudolabels or prior-model outputs.
+  probabilistic_outputs: >-
+    Preserve the later plan for calibrated plane/AP/tilt and deformation
+    uncertainty, credible trajectory volumes and probabilistic region
+    assignments, conditional on no material loss of point-estimate accuracy.
+
+future_validation_plan_preserved:
+  split_unit: "animal, never slice"
+  untouched_final_test_animals_required: true
+  development_data: "Allen and synthetic"
+  public_benchmark: "DeepSlice Ground Truth dataset DOI 10.25949/22802411"
+  external_validation: "separate real lab histology, ideally laboratory-held-out"
+  comparators: "DeepSlice and relevant expert-assisted tools under matched conditions"
+  reference: "blinded expert alignments"
+  primary_metric: "physical anatomical landmark registration error"
+  secondary_metrics: ["plane/angle error", "regional overlap", "failure rate", "correction time"]
+  reporting: "animal-level effect sizes with 95% confidence intervals"
+  reproducibility: "save exact splits, code, configs, seeds and raw predictions"
+  uncertainty_calibration: >-
+    On unseen animals, test nominal credible-interval coverage, including
+    whether 90% intervals contain references approximately 90% of the time,
+    and verify that probabilistic modelling does not reduce point accuracy.
