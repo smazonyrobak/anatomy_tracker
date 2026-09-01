@@ -87,6 +87,8 @@ def test_semantic_truth_ranks_first_and_ablation_scores_share_fixed_denominator(
     assert result["mask_dice"][1] == 1.0
     assert result["semantic_score"][1] == pytest.approx(1.0)
     assert result["semantic_score"][1] > result["semantic_score"][0] > result["semantic_score"][2]
+    for key in ("semantic_score", "raw_id_agreement", "mask_dice"):
+        assert np.all((result[key] >= 0.0) & (result[key] <= 1.0))
 
 
 def test_invalid_labels_are_zeroed_before_smoothing_and_cannot_leak_into_score():

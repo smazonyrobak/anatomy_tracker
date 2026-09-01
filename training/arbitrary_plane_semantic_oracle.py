@@ -167,9 +167,11 @@ def score_semantic_candidates(
             )
         )
     return {
-        "semantic_score": semantic_sums / len(channel_ids),
-        "raw_id_agreement": np.asarray(raw_id_agreement, dtype=np.float64),
-        "mask_dice": np.asarray(mask_dice, dtype=np.float64),
+        "semantic_score": np.clip(semantic_sums / len(channel_ids), 0.0, 1.0),
+        "raw_id_agreement": np.clip(
+            np.asarray(raw_id_agreement, dtype=np.float64), 0.0, 1.0
+        ),
+        "mask_dice": np.clip(np.asarray(mask_dice, dtype=np.float64), 0.0, 1.0),
         "target_large_region_ids": large_ids.astype(np.int64),
         "target_small_region_ids": small_ids.astype(np.int64),
         "channel_count": int(len(large_ids) + bool(len(small_ids))),
