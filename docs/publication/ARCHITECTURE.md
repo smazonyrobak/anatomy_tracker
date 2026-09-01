@@ -9,15 +9,19 @@ Those systems remain frozen comparators only. The first warm-start joint
 implementation is retained as a systems prototype and development baseline;
 it is ineligible for final architecture selection.
 
-The leading hypothesis is a compact recurrent correlation pyramid. A shallow
-histology stem produces reusable multiscale structural features and a coarse
-probabilistic full 3-D plane-frame/O/U/V pose. The current CCF plane is rendered, encoded in
-the same learned structural space, and compared with the slice through local
-multiscale cost volumes. A real shared-weight ConvGRU state then emits a pose
-increment, in-plane similarity increment, compatibility energy, matchability
-mask and residual stationary velocity field. Updating the pose causes a fresh
-atlas render before the next iteration. Global plane pose and bounded local
-deformation remain explicit even though they are optimized jointly.
+The leading hypothesis is a compact atlas-conditioned recurrent correlation
+pyramid. A small random-initialized 2-D FPN produces reusable histology
+features. A small random-initialized 3-D FPN produces a multiscale Allen feature
+volume that is cached after training. A proposal head returns `K=4--8`
+probabilistic full-plane hypotheses rather than one forced answer. Atlas feature
+planes are differentiably resliced only around those hypotheses and compared
+with the section through local multiscale cost volumes. A shared-weight ConvGRU
+then emits a pose increment, in-plane similarity increment, compatibility
+energy and matchability mask. The first one or two iterations are pose-only;
+only after the pose is inside the local capture range may later iterations emit
+a strongly constrained residual deformation. Updating the pose causes a fresh
+atlas-feature reslice before the next iteration. Global plane pose and bounded
+local deformation remain explicit even though they are optimized jointly.
 
 Deployment uses three ONNX entry graphs exported from that same checkpoint: a
 source initializer/encoder, a cached coarse candidate scorer, and a final dense
@@ -28,6 +32,10 @@ A deterministic host-side CCF renderer runs between calls. These are entry
 points into one learned model, not separately trained models. The split avoids
 re-encoding the same section or integrating unused deformation fields for every
 wrong-plane candidate.
+
+The cached atlas feature pyramid is a deterministic derived asset bound to the
+same checkpoint and atlas hashes and is rebuilt whenever either changes; it is
+not a pretrained or separately optimized dependency.
 
 The design is provisional until the matched cold-start architecture screen is
 complete. This document defines the leading hypothesis, not a completed or
@@ -40,7 +48,7 @@ Inputs:
 - grayscale histology section in the orientation selected by the user;
 - optional tissue outline, obtained automatically in automatic mode or supplied by the smart brush in assisted mode;
 - an explicit outline-availability indicator, so absence of a mask is not confused with a section that fills the canvas;
-- differentiably rendered Allen CCF template/annotation planes at the current pose;
+- differentiably resliced Allen CCF feature/template/annotation planes at the current pose;
 - recurrent state from the preceding refinement step.
 
 Outputs:
@@ -59,7 +67,7 @@ Outputs:
 1. Canonicalize the histology view and predict an initial atlas-plane distribution.
 2. Render the CCF plane at the current pose.
 3. Preserve full-plane metric geometry, encode the rendered atlas and histology pair, and construct multiscale correlations/cost volumes.
-4. Predict a residual pose update and compatibility energy from registration features while also predicting in-plane similarity and a stationary velocity field.
+4. Predict a residual pose update and compatibility energy. Keep deformation disabled for the initial pose-only iterations; later iterations may also predict in-plane similarity and a stationary velocity field.
 5. Apply the pose update, re-render the atlas plane and repeat with the same refinement weights.
 6. After the final pose update, render once more and run registration again so the returned coordinate maps are bound to the final pose rather than the preceding iteration.
 7. Return the best scored pose and its forward/inverse coordinate maps.
@@ -137,7 +145,28 @@ consistent with SynthMorph's broader acquisition-agnostic design principle.
 
 ## Deformation representation
 
-The dense branch predicts a stationary velocity field on a coarse-to-fine pyramid. Scaling-and-squaring integration produces approximately diffeomorphic forward and inverse maps. Training supervises exact synthetic flow where available and adds inverse consistency, regional/boundary agreement, smoothness and Jacobian constraints. Missing or torn pixels are excluded from correspondence loss rather than hallucinated.
+Synthetic truth separates animal anatomy from slide processing. A shared
+animal-level 3-D diffeomorphism maps a flat physical section in a pseudo-animal
+to a mildly curved surface in atlas coordinates. Its best-fit O/U/V plane is the
+global target and the residual 3-D coordinate map is deformation supervision.
+A second, section-specific affine-free 2-D stationary velocity field models
+mounting and handling. The network initially predicts only the 2-D in-plane
+field; a very smooth normal-displacement branch is admitted only if a matched
+ablation shows that it improves physical correspondence without absorbing pose
+error.
+
+Scaling-and-squaring integrates forward and inverse maps. Training supervises
+the exact synthetic atlas-coordinate map and adds inverse consistency,
+regional/boundary agreement, smoothness and Jacobian constraints. Affine
+content is removed from the local field. Missing and torn pixels have no
+correspondence; folds can be multi-valued. They remain visible for robust pose
+and uncertainty training but are excluded from smooth-deformation loss.
+
+This hierarchy follows the generative separation of shape, slice position,
+contrast and non-reference signal in
+[Tward et al. (2025)](https://doi.org/10.1038/s41467-025-65317-7). It replaces
+the earlier simplifying assumption that all biological variation can be added
+as a 2-D warp after atlas slicing.
 
 ## Compatibility and feedback
 
@@ -279,6 +308,16 @@ estimates remain explicit, and the probabilistic head is retained only if it
 does not reduce their accuracy. On unseen animals, credible spatial volumes
 will be checked for nominal coverage before their uncertainty can propagate to
 electrode trajectories or region assignments.
+
+Each of the initial `K=4--8` components carries a finite-frame/O/U/V mean, a
+positive-definite local tangent-space covariance, mixture mass and a discrete
+reflection probability. Training marginalizes the exact equivalent raster
+representations rather than selecting an arbitrary normal sign or encoding an
+improper reflection as a rotation. Physical O/U/V anchor loss remains alongside
+mixture likelihood and candidate-ranking loss so uncertainty cannot improve by
+sacrificing the point estimate. A small independent deep ensemble is considered
+only after the single-model posterior is stable; calibration is fitted later on
+held-out animals.
 
 The antipodal representation applies to an unoriented infinite plane:
 `(n,d)` and `(-n,-d)` are one object, so normal and signed offset are never

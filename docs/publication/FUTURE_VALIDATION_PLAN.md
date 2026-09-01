@@ -10,6 +10,8 @@ execute it, but must not repeatedly inspect final-test animals.
   identifiers in every manifest, prediction and exclusion record.
 - Split by animal before any view generation. Augmented descendants and serial
   sections from one animal stay in one split.
+- Treat all sections and views sharing one synthetic 3-D animal warp as one
+  pseudo-animal group; never split synthetic descendants by slice.
 - Freeze untouched final-test animals after architecture, losses, thresholds
   and calibration methods are selected.
 - Use Allen/CCF-derived synthetic views and eligible Allen sections for

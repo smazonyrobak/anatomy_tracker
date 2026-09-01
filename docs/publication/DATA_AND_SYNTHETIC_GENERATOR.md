@@ -31,19 +31,68 @@ for animal grouping. Hash-based audits reject duplicate or near-duplicate
 images across splits. Laboratory-held-out and acquisition-held-out subsets are
 separately identified.
 
+Synthetic data use the same grouping rule. Every view from one sampled 3-D
+anatomical warp receives one immutable `synthetic_animal_id`; all blocks,
+sections, channels, crops, brush descendants and augmentations from that warp
+remain in one split. A `synthetic_block_id`, monotonic `section_index`, physical
+section spacing and shared block frame are retained so sequence-aware methods
+can be evaluated without allowing related slices to leak across splits.
+
+## Hierarchical pseudo-animal geometry
+
+The release-eligible generator uses this causal order:
+
+1. sample one low-frequency 3-D diffeomorphism for a pseudo-animal;
+2. define a flat arbitrary physical plane and finite optical support in that
+   pseudo-animal's space;
+3. map all axial/raster samples through the inverse animal transform into Allen
+   coordinates and sample template and integer annotations there;
+4. save the exact atlas-coordinate map, its best-fit finite O/U/V plane and the
+   residual 3-D deformation about that plane;
+5. apply section-specific affine-free 2-D processing deformation;
+6. apply non-invertible damage geometry, then crop/window;
+7. synthesize modality/appearance/background, optional smart-brush descendants
+   and the final explicit raster reflection.
+
+This ordering is based on the generative diffeomorphic mouse-brain framework of
+[Tward et al.](https://doi.org/10.1038/s41467-025-65317-7). A physical plane in
+an individual brain generally maps to a mildly curved surface in atlas space;
+adding only a 2-D warp after slicing the atlas would conflate biological shape
+with slide processing. The implementation may evaluate the shared 3-D field at
+requested section points rather than materializing a warped full-resolution
+volume, but the exact field identity and sampled coordinate maps remain bound.
+
+The current v2 centre/slab implementation is therefore an identity-anatomy
+acquisition and quadrature precursor. Its any-plane geometry and finite-depth
+operator remain useful, but it is not yet the complete pseudo-animal generator
+and cannot issue the final `synthetic_realization_id`.
+
+Initial animal-warp bounds are explicit engineering priors, not claimed
+population estimates: global scale `0.80--1.25`, low-frequency local Jacobian
+determinant approximately `0.5--2`, and a separate stress stratum outside the
+ordinary envelope. Individual variation often exceeded processing effects in
+the Tward cohort, while local length-scale changes approached `1.25x`; exact
+training bounds remain versioned and must later be checked against real
+histology.
+
 ## Unified synthetic sample contract
 
 Each generated sample records:
 
 - generator/version and manifest hashes;
 - source atlas/data hashes;
+- `synthetic_animal_id`, block/sequence ID, section index and all hierarchical
+  seeds;
+- subject-space plane/frame, animal-level 3-D warp and exact inverse
+  atlas-coordinate raster;
 - constrained full 3-D centre/frame/basis pose and exact QuickNII O/U/V, with
   AP/L--R/D--V only as a derived coronal compatibility view;
 - in-plane rotation, scale and translation;
 - fixed template, fixed labels and brain mask;
 - moving grayscale section and pre-artifact image;
 - exact forward/inverse maps and stationary velocity when applicable;
-- visible, damaged and missing-tissue masks;
+- animal/section Jacobian summaries plus valid-correspondence, fold, visible,
+  damaged and missing-tissue masks;
 - model-input outline, outline-availability flag, outline perturbation and masking mode;
 - artifact types, parameters and severity;
 - positive plane and prespecified wrong-plane candidates.
@@ -154,7 +203,27 @@ All model inputs are grayscale. Include clean through severe combinations of:
 - bubbles, tears, edge loss, polygon occlusion and edge-to-edge blackout;
 - label-conditioned synthetic appearance to break dependence on CCF template intensity.
 
+Appearance is modality-conditioned rather than one universal grayscale
+perturbation. Brightfield integrates stain in optical-density space before
+Beer--Lambert conversion. Fluorescence uses explicit photon gain, background,
+PSF/blur and Poisson--Gaussian noise. Confocal/two-photon optical planes remain
+distinct from physical cut thickness, while an unknown-mode mixture covers
+single-focus, extended-focus and projected exports. Parameters are stored even
+when the final model input is grayscale.
+
 The proposed initial mixture is 10% clean, 45% mild, 35% moderate and 10% severe. Exact frequencies are frozen after a blinded visual generator audit and before large-scale training.
+
+The literature does not establish universal mouse-histology artifact
+frequencies. These proportions and the initial deformation/damage magnitudes
+are provisional engineering priors, must be named as such in manifests, and
+are replaced or sensitivity-tested after descriptive measurements on eligible
+real training/development histology.
+
+Tears and missing tissue never receive dense-correspondence targets. Folds are
+stored as a separate potentially multi-valued visibility event, with the
+visible top-layer coordinate map if available. Detached pieces retain their
+own rigid transform and validity. These masks are independent of the presented
+smart-brush outline.
 
 ## Outline and background curriculum
 
