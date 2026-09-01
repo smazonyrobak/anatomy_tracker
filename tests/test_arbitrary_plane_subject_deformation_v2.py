@@ -96,6 +96,91 @@ def test_subject_rng_is_length_prefixed_domain_separated_and_label_independent()
     assert "animal_id" not in inspect.signature(derive_subject_deformation_seed_v2).parameters
 
 
+@pytest.mark.parametrize(
+    ("root_seed", "animal_index", "attempt"),
+    [
+        (1.0, 3, 0),
+        (True, 3, 0),
+        (7, 3.0, 0),
+        (7, np.bool_(False), 0),
+        (7, 3, 0.0),
+        (7, 3, True),
+    ],
+)
+def test_subject_rng_rejects_noninteger_provenance_coordinates(
+    root_seed, animal_index, attempt
+):
+    with pytest.raises(ValueError):
+        derive_subject_deformation_seed_v2(
+            root_seed,
+            "development",
+            animal_index,
+            "subject-deformation",
+            "animal-realization",
+            "coarse-cubic-bspline-svf",
+            attempt,
+        )
+
+
+@pytest.mark.parametrize(
+    ("scope", "stage", "field"),
+    [
+        (7, "animal-realization", "coarse-cubic-bspline-svf"),
+        ("", "animal-realization", "coarse-cubic-bspline-svf"),
+        ("subject-deformation", object(), "coarse-cubic-bspline-svf"),
+        ("subject-deformation", "", "coarse-cubic-bspline-svf"),
+        ("subject-deformation", "animal-realization", 9),
+        ("subject-deformation", "animal-realization", ""),
+    ],
+)
+def test_subject_rng_rejects_nonstring_or_empty_domain_names(scope, stage, field):
+    with pytest.raises(ValueError):
+        derive_subject_deformation_seed_v2(
+            7, "development", 3, scope, stage, field, 0
+        )
+
+
+def test_subject_rng_and_plan_accept_numpy_integer_coordinates():
+    assert derive_subject_deformation_seed_v2(
+        np.uint64(7),
+        "development",
+        np.int64(3),
+        "subject-deformation",
+        "animal-realization",
+        "coarse-cubic-bspline-svf",
+        np.int64(0),
+    ) == derive_subject_deformation_seed_v2(
+        7,
+        "development",
+        3,
+        "subject-deformation",
+        "animal-realization",
+        "coarse-cubic-bspline-svf",
+        0,
+    )
+    plan = _plan(
+        root_seed=np.uint64(7),
+        animal_index=np.int64(3),
+        deformation_stratum="identity",
+    )
+    assert plan["provenance"]["root_seed_uint64"] == "0x0000000000000007"
+    assert plan["provenance"]["animal_index"] == 3
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"root_seed": 1.0},
+        {"root_seed": np.bool_(True)},
+        {"animal_index": 3.0},
+        {"animal_index": True},
+    ],
+)
+def test_subject_plan_rejects_noninteger_provenance_coordinates(overrides):
+    with pytest.raises(ValueError):
+        _plan(deformation_stratum="identity", **overrides)
+
+
 def test_cubic_bspline_basis_partitions_unity_and_derivative_zero():
     t = np.linspace(0.0, 1.0, 101, endpoint=False)
     weights, derivatives = cubic_bspline_basis(t)

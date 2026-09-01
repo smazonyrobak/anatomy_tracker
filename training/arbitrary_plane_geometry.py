@@ -116,6 +116,32 @@ def identity_biased_rotation_6d_to_frame(residual_6d: torch.Tensor) -> torch.Ten
     return rotation_6d_to_frame(residual + bias)
 
 
+def frame_to_rotation_6d(frame_ap_dv_ml: torch.Tensor) -> torch.Tensor:
+    """Return the first two columns of a finite proper frame as its 6-D code."""
+    frame = _finite_floating(frame_ap_dv_ml, "proper frame")
+    if frame.shape[-2:] != (3, 3):
+        raise ValueError("Proper frame must end in a 3-by-3 matrix")
+    work = frame.float() if frame.dtype in (torch.float16, torch.bfloat16) else frame
+    identity = torch.eye(3, device=work.device, dtype=work.dtype)
+    gram = work.transpose(-2, -1) @ work
+    tolerance = 128.0 * torch.finfo(work.dtype).eps
+    if (
+        not bool(torch.isfinite(gram).all())
+        or not bool(torch.allclose(gram, identity.expand_as(gram), rtol=tolerance, atol=tolerance))
+        or bool((torch.linalg.det(work) <= 0.0).any())
+        or not bool(
+            torch.allclose(
+                torch.linalg.det(work),
+                torch.ones_like(torch.linalg.det(work)),
+                rtol=tolerance,
+                atol=tolerance,
+            )
+        )
+    ):
+        raise ValueError("Frame must be orthonormal and proper")
+    return torch.cat((frame[..., :, 0], frame[..., :, 1]), dim=-1)
+
+
 def positive_inplane_basis(log_spans: torch.Tensor, shear: torch.Tensor) -> torch.Tensor:
     """Return a finite positive basis within generous physical training bounds."""
     log_spans = _finite_floating(log_spans, "log spans")
@@ -147,6 +173,24 @@ def positive_inplane_basis(log_spans: torch.Tensor, shear: torch.Tensor) -> torc
     if not bool(torch.isfinite(basis).all()):
         raise ValueError("In-plane basis must remain finite")
     return basis
+
+
+def inplane_basis_to_parameters(
+    inplane_basis: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Invert a positive upper-triangular basis to log diagonal and shear."""
+    basis = _finite_floating(inplane_basis, "in-plane basis")
+    if basis.shape[-2:] != (2, 2):
+        raise ValueError("In-plane basis must end in a 2-by-2 matrix")
+    work = basis.float() if basis.dtype in (torch.float16, torch.bfloat16) else basis
+    scale = work.abs().amax(dim=(-2, -1)).clamp_min(1.0)
+    tolerance = 128.0 * torch.finfo(work.dtype).eps * scale
+    diagonal = torch.linalg.diagonal(work, dim1=-2, dim2=-1)
+    if bool((work[..., 1, 0].abs() > tolerance).any()) or bool((diagonal <= 0.0).any()):
+        raise ValueError("In-plane basis must be positive upper triangular")
+    log_diagonal = torch.log(diagonal)
+    shear = work[..., 0, 1] / diagonal[..., 1]
+    return log_diagonal.to(basis.dtype), shear.to(basis.dtype)
 
 
 def physical_um_to_allen_index_points(
@@ -267,6 +311,37 @@ def quicknii_to_allen_vectors(vectors_ml_ap_dv: torch.Tensor) -> torch.Tensor:
     return torch.stack((-ap, -dv, ml), -1)
 
 
+def frame_to_physical_ouv(
+    center_ap_dv_ml_um: torch.Tensor,
+    frame_ap_dv_ml: torch.Tensor,
+    inplane_basis_um: torch.Tensor,
+) -> torch.Tensor:
+    """Convert a physical finite-plane state to flattened AP/DV/ML O/U/V."""
+    center, frame, basis = _aligned_state(
+        center_ap_dv_ml_um, frame_ap_dv_ml, inplane_basis_um
+    )
+    edges = torch.matmul(frame[..., :, :2], basis)
+    edge_u, edge_v = edges.unbind(-1)
+    origin = center - 0.5 * (edge_u + edge_v)
+    return torch.cat((origin, edge_u, edge_v), dim=-1)
+
+
+def physical_ouv_to_frame(
+    physical_ouv_ap_dv_ml_um: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Factor flat or three-row physical AP/DV/ML O/U/V into a finite state."""
+    values = _finite_floating(physical_ouv_ap_dv_ml_um, "physical O/U/V")
+    if values.shape[-2:] == (3, 3):
+        values = values.reshape(values.shape[:-2] + (9,))
+    elif values.shape[-1:] != (9,):
+        raise ValueError("Physical O/U/V must end in nine coordinates or three 3-vectors")
+    origin = values[..., :3]
+    edge_u = values[..., 3:6]
+    edge_v = values[..., 6:9]
+    center = origin + 0.5 * (edge_u + edge_v)
+    return _allen_edges_to_frame(center, edge_u, edge_v)
+
+
 def frame_to_quicknii_ouv(
     center_ap_dv_ml: torch.Tensor,
     frame_ap_dv_ml: torch.Tensor,
@@ -359,6 +434,40 @@ def vertical_flip_quicknii_ouv(ouv: torch.Tensor, raster_height: int) -> torch.T
          values[..., 3:6], -values[..., 6:9]),
         -1,
     )
+
+
+def crop_quicknii_ouv(
+    ouv: torch.Tensor,
+    parent_shape_h_w: tuple[int, int],
+    top_left_y_x: tuple[int, int],
+    output_shape_h_w: tuple[int, int],
+) -> torch.Tensor:
+    """Reparameterize an integer crop under QuickNII ``x/W,y/H`` sampling."""
+    values = torch.as_tensor(ouv)
+    if values.shape[-1:] != (9,):
+        raise ValueError("QuickNII O/U/V must end in nine coordinates")
+    parent_height, parent_width = (int(value) for value in parent_shape_h_w)
+    top, left = (int(value) for value in top_left_y_x)
+    height, width = (int(value) for value in output_shape_h_w)
+    if (
+        parent_height <= 0
+        or parent_width <= 0
+        or top < 0
+        or left < 0
+        or height <= 0
+        or width <= 0
+        or top + height > parent_height
+        or left + width > parent_width
+    ):
+        raise ValueError("QuickNII crop must be a nonempty integer window inside its parent")
+    origin = (
+        values[..., :3]
+        + (left / parent_width) * values[..., 3:6]
+        + (top / parent_height) * values[..., 6:9]
+    )
+    edge_u = (width / parent_width) * values[..., 3:6]
+    edge_v = (height / parent_height) * values[..., 6:9]
+    return torch.cat((origin, edge_u, edge_v), -1)
 
 
 def frame_to_quicknii_ouv_with_reflection(

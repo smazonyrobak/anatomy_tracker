@@ -41,12 +41,85 @@ The design is provisional until the matched cold-start architecture screen is
 complete. This document defines the leading hypothesis, not a completed or
 selected model.
 
+## Arbitrary-plane implementation reuse boundary
+
+The new arbitrary-plane model is a fresh implementation, not a widened version
+of `IndependentJointModel`. That earlier network is independent of legacy
+weights, but its trainable pose state, candidate renderer and losses are still
+restricted to `[AP_um, LR_deg, DV_deg]` inside a coronal-family box. Its
+factorized AP/LR/DV categorical head and three-coordinate recurrent update are
+therefore ineligible for reuse. The associated Product-5 data path,
+truth-centred candidate lattice, architecture-screen checkpoints and exported
+graphs are also ineligible. AtlasPose, AtlasWarp, DeepSlice and every pretrained
+or prior-project feature remain comparator-only.
+
+Reuse is limited to verified numerical ideas and arbitrary-plane contracts:
+
+- the torch coordinate conversions, continuous 6-D proper-frame projection,
+  positive in-plane basis, QuickNII O/U/V algebra, explicit raster reflections
+  and single-plane `grid_sample` primitive in `arbitrary_plane_geometry.py`;
+- the v2 pose-truth RP2/offset transport and finite-frame serialization in
+  `arbitrary_plane_pose_v2.py`, as supervision and audit contracts rather than
+  as a learned head;
+- the provenance-bound generator's finite boxcar schedule and exact normalized
+  axial masses, as the reference for a new differentiable through-plane PSF
+  renderer; the NumPy receipt/reduction path itself is generator-only;
+- local spatial correlation, affine-free 2-D velocity projection and
+  scaling-and-squaring as small independently tested numerical primitives,
+  re-homed behind the new full-frame API rather than importing the old model;
+- the three-channel intensity/outline/availability input semantics, with the
+  v2 accurate, imperfect and absent smart-brush realizations as their source.
+
+The forced-truth 40-proposal bank is only a premise-test and listwise-training
+instrument. Its nonuniform proposal frequencies are not posterior mass and it
+cannot seed inference. A release-eligible coarse head instead needs an
+inference-time RP2/support-offset/roll catalogue whose base-cell masses are
+defined before observing a target, followed by proposal-corrected local
+residuals and top-K rerendering.
+
+This catalogue-and-score design is an adaptation of continuous pose-density
+estimation in [Implicit-PDF](https://proceedings.mlr.press/v139/murphy21a.html)
+and equivolumetric hierarchical rotation cells in
+[Yershova et al.](https://doi.org/10.1177/0278364909352700). Those works concern
+object orientation rather than histology and do not resolve the finite-raster
+or plane-offset problem here; Yershova's cells cover SO(3), while the coupled
+RP2 quotient, roll and finite-frame cell measures remain this project's
+derivation. They justify candidate scoring with explicit cell measure, not
+copying an object-pose network or importing its weights.
+
+The fresh implementation boundary is consequently: (1) a tensor full-frame
+state and composition rule; (2) a normalized finite-thickness differentiable
+atlas renderer; (3) an inference-valid probabilistic coarse retriever; (4) a
+shared recurrent spatial-correlation updater for full pose; and only then (5)
+an affine-free SVF decoder with explicit pose/deformation identifiability
+losses. Warps select padding explicitly so black smart-brush exteriors cannot
+become replicated edge intensity. For tangent or partial sections, affine
+removal is evaluated over the correspondence-support domain rather than only
+the whole canvas. A fresh training lineage starts in a new empty run directory;
+same-lineage checkpoint resume may be enabled only after that cold start is
+recorded. The existing arbitrary-plane geometry and pose contracts currently
+pass their focused source tests, but this is contract evidence only. No model
+family is licensed or scientifically qualified until the frozen
+arbitrary-plane oracle panel has passed its live gate.
+
+The through-plane renderer evaluates several differentiable samples along the
+current physical normal and combines them with positive weights normalized to
+unit mass. Physical thickness and the boxcar/Gaussian PSF family remain explicit
+inputs rather than being absorbed into deformation. PSF-aware slice-to-volume
+registration and reconstruction in
+[Ebner et al.](https://doi.org/10.1007/978-3-319-52280-7_1) and
+[NeSVoR](https://doi.org/10.1109/TMI.2023.3236216) motivate this acquisition
+model, but both are MRI methods. The mouse-histology implementation must earn
+its own convergence evidence, reported separately for smooth intensities,
+label occupancies, hard categorical transitions and boundary-dominated pixels.
+
 ## Inputs and outputs
 
 Inputs:
 
 - grayscale histology section in the orientation selected by the user;
-- optional tissue outline, obtained automatically in automatic mode or supplied by the smart brush in assisted mode;
+- optional smart-brush tissue outline in assisted mode; automatic fallback
+  supplies no outline and retains the acquired background;
 - an explicit outline-availability indicator, so absence of a mask is not confused with a section that fills the canvas;
 - differentiably resliced Allen CCF feature/template/annotation planes at the current pose;
 - recurrent state from the preceding refinement step.
@@ -54,7 +127,7 @@ Inputs:
 Outputs:
 
 - posterior or scored candidate representation for full plane normal, physical
-  offset and finite raster frame;
+  offset, in-plane orientation/localization and finite raster frame;
 - residual global pose update;
 - residual 2-D similarity transform for nuisance rotation, scale and translation;
 - stationary velocity field integrated into forward and inverse dense maps;
@@ -86,6 +159,15 @@ A free dense field can make a wrong plane orientation or offset superficially re
 - pose-only metrics are measured before any nonlinear warp.
 
 This follows the separation of affine and non-parametric registration in Shen et al. and the use of diffeomorphic/inverse-consistent maps in VoxelMorph/GradICON, while recursive weight sharing follows recurrent registration work. The design is adapted to 2-D histology-to-3-D-atlas plane inference rather than copied wholesale.
+
+[Joint SynthMorph](https://doi.org/10.1162/imag_a_00197) further supports
+composing an explicit global transform with a regularized SVF while training
+on synthesized label-derived image pairs with label-overlap loss. It does not
+prove that the factors are identifiable in this
+slice-to-volume setting. Identifiability therefore remains an empirical gate:
+the deformation gauge is affine-free over valid correspondence support, pose
+and deformation factors receive separate synthetic supervision, and recovery
+is tested under controlled interventions and stopped-gradient ablations.
 
 ## Pose representation
 
@@ -170,7 +252,13 @@ as a 2-D warp after atlas slicing.
 
 ## Compatibility and feedback
 
-Compatibility is a trained ranking/energy signal, not raw overlay correlation and not a confidence percentage. Each positive pair is contrasted with nearby and anatomically confusing wrong planes. At inference, low warp residual cannot excuse a low-compatibility plane. Risk--coverage and threshold-error ranking are evaluated on held-out cases; probability calibration is outside the version-1 claim.
+Compatibility is a trained ranking/energy signal, not raw overlay correlation
+and not a confidence percentage. Each positive pair is contrasted with nearby
+and anatomically confusing wrong planes. At inference, low warp residual cannot
+excuse a low-compatibility plane. Risk--coverage and threshold-error ranking are
+evaluated on held-out cases; calibration of this compatibility score is outside
+the version-1 claim. A pose posterior is a separate output and may support
+credible-volume claims only after animal-held-out calibration.
 
 ## Multi-slice inference
 
@@ -311,7 +399,8 @@ electrode trajectories or region assignments.
 
 Each of the initial `K=4--8` components carries a finite-frame/O/U/V mean, a
 positive-definite local tangent-space covariance, mixture mass and a discrete
-reflection probability. Training marginalizes the exact equivalent raster
+probability over equivalent raster reparameterizations, never an anatomical
+reflection. Training marginalizes the exact equivalent raster
 representations rather than selecting an arbitrary normal sign or encoding an
 improper reflection as a rotation. Physical O/U/V anchor loss remains alongside
 mixture likelihood and candidate-ranking loss so uncertainty cannot improve by
@@ -330,13 +419,18 @@ without special-function normalizers; the current forced-centre candidate set
 is a proposal, not posterior mass.
 
 Implementation proceeds in this order: geometry conversions and a general
-differentiable renderer; a provenance-bound v3 manifest and generator;
-geodesic-normal/physical-offset candidates; the new data and posterior
-contract; then a small arbitrary-plane oracle ranking premise test. The finite
-CCF render precursor has passed its pinned-Allen development preflight, while
-complete deformation/appearance/outline realization and finite wrong-plane
-candidates remain next. Recurrence is built only after the oracle premise is
-adequate. Existing Product-5 and DeepSlice data remain useful coronal
-auxiliary/comparator evidence, but cannot validate arbitrary-plane
+differentiable renderer; a provenance-bound manifest and generator;
+geodesic-normal/physical-offset/roll candidates with finite-frame and in-plane
+localization; the new data and pose-truth contract; then a small arbitrary-plane
+oracle ranking premise test. The arbitrary-plane generator v2 source path now
+covers subject deformation, finite thickness, section
+processing, appearance, damage, accurate/imperfect/absent smart-brush modes,
+final provenance-bound realizations, finite wrong-plane candidates and an
+independently verifiable oracle-panel runner. This establishes source and unit
+contracts, not a scientific result: the frozen live panel and its null gate
+must still complete before recurrence is built. Existing Product-5 data are
+historical coronal audit evidence only and cannot enter release training,
+validation, features or pseudolabels. DeepSlice Ground Truth (DOI
+`10.25949/22802411`) remains benchmark-only. Neither validates arbitrary-plane
 performance; external real validation must deliberately span cardinal and
 extreme-oblique cutting planes and remain split by animal.

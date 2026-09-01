@@ -11,6 +11,7 @@ from training.arbitrary_plane_geometry import (
     allen_index_to_physical_um_vectors,
     allen_to_quicknii_points,
     allen_to_quicknii_vectors,
+    crop_quicknii_ouv,
     frame_to_quicknii_ouv,
     frame_to_quicknii_ouv_with_reflection,
     horizontal_flip_quicknii_ouv,
@@ -290,6 +291,38 @@ def test_explicit_raster_reflections_preserve_the_base_frame_and_reparameterize_
         ),
         atol=1e-12,
     )
+
+
+def test_quicknii_integer_crop_reparameterizes_nonzero_window_exactly():
+    ouv = torch.tensor(
+        [11.0, 23.0, 37.0, 17.0, -5.0, 9.0, -3.0, 13.0, 19.0],
+        dtype=torch.float64,
+    )
+    parent_shape = (11, 13)
+    top_left = (2, 3)
+    crop_shape = (5, 7)
+    cropped = crop_quicknii_ouv(ouv, parent_shape, top_left, crop_shape)
+    y, x = torch.meshgrid(
+        torch.arange(crop_shape[0], dtype=torch.float64),
+        torch.arange(crop_shape[1], dtype=torch.float64),
+        indexing="ij",
+    )
+    crop_st = torch.stack((x / crop_shape[1], y / crop_shape[0]), -1)
+    parent_st = torch.stack(
+        (
+            (x + top_left[1]) / parent_shape[1],
+            (y + top_left[0]) / parent_shape[0],
+        ),
+        -1,
+    )
+    assert torch.allclose(
+        normalized_raster_to_quicknii(cropped, crop_st),
+        normalized_raster_to_quicknii(ouv, parent_st),
+        atol=1e-12,
+        rtol=0.0,
+    )
+    with pytest.raises(ValueError, match="inside its parent"):
+        crop_quicknii_ouv(ouv, parent_shape, (9, 0), crop_shape)
 
 
 def _cardinal_state(name, shape, index):

@@ -1,7 +1,8 @@
-# Frozen training contracts hash source and configuration bytes exactly.
+# Frozen legacy training contracts hash source and configuration bytes exactly.
 /.gitattributes text eol=lf
 *.py text eol=lf
 *.json text eol=lf
+/publication/arbitrary_plane_acquisition_hardening_preflight.yaml text eol=lf
 
 # These consumed atlas-pair artifacts were provenance-bound as CRLF bytes.
 /training/configs/independent_oracle_atlas_pair_energy_1500.json text eol=crlf

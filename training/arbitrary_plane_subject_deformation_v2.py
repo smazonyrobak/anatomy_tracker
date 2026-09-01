@@ -12,6 +12,7 @@ from training.arbitrary_plane_acquisition_v2 import (
     _array_receipt,
     _freeze_value,
     _json_value,
+    _nonnegative_integer,
     _payload_sha256,
     _root_seed_hex,
 )
@@ -61,15 +62,16 @@ def derive_subject_deformation_seed_v2(
     attempt: int = 0,
 ) -> int:
     """Derive a PCG64DXSM seed without using mutable animal provenance labels."""
-    animal_index = int(animal_index)
-    attempt = int(attempt)
+    animal_index = _nonnegative_integer(animal_index, "animal_index")
+    attempt = _nonnegative_integer(attempt, "attempt")
     if (
         split not in {"train", "development"}
-        or animal_index < 0
-        or attempt < 0
-        or not str(scope)
-        or not str(stage)
-        or not str(field)
+        or not isinstance(scope, str)
+        or not scope
+        or not isinstance(stage, str)
+        or not stage
+        or not isinstance(field, str)
+        or not field
     ):
         raise ValueError("subject deformation RNG hierarchy is invalid")
     components = (
@@ -78,9 +80,9 @@ def derive_subject_deformation_seed_v2(
         split,
         _root_seed_hex(root_seed),
         str(animal_index),
-        str(scope),
-        str(stage),
-        str(field),
+        scope,
+        stage,
+        field,
         str(attempt),
     )
     encoded = b"".join(
@@ -945,7 +947,8 @@ def sample_animal_subject_deformation_plan_v2(
     """Create one deterministic full-CCF plan and its first passing realization."""
     lower = np.asarray(full_ccf_lower_um, dtype="<f8", order="C")
     upper = np.asarray(full_ccf_upper_um, dtype="<f8", order="C")
-    animal_index = int(animal_index)
+    root_seed = f"0x{_root_seed_hex(root_seed)}"
+    animal_index = _nonnegative_integer(animal_index, "animal_index")
     ccf_context_sha256 = str(ccf_context_sha256)
     numeric_parameters = np.asarray(
         [

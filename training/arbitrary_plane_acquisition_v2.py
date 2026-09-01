@@ -37,8 +37,24 @@ from training.arbitrary_plane_support import (
 V2_SCHEMA = "anatomy-tracker.arbitrary-plane-synthetic-realization/v2"
 V2_PLANE_SCHEMA = "anatomy-tracker.arbitrary-plane-global-reference-centre-render/v2"
 V2_PLANE_ALGORITHM = "rejection-free-rp2-global-reference-centre-render/v2"
+V2_GENERIC_PLANE_SCHEMA = (
+    "anatomy-tracker.authenticated-generic-arbitrary-plane-centre-render/v2"
+)
+V2_GENERIC_PLANE_ALGORITHM = (
+    "domain-separated-rp2-global-reference-centre-render/v2"
+)
 V2_RNG_DOMAIN = "anatomy-tracker.arbitrary-plane-acquisition-v2"
 V2_PLANE_STRATA = ("near_AP", "near_DV", "near_ML", "general_oblique", "edge_or_partial")
+V2_GENERIC_PLANE_STRATA = (
+    "reference",
+    "near_AP",
+    "near_DV",
+    "near_ML",
+    "general_oblique",
+    "edge_or_partial",
+)
+V2_SOURCE_SHA256_CANONICALIZATION = "CRLF and CR normalized to LF before SHA-256"
+V2_PREFLIGHT_CANONICAL_SHA256 = "0d06c26e1eb793b66da437db33933a09d304d2989b6383df8846106057da9ad9"
 _SOURCE_ROOT = Path(__file__).parent
 _REPOSITORY_ROOT = _SOURCE_ROOT.parent
 _PREFLIGHT_PATH = _REPOSITORY_ROOT / "publication" / "arbitrary_plane_acquisition_hardening_preflight.yaml"
@@ -136,9 +152,14 @@ def _merge_intervals(intervals: np.ndarray) -> np.ndarray:
     return np.asarray(merged, dtype=np.float64)
 
 
+def _normalized_text_sha256(path: Path) -> str:
+    content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(content).hexdigest()
+
+
 def _source_hashes() -> dict[str, str]:
     return {
-        name: hashlib.sha256((_SOURCE_ROOT / name).read_bytes()).hexdigest()
+        name: _normalized_text_sha256(_SOURCE_ROOT / name)
         for name in (
             "arbitrary_plane_acquisition_v2.py",
             "arbitrary_plane_geometry.py",
@@ -150,10 +171,14 @@ def _source_hashes() -> dict[str, str]:
 
 
 def _preflight_provenance() -> dict[str, str]:
+    file_sha256 = _normalized_text_sha256(_PREFLIGHT_PATH)
+    if file_sha256 != V2_PREFLIGHT_CANONICAL_SHA256:
+        raise ValueError("v2 acquisition hardening preflight content does not match")
     return {
         "receipt_id": "arbitrary-plane-acquisition-hardening-2026-09-01",
         "path": "publication/arbitrary_plane_acquisition_hardening_preflight.yaml",
-        "file_sha256": hashlib.sha256(_PREFLIGHT_PATH.read_bytes()).hexdigest(),
+        "file_sha256": file_sha256,
+        "file_sha256_canonicalization": V2_SOURCE_SHA256_CANONICALIZATION,
         "preflight_commit": "cd51b9d9ba9e8843d5a0d9f6405da676f73a47d5",
     }
 
@@ -211,6 +236,7 @@ def prepare_arbitrary_plane_acquisition_context_v2(
         "scalar_source": dict(parent["asset_receipt"]["scalar_source"]),
         "global_reference_fov": fov,
         "source_sha256": _source_hashes(),
+        "source_sha256_canonicalization": V2_SOURCE_SHA256_CANONICALIZATION,
     }
     frozen_receipt = _freeze_value(receipt)
     return MappingProxyType(
@@ -235,6 +261,8 @@ def _validate_v2_context(context: dict[str, object]) -> None:
         or context.get("schema") != "anatomy-tracker.prepared-arbitrary-plane-acquisition-context/v2"
         or context.get("v2_context_sha256") != _payload_sha256(_json_value(receipt))
         or _json_value(receipt["source_sha256"]) != _source_hashes()
+        or receipt.get("source_sha256_canonicalization")
+        != V2_SOURCE_SHA256_CANONICALIZATION
         or parent["prepared_context_sha256"] != receipt["opaque_v1_prepared_context_sha256"]
         or support["support_index_sha256"] != receipt["support_index_sha256"]
     ):
@@ -261,6 +289,24 @@ def _context_support(context: dict[str, object]) -> dict[str, object]:
     return _plain_value(context["opaque_v1_context"]["support_index"])
 
 
+def _nonnegative_integer(value: object, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{name} must be a nonnegative integer")
+    result = int(value)
+    if result < 0 or result > np.iinfo(np.uint64).max:
+        raise ValueError(f"{name} must be a nonnegative uint64 integer")
+    return result
+
+
+def _parent_shape(parent_shape_h_w: object) -> tuple[int, int]:
+    if not isinstance(parent_shape_h_w, (tuple, list, np.ndarray)) or len(parent_shape_h_w) != 2:
+        raise ValueError("parent_shape_h_w must contain two integers")
+    return tuple(
+        _nonnegative_integer(value, "parent_shape_h_w dimension")
+        for value in parent_shape_h_w
+    )
+
+
 def _root_seed_hex(root_seed: int | str) -> str:
     if isinstance(root_seed, str):
         if len(root_seed) != 18 or not root_seed.startswith("0x"):
@@ -269,6 +315,10 @@ def _root_seed_hex(root_seed: int | str) -> str:
         if any(character not in "0123456789abcdef" for character in digits):
             raise ValueError("root_seed string must be 0x plus 16 lowercase hexadecimal digits")
         return digits
+    if isinstance(root_seed, (bool, np.bool_)) or not isinstance(
+        root_seed, (int, np.integer)
+    ):
+        raise ValueError("root_seed must be a uint64 integer or canonical hex string")
     value = int(root_seed)
     if value < 0 or value > np.iinfo(np.uint64).max:
         raise ValueError("root_seed must fit uint64")
@@ -284,12 +334,11 @@ def derive_v2_field_seed(
     attempt: int = 0,
 ) -> int:
     """Derive one replayable PCG64DXSM uint64 seed from the frozen v2 tuple."""
-    split = str(split)
-    sample_index = int(sample_index)
-    attempt = int(attempt)
-    if split not in {"train", "development"}:
-        raise ValueError("split must be train or development")
-    if sample_index < 0 or attempt < 0 or not str(stage) or not str(field):
+    if not isinstance(split, str) or not split:
+        raise ValueError("split must be nonempty")
+    sample_index = _nonnegative_integer(sample_index, "sample_index")
+    attempt = _nonnegative_integer(attempt, "attempt")
+    if not isinstance(stage, str) or not stage or not isinstance(field, str) or not field:
         raise ValueError("sample_index/attempt must be nonnegative and stage/field nonempty")
     components = (
         V2_RNG_DOMAIN,
@@ -297,8 +346,8 @@ def derive_v2_field_seed(
         split,
         _root_seed_hex(root_seed),
         str(sample_index),
-        str(stage),
-        str(field),
+        stage,
+        field,
         str(attempt),
     )
     encoded = b"".join(len(value.encode("utf-8")).to_bytes(4, "big") + value.encode("utf-8") for value in components)
@@ -319,9 +368,10 @@ def _field_rng(
 
 
 def _smoke_assignment(sample_index: int) -> dict[str, object]:
-    row = V2_SMOKE_ASSIGNMENTS[int(sample_index)]
+    sample_index = _nonnegative_integer(sample_index, "sample_index")
+    row = V2_SMOKE_ASSIGNMENTS[sample_index]
     return {
-        "sample_index": int(sample_index),
+        "sample_index": sample_index,
         "plane_stratum": row[0],
         "window_plan_severity": row[1],
         "reflection": row[2],
@@ -337,7 +387,7 @@ def global_reference_support_geometry(
 ) -> dict[str, object]:
     """Return the orientation-independent closed-face support sphere and FOV."""
     verify_annotation_support_index(support_index)
-    height, width = (int(value) for value in parent_shape_h_w)
+    height, width = _parent_shape(parent_shape_h_w)
     if (height, width) != _SMOKE_PARENT_SHAPE:
         raise ValueError("v2 acquisition-core parent shape is frozen at 256x256")
     boxes = np.asarray(
@@ -425,7 +475,7 @@ def sample_v2_smoke_plane_pose(
     parent_shape_h_w: tuple[int, int] = (256, 256),
 ) -> dict[str, object]:
     """Sample one of the twenty predeclared development-smoke planes."""
-    sample_index = int(sample_index)
+    sample_index = _nonnegative_integer(sample_index, "sample_index")
     assignment = V2_SMOKE_ASSIGNMENTS[sample_index] if 0 <= sample_index < 20 else None
     expected = assignment[0] if assignment is not None else None
     if (
@@ -491,6 +541,100 @@ def sample_v2_smoke_plane_pose(
         "field_stream_stage": "pose",
         "field_stream_attempt_index": {field: 0 for field in seeds},
         "rejection_attempts": [],
+    }
+    return {**payload, "plane_sampler_receipt_sha256": _payload_sha256(payload)}
+
+
+def sample_v2_generic_plane_pose(
+    support_index: dict[str, object],
+    split: str,
+    root_seed: int | str,
+    sample_index: int,
+    plane_stratum: str,
+    parent_shape_h_w: tuple[int, int] = (256, 256),
+) -> dict[str, object]:
+    """Sample one authenticated arbitrary plane without using animal labels."""
+    if not isinstance(split, str) or not split:
+        raise ValueError("generic plane split must be a nonempty string")
+    sample_index = _nonnegative_integer(sample_index, "sample_index")
+    if sample_index < 0 or plane_stratum not in V2_GENERIC_PLANE_STRATA:
+        raise ValueError("generic plane split/index/stratum is invalid")
+    _root_seed_hex(root_seed)
+    global_reference_support_geometry(support_index, parent_shape_h_w)
+    seeds: dict[str, str] = {}
+    stream_stage = f"generic-pose/{plane_stratum}"
+
+    def generator(field: str) -> np.random.Generator:
+        rng, seed = _field_rng(root_seed, split, sample_index, stream_stage, field)
+        seeds[field] = seed
+        return rng
+
+    def uniform(field: str, low: float = 0.0, high: float = 1.0) -> float:
+        return float(generator(field).uniform(low, high))
+
+    if plane_stratum in {"reference", "edge_or_partial"}:
+        raw_normal = generator("isotropic-gaussian-normal").normal(size=3).astype(np.float64)
+        normal_measure = "Haar-uniform RP2 from normalized isotropic Gaussian"
+    elif plane_stratum.startswith("near_"):
+        axis = {"near_AP": 0, "near_DV": 1, "near_ML": 2}[plane_stratum]
+        cosine = uniform("axis-cosine", 0.90, 0.985)
+        azimuth = 2.0 * math.pi * uniform("axis-azimuth")
+        other = [value for value in range(3) if value != axis]
+        raw_normal = np.zeros(3, dtype=np.float64)
+        raw_normal[axis] = cosine
+        radius = math.sqrt(1.0 - cosine * cosine)
+        raw_normal[other] = radius * np.asarray((math.cos(azimuth), math.sin(azimuth)))
+        normal_measure = "named near-cardinal stress stratum; not the reference measure"
+    else:
+        magnitudes = np.asarray(
+            [uniform(f"oblique-magnitude-{axis}", 0.35, 0.75) for axis in range(3)],
+            dtype=np.float64,
+        )
+        signs = np.asarray(
+            [
+                1.0,
+                -1.0 if uniform("oblique-sign-1") < 0.5 else 1.0,
+                -1.0 if uniform("oblique-sign-2") < 0.5 else 1.0,
+            ],
+            dtype=np.float64,
+        )
+        raw_normal = magnitudes * signs
+        normal_measure = "named general-oblique stress stratum; not the reference measure"
+    normal, _, _ = canonicalize_plane(raw_normal, 0.0)
+    roll = 2.0 * math.pi * uniform("roll")
+    intervals = shifted_component_interval_union(normal, support_index)
+    if plane_stratum == "edge_or_partial":
+        edge_depth = uniform("edge-depth-fraction", 0.01, 0.03)
+        measure_fraction = (
+            edge_depth if uniform("edge-side") < 0.5 else 1.0 - edge_depth
+        )
+        offset_measure = "named edge/partial tail stress; not the reference measure"
+    else:
+        measure_fraction = uniform("offset-measure-fraction")
+        offset_measure = "length-uniform over authenticated merged brain-intersection intervals"
+    signed_offset, selected_interval = _offset_at_measure_fraction(
+        np.asarray(intervals["support_origin_interval_union_um"]), measure_fraction
+    )
+    frame = physical_plane_frame(normal, roll)
+    payload = {
+        "plane_stratum": plane_stratum,
+        "reference_measure": plane_stratum == "reference",
+        "normal_sampling_measure": normal_measure,
+        "offset_sampling_measure": offset_measure,
+        "stress_strata_do_not_change_reference_measure": True,
+        "normal_draw_ap_dv_ml": raw_normal.tolist(),
+        "normal_rp2_ap_dv_ml": normal.tolist(),
+        "roll_rad": roll,
+        "signed_offset_um_about_support_origin": signed_offset,
+        "offset_measure_fraction": measure_fraction,
+        "selected_interval_index": selected_interval,
+        "shifted_intervals": intervals,
+        "frame_ap_dv_ml_physical": frame.tolist(),
+        "field_stream_seed_uint64": seeds,
+        "field_stream_stage": stream_stage,
+        "field_stream_attempt_index": {field: 0 for field in seeds},
+        "rejection_attempts": [],
+        "animal_label_rng_dependencies": [],
     }
     return {**payload, "plane_sampler_receipt_sha256": _payload_sha256(payload)}
 
@@ -742,13 +886,20 @@ def global_reference_plane_geometry(
 def _context_provenance(
     context: dict[str, object],
     animal_id: str | int | None,
+    animal_index: int | None,
     specimen_id: str | int | None,
     experiment_id: str | int | None,
 ) -> dict[str, object]:
     receipt = context["receipt"]
     support = _context_support(context)
+    resolved_animal_index = (
+        None
+        if animal_index is None
+        else _nonnegative_integer(animal_index, "animal_index")
+    )
     return {
         "animal_id": animal_id,
+        "animal_index": resolved_animal_index,
         "specimen_id": specimen_id,
         "experiment_id": experiment_id,
         "v2_context_sha256": context["v2_context_sha256"],
@@ -757,6 +908,17 @@ def _context_provenance(
         "annotation_array_sha256": receipt["annotation_array_sha256"],
         "scalar_source_sha256": receipt["scalar_source"]["source_sha256"],
     }
+
+
+def _validate_generic_animal_lineage(
+    animal_id: str | int | None, animal_index: int | None
+) -> None:
+    if animal_id is None or animal_index is None:
+        raise ValueError(
+            "generic authenticated training animal lineage requires non-null "
+            "animal_id and nonnegative animal_index"
+        )
+    _nonnegative_integer(animal_index, "animal_index")
 
 
 def _v2_raster_metadata(
@@ -827,12 +989,15 @@ def make_v2_smoke_global_reference_centre_render(
     *,
     parent_shape_h_w: tuple[int, int] = (256, 256),
     animal_id: str | int | None = None,
+    animal_index: int | None = None,
     specimen_id: str | int | None = None,
     experiment_id: str | int | None = None,
 ) -> dict[str, object]:
     """Create the v2 plane manifest, fixed global grid, and centre-plane render."""
     _validate_v2_context(prepared_context)
     root_hex = _root_seed_hex(root_seed)
+    sample_index = _nonnegative_integer(sample_index, "sample_index")
+    parent_shape_h_w = _parent_shape(parent_shape_h_w)
     support = _context_support(prepared_context)
     if tuple(parent_shape_h_w) != _SMOKE_PARENT_SHAPE or tuple(parent_shape_h_w) != tuple(
         prepared_context["receipt"]["global_reference_fov"]["parent_shape_h_w"]
@@ -850,14 +1015,14 @@ def make_v2_smoke_global_reference_centre_render(
         parent_shape_h_w,
     )
     provenance = _context_provenance(
-        prepared_context, animal_id, specimen_id, experiment_id
+        prepared_context, animal_id, animal_index, specimen_id, experiment_id
     )
     resolved_config = {
         "schema_version": V2_PLANE_SCHEMA,
         "algorithm": V2_PLANE_ALGORITHM,
         "split": split,
         "root_seed_uint64": f"0x{root_hex}",
-        "sample_index": int(sample_index),
+        "sample_index": sample_index,
         "plane_stratum": plane_stratum,
         "parent_shape_h_w": list(parent_shape_h_w),
         "rng": {
@@ -870,6 +1035,7 @@ def make_v2_smoke_global_reference_centre_render(
         "pretrained_feature_dependencies": [],
         "learned_style_model_dependencies": [],
         "source_sha256": _source_hashes(),
+        "source_sha256_canonicalization": V2_SOURCE_SHA256_CANONICALIZATION,
         "preflight": _preflight_provenance(),
         "runtime": _runtime_receipt(),
     }
@@ -945,6 +1111,7 @@ def replay_v2_smoke_global_reference_centre_render(
         config["plane_stratum"],
         parent_shape_h_w=tuple(config["parent_shape_h_w"]),
         animal_id=provenance["animal_id"],
+        animal_index=provenance["animal_index"],
         specimen_id=provenance["specimen_id"],
         experiment_id=provenance["experiment_id"],
     )
@@ -1009,3 +1176,293 @@ def verify_v2_smoke_global_reference_centre_render(
             or not np.array_equal(artifact["raster"][name], replayed["raster"][name])
         ):
             raise ValueError("v2 centre-render replay arrays do not match")
+
+
+def _generic_plane_identity_payload(artifact: dict[str, object]) -> dict[str, object]:
+    return {
+        "schema_version": artifact["schema_version"],
+        "algorithm": artifact["algorithm"],
+        "resolved_config": artifact["generator"]["resolved_config"],
+        "resolved_config_sha256": artifact["generator"]["resolved_config_sha256"],
+        "provenance": artifact["provenance"],
+        "sampling": artifact["sampling"],
+        "geometry": artifact["geometry"],
+    }
+
+
+def _generic_centre_render_identity_payload(
+    artifact: dict[str, object],
+) -> dict[str, object]:
+    raster = artifact["raster"]
+    return {
+        "schema_version": artifact["schema_version"],
+        "algorithm": artifact["algorithm"],
+        "v2_plane_realization_id": artifact["v2_plane_realization_id"],
+        "v2_context_sha256": artifact["provenance"]["v2_context_sha256"],
+        "operator": "direct frozen render_arbitrary_plane offset-zero scalar/nearest-label primitive",
+        "array_receipts": raster["array_receipts"],
+        "combined_sha256": raster["combined_sha256"],
+    }
+
+
+def make_v2_generic_global_reference_centre_render(
+    prepared_context: dict[str, object],
+    split: str,
+    root_seed: int | str,
+    sample_index: int,
+    plane_stratum: str,
+    *,
+    parent_shape_h_w: tuple[int, int] = (256, 256),
+    animal_id: str | int | None = None,
+    animal_index: int | None = None,
+    specimen_id: str | int | None = None,
+    experiment_id: str | int | None = None,
+) -> dict[str, object]:
+    """Render one generic authenticated arbitrary-plane training precursor."""
+    _validate_generic_animal_lineage(animal_id, animal_index)
+    _validate_v2_context(prepared_context)
+    root_hex = _root_seed_hex(root_seed)
+    sample_index = _nonnegative_integer(sample_index, "sample_index")
+    parent_shape_h_w = _parent_shape(parent_shape_h_w)
+    support = _context_support(prepared_context)
+    if tuple(parent_shape_h_w) != tuple(
+        prepared_context["receipt"]["global_reference_fov"]["parent_shape_h_w"]
+    ):
+        raise ValueError("generic plane canvas must match the context-wide FOV")
+    sampling = sample_v2_generic_plane_pose(
+        support,
+        split,
+        f"0x{root_hex}",
+        sample_index,
+        plane_stratum,
+        parent_shape_h_w,
+    )
+    geometry = global_reference_plane_geometry(
+        np.asarray(sampling["normal_rp2_ap_dv_ml"]),
+        float(sampling["signed_offset_um_about_support_origin"]),
+        float(sampling["roll_rad"]),
+        support,
+        parent_shape_h_w,
+    )
+    provenance = _context_provenance(
+        prepared_context, animal_id, animal_index, specimen_id, experiment_id
+    )
+    resolved_config = {
+        "schema_version": V2_GENERIC_PLANE_SCHEMA,
+        "algorithm": V2_GENERIC_PLANE_ALGORITHM,
+        "split": split,
+        "root_seed_uint64": f"0x{root_hex}",
+        "sample_index": sample_index,
+        "plane_stratum": plane_stratum,
+        "parent_shape_h_w": list(parent_shape_h_w),
+        "rng": {
+            "derivation": "length-prefixed-v2-domain/schema/split/root/sample/stage/field/attempt",
+            "digest": "BLAKE2b-64 person=AP-ACQ-V2; unsigned big-endian",
+            "generator": "NumPy PCG64DXSM",
+            "animal_label_inputs": [],
+        },
+        "learned_checkpoint_dependencies": [],
+        "previous_model_dependencies": [],
+        "pretrained_feature_dependencies": [],
+        "learned_style_model_dependencies": [],
+        "source_sha256": _source_hashes(),
+        "source_sha256_canonicalization": V2_SOURCE_SHA256_CANONICALIZATION,
+        "runtime": _runtime_receipt(),
+    }
+    artifact = {
+        "schema_version": V2_GENERIC_PLANE_SCHEMA,
+        "algorithm": V2_GENERIC_PLANE_ALGORITHM,
+        "v2_plane_realization_id": None,
+        "centre_plane_render_id": None,
+        "generator": {
+            "resolved_config": resolved_config,
+            "resolved_config_sha256": _payload_sha256(resolved_config),
+        },
+        "provenance": provenance,
+        "sampling": sampling,
+        "geometry": geometry,
+        "raster": _render_v2_centre_plane(prepared_context, geometry),
+    }
+    artifact["v2_plane_realization_id"] = _payload_sha256(
+        _generic_plane_identity_payload(artifact)
+    )
+    artifact["centre_plane_render_id"] = _payload_sha256(
+        _generic_centre_render_identity_payload(artifact)
+    )
+    artifact["receipt_sha256"] = _payload_sha256(
+        v2_generic_centre_render_receipt(artifact)
+    )
+    return artifact
+
+
+def v2_generic_centre_render_receipt(
+    artifact: dict[str, object],
+) -> dict[str, object]:
+    raster = artifact["raster"]
+    return {
+        "schema_version": artifact["schema_version"],
+        "algorithm": artifact["algorithm"],
+        "v2_plane_realization_id": artifact["v2_plane_realization_id"],
+        "centre_plane_render_id": artifact["centre_plane_render_id"],
+        "generator": artifact["generator"],
+        "provenance": artifact["provenance"],
+        "sampling": artifact["sampling"],
+        "geometry": artifact["geometry"],
+        "raster_receipt": {
+            "array_receipts": raster["array_receipts"],
+            "scalar_sha256": raster["scalar_sha256"],
+            "annotation_sha256": raster["annotation_sha256"],
+            "brain_mask_sha256": raster["brain_mask_sha256"],
+            "combined_sha256": raster["combined_sha256"],
+            "brain_pixel_count": raster["brain_pixel_count"],
+        },
+    }
+
+
+def replay_v2_generic_global_reference_centre_render(
+    artifact: dict[str, object], prepared_context: dict[str, object]
+) -> dict[str, object]:
+    config = artifact["generator"]["resolved_config"]
+    provenance = artifact["provenance"]
+    return make_v2_generic_global_reference_centre_render(
+        prepared_context,
+        config["split"],
+        config["root_seed_uint64"],
+        config["sample_index"],
+        config["plane_stratum"],
+        parent_shape_h_w=tuple(config["parent_shape_h_w"]),
+        animal_id=provenance["animal_id"],
+        animal_index=provenance["animal_index"],
+        specimen_id=provenance["specimen_id"],
+        experiment_id=provenance["experiment_id"],
+    )
+
+
+def verify_v2_generic_global_reference_centre_render(
+    artifact: dict[str, object], prepared_context: dict[str, object]
+) -> None:
+    artifact_keys = {
+        "schema_version",
+        "algorithm",
+        "v2_plane_realization_id",
+        "centre_plane_render_id",
+        "generator",
+        "provenance",
+        "sampling",
+        "geometry",
+        "raster",
+        "receipt_sha256",
+    }
+    raster_keys = {
+        "scalar",
+        "annotation",
+        "brain_mask",
+        "array_receipts",
+        "scalar_sha256",
+        "annotation_sha256",
+        "brain_mask_sha256",
+        "combined_sha256",
+        "brain_pixel_count",
+    }
+    config_keys = {
+        "schema_version",
+        "algorithm",
+        "split",
+        "root_seed_uint64",
+        "sample_index",
+        "plane_stratum",
+        "parent_shape_h_w",
+        "rng",
+        "learned_checkpoint_dependencies",
+        "previous_model_dependencies",
+        "pretrained_feature_dependencies",
+        "learned_style_model_dependencies",
+        "source_sha256",
+        "source_sha256_canonicalization",
+        "runtime",
+    }
+    if (
+        set(artifact) != artifact_keys
+        or set(artifact.get("generator", {}))
+        != {"resolved_config", "resolved_config_sha256"}
+        or set(artifact.get("generator", {}).get("resolved_config", {})) != config_keys
+        or set(artifact.get("provenance", {}))
+        != {
+            "animal_id",
+            "animal_index",
+            "specimen_id",
+            "experiment_id",
+            "v2_context_sha256",
+            "opaque_v1_prepared_context_sha256",
+            "support_index_sha256",
+            "annotation_array_sha256",
+            "scalar_source_sha256",
+        }
+        or set(artifact.get("raster", {})) != raster_keys
+    ):
+        raise ValueError("generic centre render has missing or unauthenticated extra fields")
+    config = artifact["generator"]["resolved_config"]
+    _validate_generic_animal_lineage(
+        artifact["provenance"]["animal_id"],
+        artifact["provenance"]["animal_index"],
+    )
+    if (
+        artifact["schema_version"] != V2_GENERIC_PLANE_SCHEMA
+        or artifact["algorithm"] != V2_GENERIC_PLANE_ALGORITHM
+        or config["schema_version"] != V2_GENERIC_PLANE_SCHEMA
+        or config["algorithm"] != V2_GENERIC_PLANE_ALGORITHM
+        or "preflight" in config
+        or config["source_sha256"] != _source_hashes()
+        or config["source_sha256_canonicalization"]
+        != V2_SOURCE_SHA256_CANONICALIZATION
+        or any(
+            config[name]
+            for name in (
+                "learned_checkpoint_dependencies",
+                "previous_model_dependencies",
+                "pretrained_feature_dependencies",
+                "learned_style_model_dependencies",
+            )
+        )
+        or artifact["provenance"]["v2_context_sha256"]
+        != prepared_context["v2_context_sha256"]
+        or artifact["generator"]["resolved_config_sha256"]
+        != _payload_sha256(config)
+    ):
+        raise ValueError("generic centre render schema, source, context, or dependencies disagree")
+    for forbidden in (
+        "slab_recipe_id",
+        "slab_render_id",
+        "acquisition_window_realization_id",
+        "reflection_transform_id",
+        "reflection_realization_id",
+        "v2_acquisition_realization_id",
+        "synthetic_realization_id",
+    ):
+        if forbidden in artifact:
+            raise ValueError("generic centre render contains a premature downstream ID")
+    _validate_v2_context(prepared_context)
+    raster = artifact["raster"]
+    live = _v2_raster_metadata(
+        raster["scalar"], raster["annotation"], raster["brain_mask"]
+    )
+    if (
+        any(raster.get(key) != value for key, value in live.items())
+        or artifact["v2_plane_realization_id"]
+        != _payload_sha256(_generic_plane_identity_payload(artifact))
+        or artifact["centre_plane_render_id"]
+        != _payload_sha256(_generic_centre_render_identity_payload(artifact))
+        or artifact["receipt_sha256"]
+        != _payload_sha256(v2_generic_centre_render_receipt(artifact))
+    ):
+        raise ValueError("generic centre render live receipt or identity disagrees")
+    replayed = replay_v2_generic_global_reference_centre_render(
+        artifact, prepared_context
+    )
+    if v2_generic_centre_render_receipt(artifact) != v2_generic_centre_render_receipt(
+        replayed
+    ):
+        raise ValueError("generic centre render deterministic replay receipt disagrees")
+    for name in ("scalar", "annotation", "brain_mask"):
+        if not np.array_equal(artifact["raster"][name], replayed["raster"][name]):
+            raise ValueError("generic centre render deterministic replay arrays disagree")

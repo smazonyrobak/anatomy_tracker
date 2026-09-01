@@ -62,11 +62,11 @@ with slide processing. The implementation may evaluate the shared 3-D field at
 requested section points rather than materializing a warped full-resolution
 volume, but the exact field identity and sampled coordinate maps remain bound.
 
-The v2 centre/slab implementation remains an identity-anatomy acquisition and
-quadrature precursor. A separate standalone animal stage now samples
-animal-scoped, coarse-plus-fine cubic B-spline stationary velocity fields from
-random initialization, removes the complete local affine component, keeps only
-a positive diagonal global anatomy scale, and separates
+The frozen centre/slab precursor remains available for exact identity-anatomy
+regression checks. The active v2 chain now adds a standalone animal stage that
+samples animal-scoped, coarse-plus-fine cubic B-spline stationary velocity
+fields from random initialization, removes the complete local affine component,
+keeps only a positive diagonal global anatomy scale, and separates
 `subject_deformation_plan_id`, `subject_deformation_realization_id` and
 `synthetic_animal_id`. Its accepted realization is bound to fixed forward and
 inverse maps, Jacobians, cycle errors, final float32 affine residuals,
@@ -77,14 +77,16 @@ fixed-step RK4 update: for `q = ||Dv||_F / N`, accepted candidates require
 orientation-preserving between audit nodes. It has no learned, pretrained or
 previous-model dependency.
 
-This is still the shared-animal stage, not the complete pseudo-animal
-generator: the finite-depth coordinate pullback, section-processing warp,
-damage, appearance and brush descendants remain downstream, and only that
-complete chain may issue the final `synthetic_realization_id`. The frozen
-half-fine-knot audit grid contains 83,754 points for representative Allen bounds
-at 500-um fine spacing; the current CPU implementation exceeded 180 seconds
-even for an identity timing probe. The density contract is retained, but the
-audit must be vectorized or moved to GPU before production-scale generation.
+The downstream source path now pulls every finite-depth sample through that
+animal transform, then applies section-processing warp, damage, modality and
+appearance, crop/window, and accurate/imperfect/absent brush descendants before
+issuing the final `synthetic_realization_id`. Exact make--verify--replay and
+lineage tests establish a source contract, not a passed scientific generator
+qualification. The frozen half-fine-knot audit grid contains 83,754 points for
+representative Allen bounds at 500-um fine spacing; the current CPU
+implementation exceeded 180 seconds even for an identity timing probe. The
+density contract is retained, but the audit must be vectorized or moved to GPU
+before production-scale generation.
 
 Initial animal-warp bounds are explicit engineering priors, not claimed
 population estimates: global scale `0.80--1.25`, low-frequency local Jacobian
@@ -191,10 +193,64 @@ geometry. The small pinned-Allen preflight in
 passed near-cardinal and extreme-oblique samples plus exact cached replay. It
 is a geometry/render feasibility result, not model or accuracy evidence.
 
-This is still not a complete rendered synthetic realization: deformation,
-appearance, damage, moving images and accurate/imperfect/absent outline modes
-remain unbound. Consequently `synthetic_realization_id` is still withheld and
-the large training manifest remains unfrozen.
+### Finite-thickness convergence status
+
+The original 17-case `12.5 -> 6.25 um` axial-refinement rule is retired as a
+qualification gate. Its thresholds have not been loosened. The observed
+development failure is exact-replay and receipt bound, and the operational
+runner saves any Allen-scale raw report before its decision sidecar, but one
+universal MAE/p99 envelope is not a valid
+convergence claim across smooth scalar quadrature, support and label mass,
+nearest-label modes, hard support/abstention decisions and the nonlinear
+`clip((w - 0.5) / 0.3, 0, 1)` dense-weight transform. Even an ideal one-dimensional
+binary boundary can produce an occupancy tail error of about `0.10` and a
+dense-weight tail error of `1/3` under the two nonnested trapezoid schedules.
+Exact centre-plane coordinate, label and support replay therefore does not make
+those discontinuous boundary quantities satisfy the old universal envelope.
+The same failure pattern in the undeformed precursor also prevents attributing
+it to the subject-deformation pullback.
+
+The active runner now writes the legacy raw report and a separate authenticated
+`reject_legacy_universal_gate` decision; it cannot emit a qualification-pass
+event. The replacement is a fixed-case multiresolution experiment, not a
+threshold adjustment:
+
+1. retain the first deterministic failing pose, animal and accepted support
+   attempt without redraw;
+2. render that exact case at `12.5`, `6.25`, `3.125` and `1.5625 um`, repeat it
+   with identity deformation, and retain every raw array;
+3. use `1.5625 um` only as the provisional numerical reference;
+4. report smooth scalar, occupancy/label-mass, transformed dense-weight and
+   categorical-flip families separately, stratified into stable interior,
+   axial/tissue-support boundary and atlas-label boundary pixels;
+5. keep same-pose and byte-identical centre-target invariants strict, then
+   predeclare metric-specific, boundary-aware convergence rules before a new
+   subject-deformed panel is run.
+
+Until that experiment is frozen and passed, neither the undeformed nor the
+subject-deformed finite-thickness path has a scientific qualification result.
+The receipt-bound plan, exact first-failure replay, eight-render orchestration
+and threshold-free stratified assessment are implemented at source/test level;
+the Allen-scale experiment itself has not been run.
+
+The operational replacement is deliberately opt-in. Its runner requires
+`ANATOMY_TRACKER_RUN_SUBJECT_SLAB_MULTIRESOLUTION_V2=1` and an explicit absolute
+`ANATOMY_TRACKER_SUBJECT_SLAB_MULTIRESOLUTION_OUTPUT` outside the repository.
+An unpublished sibling tree retains the failed report, plan, complete
+nonidentity deformation plan, four raw precursors, all eight raw renders and
+their array receipts, and the assessment. Pinned Allen inputs and every frozen
+file are independently hashed; the verifier reconstructs the NumPy arrays,
+replays the plan/deformation/precursor/subject-render contracts and recomputes
+the assessment before one same-volume rename publishes the tree. Existing
+final or partial paths are never overwritten. The standalone verifier repeats
+the same checks from the published raw bundle. Both paths retain
+`qualification_eligible=false` and `acceptance_thresholds=null`.
+
+The full source chain now binds deformation, moving images, damage, appearance,
+background and accurate/imperfect/absent outline modes into one final
+`synthetic_realization_id`. The large training manifest remains unfrozen until
+the finite-thickness replacement experiment and the small live semantic-oracle
+panel have passed; source completeness is not treated as scientific evidence.
 
 Future finite-raster wrong-plane candidates use geodesic normal perturbations,
 physical normal-offset perturbations and coupled anatomically confusing planes.
@@ -202,13 +258,13 @@ Every positive and candidate must intersect the brain; their exact O/U/V and
 physical candidate distances must be hash-bound. Pose ranking must remain
 sensitive after an optimal bounded local warp.
 
-The current candidate prototype remains an unoriented infinite-plane proposal.
-The positive finite-render precursor now binds roll, centre, basis, O/U/V and
-reflection state, but wrong-plane candidates do not yet inherit that finite
-geometry. Before candidate images become training-eligible, the verified base
-frame is minimally rotated/parallel-transported to each candidate normal, an
-explicit roll perturbation is applied, and every candidate raster is required
-to contain a prespecified amount of rendered tissue.
+The current 40-candidate bank now transports the verified finite base frame,
+applies explicit normal/offset/roll/coupled perturbations, binds O/U/V and
+reflection state, and requires target-independent support acceptance. It is a
+forced-truth engineering premise panel, not an inference distribution:
+candidate frequency is not posterior mass and the bank cannot initialize the
+release model. A separate inference-time catalogue with predeclared cell
+measures remains required after the live oracle gate.
 
 ## Appearance distribution
 

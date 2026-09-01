@@ -86,6 +86,71 @@ def test_v2_rng_has_frozen_known_vectors_and_separates_every_domain():
     assert len(set(observed)) == len(observed)
 
 
+def test_v2_rng_rejects_noninteger_coordinates_and_noncanonical_names():
+    root = 0x415154564F320001
+    expected = derive_v2_field_seed(root, "development", 2, "pose", "roll", 3)
+    assert expected == derive_v2_field_seed(
+        np.uint64(root), "development", np.int64(2), "pose", "roll", np.int32(3)
+    )
+    invalid = (
+        (float(root), "development", 2, "pose", "roll", 3),
+        (True, "development", 2, "pose", "roll", 3),
+        (root, "development", 2.0, "pose", "roll", 3),
+        (root, "development", True, "pose", "roll", 3),
+        (root, "development", 2, "pose", "roll", 3.0),
+        (root, "development", 2, "pose", "roll", False),
+        (root, 7, 2, "pose", "roll", 3),
+        (root, "", 2, "pose", "roll", 3),
+        (root, "development", 2, 7, "roll", 3),
+        (root, "development", 2, "pose", object(), 3),
+        (root, "development", 1 << 64, "pose", "roll", 3),
+    )
+    for arguments in invalid:
+        with pytest.raises(ValueError):
+            derive_v2_field_seed(*arguments)
+
+
+def test_authenticated_parent_shape_and_lineage_indices_are_strict(prepared):
+    _, _, support, context = prepared
+    assert global_reference_support_geometry(
+        support, (np.int64(256), np.int32(256))
+    )["parent_shape_h_w"] == [256, 256]
+    artifact = make_v2_smoke_global_reference_centre_render(
+        context,
+        "development",
+        np.uint64(0x415154564F320001),
+        np.int64(0),
+        "near_AP",
+        parent_shape_h_w=(np.int32(256), np.int64(256)),
+        animal_id="animal",
+        animal_index=np.int32(1),
+    )
+    assert type(artifact["generator"]["resolved_config"]["sample_index"]) is int
+    assert type(artifact["provenance"]["animal_index"]) is int
+    verify_v2_smoke_global_reference_centre_render(artifact, context)
+    for invalid_shape in ((256.0, 256), (True, 256), (256, np.float64(256))):
+        with pytest.raises(ValueError, match="parent_shape_h_w"):
+            global_reference_support_geometry(support, invalid_shape)
+    with pytest.raises(ValueError, match="root_seed"):
+        sample_v2_smoke_plane_pose(
+            support, "development", float(0x415154564F320001), 0, "near_AP"
+        )
+    with pytest.raises(ValueError, match="sample_index"):
+        sample_v2_smoke_plane_pose(
+            support, "development", "0x415154564f320001", 0.0, "near_AP"
+        )
+    with pytest.raises(ValueError, match="animal_index"):
+        make_v2_smoke_global_reference_centre_render(
+            context,
+            "development",
+            "0x415154564f320001",
+            0,
+            "near_AP",
+            animal_id="animal",
+            animal_index=True,
+        )
+
+
 def test_global_fov_uses_closed_voxel_faces_and_is_pose_independent(prepared):
     _, _, support, _ = prepared
     fov = global_reference_support_geometry(support)
@@ -216,6 +281,7 @@ def test_centre_render_matches_frozen_primitive_and_linear_phantom(prepared):
         0,
         "near_AP",
         animal_id="animal-1",
+        animal_index=1,
         specimen_id="specimen-1a",
         experiment_id="experiment-11",
     )
@@ -241,10 +307,17 @@ def test_centre_render_matches_frozen_primitive_and_linear_phantom(prepared):
     assert artifact["generator"]["resolved_config"]["preflight"]["receipt_id"] == (
         "arbitrary-plane-acquisition-hardening-2026-09-01"
     )
+    assert artifact["generator"]["resolved_config"]["source_sha256_canonicalization"] == (
+        acquisition.V2_SOURCE_SHA256_CANONICALIZATION
+    )
+    assert context["receipt"]["source_sha256_canonicalization"] == (
+        acquisition.V2_SOURCE_SHA256_CANONICALIZATION
+    )
     assert artifact["generator"]["resolved_config_sha256"] == acquisition._payload_sha256(
         artifact["generator"]["resolved_config"]
     )
     assert artifact["provenance"]["animal_id"] == "animal-1"
+    assert artifact["provenance"]["animal_index"] == 1
     assert artifact["smoke_case_assignment"] == {
         "sample_index": 0,
         "plane_stratum": "near_AP",
@@ -311,6 +384,40 @@ def test_all_twenty_centre_renders_replay_byte_exactly(prepared):
         )
     assert len(set(identities)) == 20
     assert observed == expected
+
+
+def test_text_source_hashes_are_independent_of_checkout_line_endings(tmp_path):
+    lf = tmp_path / "lf.txt"
+    crlf = tmp_path / "crlf.txt"
+    cr = tmp_path / "cr.txt"
+    lf.write_bytes(b"alpha\nbeta\n")
+    crlf.write_bytes(b"alpha\r\nbeta\r\n")
+    cr.write_bytes(b"alpha\rbeta\r")
+    assert acquisition._normalized_text_sha256(lf) == acquisition._normalized_text_sha256(crlf)
+    assert acquisition._normalized_text_sha256(lf) == acquisition._normalized_text_sha256(cr)
+
+
+def test_preflight_provenance_requires_the_frozen_canonical_text(monkeypatch, tmp_path):
+    canonical = tmp_path / "preflight.yaml"
+    canonical.write_bytes(b"alpha\nbeta\n")
+    digest = acquisition._normalized_text_sha256(canonical)
+    monkeypatch.setattr(acquisition, "_PREFLIGHT_PATH", canonical)
+    monkeypatch.setattr(acquisition, "V2_PREFLIGHT_CANONICAL_SHA256", digest)
+    assert acquisition._preflight_provenance()["file_sha256"] == digest
+    canonical.write_bytes(b"alpha\r\nbeta\r\n")
+    assert acquisition._preflight_provenance()["file_sha256"] == digest
+    canonical.write_bytes(b"alpha\r\ngamma\r\n")
+    with pytest.raises(ValueError, match="preflight content"):
+        acquisition._preflight_provenance()
+
+
+def test_repository_preflight_has_the_frozen_canonical_hash():
+    assert acquisition._preflight_provenance()["file_sha256"] == (
+        acquisition.V2_PREFLIGHT_CANONICAL_SHA256
+    )
+    assert acquisition._preflight_provenance()["file_sha256_canonicalization"] == (
+        acquisition.V2_SOURCE_SHA256_CANONICALIZATION
+    )
 
 
 @pytest.mark.parametrize("target", ["geometry", "raster", "source"])

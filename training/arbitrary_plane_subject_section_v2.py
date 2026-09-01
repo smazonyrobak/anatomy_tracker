@@ -13,6 +13,42 @@ SUBJECT_CENTRE_PLANE_FIT_V2_SCHEMA = "anatomy-tracker.subject-centre-plane-fit/v
 SUBJECT_CENTRE_PLANE_FIT_V2_ALGORITHM = "quicknii-orthogonal-design-row-major-float64/v2"
 
 
+def sample_nearest_annotation_coordinate_rasters_v2(
+    annotation_volume: torch.Tensor,
+    allen_coordinate_rasters_float32: torch.Tensor,
+) -> torch.Tensor:
+    """Nearest-sample S Allen-index rasters with ties-to-even and zero padding."""
+    annotation = torch.as_tensor(annotation_volume)
+    points = torch.as_tensor(
+        allen_coordinate_rasters_float32, device=annotation.device
+    )
+    if annotation.ndim != 3 or annotation.dtype != torch.int64:
+        raise ValueError("annotation_volume must be one int64 AP-DV-ML volume")
+    if points.ndim != 4 or points.shape[-1] != 3 or points.dtype != torch.float32:
+        raise ValueError("coordinate rasters must have float32 shape [S,H,W,3]")
+
+    depth, height, width = annotation.shape
+    indices = torch.round(points).long()
+    valid = (
+        (indices[..., 0] >= 0)
+        & (indices[..., 0] < depth)
+        & (indices[..., 1] >= 0)
+        & (indices[..., 1] < height)
+        & (indices[..., 2] >= 0)
+        & (indices[..., 2] < width)
+    )
+    clipped = torch.stack(
+        (
+            indices[..., 0].clamp(0, depth - 1),
+            indices[..., 1].clamp(0, height - 1),
+            indices[..., 2].clamp(0, width - 1),
+        ),
+        -1,
+    )
+    labels = annotation[clipped[..., 0], clipped[..., 1], clipped[..., 2]]
+    return torch.where(valid, labels, torch.zeros_like(labels))
+
+
 def sample_coordinate_rasters_v2(
     scalar_volume: torch.Tensor,
     annotation_volume: torch.Tensor,
@@ -46,25 +82,9 @@ def sample_coordinate_rasters_v2(
         align_corners=True,
     )[:, 0, 0]
 
-    indices = torch.round(points).long()
-    valid = (
-        (indices[..., 0] >= 0)
-        & (indices[..., 0] < depth)
-        & (indices[..., 1] >= 0)
-        & (indices[..., 1] < height)
-        & (indices[..., 2] >= 0)
-        & (indices[..., 2] < width)
+    return samples, sample_nearest_annotation_coordinate_rasters_v2(
+        annotation, points
     )
-    clipped = torch.stack(
-        (
-            indices[..., 0].clamp(0, depth - 1),
-            indices[..., 1].clamp(0, height - 1),
-            indices[..., 2].clamp(0, width - 1),
-        ),
-        -1,
-    )
-    labels = annotation[clipped[..., 0], clipped[..., 1], clipped[..., 2]]
-    return samples, torch.where(valid, labels, torch.zeros_like(labels))
 
 
 def _row_major_sum(values: np.ndarray) -> np.ndarray:
