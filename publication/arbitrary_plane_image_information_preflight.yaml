@@ -1,0 +1,1088 @@
+schema_version: "1.0"
+receipt_id: "arbitrary-plane-image-information-preflight-2026-09-01"
+date: "2026-09-01"
+status: "development_protocol_frozen_execution_pending"
+claim_scope: >-
+  Predeclared small, model-free arbitrary-plane image-information pose-ranking
+  pilot. It asks whether dewarped synthetic histology intensity can identify the
+  exact plane within the already frozen 40-candidate banks. Exact deformation
+  and visibility remain oracle inputs. This is not model training, architecture
+  selection, uncertainty calibration, a real-histology or animal-level result,
+  a DeepSlice comparison, qualification, final-test evaluation or a benchmark.
+
+decision_basis:
+  semantic_result: "publication/arbitrary_plane_semantic_oracle_result.yaml"
+  semantic_result_checkout_sha256: "8adc2a97c4aacfcd0e91032b15cc475780cec8b8210ae0a4686ed90e697c9ac3"
+  semantic_result_payload_sha256: "d60703b5d04cbc58e9e0060f020e82c43699c4c686bffc26171a44ea7ba90ad8"
+  semantic_decision: "PASS for the narrow atlas-label premise"
+  rationale: >-
+    The semantic result clears the physical representation and finite-candidate
+    premise but cannot establish that pixels contain the same information.
+    This separately frozen pilot tests that missing premise before any learned
+    recurrent or coarse-to-fine architecture is screened.
+
+repository:
+  branch: "codex/joint-registration"
+  source_parent_commit: "ee9c72cec7980cb014721cb5e69a8fee0a7c1a27"
+  frozen_semantic_source_commit: "27c4ba644c7b75ab6f676d944e917811df961b05"
+  frozen_semantic_output: "build/arbitrary_plane_semantic_oracle_raw_27c4ba6"
+  frozen_result_json_sha256: "dee90febea4faf9a8ae92c27eea7907cf0ecdc27e6a7e7be19e59023df29794a"
+  frozen_config_payload_sha256: "72312591a83e6c6250399017bb093fb323ff12b6ed745b2baba19704f94fe9b2"
+  frozen_inventory_sha256: "3c611f6296e950e7c1b3582e55268838e1922c595775b0217d697d8350191cd3"
+  frozen_inventory:
+    file_count: 514
+    total_bytes: 63939690
+    recipe: >-
+      SHA-256 of canonical JSON for the sorted list of every frozen file as
+      {path,size_bytes,sha256}, ordered by ascending POSIX path using Unicode
+      code-point lexicographic comparison, with lowercase SHA-256 hex, UTF-8,
+      sort_keys=true, separators=(',',':') and allow_nan=false.
+  frozen_contexts:
+    support_index_sha256: "0f6d8325ff1aa1965b28e4c5edb1327ae58129a78fe41d6f2ccf1896f449f65c"
+    prepared_render_context_sha256: "04c387c1a778bfd0962cea972047b5eadc84f8cd2bce92ff74e9656f0af63b47"
+    prepared_candidate_annotation_context_sha256: "9e7e241b1b72bee571dffad53ea817d8221564c5827837f053490d29370eed88"
+    decoded_template_array_sha256: "92c1441a9a025d83199bcf3321fb8fb4b519f44030ab44d11f751f64e9516bce"
+    decoded_template_dtype_shape_order: ["<u2", [528, 320, 456], "F"]
+    scalar_conversion_array_sha256: "b7ad03fa18551a980232a1558be8b473581fbf162d2df3669337451858fa02fa"
+    scalar_conversion_dtype_shape_order: ["<f4", [528, 320, 456], "C"]
+    decoded_annotation_array_sha256: "d691efd938b9e4694e7b939aa5e71efc68441b6a25aa31f0caea51a6d26b6c8c"
+    decoded_annotation_dtype_shape_order: ["<u4", [528, 320, 456], "F"]
+  immutable_source_rule: >-
+    Do not edit any of the 12 source/preflight files hash-bound by the semantic
+    result. Implement the pilot, cached candidate-scalar adapter and tests only
+    in new files. Bind their hashes in the executed result.
+  execution_authority: >-
+    Before launch, require the tracked and untracked worktree to be empty,
+    HEAD to equal origin/codex/joint-registration, and the committed preflight,
+    runner, scorer, tests and all 12 frozen dependencies to match both their Git
+    blob SHA-256 and loaded-checkout SHA-256 records. Abort before scoring on
+    any mismatch. The generated resolved config binds those records and its own
+    payload hash. Build output is created only after this gate.
+
+independence:
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  legacy_descriptor_dependencies: []
+  initialization: "deterministic frozen case streams only; no learned initialization"
+  prohibited:
+    - "old checkpoints, learned features, pseudolabels or prior-model predictions"
+    - "legacy GUI or dense-registration MIND implementations"
+    - "selecting or combining descriptors after inspecting pilot scores"
+    - "candidate metadata, pose, class, ID, order or coordinate channels entering a scorer"
+
+literature_review:
+  reviewed_on: "2026-09-01"
+  conclusions:
+    - >-
+      MIND motivates a dense local self-similarity descriptor for nonlinear
+      cross-modality intensity relationships, noise and bias fields.
+    - >-
+      TIRL directly supports an eight-component 2-D MIND representation,
+      fixed-domain descriptor distances, masks and multiresolution search for
+      stand-alone histology-to-volume registration.
+    - >-
+      Mouse-brain work by Xiong et al. supports HOG L2 scoring with larger cells
+      for localization and smaller cells for deformation under uneven stain and
+      modest distortion.
+    - >-
+      Normalized gradient fields motivate a separate polarity-insensitive
+      structural diagnostic.
+    - >-
+      STAM reports that section angle affects anatomical interpretation and
+      provides arbitrary-angle atlas reslicing; it does not validate the
+      scoring choices or gates below.
+  engineering_choices_not_literature_facts:
+    - "the exact 100-um MIND displacement and 50-um Gaussian sigma"
+    - "the 400-um HOG cell width and 100-um gradient smoothing"
+    - "the 1000-um context ring and all numerical gates"
+    - "MIND as the sole primary rather than a learned or combined descriptor"
+  primary_sources:
+    - "Heinrich MP et al. (2012), MIND, https://doi.org/10.1016/j.media.2012.05.008"
+    - "Huszar IN et al. (2023), TIRL, https://doi.org/10.1016/j.neuroimage.2022.119792"
+    - "Xiong J et al. (2018), mouse histology HOG mapping, https://doi.org/10.3389/fninf.2018.00093"
+    - "Dalal N and Triggs B (2005), HOG, https://doi.org/10.1109/CVPR.2005.177"
+    - "Haber E and Modersitzki J (2006), NGF, https://doi.org/10.1007/11866763_89"
+    - "Feng Z et al. (2025), STAM, https://doi.org/10.1038/s41586-025-09211-8"
+
+frozen_cases:
+  statistical_unit: "base synthetic plane realization, never outline descendant or candidate pair"
+  base_count: 64
+  candidate_count_per_base: 40
+  paired_outline_descendants_per_base: 3
+  outline_modes:
+    - "accurate-outline-black-exterior"
+    - "imperfect-outline-black-exterior"
+    - "absent-outline-acquired-background"
+  orientation_counts:
+    near_AP: 12
+    near_DV: 12
+    near_ML: 12
+    general_oblique: 28
+  pooled_safeguard_strata:
+    challenging_appearance:
+      membership: >-
+        Accepted frozen G2 parameters.source_family is exactly
+        label-conditioned or template-label-mixture.
+      frozen_base_count: 22
+    damaged:
+      membership: "Accepted frozen G3 parameters.event_count >= 1."
+      frozen_base_count: 27
+      interpretation: >-
+        This tests pose information retained in valid tissue after damage;
+        privileged damage-validity masking means it is not a damaged-pixel
+        detection or robustness claim.
+    membership_contract: >-
+      Derive and save canonically sorted base-case indices from authenticated
+      accepted receipts before any image score. Count mismatch is an integrity
+      failure. Evaluate pools independently; overlapping cases remain one base
+      unit in each pool and are never duplicated within a pool.
+  shuffled_mapping: "target case (i+17) modulo 64"
+  shuffled_contract: >-
+    For bank i and shifted target j=(i+17) modulo 64, target j owns the outline
+    descendant, dewarped image, visible/core/context/ring masks and target pixel
+    pitch. Before scoring, an authenticated control builder resamples each bank-i
+    candidate about the x/W=0.5,y/H=0.5 canvas centre onto target j's physical
+    pitch: source x=W/2+(x-W/2)*p_j/p_i and likewise for y, bilinear-zero for
+    intensity and nearest-zero for the secondary support mask. The output remains
+    192x256. Target pitch then governs every descriptor constant. Candidate pitch
+    is used only by this hash-bound resampler outside the scorer; no pitch, pose
+    or geometry metadata enters the scorer. Save p_i, p_j, the exact resampling
+    map/hash and all target-j/bank-i receipts. Construct the source-coordinate
+    map in float64 C order from stored float64 p_i,p_j. Resample already-scaled
+    candidate float64 intensity with scipy.ndimage.map_coordinates, order=1,
+    mode='constant', cval=0.0, prefilter=false. Resample the secondary support
+    mask by np.rint ties-to-even followed by explicit bounds and nearest lookup,
+    with out-of-bounds false. Pass continuous coordinates to map_coordinates as
+    np.stack((source_y,source_x),axis=0). Candidate global scaling is unchanged.
+  reuse_contract: >-
+    Reconstruct only each accepted finite parent from its frozen accepted seed,
+    then reconstruct its bank and three descendants. Require exact equality of
+    every frozen parent, bank, order, candidate, truth, descendant, provenance
+    and array receipt before scoring. Do not rerun rejection searches, replace a
+    case, alter a bank, change order or tune a descriptor per case.
+  geometry_only_feasibility_check_before_freeze:
+    observed_parent_pitch_um: [44.881894316242295, 74.57340880193863]
+    mind_core_pixel_count_before_bilinear_safety:
+      minimum: 322
+      median: 10682.5
+      maximum: 20666
+    interpretation: >-
+      The exact 100/50-um MIND footprint retains adequate core support on every
+      saved target without inspecting any image score. A 600-um multiresolution
+      erosion was rejected before freezing because one thin plane retained only
+      four native pixels.
+  post_bilinear_safety_score_blind_replay:
+    method: >-
+      Two independent in-memory replays regenerated the 64 exact accepted
+      parents and one accurate-outline descendant per parent. Every parent and
+      synthetic receipt matched the frozen sidecar before constructing the exact
+      four-corner-safe masks. No candidate renderer, dewarper, descriptor or
+      score function was called and no artifact was written.
+    compact_record_columns:
+      - "case_index"
+      - "map_safe"
+      - "visible"
+      - "core"
+      - "context"
+      - "boundary_ring"
+    compact_records:
+      - [0, 47730, 15655, 11321, 25480, 9825]
+      - [1, 46504, 19496, 15608, 29091, 9595]
+      - [2, 47480, 17189, 8776, 27716, 10527]
+      - [3, 47762, 15045, 12454, 23141, 8096]
+      - [4, 46780, 9792, 7542, 17657, 7865]
+      - [5, 48705, 14979, 11104, 25250, 10271]
+      - [6, 47008, 13999, 9847, 23318, 9349]
+      - [7, 47528, 22830, 18871, 33537, 10707]
+      - [8, 48705, 12287, 8602, 22856, 10569]
+      - [9, 48259, 11857, 7688, 21080, 9223]
+      - [10, 46835, 11021, 6220, 18798, 7777]
+      - [11, 47858, 20852, 14219, 35264, 14412]
+      - [12, 48249, 7209, 4380, 13899, 6690]
+      - [13, 48195, 21827, 17391, 32012, 10185]
+      - [14, 48705, 23068, 18715, 32129, 9061]
+      - [15, 46536, 16149, 10984, 24735, 8586]
+      - [16, 48705, 25130, 20119, 36208, 11078]
+      - [17, 48705, 13318, 10159, 21537, 8219]
+      - [18, 47510, 12310, 7815, 20013, 7703]
+      - [19, 47878, 17142, 13435, 23869, 6735]
+      - [20, 47772, 3187, 1840, 9812, 6625]
+      - [21, 48705, 20728, 16928, 30152, 9424]
+      - [22, 47719, 14676, 10872, 22230, 7554]
+      - [23, 48241, 2598, 884, 8716, 6118]
+      - [24, 47548, 13283, 10505, 21592, 8309]
+      - [25, 48705, 17230, 10513, 29113, 11883]
+      - [26, 48247, 12749, 5741, 22106, 9357]
+      - [27, 48236, 7045, 5349, 13661, 6616]
+      - [28, 47850, 3838, 2308, 7591, 3753]
+      - [29, 48705, 9915, 7272, 16246, 6331]
+      - [30, 47784, 9322, 7306, 15335, 6013]
+      - [31, 48705, 17094, 13788, 25830, 8736]
+      - [32, 48705, 16153, 11953, 27635, 11482]
+      - [33, 47251, 19859, 15436, 31519, 11662]
+      - [34, 46809, 14624, 7969, 24400, 9776]
+      - [35, 47425, 9753, 7319, 15781, 6028]
+      - [36, 48705, 10185, 6662, 18190, 8005]
+      - [37, 47496, 1391, 236, 5417, 4026]
+      - [38, 48705, 13355, 10621, 20724, 7369]
+      - [39, 48005, 16223, 10432, 27564, 11341]
+      - [40, 46985, 14380, 11778, 21770, 7390]
+      - [41, 48086, 19540, 15874, 30253, 10713]
+      - [42, 48705, 12154, 8435, 18347, 6193]
+      - [43, 46993, 6030, 2986, 12902, 6872]
+      - [44, 48202, 11650, 9136, 18481, 6831]
+      - [45, 47640, 22592, 17388, 32446, 9854]
+      - [46, 47976, 21560, 16991, 33141, 11586]
+      - [47, 48705, 18110, 12347, 29170, 11060]
+      - [48, 47632, 19162, 13107, 27512, 8350]
+      - [49, 48705, 9546, 6603, 17312, 7766]
+      - [50, 47830, 3816, 1836, 11327, 7511]
+      - [51, 48705, 6058, 2702, 13318, 7260]
+      - [52, 47625, 22690, 18133, 32922, 10234]
+      - [53, 47003, 23787, 18571, 34657, 10870]
+      - [54, 47797, 18650, 15276, 26967, 8317]
+      - [55, 47706, 18785, 14727, 29686, 10901]
+      - [56, 48089, 2235, 548, 7507, 5272]
+      - [57, 48018, 9638, 6248, 16938, 7300]
+      - [58, 48705, 21088, 14349, 32646, 11558]
+      - [59, 47256, 21921, 18047, 32909, 10988]
+      - [60, 47232, 4081, 2718, 8993, 4912]
+      - [61, 46916, 6442, 3795, 15168, 8726]
+      - [62, 48705, 10156, 4407, 17970, 7814]
+      - [63, 47745, 6027, 3173, 12996, 6969]
+    compact_records_canonical_json_sha256: "447e3c6618a74f123a3f33c6fbae55d0981cd132ef6a305c5c162899a730613f"
+    named_records_canonical_json_sha256: "6690b32790b2d8b7e597f51cc0f01cde88f3df1c79b6f65723b348a2a1b31210"
+    hash_recipe: >-
+      Compact digest uses canonical JSON of compact_records. Named digest uses
+      the equivalent list of dictionaries keyed by the six column names above;
+      both use UTF-8, sort_keys=true, separators=(',',':') and allow_nan=false.
+    count_summary_minimum_median_maximum:
+      map_safe: [46504, 47854.0, 48705]
+      visible: [1391, 14189.5, 25130]
+      core: [236, 10295.5, 20119]
+      context: [5417, 22543.0, 36208]
+      boundary_ring: [3753, 8333.5, 14412]
+    prelaunch_gate_decision: "PASS; all 64 core and context counts exceed their frozen minima"
+  score_blind_prelaunch_mask_gate: >-
+    Before computing any target or candidate descriptor, rebuild all exact
+    four-corner-safe visible/core/context/ring masks. Abort the untouched pilot
+    if any primary core has fewer than 128 pixels or context fewer than 512;
+    save only a prelaunch failure receipt in a fresh failed-output directory.
+    For secondary HOG/gradient-like or boundary-ring domains with no eligible
+    block/pixel after their additional support erosion, save a named
+    insufficient-domain null rather than adapting constants or dropping a case.
+
+score_blind_prelaunch_failure:
+  finalize_condition: >-
+    Finalize this receipt only after all 64 frozen cases replay exactly and all
+    five target-only masks have been built, but before candidate-scalar
+    rendering, descriptor construction or score calculation, when at least one
+    core has fewer than 128 pixels or context fewer than 512. A replay or source
+    integrity exception aborts without finalizing this insufficient-domain
+    receipt.
+  output: "fresh build/arbitrary_plane_image_information_prelaunch_failed_<source-short-commit>"
+  mutual_exclusion: >-
+    Neither the ordinary nor failed directory may pre-exist; a run creates
+    exactly one of them only after source authority and all 64 frozen replays
+    succeed. An authority/replay abort creates neither directory.
+  exact_tree: {prelaunch_failure.json: 1, total_files: 1}
+  prelaunch_failure_json_keys:
+    - "schema"
+    - "status"
+    - "failure_code"
+    - "execution_contract"
+    - "frozen_semantic_bindings"
+    - "thresholds"
+    - "case_mask_records"
+    - "failures"
+    - "score_blind_evidence"
+    - "data_access"
+    - "model_independence"
+    - "failure_payload_sha256"
+  case_mask_record_keys:
+    - "case_index"
+    - "semantic_case_payload_sha256"
+    - "paired_view_group_id"
+    - "pixel_pitch_um"
+    - "mask_receipts"
+    - "pixel_counts"
+    - "passed"
+  failure_record_keys:
+    - "case_index"
+    - "domain"
+    - "observed_pixel_count"
+    - "minimum_required_pixels"
+  fixed_values: >-
+    status='failed_before_scoring';
+    failure_code='INSUFFICIENT_PRIMARY_DOMAIN'; case_mask_records contain exactly
+    case indices 0..63 in order; failures are nonempty and sorted by
+    (case_index,domain).
+  execution_contract: >-
+    Bind resolved-config payload/hash, commit, preflight, environment and every
+    new/frozen source hash. Each mask_receipts object has exactly map_safe,
+    visible, core, context and boundary_ring using the inline identity below.
+  inline_nonpersisted_mask_identity:
+    exact_keys:
+      - "dtype"
+      - "shape"
+      - "bitorder"
+      - "bit_count"
+      - "byte_count"
+      - "packed_payload_sha256"
+      - "storage"
+    recipe: >-
+      Convert to C-order Boolean, packbits with bitorder='little', then hash
+      canonical JSON {dtype:'|b1',shape,bitorder:'little'} immediately followed
+      by packed bytes. Set storage='not_persisted'; relative_path is forbidden.
+      This is an in-receipt identity only and does not add files to the one-file
+      failure tree.
+  score_blind_evidence: >-
+    Bind all_64_masks_built=true, frozen_replay_passed=true,
+    candidate_scalar_render_count=0, descriptor_call_count=0,
+    score_landscape_count=0 and success_output_created=false. No score, rank,
+    candidate scalar or descriptor field/file is permitted. The verifier
+    regenerates every mask, count, receipt and failure.
+  canonical_write_and_verification: >-
+    Write the one JSON atomically, self-hash it with the canonical-JSON recipe
+    below excluding only failure_payload_sha256, then reload and independently
+    verify the complete one-file tree and payload.
+
+atlas_intensity_contract:
+  source: "Allen CCFv3 2017 25-um average template"
+  source_path: "data/Allen Brain Atlas 25um/average_template_25.nrrd"
+  source_sha256: "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b"
+  support_annotation_sha256: "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
+  global_tissue_voxel_count: 32387385
+  global_quantiles:
+    mask: "raw Allen annotation nonzero"
+    method: "numpy.quantile(method='linear')"
+    probabilities: [0.005, 0.995]
+    values: [6.0, 287.0]
+  candidate_scaling: >-
+    Render the raw float32 atlas volume to a float32 candidate raster first,
+    promote that raster to float64, then compute
+    clip((scalar-6.0)/281.0,0.0,1.0). Scaling the 3-D volume before trilinear
+    rendering is forbidden because it is not numerically equivalent.
+  target_scaling: >-
+    Keep the generator's [0,1] float32 model_input_image and map through the
+    frozen float32 dewarp, then promote the dewarped raster to float64. No
+    per-image, per-case or per-candidate histogram fitting, histogram matching,
+    adaptive contrast or learned normalization.
+
+replay_and_rendering:
+  ordinary_scalar_padding: 0.0
+  target_dewarp: >-
+    Call the frozen bilinear_sample_scalar on each descendant's float32
+    model_input_image and float32 fixed_to_source_map with constant-zero
+    padding, retain its float32 result exactly, then promote that result to
+    float64 for descriptor calculation. This is source-to-fixed dewarping;
+    using source_to_fixed_map or interpolating directly in float64 is an
+    exact-control failure.
+  bilinear_safe_map_domain: >-
+    For each float32 fixed_to_source coordinate, set x0=floor(x), x1=x0+1,
+    y0=floor(y), y1=y0+1 and require all four indexed corners unconditionally
+    to be in bounds and true in source_map_domain_mask, then intersect
+    fixed_map_domain_mask. This conservative target-only Boolean predicate
+    guarantees that no invalid source corner enters a bilinear value, including
+    the formally zero-weight second corner at an integral coordinate.
+  bilinear_safe_visible_tissue: >-
+    Intersect fixed_valid_correspondence_mask with the same exact four-corner
+    predicate applied to source_valid_correspondence_mask.
+  candidate_scalar_render: >-
+    A new-file adapter may call the frozen prepared-context trusted renderer so
+    the authenticated atlas tensor is loaded once. For every candidate, require
+    the simultaneously rendered annotation and brain mask to equal the frozen
+    candidate arrays and save a scalar-array receipt. Do not edit the frozen
+    renderer merely to expose a new API.
+  memory: >-
+    Stream one base and one pending shuffled bank. Generate outline descendants
+    one at a time. Never retain all 64 banks or all descendant arrays.
+
+target_only_score_domains:
+  visible:
+    definition: "bilinear_safe_visible_tissue"
+    role: "tissue and candidate-exterior mismatch reference"
+  core:
+    definition: >-
+      Binary erosion of visible by the exact union of all MIND Gaussian-patch
+      supports and their eight shifted copies, border_value=0.
+    minimum_required_pixels: 128
+    role: "internal-anatomy endpoint without outline/background support"
+  context:
+    definition: >-
+      scipy.ndimage.distance_transform_edt(NOT visible,sampling=(p,p)) <=
+      1000.0, intersected with binary_erosion(map_safe,structure=F,
+      iterations=1,border_value=0,origin=0,brute_force=false). Distances are
+      between pixel centres. The mask is identical for all candidates and
+      outline modes.
+    minimum_required_pixels: 512
+    role: "oracle-mask-conditioned appearance endpoint with bounded exterior context"
+  boundary_ring:
+    definition: "context AND NOT visible"
+    role: "descriptive background/outline-sensitivity ablation"
+  fixed_denominator_rule: >-
+    Candidate support never shrinks, crops or reweights a target domain.
+    The gated descriptor-only scores never receive candidate annotation or
+    support. They use the scaled trilinear scalar raster unchanged at every
+    pixel, including pixels where the nearest-rendered annotation/support is
+    false; they never multiply or zero it by candidate support. Any explicit
+    support masking or penalty is confined to named secondary/null ablations.
+    MIND+atlas-support never gates. The predeclared primary-versus-constant-null
+    separation statistics are the only support-dependent gate comparisons; they
+    compare complete landscapes and never alter a primary landscape or domain.
+
+primary_descriptor:
+  name: "masked physical 2-D MIND"
+  numeric_dtype: "float64"
+  input_contract: >-
+    Target and 40 candidate intensity arrays, target visible/core/context masks,
+    and target physical pixel pitch only. Candidate labels, brain-support masks,
+    metadata and geometry are not arguments to the primary scorer.
+  physical_parameters:
+    search_displacement_um: 100.0
+    gaussian_patch_sigma_um: 50.0
+    gaussian_truncate_sigma: 3.0
+  quantization:
+    half_up_rule: "floor(positive_value+0.5)"
+    axial_step_px: "A=max(1,floor(100/p+0.5))"
+    diagonal_step_px: "B=max(1,floor(100/(sqrt(2)*p)+0.5))"
+    gaussian_sigma_px: "50/p"
+    gaussian_radius_px: "a=ceil(150/p)"
+    offsets_dy_dx:
+      - "(-A,0)"
+      - "(A,0)"
+      - "(0,-A)"
+      - "(0,A)"
+      - "(-B,-B)"
+      - "(-B,B)"
+      - "(B,-B)"
+      - "(B,B)"
+  patch_distance: >-
+    Define (S_(dy,dx)J)[y,x]=J[y+dy,x+dx] when that source index is in bounds
+    and the declared padding value otherwise. For i,j in [-a,a], construct the
+    float64 square kernel K[i,j]=exp(-(i^2+j^2)/(2*(50/p)^2)), then divide by
+    its float64 C-order sum. Compute Dr=scipy.ndimage.convolve(
+    (J-Sr(J))^2,K,mode='constant',cval=0.0,origin=0).
+    No separable filter, implicit radius or alternate summation is permitted.
+  exact_footprint_and_erosion: >-
+    Let R be exactly the eight ordered offsets listed above, L=R union {(0,0)},
+    and F contain every offset (i+dy,j+dx) for
+    i,j in [-a,a] and (dy,dx) in L. Store F as an odd Boolean array with radius
+    a+max(A,B), with zero offset at its centre. Use scipy.ndimage.binary_erosion
+    with structure=F, iterations=1, border_value=0, origin=0 and
+    brute_force=false. This same operation defines core and erodes map-safe for
+    context.
+  local_variance: >-
+    V is the arithmetic mean of the four axial Dr channels. Let vbar be mean V
+    on the named target-only evaluation domain. Use that same domain separately
+    for target and every candidate; no candidate mask is permitted. Clamp V to
+    [max(1e-12,1e-3*vbar), max(the_lower_bound,1e3*vbar)].
+  descriptor: >-
+    mr=exp(-(Dr-min_s(Ds))/V_clamped). This makes the maximum channel exactly
+    one. Preserve the canonical offset order above.
+  pixel_loss: >-
+    Mean squared difference across eight descriptor channels. No candidate
+    annotation/support override is permitted in the gated primary.
+  score: >-
+    One minus mean pixel loss on the named target-only domain, clipped only for
+    roundoff to [0,1]. Higher is better. Report core and context independently;
+    absent-outline context is the primary oracle-mask-conditioned appearance
+    endpoint.
+  support_penalized_secondary_ablation: >-
+    For native slots only, let the ordinary descriptor pixel loss on target
+    domain D be l in [0,1], target visible mask T and candidate support Sk. Set
+    l'=1 exactly on D AND T AND NOT Sk and l'=l elsewhere in D, then score
+    1-mean_D(l'). Also save count(D AND T AND NOT Sk)/count(D AND T) for every
+    candidate. Compute this outside the primary scorer. This explicitly measures
+    support contribution; it never enters a gate.
+  constant_within_support_null:
+    construction: >-
+      Outside the scorer, replace every candidate's scaled intensity on its
+      verified annotation-derived brain support by that candidate's arithmetic
+      mean supported intensity. Leave every pixel outside that support exactly
+      equal to the primary candidate raster, including nonzero trilinear scalar
+      values where the nearest-rendered annotation is zero. Leave the target
+      unchanged, then call the identical descriptor-only scorer. This destroys
+      internal supported texture without changing the primary's exterior; the
+      support is used only to construct the null outside the scorer.
+    shuffled_order: >-
+      For shuffled bank i, flatten the already-scaled candidate on its support
+      in the original bank-i lattice first, then apply the exact float64 common-
+      lattice resampler to target j. Flattening after resampling is forbidden.
+    role: >-
+      Save all raw null landscapes. The absent-core separation gate below is
+      required so a nominal MIND pass cannot be explained by candidate support
+      shape alone.
+
+secondary_descriptors:
+  interpretation: >-
+    Frozen diagnostics only. They never break a MIND tie, enter a weighted
+    score, or rescue a failed MIND primary without a new preflight.
+  HOG:
+    resolution: "native 192x256 lattice"
+    cell_width_um: 400.0
+    cell_pixels: "q=max(4,floor(400/p+0.5))"
+    gradients: >-
+      On the native complete scaled raster, gx[y,x]=(J[y,x+1]-J[y,x-1])/(2p)
+      and gy[y,x]=(J[y+1,x]-J[y-1,x])/(2p), with one scalar-image-padding pixel
+      beyond each edge. No target or candidate mask enters feature construction.
+    orientations: >-
+      theta=mod(arctan2(gy,gx),pi), z=9*theta/pi, b0=floor(z), b1=(b0+1)
+      modulo 9; magnitude hypot(gx,gy) votes weights 1-(z-b0) and z-b0.
+    cells: >-
+      Disjoint q-by-q cells anchored at the top/left: cell (r,c) owns vote-grid
+      rows [r*q,(r+1)*q) and columns [c*q,(c+1)*q). Compute gradients and votes
+      on the native raster first, then zero-pad only the magnitude/orientation
+      vote grid on the bottom/right to complete cells. Never image-pad before
+      gradient construction beyond the one derivative halo. Each native pixel
+      votes its full magnitude into the two adjacent circular bins, linearly by
+      angular distance; there is no spatial vote interpolation.
+    blocks: >-
+      Overlapping 2x2 cells with one-cell stride; concatenate cell row, cell
+      column, then orientation bin into the canonical row-major 36-vector.
+    normalization: >-
+      Divide v by sqrt(sum(v^2)+1e-24), clip each component at 0.2, then divide
+      by sqrt(sum(v_clipped^2)+1e-24), all in float64.
+    score: >-
+      For core and context, a block is eligible only when its complete unpadded
+      2q-by-2q footprint and one-pixel gradient support lie in the named
+      target-only domain. With db=min(1,0.5*||hT-hC||^2), score is one minus the
+      unweighted mean db over eligible blocks. Candidate support never enters.
+      For boundary-ring only, save a clearly named overlap-weighted contextual
+      diagnostic using nb=the count of ring pixels in each block and
+      1-sum(nb*db)/sum(nb) over nb>0; it may contain features from outside the
+      ring and is not an isolated ring score. Boundary-ring blocks must also have
+      their complete unpadded 2q-by-2q footprint and gradient support inside the
+      native raster; partially vote-grid-padded edge blocks are ineligible. Save
+      insufficient-domain nulls when no block is eligible.
+  normalized_gradient_like:
+    gaussian_sigma_um: 100.0
+    gaussian_radius: "ceil(300/p) pixels"
+    smoothing: >-
+      scipy.ndimage.gaussian_filter on float64 with sigma=100/p, radius exactly
+      ceil(300/p), mode='constant', cval=the scalar-image padding value and
+      axes=(0,1); no implicit truncate or separable alternative is permitted.
+    gradient: >-
+      Let G be the declared smoothed image and r=ceil(300/p). Compute
+      gx[y,x]=(G[y,x+1]-G[y,x-1])/(2p) and
+      gy[y,x]=(G[y+1,x]-G[y-1,x])/(2p), using a one-pixel halo with the same
+      scalar-image padding value. Additionally erode each named target-only
+      domain with scipy.ndimage.binary_erosion using an all-true square of shape
+      (2*(r+1)+1,2*(r+1)+1), iterations=1, border_value=0, origin=0 and
+      brute_force=false.
+    derived_evaluation_domain: >-
+      Name the result ngf_domain(D). Use exactly ngf_domain(D), not the original
+      D, both for target/candidate q95 stabilization and for the final similarity
+      mean. If it is empty, emit the declared insufficient-domain record.
+    stabilization: >-
+      For target and each candidate separately, eta=max(1e-12,0.1*q95 of
+      gradient magnitude on the same named target-only evaluation domain), with
+      numpy.quantile(method='linear'); no candidate mask enters.
+    polarity_invariant_similarity: >-
+      ((abs(gT dot gC)+etaT*etaC)^2) /
+      ((||gT||^2+etaT^2)*(||gC||^2+etaC^2))
+    score: >-
+      Mean similarity on the fixed target domain, clipped to [0,1] only for
+      floating-point roundoff. Candidate support is not supplied. This is an
+      NGF-motivated engineering diagnostic, not the canonical NGF objective.
+  mask_only_Dice:
+    scope: >-
+      Base-level, primary-unshuffled, outline-invariant descriptive reference
+      only; copy it once per base. It never enters an image score or gate and is
+      not presented as a new bilinear-safe/core/context or common-lattice-
+      shuffled Dice.
+    source: >-
+      Copy, never recompute under the new masks, the exact 40 float64 values at
+      /scores/mask_only_Dice from each authenticated frozen
+      primary/case-NNN.json. Those values used the frozen semantic target
+      fixed_valid_mask and native-lattice target/candidate label rasters.
+    frozen_formula: >-
+      V=fixed_valid_mask; T=V AND target_labels!=0;
+      Ck=V AND candidate_labels[k]!=0;
+      Dk=(2*count(T AND Ck)+1e-12)/(count(T)+count(Ck)+1e-12), clipped to [0,1],
+      in frozen ordered_candidate_ids order.
+    per_case_receipt_keys:
+      - "source_relative_path"
+      - "source_file_sha256"
+      - "source_case_payload_sha256"
+      - "source_target_receipt_sha256"
+      - "candidate_bank_id"
+      - "ordered_candidate_ids_sha256"
+      - "truth_candidate_id"
+      - "source_vector_json_pointer"
+      - "source_vector_sha256"
+      - "scorer_source_sha256"
+      - "runner_source_sha256"
+      - "values"
+      - "recomputed_ranking"
+      - "entered_gate"
+      - "payload_sha256"
+    source_hashes:
+      scorer_source_sha256: "4297e78a8a21785b570ad652af992d12363033ae3cc7dff324c549037e7aaf58"
+      runner_source_sha256: "6c631fc0ebf99bd8b6b905e295d39ab060d0ffbd16c786c6f567dbc4520006e4"
+    verification: >-
+      Bind the raw frozen case-file hash and case payload, hash canonical
+      {'mask_only_Dice':values}, verify candidate order/target/bank receipts,
+      replay the frozen formula byte-exactly from regenerated labels/mask, and
+      recompute ranking under the current frozen 1e-12 policy. Store under
+      primary-case provenance, not across three outline descendants. Do not copy
+      frozen shuffled Dice because it predates common-lattice resampling.
+    role: "explicit silhouette-information reference"
+
+insufficient_domain_contract:
+  scope: >-
+    Only ungated secondary descriptors or boundary-ring diagnostics may be
+    insufficient. Primary MIND core/context insufficiency is always the
+    prelaunch failure above. Never alter constants, impute a score, drop a base,
+    or encode NaN/empty vectors.
+  score_slot_union: >-
+    Every scheduled descriptor/domain/outline/base/control slot is present and
+    is either status='ok' with a 40-value score vector and ranking, or
+    status='insufficient_domain' with scores=null, ranking=null and metrics=null.
+  insufficient_record_keys:
+    - "status"
+    - "reason_code"
+    - "case_index"
+    - "bank_case_index"
+    - "target_case_index"
+    - "outline_mode"
+    - "descriptor"
+    - "domain"
+    - "domain_mask_receipt_sha256"
+    - "domain_pixel_count"
+    - "eligible_pixel_count"
+    - "eligible_block_count"
+    - "scores"
+    - "ranking"
+    - "metrics"
+    - "entered_gate"
+    - "payload_sha256"
+  fixed_values: >-
+    reason_code is exactly NO_ELIGIBLE_PIXELS or NO_ELIGIBLE_BLOCKS; the
+    corresponding eligible count is zero; scores, ranking and metrics are null;
+    entered_gate=false. Nonapplicable index/count fields are JSON null.
+  controls: >-
+    Controls enumerate the same slots. A control whose source slot is
+    insufficient emits status='authenticated_not_applicable', passed=null,
+    reason_code='SOURCE_LANDSCAPE_INSUFFICIENT_DOMAIN' and binds the source null
+    payload hash. Global integrity succeeds only when every control is
+    passed=true or has this independently verified N/A record; N/A is never
+    counted as a pass.
+  aggregation: >-
+    Secondary summaries report eligible_base_count and insufficient_base_count,
+    aggregate eligible base units only, and never change a primary/gate
+    denominator.
+
+smart_brush_analysis:
+  primary_requirement: >-
+    The absent-outline/acquired-background context endpoint must pass. A method
+    that works only after a perfect brush is not sufficient for optional-brush
+    development. This establishes no-brush ranking only with oracle dewarping,
+    visibility and ROI; it does not validate automatic slice extraction or
+    full-canvas robustness on real acquired backgrounds.
+  paired_reporting: >-
+    Report within-base changes in top-1, rank and truth margin for accurate and
+    imperfect black-exterior inputs relative to absent background. Keep the 64
+    base realizations as the units; never treat 192 descendants as independent.
+  expected_core_control: >-
+    Accurate and absent inputs should agree on well-eroded visible tissue.
+    Equality there does not show that brush is useless; its intended effect is
+    external-background removal, measured only by context/ring diagnostics and
+    later learned-model validation.
+  compatibility_gate: >-
+    Each black-exterior mode must meet its declared context top-1 threshold and
+    may not trail absent-outline top-1 by more than 0.10.
+  learned_model_implication: >-
+    If the pilot passes, future training must randomize all three modes and
+    retain the outline-availability flag only as an optional input indication,
+    never substitute an automatic perfect mask when brush is absent.
+
+score_schedule:
+  outline_order:
+    - "accurate-outline-black-exterior"
+    - "imperfect-outline-black-exterior"
+    - "absent-outline-acquired-background"
+  native_unshuffled_per_base:
+    descriptor_only_MIND:
+      domains: ["core", "context"]
+      outlines: "all three in outline_order"
+      landscapes_per_base: 6
+      decision_role: "primary; only the explicitly named slots below enter gates"
+    constant_within_support_MIND_null:
+      domains: ["core", "context"]
+      outlines: "all three in outline_order"
+      landscapes_per_base: 6
+      decision_role: "only predeclared primary-minus-null safeguards enter gates"
+    support_penalized_MIND_secondary:
+      domains: ["core", "context"]
+      outlines: "all three in outline_order"
+      landscapes_per_base: 6
+      decision_role: "descriptive only"
+    HOG_secondary:
+      domains: ["core", "context", "boundary_ring"]
+      outlines: "all three in outline_order"
+      landscapes_per_base: 9
+      decision_role: "descriptive only; explicit null allowed"
+    normalized_gradient_like_secondary:
+      domains: ["core", "context", "boundary_ring"]
+      outlines: "all three in outline_order"
+      landscapes_per_base: 9
+      decision_role: "descriptive only; explicit null allowed"
+    mask_only_Dice:
+      domains: ["frozen_semantic_fixed_valid_mask"]
+      outlines: "none; one copied vector per base"
+      landscapes_per_base: 1
+      decision_role: "descriptive only"
+    total_scheduled_slots_per_base: 37
+  common_lattice_shuffled_per_bank_target_pair:
+    descriptor_only_MIND:
+      domains: ["core", "context"]
+      outlines: "all three in outline_order"
+      landscapes_per_pair: 6
+      decision_role: "context slots enter the named shuffled gates; core is descriptive"
+    constant_within_support_MIND_null:
+      domains: ["core", "context"]
+      outlines: "all three in outline_order"
+      landscapes_per_pair: 6
+      decision_role: "descriptive control only"
+    excluded: >-
+      No support-penalized MIND, HOG, normalized-gradient-like or mask-only Dice
+      slot is scheduled for shuffled pairs.
+    total_scheduled_slots_per_pair: 12
+  gate_slot_exactness: >-
+    Overall and orientation gates use native descriptor-only MIND,
+    absent-outline context. The native core safeguard and both pooled safeguards
+    use native descriptor-only MIND and its matching constant null,
+    absent-outline core. Brush compatibility uses native descriptor-only MIND,
+    each outline's context. Shuffled gates use shuffled descriptor-only MIND,
+    each outline's context. No other slot enters a gate.
+  completeness: >-
+    Every listed slot must appear in its case sidecar in this order. No unlisted
+    descriptor/domain/outline/native-or-shuffled combination may be computed,
+    saved, aggregated or used for a decision without a new preflight.
+
+control_schedule:
+  every_computed_40_score_landscape:
+    controls:
+      - "candidate-order permutation equivariance"
+      - "chunk sizes 1, 8 and 40 byte-identical"
+    scope: >-
+      Applies to every status='ok' native or shuffled MIND, MIND-null,
+      support-penalized MIND, HOG and normalized-gradient-like scheduled slot.
+      An insufficient secondary slot uses the authenticated-N/A contract.
+  affine_and_polarity:
+    base_cases: [0, 17, 37, 63]
+    scope: >-
+      Native slots only, all three outlines: descriptor-only MIND,
+      constant-within-support MIND null and support-penalized MIND on core and
+      context; HOG and normalized-gradient-like on core, context and
+      boundary_ring. Mask-only and every shuffled slot are excluded.
+  accurate_absent_core_identity:
+    scope: >-
+      Native descriptor-only MIND core landscapes only, every base; exact raw
+      vector equality after inverse candidate-order canonicalization.
+  shuffled_binding:
+    scope: >-
+      Every scheduled shuffled descriptor-only MIND and MIND-null slot must bind
+      the exact +17 target, common-lattice maps, target masks/pitch and bank
+      candidate receipts.
+  copied_mask_only_verification:
+    scope: "the one native base-level copied vector and receipt defined above"
+  source_replay_metadata_and_geometry_controls:
+    scope: "all 64 bases and every relevant source/input receipt"
+
+ranking:
+  candidates: >-
+    Score all 40 without shortlist or reranking. Original banks use their native
+    192x256 lattice; shuffled banks use the exact target-pitch common-lattice
+    resampling before scoring.
+  tie_tolerance: 1.0e-12
+  tied_candidate_ids: >-
+    Canonically sorted candidate IDs whose score s satisfies
+    s>=max_score-1e-12.
+  top1: "the tied-ID set is the singleton truth candidate ID"
+  rank: >-
+    One plus the number of decoys with score at least truth_score-1e-12.
+  reciprocal_rank: "1.0 divided by the conservative rank"
+  truth_versus_decoy_win_fraction: >-
+    count of 39 decoys satisfying truth_score>decoy_score+1e-12, divided by 39.
+  ties: >-
+    Save the canonical sorted tied candidate-ID set. If more than one candidate
+    is tied at maximum, selected candidate and pose errors are null and truth is
+    not top-1. HOG/gradient may not resolve a MIND tie.
+  saved_metrics:
+    - "top-1, conservative rank, reciprocal rank and truth-vs-decoy win fraction"
+    - "truth score and truth-minus-best-decoy margin"
+    - "selected RP2 angle, sign-aligned offset, corresponding-point RMS and p95 errors"
+    - >-
+      raw 40-score vectors for every scheduled eligible image-descriptor/domain/
+      outline/shuffled slot; insufficient secondary slots store null by contract,
+      and base-only mask-only Dice is copied once rather than duplicated
+  selected_pose_error_scope: >-
+    Compute selected RP2 angle, sign-aligned offset and corresponding-point RMS/
+    p95 only for native unshuffled descriptor-only MIND slots with a unique
+    selected candidate. Compare with that base's frozen truth and evaluate point
+    errors on the target visible mask using the frozen x/W,y/H physical contract.
+    Set these fields null for ties and for every null, ablation, secondary,
+    mask-only or shuffled landscape; shuffled ranks concern bank-i original truth
+    and are not pose-error estimates relative to target j.
+  aggregation:
+    median: "numpy.median over the 64 base values; even counts average the two centre values"
+    wilson_95:
+      confidence: 0.95
+      z: 1.959963984540054
+      formula: >-
+        With p=k/n, denominator=1+z^2/n, centre=(p+z^2/(2n))/denominator,
+        half=z*sqrt(p*(1-p)/n+z^2/(4n^2))/denominator; report
+        [centre-half,centre+half].
+
+predeclared_go_gate:
+  exact_integrity_controls: >-
+    All applicable controls pass; only contract-permitted independently
+    authenticated N/A records for insufficient secondary slots are accepted.
+  primary_absent_context_MIND:
+    top1_rate_minimum: 0.60
+    wilson_95_lower_minimum: 0.45
+    mean_reciprocal_rank_minimum: 0.70
+    median_true_rank_maximum: 1
+    median_true_versus_decoy_win_fraction_minimum: 0.90
+    each_orientation_family_top1_minimum: 0.40
+  absent_core_MIND_safeguard:
+    top1_rate_minimum: 0.50
+    mean_reciprocal_rank_minimum: 0.65
+    top1_rate_advantage_over_constant_within_support_null_minimum: 0.10
+  pooled_absent_core_MIND_safeguards:
+    endpoint: >-
+      Original unshuffled absent-outline descriptor-only MIND on the target-only
+      core, with the matching constant-within-support-null landscape.
+    challenging_appearance:
+      frozen_base_count: 22
+      top1_success_count_minimum: 7
+      mean_reciprocal_rank_minimum: 0.45
+      top1_success_count_advantage_over_null_minimum: 2
+    damaged:
+      frozen_base_count: 27
+      top1_success_count_minimum: 9
+      mean_reciprocal_rank_minimum: 0.45
+      top1_success_count_advantage_over_null_minimum: 2
+    interpretation: >-
+      These score-blind catastrophic-stratum guards prevent the overall result
+      being carried only by easy appearance or undamaged cases; they are not
+      subgroup-performance or population-inference claims. Report each
+      constituent appearance family, damage count and damage type descriptively
+      without post-hoc gates.
+  black_exterior_context_MIND:
+    each_mode_top1_rate_minimum: 0.50
+    maximum_top1_deficit_from_absent: 0.10
+  shuffled_absent_context_MIND:
+    original_truth_top1_rate_maximum: 0.10
+    original_truth_mean_reciprocal_rank_maximum: 0.15
+  shuffled_black_exterior_context_MIND:
+    each_mode_original_truth_top1_rate_maximum: 0.10
+    each_mode_original_truth_mean_reciprocal_rank_maximum: 0.15
+  thresholds_interpretation: >-
+    These are project development thresholds, not published clinical or
+    biological standards. Chance top-1 is 1/40, but the correlated bank and the
+    frozen shuffled-target control are more informative than that calculation.
+  failure_action: >-
+    Freeze the failure and diagnose synthesis, dewarping, mask, normalization or
+    descriptor information. HOG or gradient performance cannot retroactively
+    replace MIND; any follow-up needs a new preflight. Do not begin recurrent
+    learned-model screening on this result alone.
+  pass_action: >-
+    Authorize a separately frozen, fresh randomly initialized joint
+    pose/deformation architecture screen. Treat coarse-to-fine and recurrent
+    designs as candidates selected for this problem, not legacy commitments.
+
+mandatory_exact_controls:
+  - "exact frozen parent, bank, order, candidate, descendant and dense-array replay"
+  - "candidate scalar annotation and mask cross-check against every frozen candidate"
+  - "fixed_to_source dewarp direction and bilinear-safe-mask construction"
+  - >-
+    Candidate-order permutation equivariance for every status-ok computed
+    40-score landscape named in control_schedule using new slot k <- old slot
+    (7*k+3) modulo 40; verify it is a nonidentity bijection, inverse-reindex raw
+    vectors byte-exactly, and recompute ranks, ties and selected outputs. Copied
+    mask-only Dice uses only its separate verification control.
+  - "RP2 sign equivalence and x/W,y/H physical-coordinate contract"
+  - "truth metadata, labels, poses, IDs, order and coordinate-channel exclusion from scorer source/signature"
+  - "target masks and denominators invariant to candidate support/order"
+  - >-
+    Accurate-outline and absent-outline native descriptor-only core MIND raw
+    40-score landscapes are byte-identical for every case; their inputs are
+    identical over the complete eroded descriptor footprint.
+  - "exact +17 shuffled target/bank binding"
+  - >-
+    On cases 0,17,37,63 in all outline modes, jointly transform the target and
+    all 40 already-scaled candidate images over the complete raster with no
+    clipping by J'=0.7J+0.1, J'=1.2J and J'=1-J. Apply the same transform to
+    scalar-image padding only (0.1, 0 and 1 respectively); padding of derived
+    squared-distance, gradient/histogram and Boolean-mask fields remains zero.
+    MIND/HOG/gradient-like conservative ranks, top-1 values and canonical
+    tied-ID sets must be exactly unchanged under the ordinary 1e-12 tie policy;
+    this is a rank control, not a raw-score equality claim.
+  - >-
+    For every status-ok computed 40-score landscape named in control_schedule,
+    chunk sizes exactly 1,8,40 yield byte-identical raw vectors; all scores are
+    finite/in bounds and canonical tie handling is unchanged. Copied mask-only
+    Dice is not chunk-computed.
+  - "atomic sidecars, aggregate manifests and tamper rejection"
+
+verification_and_outputs:
+  output: "fresh build/arbitrary_plane_image_information_raw_<source-short-commit>"
+  write_policy: "fail if output exists; atomic writes; never resume or repair in place"
+  canonical_json: >-
+    UTF-8 bytes from json.dumps with sort_keys=true, separators=(',',':'),
+    allow_nan=false and no trailing newline. Payload hashes exclude only their
+    own named SHA-256 field. Additional keys or files are forbidden.
+  binary_masks: >-
+    numpy.packbits over C-order Boolean flattening with bitorder='little'; bind
+    dtype, H/W shape, bit count, byte count, relative path and payload SHA-256.
+  dense_array_receipts: >-
+    Convert numeric arrays to their dtype with explicit little byte order and C
+    contiguity. Hash canonical JSON {dtype,shape} encoded UTF-8 immediately
+    followed by C-order bytes, matching the frozen renderer's _array_sha256;
+    use lowercase hex. Boolean array identities use canonical JSON
+    {dtype:'|b1',shape,bitorder:'little'} immediately followed by C-order
+    little-bitorder packbits. JSON score vectors are float64 values hashed as
+    part of their enclosing canonical payload, never platform-native raw bytes.
+  exact_tree:
+    resolved_config.json: 1
+    primary/case-NNN.json: 64
+    shuffled/case-NNN.json: 64
+    masks/case-NNN-map-safe.bin: 64
+    masks/case-NNN-visible.bin: 64
+    masks/case-NNN-core.bin: 64
+    masks/case-NNN-context.bin: 64
+    masks/case-NNN-boundary-ring.bin: 64
+    controls/case-NNN.json: 64
+    global_controls.json: 1
+    result.json: 1
+    total_files: 515
+  exact_top_level_schemas:
+    resolved_config.json:
+      - "schema"
+      - "preflight_sha256"
+      - "repository"
+      - "frozen_semantic_input"
+      - "atlas_assets"
+      - "descriptor_constants"
+      - "case_and_shuffle_contract"
+      - "environment"
+      - "model_independence"
+      - "data_access"
+      - "source_sha256"
+      - "resolved_config_sha256"
+    primary/case-NNN.json:
+      - "schema"
+      - "case_index"
+      - "semantic_case_payload_sha256"
+      - "provenance"
+      - "frozen_replay"
+      - "target"
+      - "candidate_bank"
+      - "candidate_scalar_receipts"
+      - "score_domains"
+      - "outline_results"
+      - "payload_sha256"
+    shuffled/case-NNN.json:
+      - "schema"
+      - "bank_case_index"
+      - "target_case_index"
+      - "bank_identity"
+      - "target_identity"
+      - "common_lattice_resampling"
+      - "score_domains"
+      - "outline_results"
+      - "payload_sha256"
+    controls/case-NNN.json:
+      - "schema"
+      - "case_index"
+      - "checks"
+      - "evidence_receipt_sha256"
+      - "payload_sha256"
+    global_controls.json:
+      - "schema"
+      - "frozen_inventory_audit"
+      - "source_and_signature_audit"
+      - "affine_and_polarity_controls"
+      - "evidence_receipt_sha256"
+      - "payload_sha256"
+    result.json:
+      - "schema"
+      - "interpretation"
+      - "resolved_config_sha256"
+      - "pre_result_inventory"
+      - "pre_result_inventory_sha256"
+      - "primary_case_payload_sha256"
+      - "shuffled_case_payload_sha256"
+      - "control_payload_sha256"
+      - "metrics"
+      - "gates"
+      - "data_access"
+      - "model_independence"
+      - "result_payload_sha256"
+  nested_schema_rule: >-
+    New runner constants must enumerate the exact allowed/required keys for
+    every nested record before execution; focused tests and the public verifier
+    reject missing or additional keys, wrong types, nonfinite numbers, altered
+    raw landscapes or inconsistent recomputed summaries.
+  pre_result_inventory: >-
+    result.json must bind the exact sorted {path,size_bytes,sha256} list and
+    canonical payload digest for the other 514 files. The verifier rejects a
+    missing, additional, stale or temporary file.
+  mandatory_self_verification: >-
+    After writing the final result, reload all files and independently recompute
+    identities, hashes, scores, rankings, controls, metrics and gates before
+    reporting success.
+  public_post_exit_verifier: >-
+    Rebuild Allen support from raw hash-checked assets, regenerate all frozen
+    accepted cases/banks/descendants, rerender every scalar candidate and
+    independently replay all primary and shuffled scores.
+  save:
+    - "exact source/config/preflight/environment hashes and every RNG lineage"
+    - "animal/specimen/experiment identifiers including nulls"
+    - "all parent, bank, candidate, outline, image, mask and scalar receipts"
+    - "raw score vectors, normalization constants, domain counts and rankings"
+    - "orientation, appearance, damage, support and outline strata"
+    - >-
+      copied and hash-bound frozen rejection records plus new pilot failures and
+      exact-control evidence receipts; frozen rejection searches are never rerun
+  reporting_interval: "one concise case milestone; inspect periodically rather than polling continuously"
+
+limitations:
+  - "Exact deformation and damage-validity truth are privileged."
+  - "Synthetic observations originate from the same Allen template as candidates."
+  - "The finite bank does not prove continuous global pose identifiability."
+  - "Label-conditioned and template-mixture synthesis may preserve atlas-boundary information."
+  - "Identity-appearance cases are easier and must be reported separately."
+  - "Context performance may use silhouette/background; core and mask-only results must accompany it."
+  - "No biological animal, public benchmark, external lab image or blinded expert is involved."
+
+data_access:
+  allen_template_and_annotation: true
+  synthetic_development: true
+  deepslice_ground_truth: false
+  real_lab_histology: false
+  calibration_animals: false
+  qualification_animals: false
+  final_test_animals: false
+  full_benchmark: false
+
+future_validation_plan_preserved:
+  split_unit: "animal, never slice"
+  untouched_final_test_animals_required: true
+  development_data: "Allen and synthetic"
+  public_benchmark: "DeepSlice Ground Truth dataset DOI 10.25949/22802411"
+  external_validation: "separate real lab histology, ideally laboratory-held-out"
+  comparators: "DeepSlice and relevant expert-assisted tools under matched conditions"
+  reference: "blinded expert alignments"
+  primary_metric: "physical anatomical landmark registration error"
+  secondary_metrics: ["plane/angle error", "regional overlap", "failure rate", "correction time"]
+  reporting: "animal-level effect sizes with 95% confidence intervals"
+  reproducibility: "save exact splits, code, configs, seeds and raw predictions"
+  probabilistic_outputs: >-
+    Later calibrate plane/AP/tilt and dense uncertainty on unseen animals, test
+    nominal credible-interval coverage and verify no loss of point accuracy,
+    then propagate uncertainty into trajectory volumes and region assignments.
