@@ -609,6 +609,26 @@ def test_standard_mapping_is_batch_and_order_invariant(standard_plan):
     assert np.max(np.linalg.norm(recovered - points, axis=1)) < 1e-5
 
 
+def test_default_large_mapping_is_byte_identical_to_explicit_single_batch(standard_plan):
+    rng = np.random.Generator(np.random.PCG64DXSM(23))
+    points = rng.uniform(LOWER + 50.0, UPPER - 50.0, size=(8193, 3))
+    default_forward = ccf_to_subject_points_v2(points, standard_plan)
+    single_batch_forward = ccf_to_subject_points_v2(
+        points, standard_plan, batch_size=len(points)
+    )
+    default_inverse = subject_to_ccf_points_v2(default_forward, standard_plan)
+    single_batch_inverse = subject_to_ccf_points_v2(
+        default_forward, standard_plan, batch_size=len(points)
+    )
+
+    assert default_forward.tobytes(order="C") == single_batch_forward.tobytes(
+        order="C"
+    )
+    assert default_inverse.tobytes(order="C") == single_batch_inverse.tobytes(
+        order="C"
+    )
+
+
 def test_identity_is_bitwise_and_an_accepted_realization_is_mandatory():
     identity = _plan(deformation_stratum="identity")
     points = np.asarray([[-0.0, 1.0, 2.0], [3.0, -0.0, 4.0]], dtype=np.float32)

@@ -31,6 +31,7 @@ SUBJECT_DEFORMATION_V2_RK4_ORIENTATION_CERTIFICATE = (
     "q + q^2/2 + q^3/6 + q^4/24 < 1; then every forward and inverse "
     "RK4 step-map Jacobian lies in the positive-determinant unit ball about I"
 )
+_DEFAULT_POINT_BATCH_SIZE = 8192
 _SOURCE_ROOT = Path(__file__).parent
 
 
@@ -154,18 +155,28 @@ def cubic_bspline_velocity(
     gradient = np.zeros((len(flat), 3, 3), dtype=dtype) if return_gradient else None
     shape = np.asarray(coefficients.shape[:3], dtype=np.int64)
 
+    axis_indices = tuple(
+        tuple(base[:, axis] + offset for offset in range(4)) for axis in range(3)
+    )
+    axis_valid = tuple(
+        tuple((index >= 0) & (index < shape[axis]) for index in axis_indices[axis])
+        for axis in range(3)
+    )
+    axis_clipped = tuple(
+        tuple(np.clip(index, 0, shape[axis] - 1) for index in axis_indices[axis])
+        for axis in range(3)
+    )
+    del axis_indices
+
     for i in range(4):
-        index_i = base[:, 0] + i
-        valid_i = (index_i >= 0) & (index_i < shape[0])
-        clipped_i = np.clip(index_i, 0, shape[0] - 1)
+        valid_i = axis_valid[0][i]
+        clipped_i = axis_clipped[0][i]
         for j in range(4):
-            index_j = base[:, 1] + j
-            valid_j = (index_j >= 0) & (index_j < shape[1])
-            clipped_j = np.clip(index_j, 0, shape[1] - 1)
+            valid_j = axis_valid[1][j]
+            clipped_j = axis_clipped[1][j]
             for k in range(4):
-                index_k = base[:, 2] + k
-                valid = valid_i & valid_j & (index_k >= 0) & (index_k < shape[2])
-                clipped_k = np.clip(index_k, 0, shape[2] - 1)
+                valid = valid_i & valid_j & axis_valid[2][k]
+                clipped_k = axis_clipped[2][k]
                 values = coefficients[clipped_i, clipped_j, clipped_k].astype(dtype, copy=False)
                 valid_float = valid.astype(dtype)
                 common = valid_float * weights[:, 0, i] * weights[:, 1, j] * weights[:, 2, k]
@@ -213,7 +224,11 @@ def integrate_stationary_velocity(
     if points.shape[-1:] != (3,) or direction not in {-1, 1} or int(steps) != steps or steps < 1:
         raise ValueError("points, direction, or fixed RK4 step count are invalid")
     flat = points.reshape(-1, 3)
-    size = len(flat) if batch_size is None else int(batch_size)
+    size = (
+        min(len(flat), _DEFAULT_POINT_BATCH_SIZE)
+        if batch_size is None
+        else int(batch_size)
+    )
     if size < 1:
         raise ValueError("batch_size must be positive")
     mapped = np.empty_like(flat, dtype=np.result_type(points.dtype, np.float32))
