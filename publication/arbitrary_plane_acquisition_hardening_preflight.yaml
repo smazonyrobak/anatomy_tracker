@@ -1,0 +1,566 @@
+schema_version: "1.0"
+receipt_id: "arbitrary-plane-acquisition-hardening-2026-09-01"
+date: "2026-09-01"
+status: "development_protocol_predeclared_implementation_pending"
+
+claim_scope: >-
+  Preimplementation contract for physical section thickness, raster reflection,
+  and pose-independent acquisition-window variation in the arbitrary-plane
+  synthetic generator. This is generator engineering only: no model result,
+  benchmark, qualification, calibration, final-test access, or biological
+  prevalence estimate.
+
+repository:
+  branch: "codex/arbitrary-plane-joint-model"
+  source_parent_commit: "cda338ed50d6a4807daccae044f47bf2f35d00a4"
+  preserve_v1_receipts_and_replay: true
+
+versioning:
+  v1_policy: "immutable; no field, source, schema, algorithm, or receipt reinterpretation"
+  immutable_v1_paths:
+    - "training/arbitrary_plane_geometry.py"
+    - "training/arbitrary_plane_rendered_generator.py"
+    - "training/arbitrary_plane_synthetic_generator.py"
+    - "training/arbitrary_plane_synthetic_ops.py"
+    - "training/arbitrary_plane_synthetic_observation.py"
+    - "training/arbitrary_plane_manifest.py"
+    - "training/arbitrary_plane_support.py"
+    - "publication/arbitrary_plane_synthetic_preflight.yaml"
+  v2_modules:
+    - "training/arbitrary_plane_acquisition_v2.py"
+    - "training/arbitrary_plane_synthetic_generator_v2.py"
+  v2_schema: "anatomy-tracker.arbitrary-plane-synthetic-realization/v2"
+  v2_authentication_chain: "separate root, manifests, realization IDs, and replay verifier from v1"
+  trusted_context_contract: >-
+    V2 verifies the authenticated immutable atlas, support, and prepared-context
+    receipts plus the frozen v1 interpolation primitive's source hash, but owns
+    a new v2 plane manifest, sampler, pose, and v2_plane_realization_id. A v1
+    finite-plane artifact is neither required nor inherited. V2 never edits,
+    replaces, locally rehashes, or extends a v1 artifact or ID.
+
+model_independence:
+  initialization: "named random seed streams only"
+  learned_checkpoint_dependencies: []
+  previous_model_dependencies: []
+  pretrained_feature_dependencies: []
+  learned_style_model_dependencies: []
+
+scope_controls:
+  permitted_splits: ["train", "development"]
+  deepslice_ground_truth_used: false
+  real_lab_histology_used: false
+  calibration_animals_used: false
+  qualification_animals_used: false
+  final_test_animals_used: false
+  full_benchmark_permitted: false
+  next_gate: "small deterministic generator smoke and seed-hidden montage review"
+
+randomness:
+  field_stream_derivation:
+    tuple_order:
+      - "anatomy-tracker.arbitrary-plane-acquisition-v2"
+      - "v2 schema string"
+      - "split/domain"
+      - "canonical 16-digit lowercase root-seed hex without 0x"
+      - "unsigned decimal sample index"
+      - "stage name"
+      - "field name"
+      - "unsigned decimal attempt index"
+    encoding: >-
+      UTF-8 encode each canonical string, prefix each byte string by its
+      unsigned 32-bit big-endian byte length, and concatenate in tuple order.
+    digest: "BLAKE2b with digest_size=8 and person=b'AP-ACQ-V2'"
+    uint64_conversion: "interpret the eight digest bytes as unsigned big-endian"
+  generator: "NumPy Generator with PCG64DXSM"
+  uniform_interval_convention: "low inclusive, high exclusive"
+  categorical_convention: "one uniform draw on [0,1) against ordered cumulative probabilities"
+  log_uniform_convention: "exp(uniform(log(low), log(high)))"
+  seed_search_or_outcome_conditioning_permitted: false
+
+stage_order:
+  sequence:
+    - "draw and hash acquisition-window plan without pose or tissue"
+    - "centre-plane pose"
+    - "finite-thickness scalar/support rendering"
+    - "affine-free local G1 deformation"
+    - "full-parent physical-loss and tissue-damage geometry"
+    - "apply the preplanned acquisition window to every array, map, and landmark"
+    - "output-raster appearance, lateral PSF/resolution effects, background, and noise"
+    - "optional smart-brush descendant"
+    - "whole-raster reflection"
+  rationale: >-
+    The window plan is pose/tissue blind, but it is applied only after physical
+    section deformation and damage. Global crop, scale, placement, and
+    reflection remain explicit acquisition variables and must not leak into the
+    local deformation field or rescale pixel-domain optical effects.
+
+finite_thickness:
+  coordinate_system: "physical AP-DV-ML micrometres"
+  sampling_direction: "the arbitrary plane's physical unit normal, never atlas AP"
+  centre_plane_pose_is_target: true
+  development_distribution:
+    centre_plane_render_ablation_probability: 0.15
+    finite_optical_support_probability: 0.85
+    finite_band_conditional_probabilities: [0.3333333333333333, 0.3333333333333333, 0.3333333333333334]
+    finite_balanced_bands_um:
+      - [25.0, 35.0]
+      - [45.0, 65.0]
+      - [75.0, 100.0]
+    within_band_distribution: "uniform with the declared global half-open interval convention"
+    nominal_material_thickness_draw_applies_to_both_render_modes: true
+    interpretation: "coverage prior, not laboratory prevalence"
+  named_stress_bands_um:
+    thin: [10.0, 20.0]
+    thick: [100.0, 150.0]
+  cleared_tissue_200_to_400_um_in_scope: false
+  initial_operator:
+    modality: "unknown-development-abstraction"
+    operator_name: "finite-full-slab-boxcar-development-abstraction"
+    axial_profile: "symmetric boxcar"
+    quadrature: "symmetric trapezoid"
+    axial_step_um_max: 12.5
+    centre_plane_ablation_schedule: "one direct offset-zero render; do not enter the slab quadrature branch"
+    centre_plane_ablation_kernel_metadata: "offsets=[0.0], weights=[1.0], effective_optical_support_um=0.0"
+    finite_schedule: >-
+      For T>0, N=2*ceil(T/(2*12.5))+1, offsets=linspace(-T/2,T/2,N),
+      and normalized trapezoid weights have endpoint mass 0.5 and interior
+      mass 1 before normalization.
+    initial_material_thickness: "material_thickness_um equals nominal_cut_thickness_um"
+    initial_section_spacing: "null because one section, not a serial-section spacing claim"
+    initial_optical_plane_depths: "empty list because the boxcar is not an enumerated focal-plane acquisition"
+    effective_optical_support: >-
+      Zero for centre-plane render ablation; otherwise exactly
+      material_thickness_um, which initially equals nominal_cut_thickness_um.
+      Every finite-boxcar kernel offset lies in the closed material interval
+      [-material_thickness_um/2,+material_thickness_um/2], including endpoints.
+    scalar_reduction: "normalized weighted mean with zero outside atlas"
+    support_reduction: "weighted brain occupancy"
+    centre_plane_label_target: "unchanged centre-plane nearest-neighbour integer label"
+    slab_modal_annotation: >-
+      Weighted mode over all sampled integer labels including outside-atlas
+      zero; ties resolve to the smallest integer annotation ID.
+    slab_label_purity: "winning modal-label weight divided by total normalized slab weight"
+    centre_label_support_weight: >-
+      Sum of normalized axial weights whose sampled annotation equals the
+      direct offset-zero centre-plane annotation.
+    slab_supervision_rule: >-
+      Auxiliary modal-label weight uses slab_label_purity. Centre-plane dense
+      correspondence weight=clip((centre_label_support_weight-0.5)/0.3,0,1),
+      with abstention at or below 0.5. The physical centre-plane pose target
+      remains defined even when dense correspondence abstains.
+    outside_atlas_rule: "scalar, support, and annotation samples are zero"
+    note: >-
+      The initial operator is an auditable approximation, not a claim that all
+      slide scanners integrate a physical section uniformly.
+  required_fields:
+    - "nominal_cut_thickness_um"
+    - "material_thickness_um"
+    - "section_spacing_um"
+    - "optical_plane_depths_um"
+    - "effective_optical_support_um"
+    - "projection_operator"
+    - "modality"
+    - "optical_kernel_offsets_um"
+    - "optical_kernel_weights"
+    - "axial_support_second_moment_um2"
+    - "slab_brain_occupancy"
+    - "slab_modal_annotation"
+    - "slab_label_purity"
+    - "centre_label_support_weight"
+    - "slab_supervision_weight_or_abstention"
+    - "slab_recipe_id"
+    - "slab_render_id"
+  axial_support_metadata: >-
+    Store sum_k w_k(z_k-sum_j w_j z_j)^2. It approaches thickness_um^2/12
+    only for a continuous uniform full-slab boxcar; it is an auxiliary physical
+    prior, not a mandatory posterior-variance floor.
+  deferred_modality_specific_operators:
+    - "widefield PSF-weighted depth sum plus haze"
+    - "confocal/two-photon narrow optical plane or explicit multi-plane acquisition"
+    - "declared mean/max/sum z-stack projection"
+    - "brightfield optical-density depth sum followed by Beer-Lambert intensity"
+  acceptance_gates:
+    - >-
+      Centre-plane render ablation is byte-identical to one offset-zero call of
+      the frozen v1 interpolation primitive on the same v2 global-reference
+      coordinate grid; the receipt binds that grid ID and reference-render hash.
+    - "offsets and weights are symmetric, finite, positive, and normalized"
+    - "physical displacement equals each recorded normal offset"
+    - "centre-plane labels and plane identity never change with thickness"
+    - "low centre-label support weight lowers dense-correspondence weight or records abstention"
+    - "linear-ramp phantom has the exact symmetric-slab expectation"
+    - >-
+      Halving the axial step is evaluated in float64 over the union of nonzero
+      support pixels. Scalar absolute differences are divided by
+      max(authenticated_atlas_scalar_max-authenticated_atlas_scalar_min,1);
+      normalized-scalar and support-mass MAE must be <=0.02 and their
+      99th-percentile absolute error <=0.10 for every finite CCF smoke case.
+    - "all arrays and parameters replay byte-for-byte"
+
+deformation_and_damage_partition:
+  g1_local_deformation:
+    global_similarity_angle_deg: 0.0
+    global_similarity_scale: 1.0
+    global_similarity_translation_px: [0.0, 0.0]
+    rule: >-
+      V2 samples only a local stationary-velocity field and removes its
+      least-squares constant and linear displacement components before
+      exponentiation. Crop, scale, placement, and reflection belong only to
+      the acquisition-window/reflection stages.
+    affine_removal_domain: >-
+      Float64 parent coordinates s=x/Wp,t=y/Hp and displacement components
+      divided by (Wp,Hp), fitted on centre_plane_support_mask.
+    residual_affine_gate: >-
+      Refit the residual field on the same domain in float64; maximum absolute
+      intercept or 2x2 linear coefficient must be <=1e-10. Record both the
+      removed and residual coefficients. Never refit or remove affine content
+      after acquisition windowing.
+  g3_split:
+    physical_parent_stage: "full-parent tissue loss, tears, folds, holes, and missing fragments before windowing"
+    output_raster_stage: >-
+      appearance, lateral/output-raster PSF and resolution effects, acquired
+      background, and sensor noise after windowing; no axial projection occurs here
+
+support_and_supervision_masks:
+  centre_plane_support_mask: "Boolean brain occupancy from the direct offset-zero sample before G1"
+  slab_observable_support_mass: "normalized weighted sum of brain occupancy across finite axial offsets"
+  slab_observable_support_mask: "slab_observable_support_mass > 0"
+  g1_affine_removal: "centre_plane_support_mask"
+  g1_topology_and_cycle_checks: "the union of centre_plane_support_mask and slab_observable_support_mask"
+  physical_damage_eligibility: "slab_observable_support_mask"
+  dense_correspondence_supervision: >-
+    centre_plane_support_mask intersected with surviving damage, window, and
+    map-validity masks, with the declared slab supervision weight/abstention
+
+raster_reflection:
+  states: ["none", "horizontal"]
+  development_probabilities: {none: 0.5, horizontal: 0.5}
+  interpretation: >-
+    Full roll on [0,2pi) plus one binary reflection spans O(2); independent
+    horizontal and vertical bits would duplicate states. Probabilities provide
+    development coverage and do not estimate acquisition prevalence.
+  discrete_map:
+    definition: "R_W(x,y)=(W-1-x,y) on integer pixel-centre coordinates"
+    raster_rule: "A_reflected(x,y)=A_unreflected(R_W(x,y)) for scalar, label, and mask rasters"
+    absolute_forward_inverse_rule: >-
+      For canvas-to-canvas absolute forward and inverse maps F and G,
+      F_reflected=R_W composed with F composed with R_W and
+      G_reflected=R_W composed with G composed with R_W.
+    vector_rule: >-
+      v_reflected(x,y)=diag(-1,1)*v_unrefl(R_W(x,y)); store this observed
+      transformed SVF whenever the model is supervised in observed coordinates.
+    ccf_coordinate_rule: "CCF_reflected(x,y)=CCF_unreflected(R_W(x,y)); CCF values themselves are not reflected"
+    observed_ouv_rule: >-
+      Reflect the post-window effective OUV using final canvas width W:
+      O_reflected=O_effective+(W-1)/W*U_effective,
+      U_reflected=-U_effective, V_reflected=V_effective.
+  contract:
+    - "reflection is a raster-coordinate reparameterization, never an atlas ML reflection"
+    - "reflection remains outside the proper SO(3) frame and affine-free SVF"
+    - "the proper physical frame and centre plane remain unchanged"
+    - "absolute dense maps are conjugated by the exact discrete reflection"
+    - "all images, labels, masks, outlines, backgrounds, coordinates, and landmarks are flipped"
+    - "mirrored posterior modes are preserved rather than averaged"
+  required_fields:
+    - "reflection_state"
+    - "reflection_parity"
+    - "field_stream_seed_uint64"
+    - "canonical_quicknii_ouv"
+    - "observed_quicknii_ouv"
+    - "reflection_transform_id"
+    - "reflection_realization_id"
+  identity_hierarchy:
+    reflection_transform_id: "binds the state, width, map recipe, and field seed; shared by outline descendants"
+    reflection_realization_id: "binds transform ID plus the child-specific preimage and reflected output hashes"
+    paired_view_group_id: "binds shared physical/view latents and reflection_transform_id, excluding outline choice and child realization"
+  acceptance_gates:
+    - "the reflected arrays are exact flips and reflection is an involution"
+    - "a unilateral fixture proves laterality"
+    - "forward/inverse cycle and Jacobian summaries are invariant"
+    - "the proper physical frame and centre plane remain unchanged"
+    - "the none state is byte-identical to the preceding stage"
+
+acquisition_window:
+  plan_rule: >-
+    Draw and hash the complete window plan before, and without access to, plane
+    pose, tissue/support masks, tight projected bounds, or rejection outcomes.
+  output_canvas_shape_h_w: [192, 256]
+  raster_coordinate_convention: >-
+    Integer pixel centres are x=0..W-1 and y=0..H-1; QuickNII normalized
+    coordinates are s=x/W and t=y/H, without a half-pixel offset.
+  global_reference_fov:
+    closed_voxel_face_bounds: >-
+      For authenticated positive physical voxel spacing, lo=atlas_origin_um +
+      min_occupied_index*spacing_um and hi=atlas_origin_um +
+      (max_occupied_index+1)*spacing_um, componentwise.
+    support_origin_um: "(lo+hi)/2"
+    occupied_corner_radius: >-
+      r=max Euclidean physical distance from support_origin_um to the eight
+      Cartesian-product corners formed from each component of lo or hi.
+    margin_um: "Euclidean norm of the authenticated atlas voxel-spacing vector"
+    diameter_um: "D=2*(r+margin_um)"
+    fov_uv_um: "[D,D] for every pose and plane stratum; never fit to projected tissue"
+    parent_shape_h_w: [256, 256]
+    plane_and_parent_grid:
+      plane_equation: "for canonical unit n and signed offset d, n dot (p-support_origin_um)=d"
+      support_interval_origin_conversion: >-
+        Frozen support interval endpoints b are relative to
+        projection_origin_um. For each normal, define
+        delta=n dot (projection_origin_um-support_origin_um), shift every
+        endpoint to b_v2=b+delta, preserve the merged-union ordering, and bind
+        the shifted-interval receipt/hash before sampling d.
+      physical_frame: "proper right-handed columns [u,v,n] from the frozen physical_plane_frame roll rule"
+      plane_centre_um: "C=support_origin_um+d*n, the orthogonal projection of support_origin_um onto the plane"
+      physical_ouv:
+        - "O=C-(D/2)*u-(D/2)*v"
+        - "U=(D*Wp/(Wp-1))*u"
+        - "V=(D*Hp/(Hp-1))*v"
+      sampled_physical_grid: "P(x,y)=O+(x/Wp)*U+(y/Hp)*V for integer pixel centres"
+      allen_index_conversion: >-
+        Under the frozen voxel-centre convention physical=origin+(index+0.5)*spacing,
+        O_index=(O-atlas_origin_um)/spacing_um-0.5; vector conversions are
+        U_index=U/spacing_um and V_index=V/spacing_um componentwise in
+        authenticated AP-DV-ML order.
+      binding: >-
+        Bind float64 physical and Allen-index O/U/V, the exact float32
+        normalized interpolation grid, and all their hashes in
+        global_reference_grid_id and v2_plane_realization_id.
+      acceptance_gates:
+        - "float64 physical-to-index-to-physical point round trip has maximum absolute error <=1e-9 um"
+        - "the sampled d belongs to the authenticated shifted v2 interval union"
+        - "the bound coordinate grid equals a direct O/U/V reconstruction"
+  sampling:
+    plan_severity_probabilities: {standard: 0.70, broad: 0.20, stress: 0.10}
+    scalar_ranges: "uniform with the declared global half-open interval convention"
+    aspect_ratio: "log-uniform on [0.75,1.33) and independent of severity"
+  pose_blind_plan_severity:
+    standard:
+      content_scale_range: [0.9, 1.1]
+      centre_offset_fraction_per_axis: [-0.05, 0.05]
+    broad:
+      content_scale_range: [0.7, 1.3]
+      centre_offset_fraction_per_axis: [-0.15, 0.15]
+    stress:
+      content_scale_range: [0.5, 1.5]
+      centre_offset_fraction_per_axis: [-0.30, 0.30]
+  exact_transform:
+    definitions: >-
+      Let parent shape be (Hp,Wp), canvas shape be (Hc,Wc), sampled scale q,
+      aspect a, scale_u=q*sqrt(a), scale_v=q/sqrt(a), and normalized offsets
+      (du,dv). T_canvas_to_parent maps [x_canvas,y_canvas,1]^T to
+      [x_parent,y_parent,1]^T.
+    normalized_mapping:
+      - "s_parent=0.5+du+(s_canvas-0.5)/scale_u"
+      - "t_parent=0.5+dv+(t_canvas-0.5)/scale_v"
+    canvas_to_parent_affine_entries:
+      a00: "Wp/(Wc*scale_u)"
+      a01: 0.0
+      a02: "Wp*(0.5+du-0.5/scale_u)"
+      a10: 0.0
+      a11: "Hp/(Hc*scale_v)"
+      a12: "Hp*(0.5+dv-0.5/scale_v)"
+    parent_to_canvas: "exact float64 matrix inverse of T_canvas_to_parent"
+    effective_ouv_from_parent_ouv:
+      - "O_c=O_p+(a02/Wp)*U_p+(a12/Hp)*V_p"
+      - "U_c=(Wc*a00/Wp)*U_p+(Wc*a10/Hp)*V_p"
+      - "V_c=(Hc*a01/Wp)*U_p+(Hc*a11/Hp)*V_p"
+    map_vector_landmark_conjugation:
+      notation: >-
+        For homogeneous x on the canvas, T=T_canvas_to_parent, and
+        L=T[0:2,0:2], F and G are parent-pixel absolute forward/inverse maps.
+      absolute_maps:
+        - "F_c(x)=T^-1(F_p(Tx))"
+        - "G_c(x)=T^-1(G_p(Tx))"
+      canvas_coordinate_svf: "v_c(x)=L^-1*v_p(Tx)"
+      landmarks: "landmark_c=T^-1*landmark_p"
+      ccf_coordinate_raster: "CCF_c(x)=CCF_p(Tx); physical CCF values are not transformed"
+      validity: >-
+        Valid only when the domain sample Tx is valid in the parent and the
+        transformed codomain is finite and inside [0,Wc-1]x[0,Hc-1].
+  retained_tissue_audit_bins:
+    near_full: [0.9, 1.0]
+    mild_partial: [0.7, 0.9]
+    severe_ambiguity: [0.4, 0.7]
+    below_0_4: "abstention/OOD stress; do not force precise pose supervision"
+    policy: >-
+      These are observed post-hoc audit bins without target frequencies,
+      rejection, redraw, reweighting, or pose-conditioned plan pairing.
+  retention_denominators:
+    centre_plane: "centre-plane support pixels before windowing"
+    optical: "optically observable slab-support mass before windowing"
+  required_fields:
+    - "view_plan_seed_uint64"
+    - "view_plan_id"
+    - "plan_generated_without_pose_or_tissue"
+    - "canvas_shape_h_w"
+    - "global_reference_grid_id"
+    - "global_reference_fov_uv_um"
+    - "content_scale"
+    - "centre_offset_uv"
+    - "canvas_to_parent_affine_float64"
+    - "parent_to_canvas_affine_float64"
+    - "effective_canvas_to_parent_affine_float32"
+    - "design_quicknii_ouv"
+    - "effective_quicknii_ouv"
+    - "retained_centre_plane_support_fraction"
+    - "retained_optical_slab_support_fraction"
+    - "window_status"
+    - "acquisition_window_realization_id"
+  interpolation:
+    scalar: "bilinear-zero"
+    annotation: "nearest-zero integer"
+    masks: "nearest-zero Boolean"
+    absolute_maps_and_ccf_coordinates: "bilinear with invalid/zero exterior recorded explicitly"
+  acceptance_gates:
+    - "plan API and identity contain no pose/tissue input"
+    - "matched counterfactual planes sharing a plan receive identical nuisance"
+    - "no adaptive tight-fit or redraw after tissue inspection"
+    - "positive affine determinant and exact inverse-cycle/O-U-V reconstruction"
+    - "failures and partial-FOV strata are recorded, never silently repaired"
+    - "exact replay and coherent-tamper rejection cover every field and array"
+
+smart_brush_interaction:
+  paired_modes:
+    - "absent-outline-acquired-background"
+    - "accurate-outline-black-exterior"
+    - "imperfect-outline-black-exterior"
+  shared_latents: ["plane", "slab", "window", "G1", "G2", "G3", "reflection"]
+  rules:
+    - "the brush is optional and automatic segmentation is never required"
+    - "accurate outline follows observable footprint, not privileged validity truth"
+    - "available modes are exactly black outside the final transformed outline"
+    - "absent mode preserves the final transformed acquired background"
+    - "paired_view_group_id includes reflection_transform_id and excludes outline choice and reflection child realization"
+
+model_input_anti_leak_contract:
+  source_encoder_allowlist:
+    - "final transformed grayscale image"
+    - "optional final transformed outline mask"
+    - "outline_available scalar"
+  source_encoder_denylist:
+    - "pose, plane frame, basis, or any QuickNII OUV"
+    - "animal/specimen/experiment/sample/realization IDs or hashes"
+    - "random seeds, rejected attempts, or generation-order metadata"
+    - "slab, acquisition-window, reflection, deformation, or damage parameters"
+    - "retained-tissue fractions, status flags, or abstention fields"
+    - "atlas annotations, tissue/support/validity masks, landmarks, or CCF coordinate rasters"
+  candidate_path_rule: >-
+    Atlas-derived scalar/support candidate imagery may enter only through the
+    explicit pose-conditioned comparison path. Generic artifact or metadata
+    dictionaries are never model inputs.
+
+remaining_v1_conformance_before_substantial_training:
+  items:
+    - "implement the predeclared 0.5 label-boundary anti-shortcut using contrast return or 8-64 visible groups"
+    - "sample 1-3 internal-hole components rather than always one"
+    - "sample 0-2 imperfect-outline gaps and islands with exact bound counts"
+    - "update stale public generator documentation after verification"
+  deferred_but_required_before_real_animal_robustness_claim:
+    - "pre-cut 3-D animal morphology independent of post-slice 2-D deformation"
+
+provenance_and_replay:
+  preserve_exact_ids_when_present: ["animal_id", "specimen_id", "experiment_id"]
+  preserve_exact_context_hashes:
+    - "prepared_context_sha256"
+    - "support_index_sha256"
+    - "annotation_array_sha256"
+    - "authenticated scalar-source SHA256"
+  add_ids: ["v2_plane_realization_id", "v2_acquisition_realization_id", "slab_render_id", "acquisition_window_realization_id", "reflection_transform_id", "reflection_realization_id"]
+  final_identity_binds:
+    - "all named RNG streams and rejected attempts"
+    - "resolved configuration and implementation/dependency hashes"
+    - "interpolation, dtype, shape, and array hashes"
+    - "all inherited and new realization IDs"
+  verification: "reconstruct from authenticated atlas/support/prepared context and compare every array byte-for-byte"
+
+small_smoke:
+  root_seed_uint64: "0x415154564f320001"
+  split: "development"
+  sample_indices: "integers 0 through 19 inclusive"
+  output_canvas_shape_h_w: [192, 256]
+  construction: "directly stratified assignments below; no seed search, retention filter, redraw, or outcome pairing"
+  rejection_free_plane_and_window_sampler:
+    shared_rules:
+      canonicalization: "use the frozen RP2 sign canonicalization and physical_plane_frame roll rule"
+      roll: "2*pi*U('pose','roll',attempt=0)"
+      ordinary_offset_measure_fraction: >-
+        0.15+0.70*U('pose','offset-fraction',attempt=0), mapped by length over
+        the same authenticated merged brain-intersection interval union used
+        for edge cases.
+      edge_offset_measure_fraction: >-
+        Even sample index: 0.01+0.02*U; odd sample index: 0.99-0.02*U,
+        using field 'edge-offset-fraction'. Map the fraction by length over the
+        authenticated merged brain-intersection interval union.
+    axis_near_normal: >-
+      For the named AP, DV, or ML axis, c=Uniform[0.90,0.985) from field
+      'axis-cosine' and phi=2*pi*U('axis-azimuth'); put c on that axis and
+      sqrt(1-c^2)*(cos(phi),sin(phi)) on the other two axes, then canonicalize.
+    general_oblique_normal: >-
+      Draw three magnitudes independently Uniform[0.35,0.75) using fields
+      'oblique-magnitude-0..2', set AP sign positive and DV/ML signs by fields
+      'oblique-sign-1..2' with U<0.5 mapping to -1 and U>=0.5 to +1, normalize,
+      then canonicalize. This guarantees max absolute component <0.90 without
+      rejection.
+    edge_or_partial_normal: >-
+      z=2*U('edge-sphere-z')-1, phi=2*pi*U('edge-sphere-azimuth'), raw normal
+      [z,sqrt(1-z^2)*cos(phi),sqrt(1-z^2)*sin(phi)], then canonicalize.
+    window_fields: >-
+      content scale q uses field 'window/content-scale'; aspect a uses
+      'window/aspect'; offsets du,dv use 'window/offset-u' and
+      'window/offset-v'. Each uses the assigned window_plan_severity and the
+      frozen uniform/log-uniform rules above, all at attempt zero.
+  analytic_cases:
+    - "centre-plane-render ablation identity parity"
+    - "physical-normal linear slab ramp"
+    - "unilateral reflection/laterality"
+    - "affine window and OUV coordinate ramp"
+  ccf_latent_cases: 20
+  plane_strata: ["near_AP", "near_DV", "near_ML", "general_oblique", "edge_or_partial"]
+  cases_per_plane_stratum: 4
+  fixed_assignments:
+    - {sample_index: 0, plane_stratum: near_AP, window_plan_severity: standard, reflection: none, render_mode: centre_plane_ablation, nominal_cut_thickness_um: 50, effective_optical_support_um: 0}
+    - {sample_index: 1, plane_stratum: near_AP, window_plan_severity: standard, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 25}
+    - {sample_index: 2, plane_stratum: near_AP, window_plan_severity: standard, reflection: none, render_mode: finite_boxcar, nominal_cut_thickness_um: 50}
+    - {sample_index: 3, plane_stratum: near_AP, window_plan_severity: broad, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 60}
+    - {sample_index: 4, plane_stratum: near_DV, window_plan_severity: stress, reflection: none, render_mode: finite_boxcar, thickness_class: named_thick_stress, nominal_cut_thickness_um: 100}
+    - {sample_index: 5, plane_stratum: near_DV, window_plan_severity: standard, reflection: horizontal, render_mode: centre_plane_ablation, nominal_cut_thickness_um: 60, effective_optical_support_um: 0}
+    - {sample_index: 6, plane_stratum: near_DV, window_plan_severity: standard, reflection: none, render_mode: finite_boxcar, nominal_cut_thickness_um: 30}
+    - {sample_index: 7, plane_stratum: near_DV, window_plan_severity: standard, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 55}
+    - {sample_index: 8, plane_stratum: near_ML, window_plan_severity: broad, reflection: none, render_mode: finite_boxcar, nominal_cut_thickness_um: 85}
+    - {sample_index: 9, plane_stratum: near_ML, window_plan_severity: standard, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 32.5}
+    - {sample_index: 10, plane_stratum: near_ML, window_plan_severity: standard, reflection: none, render_mode: centre_plane_ablation, nominal_cut_thickness_um: 25, effective_optical_support_um: 0}
+    - {sample_index: 11, plane_stratum: near_ML, window_plan_severity: standard, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 45}
+    - {sample_index: 12, plane_stratum: general_oblique, window_plan_severity: standard, reflection: none, render_mode: finite_boxcar, nominal_cut_thickness_um: 64}
+    - {sample_index: 13, plane_stratum: general_oblique, window_plan_severity: broad, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 75}
+    - {sample_index: 14, plane_stratum: general_oblique, window_plan_severity: standard, reflection: none, render_mode: finite_boxcar, nominal_cut_thickness_um: 99}
+    - {sample_index: 15, plane_stratum: general_oblique, window_plan_severity: standard, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 27.5}
+    - {sample_index: 16, plane_stratum: edge_or_partial, window_plan_severity: standard, reflection: none, render_mode: finite_boxcar, nominal_cut_thickness_um: 52.5}
+    - {sample_index: 17, plane_stratum: edge_or_partial, window_plan_severity: standard, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 87.5}
+    - {sample_index: 18, plane_stratum: edge_or_partial, window_plan_severity: broad, reflection: none, render_mode: finite_boxcar, nominal_cut_thickness_um: 47.5}
+    - {sample_index: 19, plane_stratum: edge_or_partial, window_plan_severity: stress, reflection: horizontal, render_mode: finite_boxcar, nominal_cut_thickness_um: 62.5}
+  fixed_assignment_totals:
+    plan_severity: {standard: 14, broad: 4, stress: 2}
+    reflection: {none: 10, horizontal: 10}
+    centre_plane_ablation: 3
+    required_anchor_thicknesses_present_in_finite_mode_um: [25, 50, 60, 100]
+  outline_descendants_per_latent: 3
+  total_observations: 60
+  analytic_phantoms_are_additional_to_ccf_observations: true
+  model_scoring: false
+  benchmarking: false
+  freeze_condition: "focused tests, exact replay, seed-hidden montage review, and independent audit"
+
+future_validation_preserved:
+  split_unit: "animal, never slice"
+  untouched_final_test_animals_required: true
+  public_benchmark: "DeepSlice Ground Truth DOI 10.25949/22802411, later only"
+  external_validation: "separate real lab histology, later only"
+  calibration: "animal-held-out calibration of pose and trajectory coverage, later only"
+
+evidence:
+  - "Allen Mouse Brain Atlas technical white paper: 25-um sections and 100-um series spacing"
+  - "Steinmetz et al. 2019, 60-um Neuropixels histology, https://doi.org/10.1038/s41586-019-1787-x"
+  - "International Brain Laboratory 2025, 50-um cuts with two optical planes, https://doi.org/10.1038/s41586-025-09235-0"
+  - "Pinskiy et al. 2015, 20-um tape transfer and reflection/orientation observations, https://doi.org/10.1371/journal.pone.0102363"
+  - "Lee et al. 2018, serial-section transform variability, https://doi.org/10.1371/journal.pcbi.1006610"
+  - "DeepSlice 2023, section-angle and whole-section use-case limits, https://doi.org/10.1038/s41467-023-41645-4"
