@@ -8,6 +8,7 @@ from training.allen_real_histology_metadata import (
     OFFICIAL_DOCUMENTS,
     _canonical_bytes,
     _official_url,
+    _snapshot_root,
     acquire_metadata_snapshot,
     split_for_animal,
     verify_metadata_snapshot,
@@ -150,3 +151,18 @@ def test_nonofficial_or_nonhttps_sources_are_rejected():
         _official_url("https://example.org/metadata.json")
     with pytest.raises(ValueError, match="official HTTPS host"):
         _official_url("http://api.brain-map.org/api/v2/data/query.json")
+
+
+def test_snapshot_root_rejects_c_and_relative_paths_resolving_on_c(monkeypatch):
+    with pytest.raises(ValueError, match="must resolve to I:"):
+        _snapshot_root("C:/AnatomyTracker/blocked")
+    monkeypatch.chdir(Path.home())
+    assert Path.cwd().drive.upper() == "C:"
+    with pytest.raises(ValueError, match="must resolve to I:"):
+        _snapshot_root("relative-allen-snapshot")
+
+
+def test_snapshot_root_accepts_and_canonicalizes_i():
+    root = _snapshot_root("I:/AnatomyTracker/data/../data/allen-metadata")
+    assert root == Path("I:/AnatomyTracker/data/allen-metadata")
+    assert root.drive.upper() == "I:"
