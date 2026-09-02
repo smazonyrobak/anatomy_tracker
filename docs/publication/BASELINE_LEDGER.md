@@ -1027,3 +1027,25 @@ arbitrary-plane retriever, finite-thickness renderer and recurrent
 pose/deformation updater. Exact metrics, hashes, scope guards and the verifier
 limitation are recorded in
 `publication/arbitrary_plane_image_information_result.yaml`.
+
+### First arbitrary-plane zero-thickness training pilot
+
+The first protected direct-row pilot from commit
+`de9418411aff31320c42b880943a1782b32d22db` froze all 5,120 training rows and
+640 animal-disjoint internal-development rows, then exited nonzero during GPU
+optimization. Its authenticated ledger is consistent through 50 attempts and
+40 applied updates, far short of the frozen 4,000-update target. The completed
+post-run gate therefore rejected the run before export; no predictions,
+calibration, public benchmark, external validation, final test, or model
+candidate exists.
+
+Read-only deterministic reconstruction from the exact step-40 checkpoint
+applied steps 40--44 and reproduced the failure at step 45. The initial
+probabilistic plane-mixture NLL became positive infinity under AMP, while the
+retrieval, refined-plane and landmark losses and all parameters and optimizer
+values remained finite. This localizes a mixed-precision stability defect; it
+is neither a cache-integrity failure nor a model-performance result. The
+frozen run remains untouched and will not be resumed. A numerically stable
+loss and finite-gradient regression must precede a newly identified pilot.
+Exact receipts, hashes and the negative gate are recorded in
+`publication/arbitrary_plane_v4_zero_thickness_pilot_failure.yaml`.

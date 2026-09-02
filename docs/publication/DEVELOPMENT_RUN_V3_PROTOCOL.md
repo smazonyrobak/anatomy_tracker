@@ -38,3 +38,11 @@ First inspect optimization, honest retrieval, physical landmark error, projectiv
 After the method stabilizes, fit uncertainty only on held-out calibration animals and audit 50/80/90/95% coverage without sacrificing point accuracy. Then follow `FUTURE_VALIDATION_PLAN.md`: untouched final-test animals, DeepSlice Ground Truth DOI 10.25949/22802411, separate real laboratory histology where available, blinded expert references, fair tool comparisons, physical landmark error as the primary endpoint, effect sizes with 95% confidence intervals, and immutable splits/configs/seeds/raw predictions.
 
 All caches, temporary files, checkpoints, reports, feature caches, and predictions for this run live under `I:\AnatomyTracker`; C: is not a development target.
+
+## First zero-thickness pilot result
+
+The first protected execution from commit `de9418411aff31320c42b880943a1782b32d22db` authenticated and froze all 5,120 training rows and all 640 animal-disjoint internal-development rows, then entered GPU optimization. Its ledger is internally consistent through 50 attempts and 40 applied updates, but the process exited nonzero before the 4,000-update target. The public post-training gate correctly rejected the incomplete run, so no inference package, raw development predictions, calibration result, benchmark result, or model candidate was produced.
+
+Read-only deterministic reconstruction from the exact step-40 checkpoint advances five further updates and then reproduces the failure at step 45: the initial probabilistic plane-mixture NLL overflows to positive infinity under AMP while retrieval, refined-plane, landmark, deformation, parameter, and optimizer values remain finite. This is a numerical-stability defect in the initial uncertainty objective, not evidence of corrupt cache rows or a scientific performance result. The frozen run will not be resumed or rewritten. Development must fix the loss, verify finite gradients under autocast, and launch a new receipt-bound pilot before any internal-development evaluation.
+
+Exact paths, receipts, hashes, failure localization, and the negative gate decision are recorded in `arbitrary_plane_v4_zero_thickness_pilot_failure.yaml`.

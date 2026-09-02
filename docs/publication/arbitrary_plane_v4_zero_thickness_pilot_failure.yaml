@@ -1,0 +1,88 @@
+schema_version: anatomy-tracker.arbitrary-plane-zero-thickness-pilot-failure/v1
+scientific_scope: internal synthetic development pilot; not validation, qualification, benchmarking, calibration, external validation, or final test
+decision: STOP_FIX_NUMERICAL_STABILITY_AND_RERUN_NEW_ID
+run:
+  label: direct_v4_zero_thickness_001
+  repository_commit: de9418411aff31320c42b880943a1782b32d22db
+  repository_branch: codex/run-direct-v4-zero-thickness-001
+  frozen_source_worktree: 'I:\AnatomyTracker\run_worktrees\direct_v4_zero_thickness_001'
+  output_root: 'I:\AnatomyTracker\runs\arbitrary_plane_v4_zero_thickness_development_001'
+  training_run: 'I:\AnatomyTracker\runs\arbitrary_plane_v4_zero_thickness_development_001\training_run'
+  run_id: 3f8d84977edc81a4bbb9537a2ccdff37c0acbb08f47ce7a79c183764087fe598
+  run_manifest_receipt_sha256: 333788d6c326ec1bc1e0d3a3f39618a57a455ff7d4859f0442d3462b596ac2e0
+  run_manifest_file_sha256: c520161dc8aff05d8d417a9ee22d3f7831c77bb62ada0821d3c7c4dc18ce2bc7
+  run_state_receipt_sha256: d293a2b266626de3578e99f47a044def1ce8b5b6bd5b3ee8a1d24de06ea57559
+  run_state_file_sha256: 643b06170c558bbefb4ea8d71a7a4f4b9a3097861b8670dc26c67feb5e646b45
+  committed_attempt_count: 50
+  committed_applied_step_count: 40
+  frozen_target_applied_step_count: 4000
+  latest_checkpoint_relative_path: checkpoints/resume_slot_0.pt
+  latest_checkpoint_file_sha256: a2682a7d3fd784a18b3e0441552e9995e50ae97333ac23032a44590a255025a3
+  runner_exit: nonzero
+  exception_type: FloatingPointError
+  exception_message: nonfinite staged-training objective
+caches:
+  training:
+    path: 'I:\AnatomyTracker\runs\arbitrary_plane_v4_zero_thickness_development_001\training_cache_5120'
+    schema_version: anatomy-tracker.arbitrary-plane-row-cache/v3
+    status: FROZEN
+    row_count: 5120
+    manifest_receipt_sha256: 27178685971882923c7c988edb312bc9bd0da508f84aba947cca9243f92cf9a8
+    manifest_file_sha256: 42724079e9972f0352b24622eb3ecc22fee68b05d9da91888cad8b5cecc124d1
+    catalogue_capture_receipt_sha256: 25f9d45ba4921e7dec058438d07accfb1485483538ff4dd9053d19914557afdd
+    catalogue_capture_file_sha256: 6d0ab016c6b834c8511b118395c460b7448d6e132f3278e680bb28469ed4e388
+  internal_development:
+    path: 'I:\AnatomyTracker\runs\arbitrary_plane_v4_zero_thickness_development_001\internal_development_cache_640'
+    schema_version: anatomy-tracker.arbitrary-plane-row-cache/v3
+    status: FROZEN
+    row_count: 640
+    manifest_receipt_sha256: 328d83a8fb72917ce51ee8a227cf10fcefa25840b17af8b8c78cbd64c17dd65a
+    manifest_file_sha256: e0b8945950c49a20defeb35d848ffbf066cd8a5000ef33824bd1db5db92e912d
+    catalogue_capture_receipt_sha256: 96e09ee99da11e62b16619c841a08d83859a83cbca5c74bd050cc042046c28b2
+    catalogue_capture_file_sha256: 25f85ed2ea3a983871295e5da6bdb0420cf440ac716c2829b6f5c26d4f20b046
+logs:
+  stdout:
+    path: 'I:\AnatomyTracker\run_logs\direct_v4_zero_thickness_001_attempt2.stdout.log'
+    file_sha256: 48c1a55f2235f027cbba3ea5a447982216649dfcfae95d3143e0deed6ccd16b1
+  stderr:
+    path: 'I:\AnatomyTracker\run_logs\direct_v4_zero_thickness_001_attempt2.stderr.log'
+    file_sha256: f77f96e1e154cb0589b73fb7aaa73d53a62d32a2d2ed6e6964e4473571a74b64
+independent_read_only_audit:
+  authenticated_run_loader: PASS
+  authenticated_run_loader_result:
+    committed_attempt_count: 50
+    committed_applied_step_count: 40
+    checkpoint_global_step: 40
+    all_manifest_state_report_checkpoint_cache_and_atlas_bindings_agree: true
+  completed_postrun_gate: REJECTED_INCOMPLETE
+  completed_postrun_gate_reason: post-training export requires the exact completed training target
+  public_package_verifier_status: NOT_RUN_NO_PACKAGE
+  raw_prediction_status: NOT_GENERATED
+  calibration_status: NOT_FITTED
+  public_benchmark_accessed: false
+  final_test_accessed: false
+  external_validation_accessed: false
+  prior_model_weight_dependencies: []
+  prior_feature_dependencies: []
+  prior_pseudolabel_dependencies: []
+deterministic_failure_localization:
+  method: read-only in-memory replay from the exact authenticated step-40 checkpoint; frozen files were not modified
+  finite_applied_steps_after_checkpoint: [40, 41, 42, 43, 44]
+  failing_step: 45
+  reconstructed_attempt_index: 55
+  row_indices: [2235, 4578, 4171, 77]
+  amp_scale: 64.0
+  parameter_state_finite_before_failure: true
+  optimizer_state_finite_before_failure: true
+  losses:
+    retrieval_nll: 6.565281867980957
+    initial_plane_mixture_nll: .inf
+    final_plane_mixture_nll: 6.178462982177734
+    final_landmark_mixture_nll: 8.104243278503418
+    total: .inf
+  localized_failure: initial probabilistic plane-mixture NLL overflows under mixed precision
+scientific_interpretation:
+  cache_integrity: authenticated frozen caches and committed training ledger passed read-only verification
+  model_status: no completed or shippable model
+  performance_claim: none
+  next_action: compute probabilistic geometric NLL in a numerically stable precision domain, add finite-value and finite-gradient regression coverage, then launch a new immutable pilot rather than resuming this failed run
