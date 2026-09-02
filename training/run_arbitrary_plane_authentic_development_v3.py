@@ -1,7 +1,7 @@
-"""First authentic arbitrary-plane V3 development run.
+"""Authentic direct-target V4 zero-thickness development run.
 
 Run only with TEMP and TMP set to
-I:\\AnatomyTracker\\tmp\\arbitrary_plane_v3_authentic_development_001.
+I:\\AnatomyTracker\\tmp\\arbitrary_plane_v4_zero_thickness_development_001.
 Every generated cache, checkpoint, report, and temporary file is then confined
 to I:\\AnatomyTracker.  This is synthetic development training, not a public
 benchmark, qualification run, or final-test evaluation.
@@ -27,7 +27,9 @@ TEMPLATE_SHA256 = "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8
 ANNOTATION_SHA256 = "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42"
 PYNRRD_VERSION = "1.1.3"
 
-OUTPUT_ROOT = ANATOMY_ROOT / "runs" / "arbitrary_plane_v3_authentic_development_001"
+OUTPUT_ROOT = (
+    ANATOMY_ROOT / "runs" / "arbitrary_plane_v4_zero_thickness_development_001"
+)
 TRAIN_CACHE = OUTPUT_ROOT / "training_cache_5120"
 DEVELOPMENT_CACHE = OUTPUT_ROOT / "internal_development_cache_640"
 TRAINING_RUN = OUTPUT_ROOT / "training_run"
@@ -35,7 +37,9 @@ TRAIN_CAPTURE_AUDIT = OUTPUT_ROOT / "training_catalogue_capture_audit.json"
 DEVELOPMENT_CAPTURE_AUDIT = (
     OUTPUT_ROOT / "internal_development_catalogue_capture_audit.json"
 )
-TEMP_ROOT = ANATOMY_ROOT / "tmp" / "arbitrary_plane_v3_authentic_development_001"
+TEMP_ROOT = (
+    ANATOMY_ROOT / "tmp" / "arbitrary_plane_v4_zero_thickness_development_001"
+)
 
 OUTPUT_SHAPE_H_W = (160, 160)
 SECTIONS_PER_ANIMAL = 16
