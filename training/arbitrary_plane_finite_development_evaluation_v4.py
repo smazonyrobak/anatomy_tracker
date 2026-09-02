@@ -29,6 +29,11 @@ FINITE_DEVELOPMENT_EVALUATION_ROLE = "internal-development-only"
 UNCALIBRATED_SCOPE = (
     "uncalibrated raw model scores/covariances; diagnostic only; no coverage claim"
 )
+REGIONAL_ANNOTATION_ARTIFACT_SCHEMA = (
+    "anatomy-tracker.portable-regional-annotation/v4"
+)
+REGIONAL_ANNOTATION_RELATIVE_PATH = "regional_annotation/annotation_ap_dv_ml.npz"
+REGIONAL_ANNOTATION_ARRAY_KEY = "annotation_ap_dv_ml"
 _MODE_LABELS = metrics_v3._MODE_LABELS
 _SOURCE_FILES = (
     Path(__file__),
@@ -105,6 +110,109 @@ def _atomic_json_new(path, value):
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, target)
+
+
+def _atomic_annotation_npz_new(path, annotation):
+    target = _i_path(path)
+    if os.path.lexists(target):
+        raise FileExistsError("finite development annotation target already exists")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    if os.path.lexists(temporary):
+        raise FileExistsError("finite development annotation temporary already exists")
+    with temporary.open("xb") as handle:
+        np.savez_compressed(handle, **{
+            REGIONAL_ANNOTATION_ARRAY_KEY: np.ascontiguousarray(annotation)
+        })
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, target)
+
+
+def _regional_annotation_record(annotation, checkpoint, output_root, *, write):
+    expected = checkpoint["inference_contract"]["atlas_assets"][
+        "annotation_volume_receipt"
+    ]
+    if annotation is None:
+        if expected is not None:
+            raise ValueError("checkpoint-bound annotation was not supplied for regional verification")
+        return None
+    array = np.ascontiguousarray(np.asarray(annotation))
+    receipt = inference_v3._tensor_receipt(array)
+    geometry = checkpoint["inference_contract"]["atlas_geometry"]
+    semantics = checkpoint["inference_contract"]["atlas_semantics"]
+    if (
+        expected is None
+        or receipt != expected
+        or array.ndim != 3
+        or list(array.shape) != geometry["shape_c_ap_dv_ml"][1:]
+        or array.dtype.hasobject
+        or array.dtype.kind not in "iu"
+    ):
+        raise ValueError("regional annotation differs from the checkpoint-bound annotation")
+    path = output_root / REGIONAL_ANNOTATION_RELATIVE_PATH
+    if write:
+        _atomic_annotation_npz_new(path, array)
+    path = path.resolve(strict=True)
+    return {
+        "schema_version": REGIONAL_ANNOTATION_ARTIFACT_SCHEMA,
+        "relative_path": path.relative_to(output_root).as_posix(),
+        "archive_format": "numpy-npz-deflate; allow_pickle=false",
+        "array_key": REGIONAL_ANNOTATION_ARRAY_KEY,
+        "file_sha256": _file_sha256(path),
+        "byte_count": int(path.stat().st_size),
+        "decoded_array": {
+            "shape_ap_dv_ml": list(array.shape),
+            "numpy_dtype": array.dtype.str,
+            "tensor_receipt": receipt,
+        },
+        "physical_geometry": {
+            "axis_order": semantics["array_axis_order"],
+            "positive_axis_directions": semantics["positive_axis_directions"],
+            "voxel_center_convention": semantics["voxel_center_convention"],
+            "origin_ap_dv_ml_um": geometry["origin_ap_dv_ml_um"],
+            "voxel_size_ap_dv_ml_um": geometry["voxel_size_ap_dv_ml_um"],
+        },
+        "source_binding": {
+            "atlas_name": semantics["atlas_name"],
+            "atlas_version": semantics["atlas_version"],
+            "source_format": semantics["source_format"],
+            "nrrd_index_order": semantics["nrrd_index_order"],
+            "source_assets": semantics["source_assets"],
+            "atlas_semantics_receipt_sha256": _sha(semantics),
+            "checkpoint_annotation_volume_receipt": expected,
+        },
+        "contains_atlas_intensity": False,
+        "metric_use": "exact nearest-label regional-overlap recomputation only",
+    }
+
+
+def _load_regional_annotation_artifact(output_root, report):
+    record = report.get("regional_annotation_artifact")
+    checkpoint = report["checkpoint_binding"]
+    expected = checkpoint["inference_contract"]["atlas_assets"][
+        "annotation_volume_receipt"
+    ]
+    if record is None:
+        if expected is not None:
+            raise ValueError("checkpoint-bound regional annotation artifact is missing")
+        return None
+    path = (output_root / record["relative_path"]).resolve(strict=True)
+    if output_root not in path.parents:
+        raise ValueError("regional annotation artifact path is invalid")
+    try:
+        with np.load(path, allow_pickle=False) as archive:
+            if archive.files != [REGIONAL_ANNOTATION_ARRAY_KEY]:
+                raise ValueError("regional annotation archive members differ")
+            annotation = np.ascontiguousarray(archive[REGIONAL_ANNOTATION_ARRAY_KEY])
+    except (OSError, TypeError, ValueError) as error:
+        raise ValueError("regional annotation artifact cannot be decoded exactly") from error
+    recomputed = _regional_annotation_record(
+        annotation, checkpoint, output_root, write=False
+    )
+    if record != recomputed:
+        raise ValueError("regional annotation artifact or provenance differs")
+    return annotation
 
 
 def _metric_summary(values):
@@ -393,6 +501,9 @@ def run_arbitrary_plane_finite_development_evaluation_v4(
     ):
         raise ValueError("finite development configuration is invalid")
     output_root.mkdir(parents=True, exist_ok=True)
+    regional_annotation_artifact = _regional_annotation_record(
+        annotation_volume_ap_dv_ml, checkpoint_binding, output_root, write=True
+    )
     raw_root = output_root / "raw_predictions"
     raw_root.mkdir()
     row_reports = []
@@ -544,6 +655,7 @@ def run_arbitrary_plane_finite_development_evaluation_v4(
             "seed_record": manifest["seed_record"],
         },
         "checkpoint_binding": checkpoint_binding,
+        "regional_annotation_artifact": regional_annotation_artifact,
         "catalogue_binding": {
             "catalogue_id": catalogue["catalogue_id"],
             "receipt_sha256": catalogue["receipt_sha256"],
@@ -681,6 +793,7 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
             "cell_count": int(catalogue["counts"]["cell_count"]),
         }:
             raise ValueError("finite development catalogue binding differs")
+    regional_annotation = _load_regional_annotation_artifact(output_root, report)
     declared_animals = report["identities"]["development_evaluation_animal_ids"]
     if set(checkpoint["training_animal_ids"]) & set(declared_animals):
         raise ValueError("finite development animal leakage into training IDs")
@@ -780,35 +893,16 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
             raise ValueError("finite development inference receipt differs")
         if catalogue is not None:
             recomputed = _recomputed_metrics_from_raw(
-                artifact["raw_prediction"], row, catalogue, checkpoint, report["configuration"]
+                artifact["raw_prediction"], row, catalogue, checkpoint,
+                report["configuration"], annotation=regional_annotation
             )
             reported = row_report["metrics"]
             for family in (
                 "pose", "retrieval", "deformation", "dense", "uncertainty",
-                "overall_failure", "operational_abstention",
+                "regional_overlap", "overall_failure", "operational_abstention",
             ):
                 if reported[family] != recomputed[family]:
                     raise ValueError("finite development metric differs from raw prediction")
-            annotation_bound = (
-                checkpoint["inference_contract"]["atlas_assets"][
-                    "annotation_volume_receipt"
-                ]
-                is not None
-            )
-            expected_regional_available = bool(
-                annotation_bound
-                and not recomputed["retrieval"]["map_component_unrefined_tail"]
-            )
-            if (
-                bool(reported["regional_overlap"]["available"])
-                != expected_regional_available
-                or (
-                    not annotation_bound
-                    and reported["regional_overlap"]
-                    != recomputed["regional_overlap"]
-                )
-            ):
-                raise ValueError("finite development regional metric availability differs")
     expected_raw_paths = {
         path.resolve() for path in (output_root / "raw_predictions").glob("*.pt")
     }
@@ -852,6 +946,7 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
 __all__ = [
     "FINITE_DEVELOPMENT_EVALUATION_BUNDLE_V4_SCHEMA",
     "FINITE_DEVELOPMENT_EVALUATION_V4_SCHEMA",
+    "REGIONAL_ANNOTATION_ARTIFACT_SCHEMA",
     "UNCALIBRATED_SCOPE",
     "run_arbitrary_plane_finite_development_evaluation_v4",
     "verify_arbitrary_plane_finite_development_evaluation_v4",

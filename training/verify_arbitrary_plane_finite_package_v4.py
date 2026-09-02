@@ -155,6 +155,20 @@ def verify_arbitrary_plane_finite_package_v4(output_directory):
     evaluation_report = json.loads(
         (evaluation_root / "finite_development_evaluation_report.json").read_text("ascii")
     )
+    evaluation_annotation = evaluation_report["regional_annotation_artifact"]
+    expected_packaged_annotation = (
+        None
+        if evaluation_annotation is None
+        else {
+            **evaluation_annotation,
+            "relative_path": (
+                evaluation_record["relative_directory"].rstrip("/")
+                + "/" + evaluation_annotation["relative_path"]
+            ),
+        }
+    )
+    if artifacts.get("regional_annotation") != expected_packaged_annotation:
+        raise ValueError("finite-v4 packaged regional annotation binding differs")
     evaluation_cache = evaluation_report["cache_binding"]
     if (
         evaluation_cache["directory"] != development["directory"]
@@ -200,6 +214,10 @@ def verify_arbitrary_plane_finite_package_v4(output_directory):
             for row in evaluation_report["row_reports"]
         },
     }
+    if expected_packaged_annotation is not None:
+        expected_files.add(
+            _inside(root, expected_packaged_annotation["relative_path"]).resolve()
+        )
     actual_files = {path.resolve() for path in root.rglob("*") if path.is_file()}
     if actual_files != expected_files:
         raise ValueError("finite-v4 package artifact set differs")

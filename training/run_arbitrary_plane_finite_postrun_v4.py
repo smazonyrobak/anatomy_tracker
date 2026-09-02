@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import training.arbitrary_plane_finite_development_evaluation_v4 as evaluation_v4
@@ -127,6 +128,22 @@ def run_arbitrary_plane_finite_postrun_v4(
         )
     )
     evaluation_v4._atomic_json_new(export_path, export_report)
+    evaluation_report = json.loads(
+        (evaluation_root / "finite_development_evaluation_report.json").read_text(
+            "ascii"
+        )
+    )
+    regional_annotation = evaluation_report["regional_annotation_artifact"]
+    packaged_regional_annotation = (
+        None
+        if regional_annotation is None
+        else {
+            **regional_annotation,
+            "relative_path": (
+                Path(evaluation_relative) / regional_annotation["relative_path"]
+            ).as_posix(),
+        }
+    )
     configuration = {
         "all_development_cache_rows_evaluated": True,
         "development_evaluation_animal_ids": sorted(development_evaluation_animal_ids),
@@ -187,6 +204,7 @@ def run_arbitrary_plane_finite_postrun_v4(
                 "bundle_file_sha256": _file_sha256(evaluation_root / "bundle_receipt.json"),
                 "bundle_receipt_sha256": evaluation_bundle["receipt_sha256"],
             },
+            "regional_annotation": packaged_regional_annotation,
         },
         "calibration": {
             "status": export_v3.UNCALIBRATED_STATUS,

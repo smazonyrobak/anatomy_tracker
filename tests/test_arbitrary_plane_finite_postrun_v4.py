@@ -270,6 +270,105 @@ def test_resealed_metric_tamper_is_rejected_against_raw_prediction(tmp_path):
         )
 
 
+def test_packaged_regional_annotation_tamper_is_rejected(tmp_path):
+    run, _, _, manifest, _ = runner_fixture._prepared(
+        tmp_path / "training", row_count=1, target=1
+    )
+    runner_v4.run_finite_training_attempts_v4(run, max_attempts=1)
+    development, _, rows = _development_cache(tmp_path / "evaluation")
+    output = tmp_path / "package"
+    postrun_v4.run_arbitrary_plane_finite_postrun_v4(
+        run,
+        development,
+        output,
+        atlas_semantics=_semantics(manifest),
+        development_evaluation_animal_ids=tuple(
+            row["lineage"]["animal_id"] for row in rows
+        ),
+        annotation_volume_ap_dv_ml=np.ones((10, 10, 10), dtype=np.int64),
+        top_k=2,
+        refinement_steps=1,
+        pose_only_steps=0,
+        retrieval_shape_h_w=(4, 4),
+        catalogue_chunk_size=2,
+        gauss_hermite_order=3,
+        device="cpu",
+    )
+    annotation_path = (
+        output / "internal_development_evaluation" /
+        evaluation_v4.REGIONAL_ANNOTATION_RELATIVE_PATH
+    )
+    with np.load(annotation_path, allow_pickle=False) as archive:
+        annotation = archive[evaluation_v4.REGIONAL_ANNOTATION_ARRAY_KEY].copy()
+    annotation[0, 0, 0] = 2
+    with annotation_path.open("wb") as handle:
+        np.savez_compressed(handle, **{
+            evaluation_v4.REGIONAL_ANNOTATION_ARRAY_KEY: annotation
+        })
+    with pytest.raises(ValueError, match="regional annotation"):
+        verify_arbitrary_plane_finite_package_v4(output)
+
+
+def test_resealed_regional_metric_tamper_is_recomputed_from_packaged_annotation(tmp_path):
+    run, _, _, manifest, _ = runner_fixture._prepared(
+        tmp_path / "training", row_count=1, target=1
+    )
+    runner_v4.run_finite_training_attempts_v4(run, max_attempts=1)
+    development, _, rows = _development_cache(tmp_path / "evaluation")
+    output = tmp_path / "package"
+    postrun_v4.run_arbitrary_plane_finite_postrun_v4(
+        run,
+        development,
+        output,
+        atlas_semantics=_semantics(manifest),
+        development_evaluation_animal_ids=tuple(
+            row["lineage"]["animal_id"] for row in rows
+        ),
+        annotation_volume_ap_dv_ml=np.ones((10, 10, 10), dtype=np.int64),
+        top_k=2,
+        refinement_steps=1,
+        pose_only_steps=0,
+        retrieval_shape_h_w=(4, 4),
+        catalogue_chunk_size=2,
+        gauss_hermite_order=3,
+        device="cpu",
+    )
+    evaluation_root = output / "internal_development_evaluation"
+    report_path = evaluation_root / "finite_development_evaluation_report.json"
+    evaluation_bundle_path = evaluation_root / "bundle_receipt.json"
+    package_bundle_path = output / "finite_postrun_bundle_receipt.json"
+    report = json.loads(report_path.read_text("ascii"))
+    regional = report["row_reports"][0]["metrics"]["regional_overlap"]
+    regional["available"] = not regional["available"]
+    report["receipt_sha256"] = evaluation_v4._sha({
+        key: value for key, value in report.items() if key != "receipt_sha256"
+    })
+    report_path.write_bytes(evaluation_v4._canonical_json(report))
+    evaluation_bundle = json.loads(evaluation_bundle_path.read_text("ascii"))
+    evaluation_bundle["report_file_sha256"] = evaluation_v4._file_sha256(report_path)
+    evaluation_bundle["report_receipt_sha256"] = report["receipt_sha256"]
+    evaluation_bundle["receipt_sha256"] = evaluation_v4._sha({
+        key: value for key, value in evaluation_bundle.items()
+        if key != "receipt_sha256"
+    })
+    evaluation_bundle_path.write_bytes(evaluation_v4._canonical_json(evaluation_bundle))
+    package_bundle = json.loads(package_bundle_path.read_text("ascii"))
+    packaged_evaluation = package_bundle["artifacts"]["development_evaluation"]
+    packaged_evaluation["bundle_file_sha256"] = evaluation_v4._file_sha256(
+        evaluation_bundle_path
+    )
+    packaged_evaluation["bundle_receipt_sha256"] = evaluation_bundle[
+        "receipt_sha256"
+    ]
+    package_bundle["receipt_sha256"] = evaluation_v4._sha({
+        key: value for key, value in package_bundle.items()
+        if key != "receipt_sha256"
+    })
+    package_bundle_path.write_bytes(evaluation_v4._canonical_json(package_bundle))
+    with pytest.raises(ValueError, match="metric differs from raw prediction"):
+        verify_arbitrary_plane_finite_package_v4(output)
+
+
 def test_unreported_raw_prediction_file_is_rejected(tmp_path):
     run, _, _, manifest, _ = runner_fixture._prepared(
         tmp_path / "training", row_count=1, target=1
