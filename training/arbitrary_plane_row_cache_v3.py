@@ -46,6 +46,22 @@ COMPOSITE_CURRICULUM_V3_SCHEMA = (
 COMPOSITE_ROW_ORDER_POLICY = (
     "append authenticated pose rows then authenticated joint rows"
 )
+JOINT_NO_DROP_POLICY = (
+    "one authenticated row per logical sample; all nonidentity retries reuse the exact "
+    "finite parent; exhaustion generates a fresh identity-G1 pose-only realization and "
+    "never relabels a rejected nonidentity image"
+)
+JOINT_FALLBACK_CENSOR_STATUS = (
+    "censored-to-fresh-identity-g1-after-bounded-nonidentity-retries"
+)
+JOINT_FALLBACK_CENSOR_REASON = (
+    "bounded nonidentity G1 realization retries exhausted"
+)
+JOINT_UNCENSORED_STATUS = "uncensored-direct-nonidentity-g1"
+JOINT_MARGINAL_CENSOR_STATUS = "censored-marginal-support-identity-g1"
+JOINT_MARGINAL_CENSOR_REASON = (
+    "finite parent raster support is below the requested identifiability threshold"
+)
 COMPOSITE_COMPONENTS = (
     (
         "identity_pose_curriculum",
@@ -326,6 +342,25 @@ def _composite_cache_contract_v3(generation_config, generator_binding):
             raise ValueError(
                 f"composite component {label!r} has a stale config, count, or binding"
             )
+        if label == "nonidentity_joint_curriculum" and (
+            component_config.get("joint_no_drop_policy") != JOINT_NO_DROP_POLICY
+            or component_config.get("nonidentity_retry_exhaustion_censor_reason")
+            != JOINT_FALLBACK_CENSOR_REASON
+            or component_config.get("deformation_censor_statuses")
+            != {
+                "direct_success": JOINT_UNCENSORED_STATUS,
+                "bounded_retry_fallback": JOINT_FALLBACK_CENSOR_STATUS,
+                "marginal_support": JOINT_MARGINAL_CENSOR_STATUS,
+            }
+            or component_config.get("marginal_support_censor_reason")
+            != JOINT_MARGINAL_CENSOR_REASON
+            or component_config.get("fallback_attempt_index")
+            != component_config.get("maximum_joint_rejection_attempts")
+            or component_config.get("rejected_nonidentity_image_relabeling_allowed")
+            is not False
+            or not isinstance(component_config.get("fallback_seed_derivation"), str)
+        ):
+            raise ValueError("composite joint no-drop/censor contract is stale")
         if required_runner_psf is None:
             required_runner_psf = component_config["required_runner_psf"]
         elif component_config["required_runner_psf"] != required_runner_psf:
@@ -459,6 +494,7 @@ def _composite_row_receipts_v3(row, row_index, contract):
         attempt_key = "joint_attempt_number"
         history_key = "joint_rejection_history"
         maximum_attempts = config["maximum_joint_rejection_attempts"]
+        expected_adapter["maximum_joint_rejection_attempts"] = maximum_attempts
         amplitude_cycle = config.get("amplitude_band_cycle", [])
         if not amplitude_cycle:
             raise ValueError("composite joint amplitude cycle is empty")
@@ -468,19 +504,170 @@ def _composite_row_receipts_v3(row, row_index, contract):
             or upstream.get("deformation_amplitude_band") != expected_amplitude
         ):
             raise ValueError("composite joint row amplitude differs from its config")
+    if any(adapter.get(name) != value for name, value in expected_adapter.items()):
+        raise ValueError("composite row adapter differs from its declared component config")
     attempt = adapter.get(attempt_key)
     history = adapter.get(history_key)
+    identity_fallback = bool(
+        component["label"] == "nonidentity_joint_curriculum"
+        and adapter.get("identity_g1_pose_only_fallback") is True
+    )
     if (
         isinstance(attempt, bool)
         or not isinstance(attempt, int)
         or attempt < 0
-        or attempt >= maximum_attempts
+        or (
+            attempt != maximum_attempts
+            if identity_fallback
+            else attempt >= maximum_attempts
+        )
         or not isinstance(history, list)
         or len(history) != attempt
         or upstream.get(history_key) != history
         or numeric.get(attempt_key) != attempt
     ):
         raise ValueError("composite row retry provenance differs from its config")
+    if component["label"] == "nonidentity_joint_curriculum":
+        parent_identity = adapter.get("finite_parent_identity")
+        dense_support = adapter.get("effective_dense_support")
+        censoring = upstream.get("deformation_censoring_contract", {})
+        support = upstream.get("support_supervision_contract", {})
+        expected_parent_request = {
+            "logical_root_seed_uint64": config["root_seed_uint64"],
+            "logical_sample_index": sample_index,
+            "derived_plane_sample_index": numeric.get(
+                "derived_plane_sample_index"
+            ),
+            "finite_render_seed_uint64": numeric.get(
+                "finite_render_seed_uint64"
+            ),
+            "lineage_ids": {
+                name: expected_adapter[name]
+                for name in (
+                    "animal_id",
+                    "specimen_id",
+                    "experiment_id",
+                    "synthetic_animal_id",
+                    "section_id",
+                )
+            },
+        }
+        if (
+            not isinstance(parent_identity, dict)
+            or parent_identity != upstream.get("finite_parent_identity")
+            or any(
+                parent_identity.get(name) != value
+                for name, value in expected_parent_request.items()
+            )
+            or parent_identity.get("finite_parent_root_seed_uint64")
+            != parent_identity.get("finite_render_seed_uint64")
+            or parent_identity.get("finite_parent_sample_index")
+            != parent_identity.get("derived_plane_sample_index")
+            or parent_identity.get("derived_plane_sample_index")
+            != numeric.get("derived_plane_sample_index")
+            or parent_identity.get("finite_render_seed_uint64")
+            != numeric.get("finite_render_seed_uint64")
+            or parent_identity.get("finite_plane_render_id")
+            != upstream.get("finite_plane_render_id")
+            or parent_identity.get("finite_render_receipt_sha256")
+            != upstream.get("finite_render_receipt_sha256")
+            or parent_identity.get("finite_parent_provenance_sha256")
+            != upstream.get("finite_parent_provenance_sha256")
+            or not isinstance(dense_support, dict)
+            or dense_support != upstream.get("deformation_censoring_contract", {}).get(
+                "effective_dense_support"
+            )
+            or dense_support != support.get("effective_dense_support")
+            or adapter.get("requested_deformation_amplitude_band")
+            != adapter.get("amplitude_band")
+            or upstream.get("requested_deformation_amplitude_band")
+            != adapter.get("amplitude_band")
+            or any(
+                entry.get("requested_deformation_amplitude_band")
+                != adapter.get("amplitude_band")
+                or entry.get("finite_parent_identity") != parent_identity
+                or entry.get("finite_parent_request") != expected_parent_request
+                for entry in history
+            )
+            or adapter.get("deformation_censor_status")
+            != censoring.get("status")
+            or adapter.get("deformation_censor_reason")
+            != censoring.get("reason")
+            or adapter.get("fallback_attempt_number")
+            != censoring.get("fallback_attempt_number")
+            or adapter.get("fallback_synthetic_seed_uint64")
+            != censoring.get("fallback_synthetic_seed_uint64")
+            or adapter.get("identity_g1_pose_only_fallback")
+            is not identity_fallback
+            or censoring.get("rejected_nonidentity_image_relabeling_allowed")
+            is not False
+            or bool(numeric.get("identity_g1_pose_only_fallback", False))
+            is not identity_fallback
+        ):
+            raise ValueError("composite joint parent/censor/dense-support provenance changed")
+        support_identifiable = bool(dense_support.get("raster_support_identifiable"))
+        expected_pose_weight = float(support_identifiable)
+        expected_dense_weight = float(support_identifiable and not identity_fallback)
+        if (
+            support.get("point_pose_supervision_weight") != expected_pose_weight
+            or support.get("dense_deformation_supervision_weight")
+            != expected_dense_weight
+            or dense_support.get(
+                "effective_dense_deformation_supervision_weight"
+            )
+            != expected_dense_weight
+        ):
+            raise ValueError("composite joint supervision weights violate censor policy")
+        if identity_fallback:
+            expected_seed = numeric.get("synthetic_seed_uint64")
+            pullback = np.asarray(
+                row["arrays"]["truth_section_pullback_map_yx_px_float64"]
+            )
+            height, width = pullback.shape[:2]
+            y, x = np.mgrid[:height, :width]
+            identity_pullback = np.stack((y, x), axis=-1).astype(
+                pullback.dtype
+            )
+            if (
+                adapter.get("fallback_attempt_number") != maximum_attempts
+                or adapter.get("fallback_synthetic_seed_uint64") != expected_seed
+                or numeric.get("fallback_attempt_number") != maximum_attempts
+                or numeric.get("fallback_synthetic_seed_uint64") != expected_seed
+                or censoring.get("status") != JOINT_FALLBACK_CENSOR_STATUS
+                or censoring.get("reason") != JOINT_FALLBACK_CENSOR_REASON
+                or censoring.get("fresh_identity_g1_realization") is not True
+                or upstream.get("selected_g1_accepted_attempt", {}).get(
+                    "identity_path"
+                )
+                is not True
+                or np.count_nonzero(
+                    row["arrays"][
+                        "truth_section_pullback_stationary_velocity_yx_px_float64"
+                    ]
+                )
+                != 0
+                or not np.array_equal(pullback, identity_pullback)
+            ):
+                raise ValueError("composite joint fallback provenance changed")
+        elif support_identifiable:
+            if (
+                censoring.get("status") != JOINT_UNCENSORED_STATUS
+                or censoring.get("reason") is not None
+                or adapter.get("fallback_attempt_number") is not None
+                or adapter.get("fallback_synthetic_seed_uint64") is not None
+                or upstream.get("selected_g1_accepted_attempt", {}).get(
+                    "identity_path"
+                )
+                is not False
+            ):
+                raise ValueError("composite joint direct-success censor state changed")
+        elif (
+            censoring.get("status") != JOINT_MARGINAL_CENSOR_STATUS
+            or censoring.get("reason") != JOINT_MARGINAL_CENSOR_REASON
+            or support.get("point_pose_supervision_weight") != 0.0
+            or support.get("dense_deformation_supervision_weight") != 0.0
+        ):
+            raise ValueError("composite joint marginal support must remain 0/0")
     return {
         "composite_component": component["label"],
         "upstream_algorithm": component["algorithm"],

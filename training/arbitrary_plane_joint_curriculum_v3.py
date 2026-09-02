@@ -57,6 +57,22 @@ GAUGE_RECOMPOSITION_REJECTION = (
     "affine-gauge pose/deformation recomposition exceeds the production bound"
 )
 ZERO_AFFINE_FREE_REJECTION = "affine-free deformation is zero after gauge projection"
+NONIDENTITY_RETRY_EXHAUSTION_CENSOR_REASON = (
+    "bounded nonidentity G1 realization retries exhausted"
+)
+MARGINAL_SUPPORT_CENSOR_REASON = (
+    "finite parent raster support is below the requested identifiability threshold"
+)
+UNCENSORED_DEFORMATION_STATUS = "uncensored-direct-nonidentity-g1"
+IDENTITY_FALLBACK_CENSOR_STATUS = (
+    "censored-to-fresh-identity-g1-after-bounded-nonidentity-retries"
+)
+MARGINAL_SUPPORT_CENSOR_STATUS = "censored-marginal-support-identity-g1"
+JOINT_NO_DROP_POLICY = (
+    "one authenticated row per logical sample; all nonidentity retries reuse the exact "
+    "finite parent; exhaustion generates a fresh identity-G1 pose-only realization and "
+    "never relabels a rejected nonidentity image"
+)
 RETRYABLE_REJECTION_STAGES = {
     **pose_curriculum.RETRYABLE_REJECTION_STAGES,
     GAUGE_RECOMPOSITION_REJECTION: "deformation-gauge",
@@ -121,7 +137,58 @@ def joint_attempt_index_v3(root_seed, sample_index, attempt_index):
     )
 
 
-def _attempt_receipt(root_seed, sample_index, attempt_index, reason):
+def _finite_parent_request_identity(root_seed, sample_index, identities):
+    return {
+        "logical_root_seed_uint64": _seed(root_seed),
+        "logical_sample_index": int(sample_index),
+        "derived_plane_sample_index": joint_attempt_index_v3(
+            root_seed, sample_index, 0
+        ),
+        "finite_render_seed_uint64": (
+            f"0x{_derived_seed(root_seed, sample_index, 0, 'finite-render'):016x}"
+        ),
+        "lineage_ids": copy.deepcopy(identities),
+    }
+
+
+def _finite_parent_identity(root_seed, sample_index, identities, parent):
+    request = _finite_parent_request_identity(
+        root_seed, sample_index, identities
+    )
+    actual = {
+        **request,
+        "finite_parent_root_seed_uint64": parent["root_seed"],
+        "finite_parent_sample_index": int(parent["sample_index"]),
+        "plane_realization_id": parent["plane_realization_id"],
+        "finite_plane_render_id": parent["finite_plane_render_id"],
+        "finite_render_receipt_sha256": parent["finite_render_receipt_sha256"],
+        "finite_parent_provenance_sha256": parent["provenance_sha256"],
+    }
+    if (
+        actual["finite_parent_root_seed_uint64"]
+        != request["finite_render_seed_uint64"]
+        or actual["finite_parent_sample_index"]
+        != request["derived_plane_sample_index"]
+        or any(
+            parent["provenance"].get(name) != value
+            for name, value in identities.items()
+            if name in ("animal_id", "specimen_id", "experiment_id")
+        )
+    ):
+        raise ValueError("finite parent differs from the authenticated logical parent request")
+    return actual
+
+
+def _attempt_receipt(
+    root_seed,
+    sample_index,
+    attempt_index,
+    reason,
+    *,
+    amplitude_band,
+    identities,
+    finite_parent_identity,
+):
     return {
         "attempt_index": int(attempt_index),
         "derived_plane_sample_index": joint_attempt_index_v3(root_seed, sample_index, 0),
@@ -134,17 +201,40 @@ def _attempt_receipt(root_seed, sample_index, attempt_index, reason):
         "error_type": "ValueError",
         "stage": RETRYABLE_REJECTION_STAGES[reason],
         "reason": reason,
+        "requested_deformation_amplitude_band": amplitude_band,
+        "finite_parent_request": _finite_parent_request_identity(
+            root_seed, sample_index, identities
+        ),
+        "finite_parent_identity": copy.deepcopy(finite_parent_identity),
     }
 
 
-def _verified_rejection_history(root_seed, sample_index, attempt_index, history):
+def _verified_rejection_history(
+    root_seed,
+    sample_index,
+    attempt_index,
+    history,
+    *,
+    amplitude_band,
+    identities,
+):
     history = copy.deepcopy(list(history or ()))
     if len(history) != int(attempt_index):
         raise ValueError("joint rejection history length must equal accepted attempt index")
     for index, entry in enumerate(history):
         reason = entry.get("reason") if isinstance(entry, dict) else None
         if reason not in RETRYABLE_REJECTION_STAGES or entry != _attempt_receipt(
-            root_seed, sample_index, index, reason
+            root_seed,
+            sample_index,
+            index,
+            reason,
+            amplitude_band=amplitude_band,
+            identities=identities,
+            finite_parent_identity=(
+                entry.get("finite_parent_identity")
+                if isinstance(entry, dict)
+                else None
+            ),
         ):
             raise ValueError("joint rejection history is not canonical")
     return history
@@ -237,6 +327,27 @@ def joint_curriculum_generation_config_v3(
         "minimum_brain_pixels": int(minimum_brain_pixels),
         "maximum_rejection_attempts": int(maximum_rejection_attempts),
         "maximum_joint_rejection_attempts": int(maximum_joint_rejection_attempts),
+        "joint_no_drop_policy": JOINT_NO_DROP_POLICY,
+        "nonidentity_retry_exhaustion_censor_reason": (
+            NONIDENTITY_RETRY_EXHAUSTION_CENSOR_REASON
+        ),
+        "deformation_censor_statuses": {
+            "direct_success": UNCENSORED_DEFORMATION_STATUS,
+            "bounded_retry_fallback": IDENTITY_FALLBACK_CENSOR_STATUS,
+            "marginal_support": MARGINAL_SUPPORT_CENSOR_STATUS,
+        },
+        "marginal_support_censor_reason": MARGINAL_SUPPORT_CENSOR_REASON,
+        "effective_dense_supervision_policy": (
+            "weight 1 only for identifiable uncensored nonidentity G1; weight 0 for "
+            "identity-G1 fallback and marginal support; point pose remains weight 1 only "
+            "when raster support is identifiable"
+        ),
+        "fallback_attempt_index": int(maximum_joint_rejection_attempts),
+        "fallback_seed_derivation": (
+            f"sha256({LEGACY_V3_RNG_DOMAIN}/synthetic,root_seed,logical_sample_index,"
+            "fallback_attempt_index)"
+        ),
+        "rejected_nonidentity_image_relabeling_allowed": False,
         "finite_parent_generator_source_commit": finite_parent_generator_source_commit,
         "maximum_direct_target_certification_error_px": (
             direct_deformation_target.MAXIMUM_CERTIFICATION_ERROR_PX
@@ -368,6 +479,40 @@ def composite_curriculum_generator_binding_v3(composite_generation_config):
     )
 
 
+def _make_joint_finite_parent(
+    prepared_context,
+    *,
+    root_seed,
+    sample_index,
+    output_shape_h_w,
+    split,
+    stratum,
+    margin_um,
+    minimum_brain_pixels,
+    maximum_rejection_attempts,
+    finite_parent_generator_source_commit,
+    identities,
+):
+    plane_sample_index = joint_attempt_index_v3(root_seed, sample_index, 0)
+    finite_seed = _derived_seed(root_seed, sample_index, 0, "finite-render")
+    parent = make_finite_arbitrary_plane_render_from_context(
+        prepared_context,
+        split,
+        finite_seed,
+        tuple(int(value) for value in output_shape_h_w),
+        sample_index=plane_sample_index,
+        stratum=stratum,
+        margin_um=margin_um,
+        animal_id=identities["animal_id"],
+        specimen_id=identities["specimen_id"],
+        experiment_id=identities["experiment_id"],
+        max_rejection_attempts=int(maximum_rejection_attempts),
+        minimum_brain_pixels=int(minimum_brain_pixels),
+        generator_source_commit=finite_parent_generator_source_commit,
+    )
+    return parent, plane_sample_index, finite_seed
+
+
 def make_joint_curriculum_training_row_v3(
     prepared_context,
     *,
@@ -390,6 +535,16 @@ def make_joint_curriculum_training_row_v3(
     finite_parent_generator_source_commit=None,
     joint_attempt_number=0,
     joint_rejection_history=None,
+    maximum_joint_rejection_attempts=16,
+    identity_g1_pose_only_fallback=False,
+    requested_deformation_amplitude_band=None,
+    deformation_censor_status=None,
+    deformation_censor_reason=None,
+    fallback_attempt_number=None,
+    fallback_synthetic_seed_uint64=None,
+    finite_parent_identity=None,
+    effective_dense_support=None,
+    _finite_parent_artifact=None,
 ):
     if selected_mode not in pose_curriculum.MODE_TO_OUTLINE:
         raise ValueError("joint curriculum mode is invalid")
@@ -407,52 +562,156 @@ def make_joint_curriculum_training_row_v3(
         raise ValueError("every joint curriculum row requires complete lineage IDs")
     sample_index = int(sample_index)
     joint_attempt_number = int(joint_attempt_number)
+    maximum_joint_rejection_attempts = int(maximum_joint_rejection_attempts)
+    identity_g1_pose_only_fallback = bool(identity_g1_pose_only_fallback)
+    if (
+        maximum_joint_rejection_attempts <= 0
+        or joint_attempt_number < 0
+        or joint_attempt_number > maximum_joint_rejection_attempts
+        or identity_g1_pose_only_fallback
+        != (joint_attempt_number == maximum_joint_rejection_attempts)
+    ):
+        raise ValueError("joint attempt/fallback state is outside the bounded no-drop contract")
+    if (
+        requested_deformation_amplitude_band is not None
+        and requested_deformation_amplitude_band != amplitude_band
+    ):
+        raise ValueError("requested deformation amplitude band changed")
+    requested_deformation_amplitude_band = amplitude_band
     rejection_history = _verified_rejection_history(
         root_seed,
         sample_index,
         joint_attempt_number,
         joint_rejection_history,
+        amplitude_band=amplitude_band,
+        identities=identities,
     )
-    plane_sample_index = joint_attempt_index_v3(root_seed, sample_index, 0)
-    finite_seed = _derived_seed(
-        root_seed, sample_index, 0, "finite-render"
+    if _finite_parent_artifact is None:
+        parent, plane_sample_index, finite_seed = _make_joint_finite_parent(
+            prepared_context,
+            root_seed=root_seed,
+            sample_index=sample_index,
+            output_shape_h_w=output_shape_h_w,
+            split=split,
+            stratum=stratum,
+            margin_um=margin_um,
+            minimum_brain_pixels=minimum_brain_pixels,
+            maximum_rejection_attempts=maximum_rejection_attempts,
+            finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+            identities=identities,
+        )
+    else:
+        parent = _finite_parent_artifact
+        plane_sample_index = joint_attempt_index_v3(root_seed, sample_index, 0)
+        finite_seed = _derived_seed(root_seed, sample_index, 0, "finite-render")
+    actual_finite_parent_identity = _finite_parent_identity(
+        root_seed, sample_index, identities, parent
     )
+    if (
+        finite_parent_identity is not None
+        and finite_parent_identity != actual_finite_parent_identity
+    ):
+        raise ValueError("finite parent identity changed across joint realization attempts")
+    finite_parent_identity = actual_finite_parent_identity
+    if any(
+        entry["finite_parent_identity"] != finite_parent_identity
+        for entry in rejection_history
+    ):
+        raise ValueError("joint rejection history changed the authenticated finite parent")
     synthetic_seed = _derived_seed(
         root_seed, sample_index, joint_attempt_number, "synthetic"
     )
-    parent = make_finite_arbitrary_plane_render_from_context(
-        prepared_context,
-        split,
-        finite_seed,
-        tuple(int(value) for value in output_shape_h_w),
-        sample_index=plane_sample_index,
-        stratum=stratum,
-        margin_um=margin_um,
-        animal_id=animal_id,
-        specimen_id=specimen_id,
-        experiment_id=experiment_id,
-        max_rejection_attempts=int(maximum_rejection_attempts),
-        minimum_brain_pixels=int(minimum_brain_pixels),
-        generator_source_commit=finite_parent_generator_source_commit,
-    )
     brain_pixel_count = int(parent["acceptance_contract"]["brain_pixel_count"])
     support_identifiable = bool(brain_pixel_count >= int(minimum_brain_pixels))
+    point_pose_supervision_weight = float(support_identifiable)
+    dense_deformation_supervision_identifiable = bool(
+        support_identifiable and not identity_g1_pose_only_fallback
+    )
+    dense_deformation_supervision_weight = float(
+        dense_deformation_supervision_identifiable
+    )
+    actual_effective_dense_support = {
+        "raster_support_identifiable": support_identifiable,
+        "raster_brain_pixel_count": brain_pixel_count,
+        "requested_identifiability_threshold_pixels": int(minimum_brain_pixels),
+        "identity_g1_pose_only_fallback": identity_g1_pose_only_fallback,
+        "effective_dense_deformation_supervision_identifiable": (
+            dense_deformation_supervision_identifiable
+        ),
+        "effective_dense_deformation_supervision_weight": (
+            dense_deformation_supervision_weight
+        ),
+    }
+    if (
+        effective_dense_support is not None
+        and effective_dense_support != actual_effective_dense_support
+    ):
+        raise ValueError("effective dense-deformation support changed")
+    effective_dense_support = actual_effective_dense_support
+    if identity_g1_pose_only_fallback:
+        actual_censor_status = IDENTITY_FALLBACK_CENSOR_STATUS
+        actual_censor_reason = NONIDENTITY_RETRY_EXHAUSTION_CENSOR_REASON
+    elif not support_identifiable:
+        actual_censor_status = MARGINAL_SUPPORT_CENSOR_STATUS
+        actual_censor_reason = MARGINAL_SUPPORT_CENSOR_REASON
+    else:
+        actual_censor_status = UNCENSORED_DEFORMATION_STATUS
+        actual_censor_reason = None
+    if (
+        deformation_censor_status is not None
+        and deformation_censor_status != actual_censor_status
+    ):
+        raise ValueError("deformation censor status changed")
+    if (
+        deformation_censor_reason is not None
+        and deformation_censor_reason != actual_censor_reason
+    ):
+        raise ValueError("deformation censor reason changed")
+    deformation_censor_status = actual_censor_status
+    deformation_censor_reason = actual_censor_reason
+    actual_fallback_attempt_number = (
+        joint_attempt_number if identity_g1_pose_only_fallback else None
+    )
+    actual_fallback_synthetic_seed = (
+        f"0x{synthetic_seed:016x}" if identity_g1_pose_only_fallback else None
+    )
+    if (
+        fallback_attempt_number is not None
+        and fallback_attempt_number != actual_fallback_attempt_number
+    ):
+        raise ValueError("identity-G1 fallback attempt changed")
+    if (
+        fallback_synthetic_seed_uint64 is not None
+        and fallback_synthetic_seed_uint64 != actual_fallback_synthetic_seed
+    ):
+        raise ValueError("identity-G1 fallback seed changed")
+    fallback_attempt_number = actual_fallback_attempt_number
+    fallback_synthetic_seed_uint64 = actual_fallback_synthetic_seed
     support_supervision_contract = {
         "continuous_plane_sample_retained": True,
         "pose_redrawn_for_raster_support": False,
         "raster_brain_pixel_count": brain_pixel_count,
         "requested_identifiability_threshold_pixels": int(minimum_brain_pixels),
         "point_pose_supervision_identifiable": support_identifiable,
-        "point_pose_supervision_weight": float(support_identifiable),
-        "dense_deformation_supervision_identifiable": support_identifiable,
-        "dense_deformation_supervision_weight": float(support_identifiable),
+        "point_pose_supervision_weight": point_pose_supervision_weight,
+        "dense_deformation_supervision_identifiable": (
+            dense_deformation_supervision_identifiable
+        ),
+        "dense_deformation_supervision_weight": (
+            dense_deformation_supervision_weight
+        ),
+        "effective_dense_support": copy.deepcopy(effective_dense_support),
         "marginal_observation_role": (
-            "ordinary point-pose plus nonrigid supervision"
-            if support_identifiable
-            else "retained censored observation; identity realization only and no unique point/dense target"
+            "retained censored observation; identity realization only and no unique point/dense target"
+            if not support_identifiable
+            else (
+                "authenticated pose-only fallback; fresh identity G1 and no dense loss"
+                if identity_g1_pose_only_fallback
+                else "ordinary point-pose plus nonrigid supervision"
+            )
         ),
     }
-    if not support_identifiable:
+    if identity_g1_pose_only_fallback or not support_identifiable:
         overrides = {
             **overrides,
             "identity_probability": 1.0,
@@ -475,8 +734,11 @@ def make_joint_curriculum_training_row_v3(
     selected = paired[selected_mode]
     accepted_g1 = selected["g1"]["parameters"]["accepted_attempt"]
     similarity = accepted_g1["similarity"]
+    identity_g1_required = bool(
+        identity_g1_pose_only_fallback or not support_identifiable
+    )
     if (
-        accepted_g1["identity_path"] == support_identifiable
+        accepted_g1["identity_path"] != identity_g1_required
         or similarity["angle_rad"] != 0.0
         or similarity["scale"] != 1.0
         or similarity["translation_xy_px"] != [0.0, 0.0]
@@ -496,7 +758,7 @@ def make_joint_curriculum_training_row_v3(
     source = selected["arrays"]
     velocity_xy = source["velocity_xy_px"]
     source_to_fixed_xy = source["source_to_fixed_map"]
-    if support_identifiable and not np.any(velocity_xy != 0.0):
+    if dense_deformation_supervision_identifiable and not np.any(velocity_xy != 0.0):
         raise ValueError(ZERO_AFFINE_FREE_REJECTION)
     target_pullback_velocity_yx = np.ascontiguousarray(
         -np.moveaxis(velocity_xy, 0, -1)[..., ::-1], dtype=np.float32
@@ -517,7 +779,9 @@ def make_joint_curriculum_training_row_v3(
     affine_free_velocity = direct_target["arrays"][
         "target_pullback_stationary_velocity_yx_px_float32"
     ]
-    if support_identifiable and not np.any(affine_free_velocity != 0.0):
+    if dense_deformation_supervision_identifiable and not np.any(
+        affine_free_velocity != 0.0
+    ):
         raise ValueError(ZERO_AFFINE_FREE_REJECTION)
     height, width = source["model_input_image"].shape
     canonical = effective_pose.copy()
@@ -586,6 +850,14 @@ def make_joint_curriculum_training_row_v3(
             "direct_deformation_target_id": direct_target[
                 "direct_deformation_target_id"
             ],
+            "deformation_censoring": {
+                "status": deformation_censor_status,
+                "reason": deformation_censor_reason,
+                "identity_g1_pose_only_fallback": identity_g1_pose_only_fallback,
+                "fallback_attempt_number": fallback_attempt_number,
+                "fallback_synthetic_seed_uint64": fallback_synthetic_seed_uint64,
+                "effective_dense_support": effective_dense_support,
+            },
         }
     )
     transform_id = acquisition._payload_sha256(
@@ -601,6 +873,17 @@ def make_joint_curriculum_training_row_v3(
         "sample_index": sample_index,
         "joint_attempt_number": joint_attempt_number,
         "joint_rejection_history": rejection_history,
+        "maximum_joint_rejection_attempts": maximum_joint_rejection_attempts,
+        "identity_g1_pose_only_fallback": identity_g1_pose_only_fallback,
+        "requested_deformation_amplitude_band": (
+            requested_deformation_amplitude_band
+        ),
+        "deformation_censor_status": deformation_censor_status,
+        "deformation_censor_reason": deformation_censor_reason,
+        "fallback_attempt_number": fallback_attempt_number,
+        "fallback_synthetic_seed_uint64": fallback_synthetic_seed_uint64,
+        "finite_parent_identity": copy.deepcopy(finite_parent_identity),
+        "effective_dense_support": copy.deepcopy(effective_dense_support),
         "output_shape_h_w": [height, width],
         "selected_mode": selected_mode,
         "reflection_state": reflection_state,
@@ -622,6 +905,26 @@ def make_joint_curriculum_training_row_v3(
         "finite_render_seed_uint64": f"0x{finite_seed:016x}",
         "synthetic_seed_uint64": f"0x{synthetic_seed:016x}",
     }
+    if identity_g1_pose_only_fallback:
+        numeric.update(
+            {
+                "identity_g1_pose_only_fallback": True,
+                "fallback_attempt_number": fallback_attempt_number,
+                "fallback_synthetic_seed_uint64": (
+                    fallback_synthetic_seed_uint64
+                ),
+            }
+        )
+    rng_sources = {
+        "finite_render_accepted_attempt": parent["rejection_attempts"][
+            parent["accepted_attempt_index"]
+        ]["field_stream_seed_uint64"],
+        "synthetic_g1_accepted_attempt": accepted_g1["field_stream_seed_uint64"],
+    }
+    if identity_g1_pose_only_fallback:
+        rng_sources["fallback_identity_g1_seed_uint64"] = (
+            fallback_synthetic_seed_uint64
+        )
     artifact = {
         "schema_version": training_row.TRAINING_ROW_V3_SCHEMA,
         "source_observation_receipt_sha256": source_bundle,
@@ -635,10 +938,32 @@ def make_joint_curriculum_training_row_v3(
             "support_index_sha256": support["support_index_sha256"],
             "joint_rejection_history": rejection_history,
             "deformation_amplitude_band": amplitude_band,
+            "requested_deformation_amplitude_band": (
+                requested_deformation_amplitude_band
+            ),
             "target_rms_displacement_over_section_D": list(
                 DEFORMATION_AMPLITUDE_BANDS[amplitude_band]
             ),
+            "deformation_censoring_contract": {
+                "status": deformation_censor_status,
+                "reason": deformation_censor_reason,
+                "identity_g1_pose_only_fallback": (
+                    identity_g1_pose_only_fallback
+                ),
+                "fallback_attempt_number": fallback_attempt_number,
+                "fallback_synthetic_seed_uint64": (
+                    fallback_synthetic_seed_uint64
+                ),
+                "fresh_identity_g1_realization": (
+                    identity_g1_pose_only_fallback
+                ),
+                "rejected_nonidentity_image_relabeling_allowed": False,
+                "effective_dense_support": copy.deepcopy(
+                    effective_dense_support
+                ),
+            },
             "g1_overrides": overrides,
+            "finite_parent_identity": copy.deepcopy(finite_parent_identity),
             "finite_parent_generator_binding": copy.deepcopy(parent["generator"]),
             "finite_parent_provenance": copy.deepcopy(parent["provenance"]),
             "finite_parent_provenance_sha256": parent["provenance_sha256"],
@@ -667,8 +992,9 @@ def make_joint_curriculum_training_row_v3(
                 "outline": selected["outline"]["outline_realization_id"],
             },
             "selected_g1_accepted_attempt": copy.deepcopy(accepted_g1),
-            "g1_nonidentity_forced": support_identifiable,
+            "g1_nonidentity_forced": dense_deformation_supervision_identifiable,
             "marginal_support_identity_forced": not support_identifiable,
+            "identity_g1_pose_only_fallback": identity_g1_pose_only_fallback,
             "sampled_similarity_forced_identity": True,
             "direct_deformation_target_certification_summary": (
                 direct_deformation_target.direct_deformation_target_summary_v4(
@@ -686,12 +1012,7 @@ def make_joint_curriculum_training_row_v3(
             "prior_pseudolabel_dependencies": [],
         },
         "numeric_rng_provenance": numeric,
-        "rng_sources": {
-            "finite_render_accepted_attempt": parent["rejection_attempts"][
-                parent["accepted_attempt_index"]
-            ]["field_stream_seed_uint64"],
-            "synthetic_g1_accepted_attempt": accepted_g1["field_stream_seed_uint64"],
-        },
+        "rng_sources": rng_sources,
         "selected_mode": selected_mode,
         "selected_descendant_id": selected["synthetic_realization_id"],
         "deformation_pose_gauge_reference": direct_deformation_target.direct_deformation_target_reference_v4(
@@ -768,6 +1089,12 @@ def verify_joint_curriculum_training_row_v3(row, prepared_context):
         rejected = copy.deepcopy(adapter)
         rejected["joint_attempt_number"] = attempt_index
         rejected["joint_rejection_history"] = history[:attempt_index]
+        rejected["identity_g1_pose_only_fallback"] = False
+        rejected["deformation_censor_status"] = None
+        rejected["deformation_censor_reason"] = None
+        rejected["fallback_attempt_number"] = None
+        rejected["fallback_synthetic_seed_uint64"] = None
+        rejected["effective_dense_support"] = None
         try:
             make_joint_curriculum_training_row_v3(prepared_context, **rejected)
         except ValueError as error:
@@ -823,33 +1150,64 @@ def make_joint_curriculum_training_rows_v3(
         amplitude_band = amplitude_band_cycle[
             sample_index % len(amplitude_band_cycle)
         ]
+        identities = {
+            "animal_id": f"{identity_prefix}-animal-{animal_index:08d}",
+            "specimen_id": f"{identity_prefix}-specimen-{animal_index:08d}",
+            "experiment_id": f"{identity_prefix}-experiment-{animal_index:08d}",
+            "synthetic_animal_id": (
+                f"{identity_prefix}-synthetic-animal-{animal_index:08d}"
+            ),
+            "section_id": f"{identity_prefix}-section-{sample_index:08d}",
+        }
+        parent, _, _ = _make_joint_finite_parent(
+            prepared_context,
+            root_seed=root_seed,
+            sample_index=sample_index,
+            output_shape_h_w=output_shape_h_w,
+            split=split,
+            stratum=stratum,
+            margin_um=margin_um,
+            minimum_brain_pixels=minimum_brain_pixels,
+            maximum_rejection_attempts=maximum_rejection_attempts,
+            finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+            identities=identities,
+        )
+        parent_identity = _finite_parent_identity(
+            root_seed, sample_index, identities, parent
+        )
+        common = {
+            "root_seed": root_seed,
+            "sample_index": sample_index,
+            "output_shape_h_w": output_shape_h_w,
+            "selected_mode": training_row.TRAINABLE_MODES[
+                sample_index % len(training_row.TRAINABLE_MODES)
+            ],
+            "reflection_state": training_row.REFLECTION_STATES[
+                (sample_index // len(training_row.TRAINABLE_MODES))
+                % len(training_row.REFLECTION_STATES)
+            ],
+            "amplitude_band": amplitude_band,
+            **identities,
+            "split": split,
+            "stratum": stratum,
+            "margin_um": margin_um,
+            "minimum_brain_pixels": minimum_brain_pixels,
+            "maximum_rejection_attempts": maximum_rejection_attempts,
+            "maximum_joint_rejection_attempts": int(
+                maximum_joint_rejection_attempts
+            ),
+            "finite_parent_generator_source_commit": (
+                finite_parent_generator_source_commit
+            ),
+            "finite_parent_identity": parent_identity,
+            "_finite_parent_artifact": parent,
+        }
         rejection_history = []
         for joint_attempt_number in range(int(maximum_joint_rejection_attempts)):
             try:
                 row = make_joint_curriculum_training_row_v3(
                     prepared_context,
-                    root_seed=root_seed,
-                    sample_index=sample_index,
-                    output_shape_h_w=output_shape_h_w,
-                    selected_mode=training_row.TRAINABLE_MODES[
-                        sample_index % len(training_row.TRAINABLE_MODES)
-                    ],
-                    reflection_state=training_row.REFLECTION_STATES[
-                        (sample_index // len(training_row.TRAINABLE_MODES))
-                        % len(training_row.REFLECTION_STATES)
-                    ],
-                    amplitude_band=amplitude_band,
-                    animal_id=f"{identity_prefix}-animal-{animal_index:08d}",
-                    specimen_id=f"{identity_prefix}-specimen-{animal_index:08d}",
-                    experiment_id=f"{identity_prefix}-experiment-{animal_index:08d}",
-                    synthetic_animal_id=f"{identity_prefix}-synthetic-animal-{animal_index:08d}",
-                    section_id=f"{identity_prefix}-section-{sample_index:08d}",
-                    split=split,
-                    stratum=stratum,
-                    margin_um=margin_um,
-                    minimum_brain_pixels=minimum_brain_pixels,
-                    maximum_rejection_attempts=maximum_rejection_attempts,
-                    finite_parent_generator_source_commit=finite_parent_generator_source_commit,
+                    **common,
                     joint_attempt_number=joint_attempt_number,
                     joint_rejection_history=rejection_history,
                 )
@@ -863,15 +1221,34 @@ def make_joint_curriculum_training_rows_v3(
                         sample_index,
                         joint_attempt_number,
                         reason,
+                        amplitude_band=amplitude_band,
+                        identities=identities,
+                        finite_parent_identity=parent_identity,
                     )
                 )
             else:
                 rows.append(row)
                 break
         else:
-            raise RuntimeError(
-                f"no verified joint row after {maximum_joint_rejection_attempts} "
-                f"deterministic attempts for logical sample {sample_index}: {rejection_history}"
+            rows.append(
+                make_joint_curriculum_training_row_v3(
+                    prepared_context,
+                    **common,
+                    joint_attempt_number=int(maximum_joint_rejection_attempts),
+                    joint_rejection_history=rejection_history,
+                    identity_g1_pose_only_fallback=True,
+                    requested_deformation_amplitude_band=amplitude_band,
+                    deformation_censor_status=IDENTITY_FALLBACK_CENSOR_STATUS,
+                    deformation_censor_reason=(
+                        NONIDENTITY_RETRY_EXHAUSTION_CENSOR_REASON
+                    ),
+                    fallback_attempt_number=int(
+                        maximum_joint_rejection_attempts
+                    ),
+                    fallback_synthetic_seed_uint64=(
+                        f"0x{_derived_seed(root_seed, sample_index, int(maximum_joint_rejection_attempts), 'synthetic'):016x}"
+                    ),
+                )
             )
     return rows
 
@@ -894,7 +1271,12 @@ __all__ = [
     "JOINT_CURRICULUM_V4_ALGORITHM",
     "JOINT_CURRICULUM_V4_SCHEMA",
     "JOINT_G1_FIXED_OVERRIDES",
+    "JOINT_NO_DROP_POLICY",
+    "IDENTITY_FALLBACK_CENSOR_STATUS",
+    "MARGINAL_SUPPORT_CENSOR_STATUS",
+    "NONIDENTITY_RETRY_EXHAUSTION_CENSOR_REASON",
     "RETRYABLE_REJECTION_STAGES",
+    "UNCENSORED_DEFORMATION_STATUS",
     "joint_attempt_index_v3",
     "composite_curriculum_generation_config_v3",
     "composite_curriculum_generator_binding_v3",

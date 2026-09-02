@@ -594,3 +594,308 @@ def test_chunked_joint_generation_uses_global_logical_index_cycle(
     assert [row["receipt_sha256"] for row in chunk] == [
         row["receipt_sha256"] for row in six_rows[4:]
     ]
+
+
+def test_v4_no_drop_fallback_preserves_exact_parent_and_never_relabels_failure(
+    prepared_context, composite_curriculum, monkeypatch
+):
+    original = joint_curriculum.make_arbitrary_plane_synthetic_realization
+    parent_observations = []
+
+    def reject_nonidentity(parent, *args, **kwargs):
+        parent_observations.append(
+            {
+                "object_id": id(parent),
+                "finite_plane_render_id": parent["finite_plane_render_id"],
+                "finite_render_receipt_sha256": parent[
+                    "finite_render_receipt_sha256"
+                ],
+                "identity_probability": kwargs["config_overrides"]["g1"][
+                    "identity_probability"
+                ],
+            }
+        )
+        if kwargs["config_overrides"]["g1"]["identity_probability"] == 0.0:
+            raise ValueError(
+                "no G1 realization passed every predeclared topology, cycle, displacement, and FOV gate"
+            )
+        return original(parent, *args, **kwargs)
+
+    monkeypatch.setattr(
+        joint_curriculum,
+        "make_arbitrary_plane_synthetic_realization",
+        reject_nonidentity,
+    )
+    rows = joint_curriculum.make_joint_curriculum_training_rows_v4(
+        prepared_context,
+        root_seed=2**63 + 919,
+        start_index=0,
+        row_count=2,
+        output_shape_h_w=(47, 53),
+        identity_prefix="joint-no-drop-v4",
+        sections_per_animal=2,
+        margin_um=(13.0, 17.0),
+        minimum_brain_pixels=320,
+        maximum_joint_rejection_attempts=2,
+    )
+    batch_parent_observations = copy.deepcopy(parent_observations)
+
+    assert len(rows) == 2
+    assert [row["lineage"]["section_id"] for row in rows] == [
+        "joint-no-drop-v4-section-00000000",
+        "joint-no-drop-v4-section-00000001",
+    ]
+    config = joint_curriculum.joint_curriculum_generation_config_v4(
+        prepared_context,
+        root_seed=2**63 + 919,
+        start_index=0,
+        row_count=2,
+        output_shape_h_w=(47, 53),
+        identity_prefix="joint-no-drop-v4",
+        sections_per_animal=2,
+        margin_um=(13.0, 17.0),
+        minimum_brain_pixels=320,
+        maximum_joint_rejection_attempts=2,
+    )
+    assert config["joint_no_drop_policy"] == joint_curriculum.JOINT_NO_DROP_POLICY
+    assert config["fallback_attempt_index"] == 2
+    assert config["rejected_nonidentity_image_relabeling_allowed"] is False
+    assert config["deformation_censor_statuses"]["bounded_retry_fallback"] == (
+        joint_curriculum.IDENTITY_FALLBACK_CENSOR_STATUS
+    )
+    composite_config = joint_curriculum.composite_curriculum_generation_config_v3(
+        composite_curriculum["pose_config"], config
+    )
+    composite_binding = (
+        joint_curriculum.composite_curriculum_generator_binding_v3(
+            composite_config
+        )
+    )
+    base = Path("I:/AnatomyTracker/tmp")
+    base.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="joint-no-drop-cache-", dir=base
+    ) as directory:
+        row_cache.initialize_training_row_cache_v3(
+            directory,
+            generator_binding=composite_binding,
+            generation_config=composite_config,
+            seed_record={
+                "pose_root_seed_uint64": "0x8000000000000037",
+                "joint_root_seed_uint64": "0x8000000000000397",
+            },
+        )
+        manifest = row_cache.append_training_rows_v3(
+            directory,
+            [composite_curriculum["rows"][0], *rows],
+        )
+    assert [item["composite_component"] for item in manifest["rows"]] == [
+        "identity_pose_curriculum",
+        "nonidentity_joint_curriculum",
+        "nonidentity_joint_curriculum",
+    ]
+    changed_dense = copy.deepcopy(rows[0])
+    changed_effective = changed_dense["upstream_reference"][
+        "adapter_configuration"
+    ]["effective_dense_support"]
+    changed_effective["effective_dense_deformation_supervision_identifiable"] = True
+    changed_effective["effective_dense_deformation_supervision_weight"] = 1.0
+    changed_dense["upstream_reference"]["deformation_censoring_contract"][
+        "effective_dense_support"
+    ] = copy.deepcopy(changed_effective)
+    changed_dense["upstream_reference"]["support_supervision_contract"][
+        "effective_dense_support"
+    ] = copy.deepcopy(changed_effective)
+    changed_dense["upstream_reference"]["support_supervision_contract"][
+        "dense_deformation_supervision_identifiable"
+    ] = True
+    changed_dense["upstream_reference"]["support_supervision_contract"][
+        "dense_deformation_supervision_weight"
+    ] = 1.0
+    changed_dense = _reauthenticated_row(changed_dense)
+    with tempfile.TemporaryDirectory(
+        prefix="joint-no-drop-tamper-cache-", dir=base
+    ) as directory:
+        row_cache.initialize_training_row_cache_v3(
+            directory,
+            generator_binding=composite_binding,
+            generation_config=composite_config,
+            seed_record={
+                "pose_root_seed_uint64": "0x8000000000000037",
+                "joint_root_seed_uint64": "0x8000000000000397",
+            },
+        )
+        with pytest.raises(ValueError, match="supervision weights"):
+            row_cache.append_training_rows_v3(
+                directory,
+                [composite_curriculum["rows"][0], changed_dense],
+            )
+    for row in rows:
+        upstream = row["upstream_reference"]
+        adapter = upstream["adapter_configuration"]
+        numeric = row["numeric_rng_provenance"]
+        support = upstream["support_supervision_contract"]
+        censor = upstream["deformation_censoring_contract"]
+        parent_identity = upstream["finite_parent_identity"]
+        history = upstream["joint_rejection_history"]
+        height, width = row["arrays"][
+            "truth_section_pullback_map_yx_px_float64"
+        ].shape[:2]
+        y, x = np.mgrid[:height, :width]
+        identity = np.stack((y, x), axis=-1).astype(np.float64)
+
+        assert len(history) == 2
+        assert all(
+            item["finite_parent_identity"] == parent_identity
+            and item["finite_parent_request"] == {
+                key: parent_identity[key]
+                for key in (
+                    "logical_root_seed_uint64",
+                    "logical_sample_index",
+                    "derived_plane_sample_index",
+                    "finite_render_seed_uint64",
+                    "lineage_ids",
+                )
+            }
+            and item["requested_deformation_amplitude_band"]
+            == adapter["amplitude_band"]
+            for item in history
+        )
+        assert adapter["identity_g1_pose_only_fallback"] is True
+        assert adapter["joint_attempt_number"] == 2
+        assert adapter["fallback_attempt_number"] == 2
+        assert adapter["fallback_synthetic_seed_uint64"] == numeric[
+            "synthetic_seed_uint64"
+        ]
+        assert numeric["synthetic_seed_uint64"] not in {
+            item["synthetic_seed_uint64"] for item in history
+        }
+        assert censor["status"] == (
+            joint_curriculum.IDENTITY_FALLBACK_CENSOR_STATUS
+        )
+        assert censor["reason"] == (
+            joint_curriculum.NONIDENTITY_RETRY_EXHAUSTION_CENSOR_REASON
+        )
+        assert censor["fresh_identity_g1_realization"] is True
+        assert censor["rejected_nonidentity_image_relabeling_allowed"] is False
+        assert support["point_pose_supervision_weight"] == 1.0
+        assert support["dense_deformation_supervision_weight"] == 0.0
+        assert np.count_nonzero(
+            row["arrays"][
+                "truth_section_pullback_stationary_velocity_yx_px_float64"
+            ]
+        ) == 0
+        assert np.array_equal(
+            row["arrays"]["truth_section_pullback_map_yx_px_float64"],
+            identity,
+        )
+        assert row["canonical_effective_quicknii_ouv_float64"] == upstream[
+            "effective_quicknii_ouv_ml_ap_dv_before_gauge"
+        ]
+        assert joint_curriculum.verify_joint_curriculum_training_row_v4(
+            row, prepared_context
+        )
+
+    for row in rows:
+        parent_id = row["upstream_reference"]["finite_plane_render_id"]
+        observations = [
+            item for item in batch_parent_observations
+            if item["finite_plane_render_id"] == parent_id
+        ]
+        assert len(observations) >= 5
+        assert len({item["object_id"] for item in observations}) == 1
+        assert len({item["finite_render_receipt_sha256"] for item in observations}) == 1
+        assert [item["identity_probability"] for item in observations[:2]] == [
+            0.0,
+            0.0,
+        ]
+        assert all(
+            item["identity_probability"] == 1.0 for item in observations[2:]
+        )
+
+    tampered = copy.deepcopy(rows[0])
+    tampered["upstream_reference"]["joint_rejection_history"][0][
+        "finite_parent_identity"
+    ]["finite_plane_render_id"] = "0" * 64
+    tampered = _reauthenticated_row(tampered)
+    with pytest.raises(ValueError, match="rejection history|finite parent"):
+        joint_curriculum.verify_joint_curriculum_training_row_v4(
+            tampered, prepared_context
+        )
+
+    tampered = copy.deepcopy(rows[0])
+    tampered["upstream_reference"]["adapter_configuration"][
+        "deformation_censor_status"
+    ] = "tampered-censor-status"
+    tampered["upstream_reference"]["deformation_censoring_contract"][
+        "status"
+    ] = "tampered-censor-status"
+    tampered = _reauthenticated_row(tampered)
+    with pytest.raises(ValueError, match="censor status"):
+        joint_curriculum.verify_joint_curriculum_training_row_v4(
+            tampered, prepared_context
+        )
+
+
+def test_v4_direct_success_remains_bit_exact_and_one_over_one(
+    prepared_context, six_rows
+):
+    direct = joint_curriculum.make_joint_curriculum_training_row_v4(
+        prepared_context,
+        root_seed=2**63 + 155,
+        sample_index=0,
+        output_shape_h_w=(47, 53),
+        selected_mode=training_row.TRAINABLE_MODES[0],
+        reflection_state=training_row.REFLECTION_STATES[0],
+        amplitude_band="mild",
+        animal_id="joint-v3-animal-00000000",
+        specimen_id="joint-v3-specimen-00000000",
+        experiment_id="joint-v3-experiment-00000000",
+        synthetic_animal_id="joint-v3-synthetic-animal-00000000",
+        section_id="joint-v3-section-00000000",
+        margin_um=(13.0, 17.0),
+        minimum_brain_pixels=320,
+    )
+    cached = six_rows[0]
+    assert all(
+        np.array_equal(direct["arrays"][name], cached["arrays"][name])
+        for name in training_row._ARRAY_KEYS
+    )
+    support = direct["upstream_reference"]["support_supervision_contract"]
+    censor = direct["upstream_reference"]["deformation_censoring_contract"]
+    assert support["point_pose_supervision_weight"] == 1.0
+    assert support["dense_deformation_supervision_weight"] == 1.0
+    assert censor["status"] == joint_curriculum.UNCENSORED_DEFORMATION_STATUS
+    assert censor["reason"] is None
+    assert censor["identity_g1_pose_only_fallback"] is False
+
+
+def test_v4_marginal_support_remains_zero_over_zero(prepared_context):
+    row = joint_curriculum.make_joint_curriculum_training_row_v4(
+        prepared_context,
+        root_seed=2**63 + 921,
+        sample_index=7,
+        output_shape_h_w=(47, 53),
+        selected_mode="smart-brush-accurate",
+        reflection_state="none",
+        amplitude_band="moderate",
+        animal_id="marginal-animal",
+        specimen_id="marginal-specimen",
+        experiment_id="marginal-experiment",
+        synthetic_animal_id="marginal-synthetic-animal",
+        section_id="marginal-section",
+        margin_um=(13.0, 17.0),
+        minimum_brain_pixels=47 * 53 + 1,
+    )
+    support = row["upstream_reference"]["support_supervision_contract"]
+    censor = row["upstream_reference"]["deformation_censoring_contract"]
+    assert support["point_pose_supervision_weight"] == 0.0
+    assert support["dense_deformation_supervision_weight"] == 0.0
+    assert support["effective_dense_support"][
+        "effective_dense_deformation_supervision_weight"
+    ] == 0.0
+    assert censor["status"] == joint_curriculum.MARGINAL_SUPPORT_CENSOR_STATUS
+    assert censor["identity_g1_pose_only_fallback"] is False
+    assert joint_curriculum.verify_joint_curriculum_training_row_v4(
+        row, prepared_context
+    )
