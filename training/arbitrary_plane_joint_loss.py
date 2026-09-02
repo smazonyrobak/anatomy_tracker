@@ -76,19 +76,34 @@ def gaussian_plane_mixture_nll(
     truth_state: torch.Tensor,
     support_origin_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
 ) -> torch.Tensor:
-    truth = truth_state[:, None].expand_as(state)
-    residual = plane_tangent_residual(state, truth, support_origin_ap_dv_ml_um)
-    identity = torch.eye(3, device=covariance.device, dtype=covariance.dtype)
-    cholesky = torch.linalg.cholesky(covariance + 1e-6 * identity)
-    standardized = torch.linalg.solve_triangular(
-        cholesky, residual[..., None], upper=False
-    ).squeeze(-1)
-    log_density = -0.5 * (
-        standardized.square().sum(dim=-1)
-        + 2.0 * torch.log(torch.diagonal(cholesky, dim1=-2, dim2=-1)).sum(dim=-1)
-        + 3.0 * math.log(2.0 * math.pi)
-    )
-    return -torch.logsumexp(component_log_mass + log_density, dim=1).mean()
+    work_dtype = torch.promote_types(state.dtype, covariance.dtype)
+    work_dtype = torch.promote_types(work_dtype, truth_state.dtype)
+    work_dtype = torch.promote_types(work_dtype, component_log_mass.dtype)
+    if work_dtype in (torch.float16, torch.bfloat16):
+        work_dtype = torch.float32
+    # The physical offset coordinate is in micrometres, so both variance and
+    # Mahalanobis terms can exceed float16 range for valid, finite predictions.
+    with torch.autocast(device_type=state.device.type, enabled=False):
+        work_state = state.to(dtype=work_dtype)
+        truth = truth_state.to(dtype=work_dtype)[:, None].expand_as(work_state)
+        residual = plane_tangent_residual(
+            work_state, truth, support_origin_ap_dv_ml_um
+        )
+        work_covariance = covariance.to(dtype=work_dtype)
+        identity = torch.eye(3, device=covariance.device, dtype=work_dtype)
+        cholesky = torch.linalg.cholesky(work_covariance + 1e-6 * identity)
+        standardized = torch.linalg.solve_triangular(
+            cholesky, residual[..., None], upper=False
+        ).squeeze(-1)
+        log_density = -0.5 * (
+            standardized.square().sum(dim=-1)
+            + 2.0
+            * torch.log(torch.diagonal(cholesky, dim1=-2, dim2=-1)).sum(dim=-1)
+            + 3.0 * math.log(2.0 * math.pi)
+        )
+        return -torch.logsumexp(
+            component_log_mass.to(dtype=work_dtype) + log_density, dim=1
+        ).mean()
 
 
 def landmark_mixture_nll(

@@ -5,6 +5,7 @@ import math
 import pytest
 import torch
 
+import training.arbitrary_plane_joint_loss as joint_loss
 import training.arbitrary_plane_recurrent_model as recurrent
 from training.arbitrary_plane_full_frame_primitives import (
     FULL_FRAME_STATE_SIZE,
@@ -563,6 +564,76 @@ def test_cuda_autocast_keeps_geometry_in_catalogue_state_dtype():
     loss.backward()
     assert output["final_cell_state"].dtype == fixture["states"].dtype
     assert model.recurrent_update.weight.grad is not None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for autocast")
+def test_cuda_autocast_keeps_physical_plane_covariance_and_nll_finite_above_fp16_range():
+    fixture = _to(_fixture(batch=1), "cuda")
+    model = _model(device="cuda").train()
+    with torch.no_grad():
+        model.plane_tangent_scales[2] = 600.0
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16):
+        reference_point_state = _forward(
+            model, fixture, top_k=2, refinement_steps=1
+        )["final_cell_state"]
+    with torch.no_grad():
+        for head in (
+            model.candidate_plane_cholesky,
+            model.recurrent_plane_cholesky,
+        ):
+            head.weight.zero_()
+            head.bias.zero_()
+            head.bias[:2] = -2.0
+
+    with torch.autocast("cuda", dtype=torch.float16):
+        output = _forward(model, fixture, top_k=2, refinement_steps=1)
+    with torch.autocast("cuda", enabled=False):
+        center, frame, basis = full_frame_state_to_components(
+            output["topk_initial_cell_state"][:, 0]
+        )
+        truth = full_frame_state_from_components(
+            center + 10_000.0 * frame[..., :, 2], frame, basis
+        )
+    with torch.autocast("cuda", dtype=torch.float16):
+        initial_nll = joint_loss.gaussian_plane_mixture_nll(
+            output["topk_initial_cell_state"],
+            output["topk_initial_cell_canonical_plane_covariance"],
+            output["retrieval_topk_log_probability"],
+            truth,
+            (5.0, 5.0, 5.0),
+        )
+        final_log_mass = (
+            output["retrieval_topk_retained_probability"].clamp_min(1e-8).log()[:, None]
+            + output["conditional_within_topk_cell_log_probability"]
+        )
+        final_nll = joint_loss.gaussian_plane_mixture_nll(
+            output["final_cell_state"],
+            output["final_cell_canonical_plane_covariance"],
+            final_log_mass,
+            truth,
+            (5.0, 5.0, 5.0),
+        )
+
+    for covariance in (
+        output["topk_initial_cell_canonical_plane_covariance"],
+        output["final_cell_canonical_plane_covariance"],
+    ):
+        assert covariance.dtype == torch.float32
+        assert torch.isfinite(covariance).all()
+        assert torch.all(covariance[..., 2, 2] > torch.finfo(torch.float16).max)
+    assert torch.isfinite(initial_nll)
+    assert torch.isfinite(final_nll)
+    assert torch.isfinite(output["final_cell_state"]).all()
+    assert torch.equal(output["final_cell_state"], reference_point_state)
+
+    (initial_nll + final_nll).backward()
+    for head in (
+        model.candidate_plane_cholesky,
+        model.recurrent_plane_cholesky,
+    ):
+        assert head.bias.grad is not None
+        assert torch.isfinite(head.bias.grad).all()
+        assert head.bias.grad[2] != 0
 
 
 def test_new_model_has_no_legacy_checkpoint_filesystem_or_deformation_path():

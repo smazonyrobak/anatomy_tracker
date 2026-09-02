@@ -738,18 +738,35 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 support_origin_ap_dv_ml_um,
             ).reshape(batch, cells, FULL_FRAME_STATE_SIZE)
 
-        canonical_cholesky = self._plane_cholesky(
-            self.candidate_plane_cholesky(pooled)
-        ).to(cell_states)
-        canonical_covariance = canonical_cholesky @ canonical_cholesky.transpose(-1, -2)
-        difference = canonical_update.to(cell_states)[..., :3] - cell_update[..., None, :3]
-        cell_covariance = (
-            representation_probability.to(cell_states)[..., None, None]
-            * (
-                canonical_covariance
-                + difference[..., :, None] @ difference[..., None, :]
+        # Normal-offset variance is measured in um^2 and routinely exceeds
+        # float16's finite range. Keep the complete probabilistic head and its
+        # mixture moments out of autocast; these tensors do not affect the
+        # point-state update above.
+        with torch.autocast(device_type=cell_states.device.type, enabled=False):
+            raw_cholesky = self.candidate_plane_cholesky(
+                pooled.to(self.candidate_plane_cholesky.weight)
             )
-        ).sum(dim=2)
+            canonical_cholesky = self._plane_cholesky(raw_cholesky)
+            covariance_dtype = torch.promote_types(
+                canonical_cholesky.dtype, cell_states.dtype
+            )
+            if covariance_dtype in (torch.float16, torch.bfloat16):
+                covariance_dtype = torch.float32
+            canonical_cholesky = canonical_cholesky.to(dtype=covariance_dtype)
+            canonical_covariance = (
+                canonical_cholesky @ canonical_cholesky.transpose(-1, -2)
+            )
+            difference = (
+                canonical_update.to(dtype=covariance_dtype)[..., :3]
+                - cell_update.to(dtype=covariance_dtype)[..., None, :3]
+            )
+            cell_covariance = (
+                representation_probability.to(dtype=covariance_dtype)[..., None, None]
+                * (
+                    canonical_covariance
+                    + difference[..., :, None] @ difference[..., None, :]
+                )
+            ).sum(dim=2)
         return {
             "cell_id": ids,
             "representation_log_score": representation_log_score,
@@ -1012,23 +1029,34 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 representation_log_conditional.exp().to(accumulation_dtype)[..., None]
                 * canonical_update.to(accumulation_dtype)
             ).sum(dim=2).to(state)
-            canonical_cholesky = self._plane_cholesky(
-                self.recurrent_plane_cholesky(pooled)
-            ).to(state)
-            canonical_covariance = (
-                canonical_cholesky @ canonical_cholesky.transpose(-1, -2)
-            ).reshape(batch, cells, representations, 3, 3)
-            plane_difference = (
-                canonical_update.to(state)[..., :3] - cell_update[..., None, :3]
-            )
-            cell_covariance = (
-                representation_log_conditional.exp().to(state)[..., None, None]
-                * (
-                    canonical_covariance
-                    + plane_difference[..., :, None]
-                    @ plane_difference[..., None, :]
+            with torch.autocast(device_type=state.device.type, enabled=False):
+                raw_cholesky = self.recurrent_plane_cholesky(
+                    pooled.to(self.recurrent_plane_cholesky.weight)
                 )
-            ).sum(dim=2)
+                canonical_cholesky = self._plane_cholesky(raw_cholesky)
+                covariance_dtype = torch.promote_types(
+                    canonical_cholesky.dtype, state.dtype
+                )
+                if covariance_dtype in (torch.float16, torch.bfloat16):
+                    covariance_dtype = torch.float32
+                canonical_cholesky = canonical_cholesky.to(dtype=covariance_dtype)
+                canonical_covariance = (
+                    canonical_cholesky @ canonical_cholesky.transpose(-1, -2)
+                ).reshape(batch, cells, representations, 3, 3)
+                plane_difference = (
+                    canonical_update.to(dtype=covariance_dtype)[..., :3]
+                    - cell_update.to(dtype=covariance_dtype)[..., None, :3]
+                )
+                cell_covariance = (
+                    representation_log_conditional.exp().to(
+                        dtype=covariance_dtype
+                    )[..., None, None]
+                    * (
+                        canonical_covariance
+                        + plane_difference[..., :, None]
+                        @ plane_difference[..., None, :]
+                    )
+                ).sum(dim=2)
             with torch.autocast(device_type=state.device.type, enabled=False):
                 state = compose_antipodal_plane_frame_residual(
                     state.reshape(-1, FULL_FRAME_STATE_SIZE),
@@ -1143,16 +1171,29 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             final_joint_within_cell - final_cell_log_score[..., None]
         )
         final_pooled = final_hidden.mean(dim=(-2, -1))
-        final_canonical_cholesky = self._plane_cholesky(
-            self.recurrent_plane_cholesky(final_pooled)
-        ).to(state)
-        final_representation_covariance = (
-            final_canonical_cholesky @ final_canonical_cholesky.transpose(-1, -2)
-        ).reshape(batch, cells, representations, 3, 3)
-        final_cell_covariance = (
-            final_representation_log_conditional.exp().to(state)[..., None, None]
-            * final_representation_covariance
-        ).sum(dim=2)
+        with torch.autocast(device_type=state.device.type, enabled=False):
+            final_raw_cholesky = self.recurrent_plane_cholesky(
+                final_pooled.to(self.recurrent_plane_cholesky.weight)
+            )
+            final_canonical_cholesky = self._plane_cholesky(final_raw_cholesky)
+            covariance_dtype = torch.promote_types(
+                final_canonical_cholesky.dtype, state.dtype
+            )
+            if covariance_dtype in (torch.float16, torch.bfloat16):
+                covariance_dtype = torch.float32
+            final_canonical_cholesky = final_canonical_cholesky.to(
+                dtype=covariance_dtype
+            )
+            final_representation_covariance = (
+                final_canonical_cholesky
+                @ final_canonical_cholesky.transpose(-1, -2)
+            ).reshape(batch, cells, representations, 3, 3)
+            final_cell_covariance = (
+                final_representation_log_conditional.exp().to(
+                    dtype=covariance_dtype
+                )[..., None, None]
+                * final_representation_covariance
+            ).sum(dim=2)
         conditional_cell_log_probability = F.log_softmax(
             initial_cell_log_probability
             + cell_log_score_increment
