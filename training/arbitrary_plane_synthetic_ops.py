@@ -18,7 +18,18 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 
 
-ARBITRARY_PLANE_SYNTHETIC_OPS_VERSION = "arbitrary-plane-synthetic-ops-g1-v1"
+ARBITRARY_PLANE_SYNTHETIC_OPS_VERSION = (
+    "arbitrary-plane-synthetic-ops-g1-direct-gauge-option-v2"
+)
+
+ADAPTIVE_NUMPY_INTEGRATION = "adaptive-float32-max-seed-0.5px"
+FIXED_SEVEN_DECODER_INTEGRATION = (
+    "fixed-seven-float32-torch-align-corners-border-decoder-parity"
+)
+TISSUE_AFFINE_PROJECTION = "tissue-mask-float64-least-squares"
+UNIFORM_CANVAS_AFFINE_PROJECTION = (
+    "uniform-full-canvas-float32-decoder-parity"
+)
 
 
 def identity_pixel_map(shape: tuple[int, int]) -> np.ndarray:
@@ -205,6 +216,35 @@ def remove_tissue_affine_component(
     return result
 
 
+def remove_uniform_canvas_affine_component_decoder_parity(
+    velocity_xy: np.ndarray,
+) -> np.ndarray:
+    """Project an x-y SVF with the decoder's exact float32 full-canvas gauge."""
+    import torch
+
+    from training.arbitrary_plane_deformation_primitives import (
+        support_weighted_affine_projection_yx,
+    )
+
+    velocity = np.asarray(velocity_xy, dtype=np.float32)
+    if (
+        velocity.ndim != 3
+        or velocity.shape[0] != 2
+        or not np.isfinite(velocity).all()
+    ):
+        raise ValueError("velocity must be finite with shape (2,H,W)")
+    velocity_yx = torch.from_numpy(np.ascontiguousarray(velocity[::-1])).unsqueeze(0)
+    support = torch.ones(
+        (1, 1, *velocity.shape[1:]), dtype=torch.float32
+    )
+    residual_yx, _, _, _ = support_weighted_affine_projection_yx(
+        velocity_yx, support
+    )
+    return np.ascontiguousarray(
+        residual_yx[0].detach().cpu().numpy()[::-1], dtype=np.float32
+    )
+
+
 def sample_multiscale_physical_velocity(
     rng: np.random.Generator,
     shape: tuple[int, int],
@@ -307,6 +347,43 @@ def integrate_stationary_velocity(
     )
 
 
+def integrate_stationary_velocity_fixed_decoder_steps(
+    velocity_xy: np.ndarray,
+    *,
+    steps: int = 7,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Use the decoder's exact float32 fixed-step integration implementation."""
+    import torch
+
+    from training.arbitrary_plane_deformation_primitives import (
+        integrate_stationary_velocity_yx,
+    )
+
+    velocity = np.asarray(velocity_xy, dtype=np.float32)
+    if (
+        velocity.ndim != 3
+        or velocity.shape[0] != 2
+        or not np.isfinite(velocity).all()
+        or not isinstance(steps, int)
+        or isinstance(steps, bool)
+        or steps != 7
+    ):
+        raise ValueError(
+            "fixed decoder integration requires a finite (2,H,W) velocity and exactly seven steps"
+        )
+    velocity_yx = torch.from_numpy(np.ascontiguousarray(velocity[::-1])).unsqueeze(0)
+    forward_yx, inverse_yx = integrate_stationary_velocity_yx(
+        velocity_yx, steps
+    )
+
+    def xy(array_yx):
+        return np.ascontiguousarray(
+            array_yx[0].detach().cpu().numpy()[::-1], dtype=np.float32
+        )
+
+    return xy(forward_yx), xy(inverse_yx), steps
+
+
 def _apply_similarity(
     points_xy: np.ndarray,
     angle_rad: float,
@@ -369,6 +446,7 @@ def fixed_source_maps(
     scale: float,
     translation_xy: tuple[float, float] | np.ndarray,
     max_scaled_displacement_px: float = 0.5,
+    integration_contract: str = ADAPTIVE_NUMPY_INTEGRATION,
 ) -> dict[str, np.ndarray | int]:
     """Construct effective numeric point maps for a fixed atlas and source image.
 
@@ -378,9 +456,18 @@ def fixed_source_maps(
     source image from the fixed raster.
     """
     velocity_xy = physical_velocity_to_pixel(velocity_uv_um, pixel_basis_uv_um)
-    local_forward, local_inverse, steps = integrate_stationary_velocity(
-        velocity_xy, max_scaled_displacement_px=max_scaled_displacement_px
-    )
+    if integration_contract == ADAPTIVE_NUMPY_INTEGRATION:
+        local_forward, local_inverse, steps = integrate_stationary_velocity(
+            velocity_xy, max_scaled_displacement_px=max_scaled_displacement_px
+        )
+    elif integration_contract == FIXED_SEVEN_DECODER_INTEGRATION:
+        local_forward, local_inverse, steps = (
+            integrate_stationary_velocity_fixed_decoder_steps(
+                velocity_xy, steps=7
+            )
+        )
+    else:
+        raise ValueError("unknown stationary-velocity integration contract")
     similarity_forward, similarity_inverse = similarity_maps(
         velocity_xy.shape[1:],
         angle_rad=angle_rad,
@@ -402,6 +489,30 @@ def fixed_source_maps(
         similarity_inverse,
         padding_mode="border",
     )
+    identity_similarity = bool(
+        float(angle_rad) == 0.0
+        and float(scale) == 1.0
+        and np.array_equal(
+            np.asarray(translation_xy, dtype=np.float32),
+            np.zeros(2, dtype=np.float32),
+        )
+    )
+    identity_similarity_inverse_composition_error = float(
+        np.max(
+            np.abs(
+                source_to_fixed.astype(np.float64)
+                - local_inverse.astype(np.float64)
+            )
+        )
+    )
+    if (
+        integration_contract == FIXED_SEVEN_DECODER_INTEGRATION
+        and identity_similarity
+        and not np.array_equal(source_to_fixed, local_inverse)
+    ):
+        raise ValueError(
+            "identity-similarity source-to-fixed composition changed the decoder inverse map"
+        )
     return {
         "velocity_xy_px": velocity_xy,
         "local_fixed_to_fixed_map": local_forward,
@@ -411,6 +522,10 @@ def fixed_source_maps(
         "fixed_to_source_map": fixed_to_source.astype(np.float32),
         "source_to_fixed_map": source_to_fixed.astype(np.float32),
         "integration_steps": steps,
+        "integration_contract": integration_contract,
+        "identity_similarity_inverse_composition_error_max_abs_px": (
+            identity_similarity_inverse_composition_error
+        ),
     }
 
 
@@ -635,7 +750,11 @@ def topology_acceptance_metrics(
 
 
 __all__ = [
+    "ADAPTIVE_NUMPY_INTEGRATION",
     "ARBITRARY_PLANE_SYNTHETIC_OPS_VERSION",
+    "FIXED_SEVEN_DECODER_INTEGRATION",
+    "TISSUE_AFFINE_PROJECTION",
+    "UNIFORM_CANVAS_AFFINE_PROJECTION",
     "bilinear_sample_field",
     "bilinear_sample_scalar",
     "compose_pixel_maps",
@@ -643,10 +762,12 @@ __all__ = [
     "forward_inverse_cycle_metrics",
     "identity_pixel_map",
     "integrate_stationary_velocity",
+    "integrate_stationary_velocity_fixed_decoder_steps",
     "jacobian_determinant",
     "nearest_sample_labels",
     "physical_velocity_to_pixel",
     "remove_tissue_affine_component",
+    "remove_uniform_canvas_affine_component_decoder_parity",
     "sample_multiscale_physical_velocity",
     "scaling_and_squaring",
     "similarity_maps",

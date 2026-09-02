@@ -11,17 +11,28 @@ import numpy as np
 
 import training.arbitrary_plane_acquisition_v2 as acquisition_v2
 import training.arbitrary_plane_deformation_gauge_v3 as deformation_gauge_v3
+import training.arbitrary_plane_deformation_gauge_v4 as deformation_gauge_v4
 import training.arbitrary_plane_training_row_v3 as training_row_v3
 
 
 ROW_CACHE_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-row-cache/v3"
 GENERATOR_BINDING_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-generator-binding/v3"
 DEVELOPMENT_DATA_ROLE = "development-training"
-DEFORMATION_GAUGE_REFERENCE_KEYS = {
+LEGACY_DEFORMATION_GAUGE_REFERENCE_KEYS = {
     "schema_version",
     "algorithm",
     "projection_weighting",
     "deformation_pose_gauge_id",
+    "receipt_sha256",
+}
+DEFORMATION_GAUGE_REFERENCE_KEYS = {
+    "schema_version",
+    "algorithm",
+    "projection_weighting",
+    "target_direction",
+    "numeric_contract",
+    "runtime_versions",
+    "direct_deformation_target_id",
     "receipt_sha256",
 }
 DEFORMATION_GAUGE_PROJECTION_WEIGHTING = (
@@ -43,8 +54,8 @@ COMPOSITE_COMPONENTS = (
     ),
     (
         "nonidentity_joint_curriculum",
-        "anatomy-tracker.arbitrary-plane-joint-curriculum/v3",
-        "unconditioned-uniform-rp2-direct-identifiable-nonidentity-affine-free-g1-varied-g2-g3/v3",
+        "anatomy-tracker.arbitrary-plane-joint-curriculum/v4",
+        "unconditioned-uniform-rp2-direct-preintegration-affine-free-source-to-fixed-g1-varied-g2-g3/v4",
     ),
 )
 FORBIDDEN_SPLIT_TOKENS = (
@@ -132,6 +143,45 @@ def _valid_sha256(value):
     )
 
 
+def _valid_geometry_gauge_contract(contract):
+    if not isinstance(contract, dict):
+        return False
+    if contract == deformation_gauge_v4.direct_deformation_target_contract_v4():
+        return True
+    return (
+        set(contract) == {"schema_version", "algorithm", "projection_weighting"}
+        and contract.get("schema_version")
+        == deformation_gauge_v3.DEFORMATION_GAUGE_V3_SCHEMA
+        and contract.get("algorithm")
+        == deformation_gauge_v3.DEFORMATION_GAUGE_V3_ALGORITHM
+        and contract.get("projection_weighting")
+        == DEFORMATION_GAUGE_PROJECTION_WEIGHTING
+    )
+
+
+def _valid_gauge_reference(reference):
+    if not isinstance(reference, dict):
+        return False
+    if set(reference) == DEFORMATION_GAUGE_REFERENCE_KEYS:
+        contract = deformation_gauge_v4.direct_deformation_target_contract_v4()
+        return (
+            all(reference.get(name) == contract[name] for name in contract)
+            and _valid_sha256(reference.get("direct_deformation_target_id"))
+            and _valid_sha256(reference.get("receipt_sha256"))
+        )
+    return (
+        set(reference) == LEGACY_DEFORMATION_GAUGE_REFERENCE_KEYS
+        and reference.get("schema_version")
+        == deformation_gauge_v3.DEFORMATION_GAUGE_V3_SCHEMA
+        and reference.get("algorithm")
+        == deformation_gauge_v3.DEFORMATION_GAUGE_V3_ALGORITHM
+        and reference.get("projection_weighting")
+        == DEFORMATION_GAUGE_PROJECTION_WEIGHTING
+        and _valid_sha256(reference.get("deformation_pose_gauge_id"))
+        and _valid_sha256(reference.get("receipt_sha256"))
+    )
+
+
 def make_generator_binding_v3(
     *,
     generator_ids,
@@ -146,14 +196,7 @@ def make_generator_binding_v3(
         not generator_ids
         or not source_sha256
         or any(not _valid_sha256(value) for value in source_sha256.values())
-        or not isinstance(geometry_gauge_contract, dict)
-        or not geometry_gauge_contract
-        or geometry_gauge_contract.get("schema_version")
-        != deformation_gauge_v3.DEFORMATION_GAUGE_V3_SCHEMA
-        or geometry_gauge_contract.get("algorithm")
-        != deformation_gauge_v3.DEFORMATION_GAUGE_V3_ALGORITHM
-        or geometry_gauge_contract.get("projection_weighting")
-        != DEFORMATION_GAUGE_PROJECTION_WEIGHTING
+        or not _valid_geometry_gauge_contract(geometry_gauge_contract)
         or not isinstance(generator_config, dict)
         or not generator_config
     ):
@@ -182,14 +225,9 @@ def verify_generator_binding_v3(binding):
         or payload.get("generator_ids") != sorted(set(payload["generator_ids"]))
         or not payload.get("source_sha256")
         or any(not _valid_sha256(value) for value in payload["source_sha256"].values())
-        or not isinstance(payload.get("geometry_gauge_contract"), dict)
-        or not payload.get("geometry_gauge_contract")
-        or payload["geometry_gauge_contract"].get("schema_version")
-        != deformation_gauge_v3.DEFORMATION_GAUGE_V3_SCHEMA
-        or payload["geometry_gauge_contract"].get("algorithm")
-        != deformation_gauge_v3.DEFORMATION_GAUGE_V3_ALGORITHM
-        or payload["geometry_gauge_contract"].get("projection_weighting")
-        != DEFORMATION_GAUGE_PROJECTION_WEIGHTING
+        or not _valid_geometry_gauge_contract(
+            payload.get("geometry_gauge_contract")
+        )
         or payload.get("geometry_gauge_contract_sha256")
         != _hash_json(payload.get("geometry_gauge_contract"))
         or not payload.get("generator_config")
@@ -466,20 +504,12 @@ def verify_cached_training_row_v3(row, *, expected_geometry_gauge_contract=None)
         "split",
     )
     if (
-        set(gauge_reference) != DEFORMATION_GAUGE_REFERENCE_KEYS
-        or gauge_reference.get("schema_version")
-        != deformation_gauge_v3.DEFORMATION_GAUGE_V3_SCHEMA
-        or gauge_reference.get("algorithm")
-        != deformation_gauge_v3.DEFORMATION_GAUGE_V3_ALGORITHM
-        or gauge_reference.get("projection_weighting")
-        != DEFORMATION_GAUGE_PROJECTION_WEIGHTING
-        or not _valid_sha256(gauge_reference.get("deformation_pose_gauge_id"))
-        or not _valid_sha256(gauge_reference.get("receipt_sha256"))
+        not _valid_gauge_reference(gauge_reference)
     ):
         raise ValueError("training row deformation-pose gauge reference is invalid or stale")
     if expected_geometry_gauge_contract is not None and any(
-        gauge_reference[name] != expected_geometry_gauge_contract.get(name)
-        for name in ("schema_version", "algorithm", "projection_weighting")
+        gauge_reference.get(name) != value
+        for name, value in expected_geometry_gauge_contract.items()
     ):
         raise ValueError("training row uses a stale or mismatched deformation-pose gauge")
     if (
@@ -625,21 +655,13 @@ def load_training_row_cache_manifest_v3(
         gauge_reference = record.get("deformation_pose_gauge_reference", {})
         if (
             record.get("row_index") != index
-            or set(gauge_reference) != DEFORMATION_GAUGE_REFERENCE_KEYS
-            or gauge_reference.get("schema_version")
-            != payload["generator_binding"]["geometry_gauge_contract"].get(
-                "schema_version"
+            or not _valid_gauge_reference(gauge_reference)
+            or any(
+                gauge_reference.get(name) != value
+                for name, value in payload["generator_binding"][
+                    "geometry_gauge_contract"
+                ].items()
             )
-            or gauge_reference.get("algorithm")
-            != payload["generator_binding"]["geometry_gauge_contract"].get(
-                "algorithm"
-            )
-            or gauge_reference.get("projection_weighting")
-            != payload["generator_binding"]["geometry_gauge_contract"].get(
-                "projection_weighting"
-            )
-            or not _valid_sha256(gauge_reference.get("deformation_pose_gauge_id"))
-            or not _valid_sha256(gauge_reference.get("receipt_sha256"))
             or any(token in str(lineage.get("split", "")).lower() for token in FORBIDDEN_SPLIT_TOKENS)
             or any(
                 record.get(name) in (None, "")

@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 import training.arbitrary_plane_acquisition_v2 as acquisition
-import training.arbitrary_plane_deformation_gauge_v3 as deformation_gauge
+import training.arbitrary_plane_deformation_gauge_v4 as deformation_gauge
 import training.arbitrary_plane_row_cache_v3 as row_cache
 import training.arbitrary_plane_training_row_v3 as training_row
 from training.arbitrary_plane_rendered_generator import (
@@ -56,7 +56,8 @@ _SOURCE_FILES = (
     "training/arbitrary_plane_synthetic_generator.py",
     "training/arbitrary_plane_synthetic_ops.py",
     "training/arbitrary_plane_synthetic_observation.py",
-    "training/arbitrary_plane_deformation_gauge_v3.py",
+    "training/arbitrary_plane_deformation_gauge_v4.py",
+    "training/arbitrary_plane_deformation_primitives.py",
     "training/arbitrary_plane_training_row_v3.py",
 )
 
@@ -234,6 +235,9 @@ def pose_curriculum_generation_config_v3(
             "interpretation": "single centre-plane sample matching the direct curriculum raster",
         },
         "g1_deformation": "forced exact identity",
+        "direct_deformation_target_contract": (
+            deformation_gauge.direct_deformation_target_contract_v4()
+        ),
         "appearance_damage": "audited varied G2/G3",
         "trainable_modes": list(training_row.TRAINABLE_MODES),
         "horizontal_representation_augmentation": list(training_row.REFLECTION_STATES),
@@ -260,11 +264,9 @@ def pose_curriculum_generator_binding_v3(generation_config):
     return row_cache.make_generator_binding_v3(
         generator_ids=(POSE_CURRICULUM_V3_ALGORITHM,),
         source_sha256=_source_sha256(),
-        geometry_gauge_contract={
-            "schema_version": deformation_gauge.DEFORMATION_GAUGE_V3_SCHEMA,
-            "algorithm": deformation_gauge.DEFORMATION_GAUGE_V3_ALGORITHM,
-            "projection_weighting": row_cache.DEFORMATION_GAUGE_PROJECTION_WEIGHTING,
-        },
+        geometry_gauge_contract=(
+            deformation_gauge.direct_deformation_target_contract_v4()
+        ),
         generator_config=generation_config,
     )
 
@@ -370,41 +372,41 @@ def make_pose_curriculum_training_row_v3(
     selected = paired[selected_mode]
     height, width = selected["arrays"]["model_input_image"].shape
     identity_xy = identity_pixel_map((height, width))
-    fixed_to_source_xy = selected["arrays"]["fixed_to_source_map"]
+    source_to_fixed_xy = selected["arrays"]["source_to_fixed_map"]
     velocity_xy = selected["arrays"]["velocity_xy_px"]
     if (
         not selected["g1"]["parameters"]["accepted_attempt"]["identity_path"]
-        or not np.array_equal(fixed_to_source_xy, identity_xy)
+        or not np.array_equal(source_to_fixed_xy, identity_xy)
         or np.any(velocity_xy != 0.0)
     ):
         raise RuntimeError("pose curriculum G1 must be exact identity")
     pullback_yx = np.ascontiguousarray(
-        np.moveaxis(fixed_to_source_xy, 0, -1)[..., ::-1], dtype=np.float64
+        np.moveaxis(source_to_fixed_xy, 0, -1)[..., ::-1], dtype=np.float32
     )
     velocity_yx = np.ascontiguousarray(
-        np.moveaxis(velocity_xy, 0, -1)[..., ::-1], dtype=np.float64
+        -np.moveaxis(velocity_xy, 0, -1)[..., ::-1], dtype=np.float32
     )
     effective_pose = np.asarray(
         parent["geometry"]["effective_quicknii_ouv_ml_ap_dv"], dtype=np.float64
     ).reshape(3, 3)
     deformation_valid = np.ones((height, width), dtype=bool)
-    gauge = deformation_gauge.gauge_fix_canvas_deformation_v3(
+    gauge = deformation_gauge.certify_direct_deformation_target_v4(
         velocity_yx,
         pullback_yx,
         effective_pose,
         deformation_valid,
     )
-    canonical = gauge["arrays"]["pose_adjusted_effective_quicknii_ouv_float64"]
+    canonical = effective_pose.copy()
     horizontal = reflection_state == "horizontal"
     observed, affine, representation_index = _reflection_geometry(
         canonical, (height, width), reflection_state
     )
     source = selected["arrays"]
     reflected_pullback = _reflect(
-        gauge["arrays"]["affine_free_pullback_map_yx_px_float64"], horizontal
+        gauge["arrays"]["certified_pullback_map_yx_px_float32"], horizontal
     ).copy()
     reflected_velocity = _reflect(
-        gauge["arrays"]["affine_free_stationary_velocity_yx_px_float64"], horizontal
+        gauge["arrays"]["target_pullback_stationary_velocity_yx_px_float32"], horizontal
     ).copy()
     if horizontal:
         reflected_pullback[..., 1] = width - 1.0 - reflected_pullback[..., 1]
@@ -428,10 +430,10 @@ def make_pose_curriculum_training_row_v3(
             tissue & ~valid, horizontal
         ),
         "truth_section_pullback_map_yx_px_float64": np.ascontiguousarray(
-            reflected_pullback
+            reflected_pullback, dtype=np.float64
         ),
         "truth_section_pullback_stationary_velocity_yx_px_float64": np.ascontiguousarray(
-            reflected_velocity
+            reflected_velocity, dtype=np.float64
         ),
         "truth_section_deformation_valid_mask": _reflect(
             deformation_valid, horizontal
@@ -523,6 +525,9 @@ def make_pose_curriculum_training_row_v3(
                 "outline": selected["outline"]["outline_realization_id"],
             },
             "g1_identity_forced": True,
+            "direct_deformation_target_certification_summary": (
+                deformation_gauge.direct_deformation_target_summary_v4(gauge)
+            ),
             "selected_input_mask_receipt": acquisition._array_receipt(
                 source["input_outline_mask"]
             ),
@@ -544,7 +549,7 @@ def make_pose_curriculum_training_row_v3(
         },
         "selected_mode": selected_mode,
         "selected_descendant_id": selected["synthetic_realization_id"],
-        "deformation_pose_gauge_reference": deformation_gauge.deformation_pose_gauge_reference_v3(
+        "deformation_pose_gauge_reference": deformation_gauge.direct_deformation_target_reference_v4(
             gauge
         ),
         "reflection_state": reflection_state,

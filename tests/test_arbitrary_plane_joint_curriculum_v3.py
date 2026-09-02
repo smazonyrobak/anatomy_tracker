@@ -7,12 +7,16 @@ import numpy as np
 import pytest
 
 import training.arbitrary_plane_acquisition_v2 as acquisition
-import training.arbitrary_plane_deformation_gauge_v3 as deformation_gauge
+import training.arbitrary_plane_deformation_gauge_v4 as deformation_gauge
 import training.arbitrary_plane_joint_curriculum_v3 as joint_curriculum
 import training.arbitrary_plane_pose_curriculum_v3 as pose_curriculum
 import training.arbitrary_plane_row_cache_v3 as row_cache
 import training.arbitrary_plane_training_row_v3 as training_row
 from training.arbitrary_plane_rendered_generator import prepare_finite_render_context
+from training.arbitrary_plane_rendered_generator import (
+    effective_renderer_sampling_arrays,
+)
+from training.arbitrary_plane_synthetic_ops import bilinear_sample_scalar
 from training.arbitrary_plane_support import build_annotation_support_index
 
 
@@ -133,32 +137,110 @@ def test_nonzero_affine_free_deformation_positive_jacobian_and_exact_replay(
     assert np.any(velocity != 0.0)
     assert not np.array_equal(pullback, identity)
     assert _cell_jacobian(pullback).min() > 0.0
-    assert np.allclose(
-        deformation_gauge.integrate_stationary_velocity_yx_v3(velocity),
-        pullback,
-        atol=0.0,
-        rtol=0.0,
-    )
     g1 = row["upstream_reference"]["selected_g1_accepted_attempt"]
     assert g1["identity_path"] is False
     assert g1["topology_metrics"]["forward_jacobian_min"] > 0.0
     assert g1["topology_metrics"]["inverse_jacobian_min"] > 0.0
-    gauge = row["upstream_reference"]["deformation_pose_gauge_summary"]
-    assert gauge["maximum_valid_recomposition_error_px"] == (
-        deformation_gauge.MAXIMUM_VALID_RECOMPOSITION_ERROR_PX
+    gauge = row["upstream_reference"][
+        "direct_deformation_target_certification_summary"
+    ]
+    assert gauge["target_direction"] == deformation_gauge.TARGET_DIRECTION
+    assert gauge["integration_steps"] == 7
+    assert gauge["diagnostics"]["valid_certification_error_max_px"] == 0.0
+    assert (
+        gauge["diagnostics"]["uniform_canvas_affine_coefficient_max_abs"]
+        < 1e-6
     )
-    assert gauge["diagnostics"]["valid_recomposition_error_max_px"] <= 0.05
-    assert gauge["diagnostics"]["uniform_canvas_affine_coefficient_max_abs"] > 0.0
+    assert gauge["diagnostics"]["parent_pose_adjustment_max_abs"] == 0.0
     assert row["upstream_reference"]["render_thickness_scope"] == (
         "single centre-plane finite-FOV raster; no through-plane PSF integration"
     )
-    assert row["canonical_effective_quicknii_ouv_float64"] != row[
+    assert row["canonical_effective_quicknii_ouv_float64"] == row[
         "upstream_reference"
     ]["effective_quicknii_ouv_ml_ap_dv_before_gauge"]
     assert joint_curriculum.verify_joint_curriculum_training_row_v3(
         row, prepared_context
     )
     assert row_cache.verify_cached_training_row_v3(row)
+
+
+def test_joint_target_direction_and_ccf_follow_source_to_fixed_pullback(
+    prepared_context, monkeypatch
+):
+    captured = {}
+    original = joint_curriculum.make_arbitrary_plane_synthetic_realization
+
+    def record(*args, **kwargs):
+        result = original(*args, **kwargs)
+        captured[result["outline"]["parameters"]["mode"]] = result
+        return result
+
+    monkeypatch.setattr(
+        joint_curriculum, "make_arbitrary_plane_synthetic_realization", record
+    )
+    row = joint_curriculum.make_joint_curriculum_training_row_v4(
+        prepared_context,
+        root_seed=2**63 + 155,
+        sample_index=0,
+        output_shape_h_w=(47, 53),
+        selected_mode="smart-brush-accurate",
+        reflection_state="none",
+        amplitude_band="mild",
+        animal_id="direction-animal",
+        specimen_id="direction-specimen",
+        experiment_id="direction-experiment",
+        synthetic_animal_id="direction-synthetic-animal",
+        section_id="direction-section",
+        margin_um=(13.0, 17.0),
+        minimum_brain_pixels=320,
+    )
+    selected = captured[
+        pose_curriculum.MODE_TO_OUTLINE["smart-brush-accurate"]
+    ]
+    source = selected["arrays"]
+    expected_map = np.moveaxis(source["source_to_fixed_map"], 0, -1)[..., ::-1]
+    wrong_map = np.moveaxis(source["fixed_to_source_map"], 0, -1)[..., ::-1]
+    expected_velocity = -np.moveaxis(source["velocity_xy_px"], 0, -1)[..., ::-1]
+    assert np.array_equal(
+        row["arrays"]["truth_section_pullback_map_yx_px_float64"],
+        expected_map.astype(np.float64),
+    )
+    assert not np.array_equal(
+        row["arrays"]["truth_section_pullback_map_yx_px_float64"],
+        wrong_map.astype(np.float64),
+    )
+    assert np.array_equal(
+        row["arrays"][
+            "truth_section_pullback_stationary_velocity_yx_px_float64"
+        ],
+        expected_velocity.astype(np.float64),
+    )
+
+    parent = selected["finite_parent"]
+    support = prepared_context["support_index"]
+    fixed = effective_renderer_sampling_arrays(
+        parent["geometry"],
+        tuple(int(value) for value in support["annotation_shape"]),
+        origin_ap_dv_ml_um=tuple(support["origin_um"]),
+        voxel_size_ap_dv_ml_um=tuple(support["voxel_size_um"]),
+    )["coordinate_raster_allen_index_float32"]
+    source_allen = np.stack(
+        [
+            bilinear_sample_scalar(fixed[..., axis], source["source_to_fixed_map"])
+            for axis in range(3)
+        ],
+        axis=-1,
+    ).astype(np.float32)
+    expected_ccf = (
+        np.asarray(support["origin_um"], np.float32)
+        + (source_allen + np.float32(0.5))
+        * np.asarray(support["voxel_size_um"], np.float32)
+    ).astype(np.float32)
+    expected_ccf[~source["source_map_domain_mask"]] = 0.0
+    assert np.array_equal(
+        row["arrays"]["target_ccf_coordinates_ap_dv_ml_um_float64"],
+        expected_ccf.astype(np.float64),
+    )
 
 
 def test_modes_reflections_amplitude_bands_and_provenance_cycle(six_rows):

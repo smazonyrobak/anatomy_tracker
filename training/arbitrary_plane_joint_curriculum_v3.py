@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 import training.arbitrary_plane_acquisition_v2 as acquisition
-import training.arbitrary_plane_deformation_gauge_v3 as deformation_gauge
+import training.arbitrary_plane_deformation_gauge_v4 as direct_deformation_target
 import training.arbitrary_plane_pose_curriculum_v3 as pose_curriculum
 import training.arbitrary_plane_row_cache_v3 as row_cache
 import training.arbitrary_plane_training_row_v3 as training_row
@@ -19,12 +19,21 @@ from training.arbitrary_plane_rendered_generator import (
 from training.arbitrary_plane_synthetic_generator import (
     make_arbitrary_plane_synthetic_realization,
 )
-
-
-JOINT_CURRICULUM_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-joint-curriculum/v3"
-JOINT_CURRICULUM_V3_ALGORITHM = (
-    "unconditioned-uniform-rp2-direct-identifiable-nonidentity-affine-free-g1-varied-g2-g3/v3"
+from training.arbitrary_plane_synthetic_ops import (
+    FIXED_SEVEN_DECODER_INTEGRATION,
+    UNIFORM_CANVAS_AFFINE_PROJECTION,
 )
+
+
+JOINT_CURRICULUM_V4_SCHEMA = "anatomy-tracker.arbitrary-plane-joint-curriculum/v4"
+JOINT_CURRICULUM_V4_ALGORITHM = (
+    "unconditioned-uniform-rp2-direct-preintegration-affine-free-source-to-fixed-g1-varied-g2-g3/v4"
+)
+# Compatibility names keep the existing runner API while every emitted artifact
+# explicitly declares the v4 schema and algorithm above.
+JOINT_CURRICULUM_V3_SCHEMA = JOINT_CURRICULUM_V4_SCHEMA
+JOINT_CURRICULUM_V3_ALGORITHM = JOINT_CURRICULUM_V4_ALGORITHM
+LEGACY_V3_RNG_DOMAIN = "anatomy-tracker.arbitrary-plane-joint-curriculum/v3"
 COMPOSITE_CURRICULUM_V3_SCHEMA = (
     "anatomy-tracker.pose-and-joint-curriculum-cache-config/v3"
 )
@@ -41,6 +50,8 @@ JOINT_G1_FIXED_OVERRIDES = {
     "similarity_angle_rad": (0.0, 0.0),
     "similarity_scale": (1.0, 1.0),
     "similarity_translation_over_D": (0.0, 0.0),
+    "affine_projection_contract": UNIFORM_CANVAS_AFFINE_PROJECTION,
+    "integration_contract": FIXED_SEVEN_DECODER_INTEGRATION,
 }
 GAUGE_RECOMPOSITION_REJECTION = (
     "affine-gauge pose/deformation recomposition exceeds the production bound"
@@ -59,7 +70,8 @@ _SOURCE_FILES = (
     "training/arbitrary_plane_synthetic_generator.py",
     "training/arbitrary_plane_synthetic_ops.py",
     "training/arbitrary_plane_synthetic_observation.py",
-    "training/arbitrary_plane_deformation_gauge_v3.py",
+    "training/arbitrary_plane_deformation_gauge_v4.py",
+    "training/arbitrary_plane_deformation_primitives.py",
     "training/arbitrary_plane_training_row_v3.py",
 )
 
@@ -82,7 +94,7 @@ def _derived_seed(root_seed, sample_index, attempt_index, domain):
     return int(
         acquisition._payload_sha256(
             {
-                "domain": f"{JOINT_CURRICULUM_V3_SCHEMA}/{domain}",
+                "domain": f"{LEGACY_V3_RNG_DOMAIN}/{domain}",
                 "root_seed_uint64": _seed(root_seed),
                 "sample_index": int(sample_index),
                 "attempt_index": int(attempt_index),
@@ -99,7 +111,7 @@ def joint_attempt_index_v3(root_seed, sample_index, attempt_index):
     return int(
         acquisition._payload_sha256(
             {
-                "domain": f"{JOINT_CURRICULUM_V3_SCHEMA}/plane-attempt-index",
+                "domain": f"{LEGACY_V3_RNG_DOMAIN}/plane-attempt-index",
                 "root_seed_uint64": _seed(root_seed),
                 "sample_index": int(sample_index),
                 "attempt_index": attempt_index,
@@ -202,7 +214,14 @@ def joint_curriculum_generation_config_v3(
             key: list(value) if isinstance(value, tuple) else value
             for key, value in JOINT_G1_FIXED_OVERRIDES.items()
         },
-        "identifiability": "no sampled G1 similarity; uniform-canvas affine SVF component is moved into pose",
+        "identifiability": (
+            "no sampled G1 similarity; G1 is projected into the decoder's uniform-full-canvas "
+            "affine-free gauge before integration; parent pose is unchanged"
+        ),
+        "direct_deformation_target_contract": (
+            direct_deformation_target.direct_deformation_target_contract_v4()
+        ),
+        "rng_domain_compatibility": LEGACY_V3_RNG_DOMAIN,
         "appearance_damage": "audited varied G2/G3",
         "trainable_modes": list(training_row.TRAINABLE_MODES),
         "horizontal_representation_augmentation": list(training_row.REFLECTION_STATES),
@@ -219,8 +238,8 @@ def joint_curriculum_generation_config_v3(
         "maximum_rejection_attempts": int(maximum_rejection_attempts),
         "maximum_joint_rejection_attempts": int(maximum_joint_rejection_attempts),
         "finite_parent_generator_source_commit": finite_parent_generator_source_commit,
-        "maximum_valid_gauge_recomposition_error_px": (
-            deformation_gauge.MAXIMUM_VALID_RECOMPOSITION_ERROR_PX
+        "maximum_direct_target_certification_error_px": (
+            direct_deformation_target.MAXIMUM_CERTIFICATION_ERROR_PX
         ),
         "prior_model_weight_dependencies": [],
         "prior_feature_dependencies": [],
@@ -232,11 +251,9 @@ def joint_curriculum_generator_binding_v3(generation_config):
     return row_cache.make_generator_binding_v3(
         generator_ids=(JOINT_CURRICULUM_V3_ALGORITHM,),
         source_sha256=_source_sha256(),
-        geometry_gauge_contract={
-            "schema_version": deformation_gauge.DEFORMATION_GAUGE_V3_SCHEMA,
-            "algorithm": deformation_gauge.DEFORMATION_GAUGE_V3_ALGORITHM,
-            "projection_weighting": row_cache.DEFORMATION_GAUGE_PROJECTION_WEIGHTING,
-        },
+        geometry_gauge_contract=(
+            direct_deformation_target.direct_deformation_target_contract_v4()
+        ),
         generator_config=generation_config,
     )
 
@@ -344,11 +361,9 @@ def composite_curriculum_generator_binding_v3(composite_generation_config):
             JOINT_CURRICULUM_V3_ALGORITHM,
         ),
         source_sha256=source_sha256,
-        geometry_gauge_contract={
-            "schema_version": deformation_gauge.DEFORMATION_GAUGE_V3_SCHEMA,
-            "algorithm": deformation_gauge.DEFORMATION_GAUGE_V3_ALGORITHM,
-            "projection_weighting": row_cache.DEFORMATION_GAUGE_PROJECTION_WEIGHTING,
-        },
+        geometry_gauge_contract=(
+            direct_deformation_target.direct_deformation_target_contract_v4()
+        ),
         generator_config=config,
     )
 
@@ -465,44 +480,53 @@ def make_joint_curriculum_training_row_v3(
         or similarity["angle_rad"] != 0.0
         or similarity["scale"] != 1.0
         or similarity["translation_xy_px"] != [0.0, 0.0]
+        or accepted_g1["affine_projection_contract"]
+        != UNIFORM_CANVAS_AFFINE_PROJECTION
+        or accepted_g1["integration_contract"]
+        != FIXED_SEVEN_DECODER_INTEGRATION
+        or accepted_g1["integration_steps"] != 7
+        or accepted_g1[
+            "identity_similarity_inverse_composition_error_max_abs_px"
+        ]
+        != 0.0
     ):
         raise RuntimeError(
-            "joint curriculum requires nonidentity G1 only for identifiable support and identity otherwise"
+            "joint curriculum requires direct affine-free fixed-seven G1 with identity similarity"
         )
     source = selected["arrays"]
     velocity_xy = source["velocity_xy_px"]
-    fixed_to_source_xy = source["fixed_to_source_map"]
+    source_to_fixed_xy = source["source_to_fixed_map"]
     if support_identifiable and not np.any(velocity_xy != 0.0):
         raise ValueError(ZERO_AFFINE_FREE_REJECTION)
-    velocity_yx = np.ascontiguousarray(
-        np.moveaxis(velocity_xy, 0, -1)[..., ::-1], dtype=np.float64
+    target_pullback_velocity_yx = np.ascontiguousarray(
+        -np.moveaxis(velocity_xy, 0, -1)[..., ::-1], dtype=np.float32
     )
     pullback_yx = np.ascontiguousarray(
-        np.moveaxis(fixed_to_source_xy, 0, -1)[..., ::-1], dtype=np.float64
+        np.moveaxis(source_to_fixed_xy, 0, -1)[..., ::-1], dtype=np.float32
     )
     effective_pose = np.asarray(
         parent["geometry"]["effective_quicknii_ouv_ml_ap_dv"], dtype=np.float64
     ).reshape(3, 3)
-    deformation_valid = np.asarray(source["fixed_map_domain_mask"], dtype=bool)
-    gauge = deformation_gauge.gauge_fix_canvas_deformation_v3(
-        velocity_yx,
+    deformation_valid = np.asarray(source["source_map_domain_mask"], dtype=bool)
+    direct_target = direct_deformation_target.certify_direct_deformation_target_v4(
+        target_pullback_velocity_yx,
         pullback_yx,
         effective_pose,
         deformation_valid,
     )
-    affine_free_velocity = gauge["arrays"][
-        "affine_free_stationary_velocity_yx_px_float64"
+    affine_free_velocity = direct_target["arrays"][
+        "target_pullback_stationary_velocity_yx_px_float32"
     ]
     if support_identifiable and not np.any(affine_free_velocity != 0.0):
         raise ValueError(ZERO_AFFINE_FREE_REJECTION)
     height, width = source["model_input_image"].shape
-    canonical = gauge["arrays"]["pose_adjusted_effective_quicknii_ouv_float64"]
+    canonical = effective_pose.copy()
     horizontal = reflection_state == "horizontal"
     observed, affine, representation_index = pose_curriculum._reflection_geometry(
         canonical, (height, width), reflection_state
     )
     reflected_pullback = pose_curriculum._reflect(
-        gauge["arrays"]["affine_free_pullback_map_yx_px_float64"], horizontal
+        direct_target["arrays"]["certified_pullback_map_yx_px_float32"], horizontal
     ).copy()
     reflected_velocity = pose_curriculum._reflect(
         affine_free_velocity, horizontal
@@ -535,10 +559,10 @@ def make_joint_curriculum_training_row_v3(
             tissue & ~valid, horizontal
         ),
         "truth_section_pullback_map_yx_px_float64": np.ascontiguousarray(
-            reflected_pullback
+            reflected_pullback, dtype=np.float64
         ),
         "truth_section_pullback_stationary_velocity_yx_px_float64": np.ascontiguousarray(
-            reflected_velocity
+            reflected_velocity, dtype=np.float64
         ),
         "truth_section_deformation_valid_mask": pose_curriculum._reflect(
             deformation_valid, horizontal
@@ -559,7 +583,9 @@ def make_joint_curriculum_training_row_v3(
                 mode: realization["synthetic_receipt_sha256"]
                 for mode, realization in paired.items()
             },
-            "deformation_pose_gauge_id": gauge["deformation_pose_gauge_id"],
+            "direct_deformation_target_id": direct_target[
+                "direct_deformation_target_id"
+            ],
         }
     )
     transform_id = acquisition._payload_sha256(
@@ -620,6 +646,7 @@ def make_joint_curriculum_training_row_v3(
             "finite_render_receipt_sha256": parent["finite_render_receipt_sha256"],
             "effective_pose_source_key": "parent['geometry']['effective_quicknii_ouv_ml_ap_dv']",
             "effective_quicknii_ouv_ml_ap_dv_before_gauge": effective_pose.tolist(),
+            "effective_quicknii_ouv_ml_ap_dv_after_gauge": canonical.tolist(),
             "plane_sampling_measure": copy.deepcopy(parent["sampling_measure"]),
             "render_thickness_scope": (
                 "single centre-plane finite-FOV raster; no through-plane PSF integration"
@@ -643,8 +670,10 @@ def make_joint_curriculum_training_row_v3(
             "g1_nonidentity_forced": support_identifiable,
             "marginal_support_identity_forced": not support_identifiable,
             "sampled_similarity_forced_identity": True,
-            "deformation_pose_gauge_summary": (
-                deformation_gauge.deformation_pose_gauge_summary_v3(gauge)
+            "direct_deformation_target_certification_summary": (
+                direct_deformation_target.direct_deformation_target_summary_v4(
+                    direct_target
+                )
             ),
             "selected_input_mask_receipt": acquisition._array_receipt(
                 source["input_outline_mask"]
@@ -665,8 +694,8 @@ def make_joint_curriculum_training_row_v3(
         },
         "selected_mode": selected_mode,
         "selected_descendant_id": selected["synthetic_realization_id"],
-        "deformation_pose_gauge_reference": deformation_gauge.deformation_pose_gauge_reference_v3(
-            gauge
+        "deformation_pose_gauge_reference": direct_deformation_target.direct_deformation_target_reference_v4(
+            direct_target
         ),
         "reflection_state": reflection_state,
         "reflection_representation_index": representation_index,
@@ -690,7 +719,9 @@ def make_joint_curriculum_training_row_v3(
             {
                 "domain": f"{JOINT_CURRICULUM_V3_SCHEMA}/paired-view",
                 "latent_group": selected["paired_view_group_id"],
-                "gauge_id": gauge["deformation_pose_gauge_id"],
+                "direct_deformation_target_id": direct_target[
+                    "direct_deformation_target_id"
+                ],
                 "transform_id": transform_id,
             }
         ),
@@ -845,11 +876,23 @@ def make_joint_curriculum_training_rows_v3(
     return rows
 
 
+joint_attempt_index_v4 = joint_attempt_index_v3
+joint_g1_overrides_v4 = joint_g1_overrides_v3
+joint_curriculum_generation_config_v4 = joint_curriculum_generation_config_v3
+joint_curriculum_generator_binding_v4 = joint_curriculum_generator_binding_v3
+make_joint_curriculum_training_row_v4 = make_joint_curriculum_training_row_v3
+make_joint_curriculum_training_rows_v4 = make_joint_curriculum_training_rows_v3
+replay_joint_curriculum_training_row_v4 = replay_joint_curriculum_training_row_v3
+verify_joint_curriculum_training_row_v4 = verify_joint_curriculum_training_row_v3
+
+
 __all__ = [
     "COMPOSITE_CURRICULUM_V3_SCHEMA",
     "DEFORMATION_AMPLITUDE_BANDS",
     "JOINT_CURRICULUM_V3_ALGORITHM",
     "JOINT_CURRICULUM_V3_SCHEMA",
+    "JOINT_CURRICULUM_V4_ALGORITHM",
+    "JOINT_CURRICULUM_V4_SCHEMA",
     "JOINT_G1_FIXED_OVERRIDES",
     "RETRYABLE_REJECTION_STAGES",
     "joint_attempt_index_v3",
@@ -862,4 +905,12 @@ __all__ = [
     "make_joint_curriculum_training_rows_v3",
     "replay_joint_curriculum_training_row_v3",
     "verify_joint_curriculum_training_row_v3",
+    "joint_attempt_index_v4",
+    "joint_g1_overrides_v4",
+    "joint_curriculum_generation_config_v4",
+    "joint_curriculum_generator_binding_v4",
+    "make_joint_curriculum_training_row_v4",
+    "make_joint_curriculum_training_rows_v4",
+    "replay_joint_curriculum_training_row_v4",
+    "verify_joint_curriculum_training_row_v4",
 ]

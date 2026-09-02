@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import scipy
+import torch
 from scipy import ndimage
 
 from training.arbitrary_plane_rendered_generator import (
@@ -33,12 +34,17 @@ from training.arbitrary_plane_synthetic_observation import (
     smart_brush_input,
 )
 from training.arbitrary_plane_synthetic_ops import (
+    ADAPTIVE_NUMPY_INTEGRATION,
     ARBITRARY_PLANE_SYNTHETIC_OPS_VERSION,
+    FIXED_SEVEN_DECODER_INTEGRATION,
+    TISSUE_AFFINE_PROJECTION,
+    UNIFORM_CANVAS_AFFINE_PROJECTION,
     bilinear_sample_scalar,
     fixed_source_maps,
     identity_pixel_map,
     nearest_sample_labels,
     remove_tissue_affine_component,
+    remove_uniform_canvas_affine_component_decoder_parity,
     sample_multiscale_physical_velocity,
     topology_acceptance_metrics,
 )
@@ -52,6 +58,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_FILES = {
     "generator": Path(__file__).resolve(),
     "ops": Path(__file__).with_name("arbitrary_plane_synthetic_ops.py"),
+    "deformation_primitives": Path(__file__).with_name(
+        "arbitrary_plane_deformation_primitives.py"
+    ),
     "observation": Path(__file__).with_name("arbitrary_plane_synthetic_observation.py"),
     "finite_renderer": Path(__file__).with_name("arbitrary_plane_rendered_generator.py"),
     "predeclared_config": _ROOT / "publication" / "arbitrary_plane_synthetic_preflight.yaml",
@@ -83,6 +92,8 @@ _DEFAULT_CONFIG = {
         "maximum_cycle_q99_px": 0.25,
         "maximum_cycle_max_px": 0.50,
         "minimum_tissue_retained_fraction": 0.995,
+        "affine_projection_contract": TISSUE_AFFINE_PROJECTION,
+        "integration_contract": ADAPTIVE_NUMPY_INTEGRATION,
     },
     "g2": {
         "identity_probability": 0.15,
@@ -329,6 +340,26 @@ def _g1(
         raise ValueError("finite parent must use the isotropic reference pixel-pitch contract")
     D_um, u_span, v_span = _tissue_scale(fixed_tissue, pitch_um)
     g1 = config["g1"]
+    affine_projection_contract = g1["affine_projection_contract"]
+    integration_contract = g1["integration_contract"]
+    if affine_projection_contract not in {
+        TISSUE_AFFINE_PROJECTION,
+        UNIFORM_CANVAS_AFFINE_PROJECTION,
+    } or integration_contract not in {
+        ADAPTIVE_NUMPY_INTEGRATION,
+        FIXED_SEVEN_DECODER_INTEGRATION,
+    }:
+        raise ValueError("unknown G1 affine projection or integration contract")
+
+    def project_velocity(velocity_um):
+        velocity_px = np.asarray(velocity_um, dtype=np.float32) / pitch_um
+        if affine_projection_contract == TISSUE_AFFINE_PROJECTION:
+            projected = remove_tissue_affine_component(velocity_px, fixed_tissue)
+        else:
+            projected = remove_uniform_canvas_affine_component_decoder_parity(
+                velocity_px
+            )
+        return projected * pitch_um
     fields = [
         "identity", "fine-correlation", "coarse-correlation", "fine-svf-field", "coarse-svf-field", "target-rms",
         "analytic-enable", "analytic-choice", "analytic-parameters", "similarity-angle",
@@ -361,15 +392,14 @@ def _g1(
                 rms_amplitudes_um=(1.0,),
             )
             velocity_um = fine_velocity_um + coarse_velocity_um
-            velocity_px = remove_tissue_affine_component(velocity_um / pitch_um, fixed_tissue)
-            velocity_um = velocity_px * pitch_um
+            velocity_um = project_velocity(velocity_um)
             analytic_enabled = bool(
                 _rng(config, "g1", "analytic-enable", attempt).random() < float(g1["analytic_probability"])
             )
             if analytic_enabled:
                 primitive, analytic = _analytic_velocity((height, width), fixed_tissue, D_um, pitch_um, config, attempt)
                 velocity_um += primitive
-                velocity_um = remove_tissue_affine_component(velocity_um / pitch_um, fixed_tissue) * pitch_um
+                velocity_um = project_velocity(velocity_um)
             else:
                 analytic = {"enabled": False, "choice": None}
             target_rms_um = _log_uniform(
@@ -377,6 +407,7 @@ def _g1(
             ) * D_um
             rms = float(np.sqrt(np.mean(np.sum(velocity_um[:, fixed_tissue].astype(np.float64) ** 2, axis=0))))
             velocity_um *= target_rms_um / max(rms, np.finfo(np.float32).eps)
+            velocity_um = project_velocity(velocity_um)
         angle = 0.0 if identity else _uniform(_rng(config, "g1", "similarity-angle", attempt), g1["similarity_angle_rad"])
         scale = 1.0 if identity else _uniform(_rng(config, "g1", "similarity-scale", attempt), g1["similarity_scale"])
         translation = np.zeros(2, np.float32) if identity else (
@@ -390,6 +421,7 @@ def _g1(
             angle_rad=angle,
             scale=scale,
             translation_xy=translation,
+            integration_contract=integration_contract,
         )
         identity_map = identity_pixel_map((height, width))
         initial_postintegration_rms_um = (
@@ -414,12 +446,14 @@ def _g1(
         reintegrated_after_rms_rescale = False
         if not identity and initial_postintegration_rms_um > 0.0:
             velocity_um *= target_rms_um / initial_postintegration_rms_um
+            velocity_um = project_velocity(velocity_um)
             maps = fixed_source_maps(
                 velocity_um,
                 np.eye(2, dtype=np.float64) * pitch_um,
                 angle_rad=angle,
                 scale=scale,
                 translation_xy=translation,
+                integration_contract=integration_contract,
             )
             reintegrated_after_rms_rescale = True
         achieved_postintegration_rms_um = (
@@ -507,6 +541,11 @@ def _g1(
                 "reflection": False,
             },
             "integration_steps": int(maps["integration_steps"]),
+            "affine_projection_contract": affine_projection_contract,
+            "integration_contract": maps["integration_contract"],
+            "identity_similarity_inverse_composition_error_max_abs_px": maps[
+                "identity_similarity_inverse_composition_error_max_abs_px"
+            ],
             "topology_metrics": metrics,
             "clean_tissue_retained_in_valid_fov_fraction": retained,
             "fov_gate_passed": fov_passed,
@@ -571,6 +610,8 @@ def _g1(
                     "map_order": "absolute pixel-centre (x,y), align_corners=True",
                     "fixed_to_source": "point map A o exp(v)",
                     "source_to_fixed": "pullback exp(-v) o inverse(A)",
+                    "affine_projection_contract": affine_projection_contract,
+                    "integration_contract": integration_contract,
                     "scalar_interpolation": "bilinear-zero",
                     "annotation_interpolation": "nearest-integer-zero",
                     "nearest_half_tie_rule": "numpy.rint ties-to-even, matching torch.round",
@@ -1273,6 +1314,11 @@ def _generate(
         },
         "numpy_version": np.__version__,
         "scipy_version": scipy.__version__,
+        "torch_version": torch.__version__,
+        "g1_affine_projection_contract": config["g1"][
+            "affine_projection_contract"
+        ],
+        "g1_integration_contract": config["g1"]["integration_contract"],
     }
     model_independence = {
         "learned_checkpoint_dependencies": [],
