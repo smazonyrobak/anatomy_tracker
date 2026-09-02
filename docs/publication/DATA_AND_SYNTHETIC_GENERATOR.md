@@ -314,6 +314,24 @@ are provisional engineering priors, must be named as such in manifests, and
 are replaced or sensitivity-tested after descriptive measurements on eligible
 real training/development histology.
 
+### 2026-09-02 finite acquisition-domain audit
+
+The source-level v2 audit of the active finite path is recorded in
+[`SYNTHETIC_DOMAIN_AUDIT_V2.md`](SYNTHETIC_DOMAIN_AUDIT_V2.md). The next
+generator iteration adds named dark-field-like, brightfield-glass-like and
+neutral scanner-stress backgrounds; whole-frame illumination
+gradient/vignette; deterministic block-DCT compression; thin scratch/streak
+and mounting-bubble-ring events; and receipt-bound
+animal/specimen/experiment/synthetic-animal/section lineage. Accurate and
+imperfect brush modes still require an exact-zero exterior, while the absent
+mode retains the acquired background and has no segmentation dependency.
+
+This additive implementation does not yet provide the modality-physical
+brightfield/fluorescence renderer described above, true multi-layer tissue
+folds, or empirically estimated artifact frequencies. Those remain declared
+future requirements rather than inferred capabilities. The changes are for a
+future iteration and do not amend the frozen running pilot.
+
 Tears and missing tissue never receive dense-correspondence targets. Folds are
 stored as a separate potentially multi-valued visibility event, with the
 visible top-layer coordinate map if available. Detached pieces retain their

@@ -8,6 +8,7 @@ The frozen software baseline is Git commit `c6681039e0b7acf35c9cdbee43040a3dca29
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): proposed recurrent pose/registration model and rationale.
 - [`COORDINATE_CONVENTIONS.md`](COORDINATE_CONVENTIONS.md): public coordinates and transform direction.
 - [`DATA_AND_SYNTHETIC_GENERATOR.md`](DATA_AND_SYNTHETIC_GENERATOR.md): provenance, generation and leakage controls.
+- [`SYNTHETIC_DOMAIN_AUDIT_V2.md`](SYNTHETIC_DOMAIN_AUDIT_V2.md): source-level arbitrary-plane acquisition-domain audit and next-iteration boundary.
 - [`TRAINING_PROTOCOL.md`](TRAINING_PROTOCOL.md): staged training and experiment controls.
 - [`CONSTRAINTS.md`](CONSTRAINTS.md): deterministic AP, order, common-tilt and surgical constraints.
 - [`BENCHMARKS.md`](BENCHMARKS.md): comparators, metrics, statistics, ablations and runtime.

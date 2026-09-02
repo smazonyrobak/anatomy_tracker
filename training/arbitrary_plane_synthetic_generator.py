@@ -55,8 +55,9 @@ from training.arbitrary_plane_synthetic_ops import (
 )
 
 
-SYNTHETIC_SCHEMA = "anatomy-tracker.arbitrary-plane-synthetic-realization/v1"
-SYNTHETIC_ALGORITHM = "provenance-bound-arbitrary-plane-g1-g2-g3/v1"
+SYNTHETIC_SCHEMA = "anatomy-tracker.arbitrary-plane-synthetic-realization/v2"
+SYNTHETIC_ALGORITHM = "provenance-bound-arbitrary-plane-g1-g2-g3/v2"
+SYNTHETIC_SEED_DOMAIN = "provenance-bound-arbitrary-plane-g1-g2-g3/v1"
 SLAB_OBSERVATION_V4_CONTRACT = (
     "authenticated-finite-psf-slab-observation-with-centre-targets/v4"
 )
@@ -83,6 +84,14 @@ SLAB_OBSERVATION_V4_PARENT_BINDINGS = (
     "experiment_id",
 )
 SYNTHETIC_STRATA = ("ordinary", "tiny-tangent-stress", "low-information-stress")
+SYNTHETIC_LINEAGE_KEYS = (
+    "animal_id",
+    "specimen_id",
+    "experiment_id",
+    "synthetic_animal_id",
+    "section_id",
+    "split",
+)
 SEED_ENCODING = "canonical-lowercase-uint64-hex/v1"
 _ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_FILES = {
@@ -143,8 +152,21 @@ _DEFAULT_CONFIG = {
         "noise_probability": 0.70,
         "noise_std": [0.0, 0.06],
         "background_base": [0.0, 0.25],
+        "finite_background_family_probabilities": {
+            "dark-field-like": 0.45,
+            "brightfield-glass-like": 0.45,
+            "neutral-scanner-stress": 0.10,
+        },
+        "finite_background_base_by_family": {
+            "dark-field-like": [0.0, 0.25],
+            "brightfield-glass-like": [0.75, 1.0],
+            "neutral-scanner-stress": [0.25, 0.75],
+        },
         "background_field_std": [0.0, 0.08],
         "background_noise_std": [0.0, 0.03],
+        "finite_global_illumination_probability": 0.70,
+        "finite_global_gradient_log_gain": [-0.30, 0.30],
+        "finite_global_vignette_log_gain": [-0.25, 0.15],
         "artifact_probability": 0.35,
         "artifact_fraction": [0.001, 0.01],
         "minimum_q99_q01": 0.10,
@@ -159,6 +181,9 @@ _DEFAULT_CONFIG = {
         "minimum_visible_pixels": 64,
         "imperfect_iou": [0.70, 0.98],
         "maximum_outline_attempts": 64,
+        "finite_transform_compression_probability": 0.30,
+        "finite_transform_compression_block_size_px": 8,
+        "finite_transform_compression_quantization_step": [0.002, 0.035],
     },
 }
 
@@ -221,7 +246,7 @@ def derive_field_seed(
     if int(sample_index) < 0 or int(attempt) < 0 or not stage or not field:
         raise ValueError("sample index, attempt, stage, and field must be named and nonnegative")
     parts = (
-        SYNTHETIC_ALGORITHM,
+        SYNTHETIC_SEED_DOMAIN,
         _seed_hex(root_seed),
         split,
         str(int(sample_index)),
@@ -1029,6 +1054,62 @@ def _coarse_field(
     return (field / max(float(field.std()), 1e-7)).astype(np.float32)
 
 
+def _global_illumination_gain(
+    shape: tuple[int, int],
+    angle_rad: float,
+    gradient_log_gain: float,
+    vignette_log_gain: float,
+) -> np.ndarray:
+    y = np.linspace(-1.0, 1.0, shape[0], dtype=np.float32)
+    x = np.linspace(-1.0, 1.0, shape[1], dtype=np.float32)
+    yy, xx = np.meshgrid(y, x, indexing="ij")
+    along = np.float32(math.cos(angle_rad)) * xx + np.float32(
+        math.sin(angle_rad)
+    ) * yy
+    radius_squared = xx * xx + yy * yy
+    log_gain = (
+        np.float32(gradient_log_gain) * along
+        + np.float32(vignette_log_gain)
+        * (radius_squared - np.float32(radius_squared.mean(dtype=np.float64)))
+    )
+    return np.exp(log_gain).astype(np.float32)
+
+
+def _block_dct_quantize(
+    image: np.ndarray, block_size: int, quantization_step: float
+) -> np.ndarray:
+    value = np.asarray(image, dtype=np.float32)
+    block_size = int(block_size)
+    if block_size < 2 or quantization_step <= 0.0:
+        raise ValueError("transform-compression block size or quantization step is invalid")
+    pad_y = (-value.shape[0]) % block_size
+    pad_x = (-value.shape[1]) % block_size
+    padded = np.pad(value, ((0, pad_y), (0, pad_x)), mode="edge")
+    blocks = (
+        padded.reshape(
+            padded.shape[0] // block_size,
+            block_size,
+            padded.shape[1] // block_size,
+            block_size,
+        )
+        .transpose(0, 2, 1, 3)
+        .astype(np.float64)
+    )
+    coefficients = scipy.fft.dctn(blocks, axes=(-2, -1), norm="ortho")
+    frequency = np.add.outer(
+        np.arange(block_size, dtype=np.float64),
+        np.arange(block_size, dtype=np.float64),
+    )
+    weights = 1.0 + 2.0 * frequency / max(2.0 * (block_size - 1.0), 1.0)
+    steps = float(quantization_step) * weights
+    quantized = np.rint(coefficients / steps) * steps
+    reconstructed = scipy.fft.idctn(
+        quantized, axes=(-2, -1), norm="ortho"
+    ).transpose(0, 2, 1, 3)
+    reconstructed = reconstructed.reshape(padded.shape)[: value.shape[0], : value.shape[1]]
+    return np.clip(reconstructed, 0.0, 1.0).astype(np.float32)
+
+
 def _label_conditioned_appearance(
     normalized: np.ndarray,
     labels: np.ndarray,
@@ -1206,12 +1287,65 @@ def _g2_attempt(
             additive_noise={"present": False, "standard_deviation": None},
         )
     appearance = np.clip(appearance, 0, 1).astype(np.float32)
-    base = _uniform(stage_rng("background-base"), g2["background_base"])
+    if slab_mode:
+        background_probabilities = g2["finite_background_family_probabilities"]
+        background_families = tuple(background_probabilities)
+        background_family = str(
+            stage_rng("background-family").choice(
+                np.asarray(background_families),
+                p=np.asarray(
+                    [background_probabilities[name] for name in background_families],
+                    dtype=np.float64,
+                ),
+            )
+        )
+        background_base_range = g2["finite_background_base_by_family"][
+            background_family
+        ]
+    else:
+        background_family = "legacy-dark-background"
+        background_base_range = g2["background_base"]
+    base = _uniform(stage_rng("background-base"), background_base_range)
     field_std = _uniform(stage_rng("background-field-parameter"), g2["background_field_std"])
     noise_std_bg = _uniform(stage_rng("background-noise-parameter"), g2["background_noise_std"])
     background = base + field_std * _smooth_field(appearance.shape, stage_rng("background-field"), max(1.0, max(appearance.shape) / 12))
     background += stage_rng("background-noise").normal(0, noise_std_bg, appearance.shape)
     background = np.clip(background, 0, 1).astype(np.float32)
+    illumination_enabled = bool(
+        slab_mode
+        and stage_rng("global-illumination-enable").random()
+        < float(g2["finite_global_illumination_probability"])
+    )
+    illumination_angle = float(
+        stage_rng("global-illumination-angle").uniform(-np.pi, np.pi)
+    )
+    gradient_log_gain = (
+        _uniform(
+            stage_rng("global-illumination-gradient"),
+            g2["finite_global_gradient_log_gain"],
+        )
+        if illumination_enabled
+        else 0.0
+    )
+    vignette_log_gain = (
+        _uniform(
+            stage_rng("global-illumination-vignette"),
+            g2["finite_global_vignette_log_gain"],
+        )
+        if illumination_enabled
+        else 0.0
+    )
+    if illumination_enabled:
+        illumination = _global_illumination_gain(
+            appearance.shape,
+            illumination_angle,
+            gradient_log_gain,
+            vignette_log_gain,
+        )
+        appearance[tissue] *= illumination[tissue]
+        background *= illumination
+        appearance = np.clip(appearance, 0.0, 1.0).astype(np.float32)
+        background = np.clip(background, 0.0, 1.0).astype(np.float32)
     artifact_enabled = bool(
         not identity
         and stage_rng("artifact-enable").random() < float(g2["artifact_probability"])
@@ -1232,7 +1366,21 @@ def _g2_attempt(
     std = float(values.std()) if len(values) else 0.0
     information_passed = spread >= float(g2["minimum_q99_q01"]) and std >= float(g2["minimum_std"])
     parameters.update(
-        background={"base": base, "smooth_field_standard_deviation": field_std, "pixel_noise_standard_deviation": noise_std_bg},
+        background={
+            "family": background_family,
+            "base_range": list(background_base_range),
+            "base": base,
+            "smooth_field_standard_deviation": field_std,
+            "pixel_noise_standard_deviation": noise_std_bg,
+        },
+        finite_global_illumination={
+            "eligible": slab_mode,
+            "present": illumination_enabled,
+            "angle_rad": illumination_angle if illumination_enabled else None,
+            "gradient_log_gain": gradient_log_gain,
+            "vignette_log_gain": vignette_log_gain,
+            "applied_to": "tissue and acquired background before damage",
+        },
         appearance_artifact={"present": artifact_enabled, "target_fraction": fraction, "value": value},
         information_metrics={"q99_minus_q01": spread, "standard_deviation": std, "accepted": information_passed},
         field_stream_seed_uint64=_seed_record(
@@ -1241,9 +1389,10 @@ def _g2_attempt(
                 "label-noise-values", "label-anti-shortcut-enable", "label-anti-shortcut-parameter",
                 "label-postrender-blur", "polarity", "gamma", "gain", "offset",
                 "bias", "bias-field", "blur-enable", "blur-parameter", "resolution-enable", "resolution-parameters",
-                "noise-enable", "noise-parameter", "noise-values", "background-base", "background-field-parameter",
+                "noise-enable", "noise-parameter", "noise-values", "background-family", "background-base", "background-field-parameter",
                 "background-field", "background-noise-parameter", "background-noise", "artifact-enable", "artifact-parameter",
-                "artifact-field", "artifact-value",
+                "artifact-field", "artifact-value", "global-illumination-enable", "global-illumination-angle",
+                "global-illumination-gradient", "global-illumination-vignette",
             ], attempt
         ),
     )
@@ -1386,7 +1535,41 @@ def _damage_event(
         mask = _polygon_mask(tissue.shape, vertices) & tissue
         category = "occlusion"
         geometry = {"primitive": "irregular convex polygon", "vertices_xy": vertices.tolist()}
+    elif kind == "thin-scratch-or-streak":
+        cy, cx = yx[int(rng.integers(len(yx)))]
+        yy, xx = np.mgrid[:height, :width]
+        across = -(xx - cx) * math.sin(angle) + (yy - cy) * math.cos(angle)
+        half_width = float(rng.uniform(0.5, 1.75))
+        mask = (np.abs(across) <= half_width) & tissue
+        category = "appearance_artifact"
+        geometry = {
+            "primitive": "edge-to-edge thin scanner-or-mounting streak",
+            "half_width_px": half_width,
+        }
+    elif kind == "mounting-bubble-ring":
+        cy, cx = yx[int(rng.integers(len(yx)))]
+        outer_rx = max(2.0, radius * float(rng.uniform(1.0, 1.8)))
+        outer_ry = max(2.0, radius * float(rng.uniform(0.7, 1.3)))
+        ring_fraction = float(rng.uniform(0.18, 0.38))
+        outer = _ellipse(tissue.shape, cx, cy, outer_rx, outer_ry, angle)
+        inner = _ellipse(
+            tissue.shape,
+            cx,
+            cy,
+            outer_rx * (1.0 - ring_fraction),
+            outer_ry * (1.0 - ring_fraction),
+            angle,
+        )
+        mask = outer & ~inner & tissue
+        category = "appearance_artifact"
+        geometry = {
+            "primitive": "elliptical mounting-bubble annulus",
+            "outer_radius_xy_px": [outer_rx, outer_ry],
+            "ring_fraction": ring_fraction,
+        }
     else:
+        if kind != "fold-like-bright-or-doubled-strip":
+            raise ValueError("undeclared damage-event family")
         cy, cx = yx[int(rng.integers(len(yx)))]
         yy, xx = np.mgrid[:height, :width]
         across = -(xx - cx) * math.sin(angle) + (yy - cy) * math.cos(angle)
@@ -1436,6 +1619,8 @@ def _g3(
         "boundary-bite-or-missing-cortex", "internal-hole", "tear-or-crack",
         "blackout-or-occluding-polygon", "fold-like-bright-or-doubled-strip",
     )
+    if slab_mode:
+        kinds += ("thin-scratch-or-streak", "mounting-bubble-ring")
     rejection_attempts = []
     for damage_attempt in range(32):
         event_count = int(
@@ -1545,6 +1730,29 @@ def _g3(
     image[physical] = g2_arrays["acquired_background"][physical]
     image[occlusion] = 0.0
     image[damage_artifact] = np.clip(image[damage_artifact] + 0.45, 0, 1)
+    compression_enabled = bool(
+        slab_mode
+        and _rng(
+            config, "g3", "transform-compression-enable", damage_attempt
+        ).random()
+        < float(g3["finite_transform_compression_probability"])
+    )
+    compression_step = (
+        _log_uniform(
+            _rng(
+                config, "g3", "transform-compression-quantization", damage_attempt
+            ),
+            g3["finite_transform_compression_quantization_step"],
+        )
+        if compression_enabled
+        else None
+    )
+    if compression_enabled:
+        image = _block_dct_quantize(
+            image,
+            int(g3["finite_transform_compression_block_size_px"]),
+            float(compression_step),
+        )
     arrays = {
         "damaged_acquired_image": image.astype(np.float32),
         "physical_loss_mask": physical,
@@ -1585,8 +1793,24 @@ def _g3(
             "physical_loss", "occlusion", "appearance_artifact", "visible"
         ],
         "gates": gates,
+        "finite_transform_compression": {
+            "eligible": slab_mode,
+            "present": compression_enabled,
+            "operator": "block-DCT coefficient quantization with frequency-weighted steps",
+            "block_size_px": int(g3["finite_transform_compression_block_size_px"]),
+            "base_quantization_step": compression_step,
+            "application_order": "after physical damage and appearance artifacts, before optional smart-brush masking",
+        },
         "field_stream_seed_uint64": _seed_record(
-            config, "g3", ["event-count"] + [f"event-{slot}-{suffix}" for slot in range(2) for suffix in ("type", "parameters")], damage_attempt
+            config,
+            "g3",
+            ["event-count", "transform-compression-enable", "transform-compression-quantization"]
+            + [
+                f"event-{slot}-{suffix}"
+                for slot in range(2)
+                for suffix in ("type", "parameters")
+            ],
+            damage_attempt,
         ),
     }
     if slab_mode:
@@ -1674,6 +1898,37 @@ def _finite_identity(parent: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _synthetic_lineage(
+    parent: dict[str, object], lineage: dict[str, object] | None
+) -> tuple[dict[str, object], str]:
+    parent_lineage = {
+        "animal_id": parent["provenance"]["animal_id"],
+        "specimen_id": parent["provenance"]["specimen_id"],
+        "experiment_id": parent["provenance"]["experiment_id"],
+        "synthetic_animal_id": None,
+        "section_id": None,
+        "split": parent["split"],
+    }
+    if lineage is None:
+        return parent_lineage, "partial-parent-fallback"
+    if set(lineage) != set(SYNTHETIC_LINEAGE_KEYS):
+        raise ValueError("synthetic lineage keys differ from the exact contract")
+    resolved = {name: copy.deepcopy(lineage[name]) for name in SYNTHETIC_LINEAGE_KEYS}
+    if (
+        resolved["split"] != parent["split"]
+        or any(
+            resolved[name] != parent["provenance"][name]
+            for name in ("animal_id", "specimen_id", "experiment_id")
+        )
+        or any(
+            resolved[name] in (None, "")
+            for name in ("synthetic_animal_id", "section_id")
+        )
+    ):
+        raise ValueError("explicit synthetic lineage conflicts with its finite parent")
+    return resolved, "explicit-complete"
+
+
 def _stage_identity(name: str, recipe: object, arrays: dict[str, np.ndarray]) -> tuple[str, str]:
     recipe_id = _payload_sha256({"schema": f"anatomy-tracker.{name}-recipe/v1", "recipe": recipe})
     realization_id = _payload_sha256(
@@ -1685,6 +1940,7 @@ def _stage_identity(name: str, recipe: object, arrays: dict[str, np.ndarray]) ->
 def _resolved_config(
     parent: dict[str, object], root_seed: int | str | None, sample_index: int | None, synthetic_stratum: str,
     outline_mode: str | None, overrides: dict[str, object] | None,
+    lineage: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if parent["schema_version"] != FINITE_RENDER_SCHEMA:
         raise ValueError("synthetic generator requires a finite arbitrary-plane parent")
@@ -1697,6 +1953,7 @@ def _resolved_config(
         sample_index=int(parent["sample_index"] if sample_index is None else sample_index),
         synthetic_stratum=synthetic_stratum,
         seed_encoding=SEED_ENCODING,
+        seed_domain=SYNTHETIC_SEED_DOMAIN,
     )
     if config["split"] not in {"train", "development"} or config["sample_index"] < 0:
         raise ValueError("synthetic generation is restricted to nonnegative train/development samples")
@@ -1715,6 +1972,9 @@ def _resolved_config(
         "development_probabilities": {mode: 1.0 / 3.0 for mode in SMART_BRUSH_MODES},
         "selected_mode": outline_mode,
     }
+    resolved_lineage, lineage_resolution = _synthetic_lineage(parent, lineage)
+    config["lineage"] = resolved_lineage
+    config["lineage_resolution"] = lineage_resolution
     return config
 
 
@@ -1820,13 +2080,14 @@ def _generate(
         }
     )
     provenance = copy.deepcopy(parent["provenance"])
+    lineage = copy.deepcopy(config["lineage"])
     implementation = {
         "source_path": "training/arbitrary_plane_synthetic_generator.py",
         "loaded_source_sha256": {name: _file_sha256(path) for name, path in _SOURCE_FILES.items()},
         "dependency_contract_versions": {
             "finite_parent": FINITE_RENDER_SCHEMA,
             "ops": ARBITRARY_PLANE_SYNTHETIC_OPS_VERSION,
-            "observation": "procedural-appearance-damage-outline-primitives/v1",
+            "observation": "procedural-appearance-damage-outline-primitives/v2",
         },
         "numpy_version": np.__version__,
         "scipy_version": scipy.__version__,
@@ -1864,6 +2125,9 @@ def _generate(
         "support_index_sha256": support["support_index_sha256"],
         "provenance": provenance,
         "provenance_sha256": _payload_sha256(provenance),
+        "lineage": lineage,
+        "lineage_sha256": _payload_sha256(lineage),
+        "lineage_resolution": config["lineage_resolution"],
         "support_supervision": support_supervision,
         "generator": {
             "implementation": implementation,
@@ -1934,6 +2198,7 @@ def _generate(
         "implementation_sha256": artifact["generator"]["implementation_sha256"],
         "resolved_config_sha256": artifact["generator"]["resolved_config_sha256"],
         "provenance_sha256": artifact["provenance_sha256"],
+        "lineage_sha256": artifact["lineage_sha256"],
         "deformation_recipe_id": g1_recipe,
         "deformation_realization_id": g1_realization,
         "appearance_recipe_id": g2_recipe,
@@ -1962,11 +2227,18 @@ def make_arbitrary_plane_synthetic_realization(
     synthetic_stratum: str = "ordinary",
     outline_mode: str | None = None,
     config_overrides: dict[str, object] | None = None,
+    lineage: dict[str, object] | None = None,
     finite_parent_generator_source_commit: str | None = None,
 ) -> dict[str, object]:
     """Create one complete G1/G2/G3 realization and issue its final identity."""
     config = _resolved_config(
-        finite_parent, root_seed, sample_index, synthetic_stratum, outline_mode, config_overrides
+        finite_parent,
+        root_seed,
+        sample_index,
+        synthetic_stratum,
+        outline_mode,
+        config_overrides,
+        lineage,
     )
     return _generate(
         finite_parent,
@@ -2021,6 +2293,7 @@ def verify_arbitrary_plane_synthetic_realization(
     required = {
         "schema_version", "generator_algorithm", "finite_parent", "arrays", "array_receipts",
         "synthetic_artifacts_sha256", "synthetic_realization_id", "synthetic_receipt_sha256",
+        "lineage", "lineage_sha256", "lineage_resolution",
     }
     if not required <= artifact.keys():
         raise ValueError("incomplete synthetic artifact cannot be verified or identified")
@@ -2072,6 +2345,24 @@ def verify_arbitrary_plane_synthetic_realization(
         raise ValueError("synthetic provenance must preserve finite-parent subject and atlas IDs exactly")
     if artifact["provenance_sha256"] != _payload_sha256(artifact["provenance"]):
         raise ValueError("synthetic provenance hash does not match")
+    expected_lineage, expected_resolution = _synthetic_lineage(
+        artifact["finite_parent"],
+        (
+            artifact["lineage"]
+            if artifact["lineage_resolution"] == "explicit-complete"
+            else None
+        ),
+    )
+    if (
+        artifact["lineage"] != expected_lineage
+        or artifact["lineage_resolution"] != expected_resolution
+        or artifact["lineage_sha256"] != _payload_sha256(artifact["lineage"])
+        or artifact["generator"]["resolved_config"].get("lineage")
+        != artifact["lineage"]
+        or artifact["generator"]["resolved_config"].get("lineage_resolution")
+        != artifact["lineage_resolution"]
+    ):
+        raise ValueError("synthetic animal/specimen/experiment/section lineage does not match")
     model = {
         key: artifact["generator"][key]
         for key in ("learned_checkpoint_dependencies", "previous_model_dependencies", "pretrained_feature_dependencies", "initialization")
@@ -2249,7 +2540,8 @@ def verify_arbitrary_plane_synthetic_realization(
 __all__ = [
     "ABSENT_OUTLINE", "ACCURATE_OUTLINE", "IMPERFECT_OUTLINE", "SEED_ENCODING",
     "SLAB_OBSERVATION_V4_ARRAY_NAMES", "SLAB_OBSERVATION_V4_CONTRACT",
-    "SYNTHETIC_ALGORITHM", "SYNTHETIC_SCHEMA", "derive_field_seed",
+    "SYNTHETIC_LINEAGE_KEYS",
+    "SYNTHETIC_ALGORITHM", "SYNTHETIC_SCHEMA", "SYNTHETIC_SEED_DOMAIN", "derive_field_seed",
     "make_arbitrary_plane_synthetic_realization", "replay_arbitrary_plane_synthetic_realization",
     "slab_observation_v4_receipt", "synthetic_realization_receipt",
     "verify_arbitrary_plane_synthetic_realization",

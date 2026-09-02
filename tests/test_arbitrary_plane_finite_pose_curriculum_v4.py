@@ -93,6 +93,8 @@ def test_exact_finite_pose_row_replay_and_loss_contract(prepared_context, row):
     assert psf["slab_observation_v4_receipt_sha256"] == row[
         "upstream_reference"
     ]["slab_observation_v4_receipt_sha256"]
+    assert row["upstream_reference"]["selected_synthetic_lineage"] == row["lineage"]
+    assert len(row["upstream_reference"]["selected_synthetic_lineage_sha256"]) == 64
     support = row["upstream_reference"]["support_supervision_contract"]
     assert support["point_pose_supervision_evidence_metric"] == (
         "post-G1 sum(source_slab_brain_occupancy_float32)"

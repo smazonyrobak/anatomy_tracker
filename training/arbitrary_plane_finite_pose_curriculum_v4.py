@@ -483,6 +483,7 @@ def make_finite_pose_curriculum_training_row_v4(
             sample_index=sample_index,
             outline_mode=outline_mode,
             config_overrides=overrides,
+            lineage={**identities, "split": split},
             finite_parent_generator_source_commit=finite_parent_generator_source_commit,
         )
         for mode, outline_mode in pose_v3.MODE_TO_OUTLINE.items()
@@ -497,6 +498,8 @@ def make_finite_pose_curriculum_training_row_v4(
     ):
         raise RuntimeError("paired finite-pose modes do not share one slab realization")
     selected = paired[selected_mode]
+    if selected["lineage"] != {**identities, "split": split}:
+        raise RuntimeError("finite-pose synthetic lineage differs from its row lineage")
     source = selected["arrays"]
     height, width = source["model_input_image"].shape
     identity_xy = identity_pixel_map((height, width))
@@ -732,6 +735,8 @@ def make_finite_pose_curriculum_training_row_v4(
         "selected_synthetic_provenance_sha256": selected[
             "provenance_sha256"
         ],
+        "selected_synthetic_lineage": copy.deepcopy(selected["lineage"]),
+        "selected_synthetic_lineage_sha256": selected["lineage_sha256"],
         "paired_synthetic_receipts_sha256": {
             mode: realization["synthetic_receipt_sha256"]
             for mode, realization in paired.items()

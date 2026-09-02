@@ -679,6 +679,7 @@ def make_finite_joint_curriculum_training_row_v5(
                 ),
             },
             slab_observation_v4=block,
+            lineage={**identities, "split": split},
             finite_parent_generator_source_commit=finite_parent_generator_source_commit,
         )
         for mode, outline_mode in pose_curriculum.MODE_TO_OUTLINE.items()
@@ -694,6 +695,8 @@ def make_finite_joint_curriculum_training_row_v5(
     ):
         raise RuntimeError("paired modes did not preserve one immutable parent and slab")
     selected = paired[selected_mode]
+    if selected["lineage"] != {**identities, "split": split}:
+        raise RuntimeError("finite-joint synthetic lineage differs from its row lineage")
     source = selected["arrays"]
     accepted_g1 = selected["g1"]["parameters"]["accepted_attempt"]
     expected_identity = bool(identity_fallback or not parent_center_identifiable)
@@ -975,6 +978,8 @@ def make_finite_joint_curriculum_training_row_v5(
         "selected_synthetic_receipt_sha256": selected["synthetic_receipt_sha256"],
         "selected_synthetic_generator_binding": copy.deepcopy(selected["generator"]),
         "selected_synthetic_provenance_sha256": selected["provenance_sha256"],
+        "selected_synthetic_lineage": copy.deepcopy(selected["lineage"]),
+        "selected_synthetic_lineage_sha256": selected["lineage_sha256"],
         "paired_synthetic_receipts_sha256": {
             mode: realization["synthetic_receipt_sha256"]
             for mode, realization in paired.items()

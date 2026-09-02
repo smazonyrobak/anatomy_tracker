@@ -132,6 +132,8 @@ def test_row_is_strict_v4_slab_bound_replayable_and_model_independent(
         "section_id": "finite-v5-section",
         "split": "development",
     }
+    assert upstream["selected_synthetic_lineage"] == row["lineage"]
+    assert len(upstream["selected_synthetic_lineage_sha256"]) == 64
 
 
 def test_horizontal_reflection_preserves_physical_pose_and_reflects_all_targets(

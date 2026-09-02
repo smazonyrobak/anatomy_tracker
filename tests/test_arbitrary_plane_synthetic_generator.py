@@ -438,9 +438,11 @@ def test_tampering_incomplete_state_and_coherent_local_rehash_are_rejected():
         ("tear-or-crack", "physical_loss"),
         ("blackout-or-occluding-polygon", "occlusion"),
         ("fold-like-bright-or-doubled-strip", "appearance_artifact"),
+        ("thin-scratch-or-streak", "appearance_artifact"),
+        ("mounting-bubble-ring", "appearance_artifact"),
     ),
 )
-def test_all_five_damage_families_change_tissue_pixels(kind, category):
+def test_all_seven_damage_families_change_tissue_pixels(kind, category):
     parent, support = _parent()
     config = synthetic._resolved_config(
         parent, 919, None, "ordinary", ACCURATE_OUTLINE, None
@@ -451,6 +453,173 @@ def test_all_five_damage_families_change_tissue_pixels(kind, category):
     assert mask.any()
     assert np.all(mask <= tissue)
     assert receipt["changed_pixel_count"] > 0
+
+
+@pytest.mark.parametrize(
+    "family,base",
+    (
+        ("dark-field-like", 0.10),
+        ("brightfield-glass-like", 0.90),
+        ("neutral-scanner-stress", 0.50),
+    ),
+)
+def test_finite_slab_background_families_cover_acquisition_domains(family, base):
+    parent, support = _parent()
+    slab = _slab_observation_v4(parent, support)
+    probabilities = {
+        name: float(name == family)
+        for name in (
+            "dark-field-like",
+            "brightfield-glass-like",
+            "neutral-scanner-stress",
+        )
+    }
+    artifact = make_arbitrary_plane_synthetic_realization(
+        parent,
+        support,
+        slab_observation_v4=slab,
+        root_seed=909,
+        outline_mode=ABSENT_OUTLINE,
+        config_overrides={
+            "g1": {"identity_probability": 1.0},
+            "g2": {
+                "identity_probability": 1.0,
+                "artifact_probability": 0.0,
+                "finite_background_family_probabilities": probabilities,
+                "finite_background_base_by_family": {family: [base, base]},
+                "background_field_std": [0.0, 0.0],
+                "background_noise_std": [0.0, 0.0],
+                "finite_global_illumination_probability": 0.0,
+            },
+            "g3": {
+                "disable_damage_below_pixels": 10**9,
+                "finite_transform_compression_probability": 0.0,
+            },
+        },
+    )
+    outside = ~artifact["arrays"]["observable_footprint_mask"]
+
+    assert artifact["g2"]["parameters"]["background"]["family"] == family
+    assert np.all(artifact["arrays"]["acquired_background"] == np.float32(base))
+    assert np.all(
+        artifact["arrays"]["damaged_acquired_image"][outside]
+        == np.float32(base)
+    )
+    verify_arbitrary_plane_synthetic_realization(artifact, support)
+
+
+def test_finite_transform_compression_replays_and_smart_brush_exterior_stays_black():
+    parent, support = _parent()
+    slab = _slab_observation_v4(parent, support)
+    base_overrides = {
+        "g1": {"identity_probability": 1.0},
+        "g2": {
+            "identity_probability": 1.0,
+            "artifact_probability": 0.0,
+            "finite_global_illumination_probability": 0.0,
+        },
+        "g3": {
+            "disable_damage_below_pixels": 10**9,
+            "finite_transform_compression_probability": 1.0,
+            "finite_transform_compression_quantization_step": [0.035, 0.035],
+        },
+    }
+    compressed = {
+        mode: make_arbitrary_plane_synthetic_realization(
+            parent,
+            support,
+            slab_observation_v4=slab,
+            root_seed=177,
+            outline_mode=mode,
+            config_overrides=base_overrides,
+        )
+        for mode in (ACCURATE_OUTLINE, IMPERFECT_OUTLINE, ABSENT_OUTLINE)
+    }
+    uncompressed_overrides = copy.deepcopy(base_overrides)
+    uncompressed_overrides["g3"]["finite_transform_compression_probability"] = 0.0
+    uncompressed = make_arbitrary_plane_synthetic_realization(
+        parent,
+        support,
+        slab_observation_v4=slab,
+        root_seed=177,
+        outline_mode=ABSENT_OUTLINE,
+        config_overrides=uncompressed_overrides,
+    )
+
+    absent = compressed[ABSENT_OUTLINE]
+    assert absent["g3"]["parameters"]["finite_transform_compression"] == {
+        "eligible": True,
+        "present": True,
+        "operator": "block-DCT coefficient quantization with frequency-weighted steps",
+        "block_size_px": 8,
+        "base_quantization_step": pytest.approx(0.035),
+        "application_order": "after physical damage and appearance artifacts, before optional smart-brush masking",
+    }
+    assert not np.array_equal(
+        absent["arrays"]["damaged_acquired_image"],
+        uncompressed["arrays"]["damaged_acquired_image"],
+    )
+    assert np.array_equal(
+        absent["arrays"]["model_input_image"],
+        absent["arrays"]["damaged_acquired_image"],
+    )
+    for mode in (ACCURATE_OUTLINE, IMPERFECT_OUTLINE):
+        artifact = compressed[mode]
+        assert np.all(
+            artifact["arrays"]["model_input_image"][~artifact["arrays"]["input_outline_mask"]]
+            == 0.0
+        )
+    replayed = replay_arbitrary_plane_synthetic_realization(absent, support)
+    assert np.array_equal(
+        replayed["arrays"]["damaged_acquired_image"],
+        absent["arrays"]["damaged_acquired_image"],
+    )
+
+
+def test_synthetic_artifact_binds_complete_section_lineage_without_conflation():
+    parent, support = _parent()
+    lineage = {
+        "animal_id": "animal-7",
+        "specimen_id": "specimen-7a",
+        "experiment_id": "experiment-71",
+        "synthetic_animal_id": "synthetic-animal-0003",
+        "section_id": "section-0017",
+        "split": "development",
+    }
+    artifact = make_arbitrary_plane_synthetic_realization(
+        parent, support, root_seed=987, lineage=lineage
+    )
+
+    assert artifact["lineage"] == lineage
+    assert artifact["lineage_resolution"] == "explicit-complete"
+    assert artifact["lineage_sha256"] == synthetic._payload_sha256(lineage)
+    verify_arbitrary_plane_synthetic_realization(artifact, support)
+    with pytest.raises(ValueError, match="conflicts"):
+        make_arbitrary_plane_synthetic_realization(
+            parent,
+            support,
+            root_seed=987,
+            lineage={**lineage, "animal_id": "different-animal"},
+        )
+    tampered = copy.deepcopy(artifact)
+    tampered["lineage"]["section_id"] = "different-section"
+    with pytest.raises(ValueError, match="lineage"):
+        verify_arbitrary_plane_synthetic_realization(tampered, support)
+
+
+def test_low_level_legacy_call_declares_partial_lineage_instead_of_inventing_ids():
+    artifact, parent, support = _make()
+
+    assert artifact["lineage"] == {
+        "animal_id": parent["provenance"]["animal_id"],
+        "specimen_id": parent["provenance"]["specimen_id"],
+        "experiment_id": parent["provenance"]["experiment_id"],
+        "synthetic_animal_id": None,
+        "section_id": None,
+        "split": parent["split"],
+    }
+    assert artifact["lineage_resolution"] == "partial-parent-fallback"
+    verify_arbitrary_plane_synthetic_realization(artifact, support)
 
 
 @pytest.mark.parametrize(
