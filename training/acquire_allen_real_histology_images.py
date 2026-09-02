@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 import os
+import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -205,19 +207,14 @@ def _counts(sections: list[dict], selected: list[dict], downloaded: list[dict]) 
     return result
 
 
-def acquire_image_snapshot(
-    metadata_snapshot: str | Path,
-    output: str | Path,
-    quotas: dict[str, int],
+def _build_image_snapshot(
+    metadata_snapshot: Path,
+    output: Path,
+    normalized_quotas: dict[str, int],
     *,
-    get=requests.get,
-    retrieved_at_utc: str | None = None,
+    get,
+    retrieved_at_utc: str,
 ) -> dict:
-    metadata_snapshot = _snapshot_root(metadata_snapshot)
-    output = _outside_git_on_i(output)
-    verify_metadata_snapshot(metadata_snapshot)
-    retrieved_at_utc = retrieved_at_utc or datetime.now(timezone.utc).isoformat()
-
     metadata_files = {
         name: _file_sha256(metadata_snapshot / name)
         for name in ("manifest.json", "receipt.json", "experiments.jsonl", "sections.jsonl")
@@ -228,7 +225,6 @@ def acquire_image_snapshot(
     experiments = _read_jsonl(metadata_snapshot / "experiments.jsonl")
     sections = _read_jsonl(metadata_snapshot / "sections.jsonl")
     experiment_by_id = {row["experiment_id"]: row for row in experiments}
-    normalized_quotas = {split: int(quotas.get(split, 0)) for split in DEVELOPMENT_SPLITS}
     selected = deterministic_section_selection(sections, normalized_quotas)
     downloaded = [
         _download_record(get, row, output, rank)
@@ -282,11 +278,24 @@ def acquire_image_snapshot(
         },
     }
     _write_once(output / "manifest.json", _canonical_bytes(manifest))
+    expected_relative_paths = {
+        "images.jsonl",
+        "manifest.json",
+        *(record["relative_path"] for record in downloaded),
+    }
+    actual_relative_paths = {
+        path.relative_to(output).as_posix()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    if actual_relative_paths != expected_relative_paths:
+        raise RuntimeError("Allen image snapshot contains an unexpected artifact before sealing")
     files = []
-    for path in sorted(path for path in output.rglob("*") if path.is_file() and path.name != "receipt.json"):
+    for relative_path in sorted(expected_relative_paths):
+        path = output / relative_path
         files.append(
             {
-                "relative_path": path.relative_to(output).as_posix(),
+                "relative_path": relative_path,
                 "sha256": _file_sha256(path),
                 "bytes": path.stat().st_size,
             }
@@ -302,3 +311,80 @@ def acquire_image_snapshot(
 
     verify_image_snapshot(output, metadata_snapshot)
     return manifest
+
+
+def _verified_existing_snapshot(
+    output: Path,
+    metadata_snapshot: Path,
+    normalized_quotas: dict[str, int],
+    retrieved_at_utc: str | None,
+) -> dict:
+    if not (output / "receipt.json").is_file():
+        raise FileExistsError(
+            f"Allen image output is an existing incomplete snapshot: {output}"
+        )
+    from training.verify_allen_real_histology_images import verify_image_snapshot
+
+    verify_image_snapshot(output, metadata_snapshot)
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    if manifest["selection"]["quotas"] != normalized_quotas:
+        raise FileExistsError(
+            f"Immutable Allen image snapshot has different quotas: {output}"
+        )
+    if retrieved_at_utc is not None and manifest["retrieved_at_utc"] != retrieved_at_utc:
+        raise FileExistsError(
+            f"Immutable Allen image snapshot has a different retrieval time: {output}"
+        )
+    return manifest
+
+
+def acquire_image_snapshot(
+    metadata_snapshot: str | Path,
+    output: str | Path,
+    quotas: dict[str, int],
+    *,
+    get=requests.get,
+    retrieved_at_utc: str | None = None,
+) -> dict:
+    metadata_snapshot = _snapshot_root(metadata_snapshot)
+    output = _outside_git_on_i(output)
+    verify_metadata_snapshot(metadata_snapshot)
+    sections = _read_jsonl(metadata_snapshot / "sections.jsonl")
+    deterministic_section_selection(sections, quotas)
+    normalized_quotas = {split: int(quotas.get(split, 0)) for split in DEVELOPMENT_SPLITS}
+
+    if output.exists():
+        return _verified_existing_snapshot(
+            output, metadata_snapshot, normalized_quotas, retrieved_at_utc
+        )
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = output.with_name(
+        f".{output.name}.staging-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    staging.mkdir(exist_ok=False)
+    try:
+        manifest = _build_image_snapshot(
+            metadata_snapshot,
+            staging,
+            normalized_quotas,
+            get=get,
+            retrieved_at_utc=(
+                retrieved_at_utc or datetime.now(timezone.utc).isoformat()
+            ),
+        )
+        try:
+            staging.rename(output)
+        except OSError:
+            if not output.exists():
+                raise
+            return _verified_existing_snapshot(
+                output, metadata_snapshot, normalized_quotas, retrieved_at_utc
+            )
+        from training.verify_allen_real_histology_images import verify_image_snapshot
+
+        verify_image_snapshot(output, metadata_snapshot)
+        return manifest
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)

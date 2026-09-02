@@ -212,6 +212,7 @@ def verify_image_snapshot(output: str | Path, metadata_snapshot: str | Path) -> 
         or manifest["selection"]["salt"] != SELECTION_SALT
         or manifest["selection"]["algorithm"]
         != "sha256 donor-round-robin then section rank v1"
+        or manifest["selection"]["unit"] != "Allen Donor.id"
         or manifest["selection"]["inherited_split_only"] is not True
     ):
         raise ValueError("Allen image selection contract mismatch")
@@ -228,10 +229,12 @@ def verify_image_snapshot(output: str | Path, metadata_snapshot: str | Path) -> 
         experiment = experiment_by_id[image_row["experiment_id"]]
         raw_experiment_path = f"raw/api/experiments/{int(image_row['experiment_id'])}.json"
         inherited = (
+            "animal_id_namespace",
             "animal_id",
             "animal_partition_key",
             "specimen_id",
             "experiment_id",
+            "section_id_namespace",
             "section_id",
             "section_number",
             "split",
@@ -240,6 +243,13 @@ def verify_image_snapshot(output: str | Path, metadata_snapshot: str | Path) -> 
             raise ValueError("Allen downloaded image lineage differs from source metadata")
         if image_row["split"] not in DEVELOPMENT_SPLITS:
             raise ValueError("Allen image snapshot contains a non-development split")
+        if (
+            image_row["animal_id_namespace"] != "Allen Donor.id"
+            or image_row["animal_partition_key"]
+            != f"allen-donor:{int(image_row['animal_id'])}"
+            or image_row["section_id_namespace"] != "Allen SectionImage.id"
+        ):
+            raise ValueError("Allen image animal/section identity semantics mismatch")
         if image_row["source_section_record_sha256"] != _sha256(_canonical_bytes(source)):
             raise ValueError("Allen source section record binding mismatch")
         if image_row["source_experiment_record_sha256"] != _sha256(_canonical_bytes(experiment)):

@@ -1,6 +1,8 @@
 import hashlib
 import io
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
 from urllib.parse import urlparse
@@ -237,3 +239,133 @@ def test_image_output_inside_git_is_rejected_before_download(tmp_path: Path):
             {"development_train": 1},
             get=_image_get([]),
         )
+
+
+def test_completed_snapshot_rejects_changed_quota_before_download_or_write(tmp_path: Path):
+    metadata = _metadata_snapshot(tmp_path)
+    output = tmp_path / "images"
+    acquire_image_snapshot(
+        metadata,
+        output,
+        {"development_train": 1, "development_validation": 0},
+        get=_image_get([]),
+        retrieved_at_utc="2026-09-02T01:00:00+00:00",
+    )
+    before = {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+    calls = []
+    with pytest.raises(FileExistsError, match="different quotas"):
+        acquire_image_snapshot(
+            metadata,
+            output,
+            {"development_train": 2, "development_validation": 0},
+            get=_image_get(calls),
+            retrieved_at_utc="2026-09-02T01:00:00+00:00",
+        )
+    assert calls == []
+    assert before == {
+        path.relative_to(output).as_posix(): path.read_bytes()
+        for path in output.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_nonempty_unsealed_output_is_rejected_before_download(tmp_path: Path):
+    metadata = _metadata_snapshot(tmp_path)
+    output = tmp_path / "images"
+    output.mkdir()
+    unrelated = output / "unrelated.bin"
+    unrelated.write_bytes(b"not part of this snapshot")
+    calls = []
+    with pytest.raises(FileExistsError, match="existing incomplete snapshot"):
+        acquire_image_snapshot(
+            metadata,
+            output,
+            {"development_train": 1},
+            get=_image_get(calls),
+        )
+    assert calls == []
+    assert unrelated.read_bytes() == b"not part of this snapshot"
+
+
+@pytest.mark.parametrize("field", ["animal_id_namespace", "section_id_namespace"])
+def test_independent_verifier_rejects_namespace_tampering(tmp_path: Path, field: str):
+    metadata = _metadata_snapshot(tmp_path)
+    output = tmp_path / "images"
+    acquire_image_snapshot(
+        metadata,
+        output,
+        {"development_train": 1, "development_validation": 0},
+        get=_image_get([]),
+        retrieved_at_utc="2026-09-02T01:00:00+00:00",
+    )
+    image_manifest_path = output / "images.jsonl"
+    rows = [json.loads(line) for line in image_manifest_path.read_text().splitlines()]
+    rows[0][field] = "tampered-namespace"
+    image_manifest_path.write_bytes(b"".join(_canonical_bytes(row) for row in rows))
+    receipt_path = output / "receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    for row in receipt["files"]:
+        if row["relative_path"] == "images.jsonl":
+            content = image_manifest_path.read_bytes()
+            row["bytes"] = len(content)
+            row["sha256"] = hashlib.sha256(content).hexdigest()
+    receipt_path.write_bytes(_canonical_bytes(receipt))
+    with pytest.raises(ValueError, match="lineage differs"):
+        verify_image_snapshot(output, metadata)
+
+
+def test_concurrent_publishers_cannot_overwrite_the_winning_snapshot(tmp_path: Path):
+    metadata = _metadata_snapshot(tmp_path)
+    output = tmp_path / "images"
+    barrier = threading.Barrier(2)
+
+    def get(url, timeout=180):
+        del timeout
+        barrier.wait(timeout=5)
+        section_id = int(urlparse(url).path.rsplit("/", 1)[1])
+        return _response(url, content=_jpeg(section_id), content_type="image/jpeg")
+
+    def acquire():
+        return acquire_image_snapshot(
+            metadata,
+            output,
+            {"development_train": 1, "development_validation": 0},
+            get=get,
+            retrieved_at_utc="2026-09-02T01:00:00+00:00",
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        manifests = list(pool.map(lambda _: acquire(), range(2)))
+    assert manifests[0] == manifests[1]
+    assert verify_image_snapshot(output, metadata)["images"] == 1
+    assert not list(output.parent.glob(f".{output.name}.staging-*"))
+
+
+def test_independent_verifier_rejects_false_selection_unit(tmp_path: Path):
+    metadata = _metadata_snapshot(tmp_path)
+    output = tmp_path / "images"
+    acquire_image_snapshot(
+        metadata,
+        output,
+        {"development_train": 1, "development_validation": 0},
+        get=_image_get([]),
+        retrieved_at_utc="2026-09-02T01:00:00+00:00",
+    )
+    manifest_path = output / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["selection"]["unit"] = "section"
+    manifest_path.write_bytes(_canonical_bytes(manifest))
+    receipt_path = output / "receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    for row in receipt["files"]:
+        if row["relative_path"] == "manifest.json":
+            content = manifest_path.read_bytes()
+            row["bytes"] = len(content)
+            row["sha256"] = hashlib.sha256(content).hexdigest()
+    receipt_path.write_bytes(_canonical_bytes(receipt))
+    with pytest.raises(ValueError, match="selection contract"):
+        verify_image_snapshot(output, metadata)
