@@ -170,6 +170,94 @@ hardened_all_row_postrun:
     engineering: PASS
     scientific_quality: FAIL
     shipping_quality: NOT_ESTABLISHED
+annotation_bound_verifier_hardening:
+  purpose: portable independent regional-metric verification of the existing smoke predictions; not retraining or new model performance
+  implementation_commit: e52648af2bc2cead7097a72650ef9d8d4977dc29
+  exact_source_commit: 88cc51cd519245d123898775cdd0bea4fcd6301e
+  frozen_source_worktree: 'I:\AnatomyTracker\run_worktrees\finite_v4_smoke_postrun_annotation_001'
+  output_directory: 'I:\AnatomyTracker\runs\arbitrary_plane_finite_v4_smoke_001\finite_postrun_v4_annotation_bound'
+  prior_package:
+    output_directory: 'I:\AnatomyTracker\runs\arbitrary_plane_finite_v4_smoke_001\finite_postrun_v4'
+    disposition: immutable and unmodified; retained as the preceding hardened package
+    reused_as_output: false
+  execution:
+    device: cuda
+    catalogue_chunk_size: 512
+    process_exit_code: 0
+    stderr: empty
+    independent_package_verifier: PASS
+    independent_verifier_exit_code: 0
+  receipts:
+    package_receipt_sha256: d685113d6312012894e917046303087c26868da99011c70535762a9b197c857a
+    package_bundle_file_sha256: a522896cc33671b422e29cfa2d797e413ffd658e4cef5ab7d3bc38d1a8c709a9
+    inference_export_report_receipt_sha256: aef497fad2cc1fed33c41f4625548449dc48be28a9a9b8ef6b05b21a1e65f1ec
+    inference_export_report_file_sha256: d891ed54f1b18114988fae4c661110961d6f4b6ed26e16b32102bdc85e006c8a
+    capability_checkpoint_file_sha256: f25f7764ae65faa2b6ffd4ec373919ea86e3d4da96567a2d63096ac5e425f6c6
+    checkpoint_id: 3cf444d3a1ac9576f8891c5bcd4d32799e6bad398589afaedf737d55ea9da1fb
+    checkpoint_binding_id: 277cf29157b10f059ee796ad4052597e390b2aa25d4d87b1ebb1b032588bf481
+    model_state_sha256: 3065b74869313d1e8912b41556cd0b29d6dffe83bdcf88cc208a1fe7527d9f79
+    evaluation_receipt_sha256: 45474641add0851f6aedc46c3e50650b35dbfc41a35fe9932ea03132552d0c0a
+    evaluation_report_file_sha256: 16fab0a4d84c9b4f9290ad4d21a4cea4e8b99e88d788638650bb1f91f5315066
+    evaluation_bundle_receipt_sha256: 7000c530e2d91d6753b4502e3478f2bb2fc0840ef7ea831dbea9e3c58b4b49f2
+    evaluation_bundle_file_sha256: c4915451c2543db3bee37c7a564aad57a4367d4f0abd8a65d5d224b6c6edee90
+  annotation_only_artifact:
+    relative_path: internal_development_evaluation/regional_annotation/annotation_ap_dv_ml.npz
+    schema_version: anatomy-tracker.portable-regional-annotation/v4
+    archive_format: numpy-npz-deflate; allow_pickle=false
+    file_sha256: af3e3f06ee84fdf57ab68a11cec2dc5e053f1671324097f88aab99b0400def6e
+    byte_count: 4247414
+    numpy_dtype: '<u4'
+    torch_dtype: torch.uint32
+    shape_ap_dv_ml: [528, 320, 456]
+    axis_order: [AP, DV, ML]
+    origin_ap_dv_ml_um: [0.0, 0.0, 0.0]
+    voxel_size_ap_dv_ml_um: [25.0, 25.0, 25.0]
+    tensor_sha256: 36ed7e196bc41a850071246ed1d182f6331157df3a51b1145144848874025ad3
+    atlas_semantics_receipt_sha256: 165c6bbf3dd0b210db5e7f79d6542c713e4865ed80a0e57025aff82a7378a2d0
+    raw_annotation_source_sha256: c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42
+    contains_atlas_intensity: false
+    verifier_use: exact nearest-label regional-overlap recomputation from every saved CPU raw prediction
+  source_sha256:
+    postrun: b18ddb6064d9e528b553419134f40d170649e7f3cfe9de3622e44e78872ce447
+    verifier: 0d01466542adb5b9e557a7f3f337bae14c902e61ad5ead8bb5c9abe498e4be6b
+    evaluation: 5a24b430f513a0df38dc94fdc993547074edd6ebea2a71247129d480e49f41c2
+    export: 5732618b9d9f2bd383467ca4bbc62640936f1c198ede18cbb5d3eef34a9efe52
+    runner: 0c7163ab33ec2c5e3bb028d26a6981affeeb5d759857dc1c557d05e9ea5bf5c1
+    cache: 2e5101a82b9092bddfd42e04dae9e4e175595c67a2528d1ae401272f7459f8dc
+  artifact_audit:
+    exact_package_file_count: 18
+    selected_rows: 12
+    reported_rows: 12
+    raw_prediction_files: 12
+    every_raw_file_hash_matches: true
+    every_raw_prediction_receipt_matches: true
+    every_saved_prediction_tensor_is_cpu: true
+    no_rows_dropped: true
+    failed_rows: 12
+    abstained_rows: 0
+  unchanged_scientific_result:
+    statistical_unit: animal
+    animal_count: 2
+    retrieval_topk_recall: 0.0
+    retrieval_failure_fraction: 1.0
+    overall_failure_fraction: 1.0
+    physical_finite_frame_landmark_mean_um: 11670.371996520109
+    absolute_signed_plane_offset_error_um: 3591.523626490142
+    plane_normal_projective_error_deg: 57.03649442936318
+    finite_frame_rotation_error_deg: 129.5270215366854
+    mean_dice_foreground: 0.0006351621244078951
+    dense_mean_endpoint_error_px: 0.19711727064889523
+    raw_normalized_retrieval_entropy: 0.9999984430598228
+    note: principal performance metrics and FAIL gate are unchanged; the entropy-only difference from the preceding package is a 2.84e-8 chunked-reduction effect from catalogue chunk 512 rather than 128
+  access:
+    public_benchmark_accessed: false
+    external_validation_accessed: false
+    final_test_accessed: false
+    calibration_status: absent-uncalibrated
+  gate:
+    engineering: PASS
+    scientific_quality: FAIL
+    shipping_quality: NOT_ESTABLISHED
 initial_postrun_device_failure:
   source_commit: 9f9e88a
   failure: CUDA evaluation metric recomputation mixed CPU truth/annotation state with CUDA prediction tensors

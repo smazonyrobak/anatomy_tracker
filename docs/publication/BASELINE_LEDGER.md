@@ -1081,7 +1081,7 @@ two-file output was archived under
 `I:\AnatomyTracker\rejected_launches\finite_v4_smoke_postrun_001_annotation_device_bug_9f9e88a`
 and was not reused.
 
-The hardened all-row package passes independent verification under package
+The preceding hardened all-row package passes independent verification under package
 receipt `02de5983fca6f82b56ed0c0c01ec0a79139c9f588098f3003084eb215f5ee7ba`
 and evaluation receipt
 `a2e94006b8164d7d47c4706beaf37bbfd6cf53e7f19267fa5e25a966e7731697`.
@@ -1090,11 +1090,33 @@ units. The independently replayed cache scientific audit exactly matches
 receipt `8e2e5033b003ee41378932e20147c760b8b635426992c1fc584958b8b6a43706`
 and passes every contractual cache/provenance gate.
 
-The scientific-quality gate is **FAIL / NOT ESTABLISHED**. All 12 rows failed
-and animal-macro top-k recall is zero. Animal-macro physical finite-frame
-landmark error is 11,670.37 micrometres, absolute plane-offset error is
-3,591.52 micrometres, projective-normal error is 57.04 degrees, finite-frame
-rotation error is 129.53 degrees, and mean foreground Dice is 0.000635.
+The regional-verifier hardening implemented at
+`e52648af2bc2cead7097a72650ef9d8d4977dc29` was then exercised from a clean
+worktree pinned to `88cc51cd519245d123898775cdd0bea4fcd6301e`. It created a
+new immutable package at
+`I:\AnatomyTracker\runs\arbitrary_plane_finite_v4_smoke_001\finite_postrun_v4_annotation_bound`;
+the preceding `finite_postrun_v4` package remains immutable and unmodified.
+The replacement package receipt is
+`d685113d6312012894e917046303087c26868da99011c70535762a9b197c857a`,
+with evaluation receipt
+`45474641add0851f6aedc46c3e50650b35dbfc41a35fe9932ea03132552d0c0a`.
+Its independent verifier passes after replaying all 12 CPU raw predictions
+and recomputing regional overlap from a portable annotation-only artifact:
+AP/DV/ML `uint32`, 528 by 320 by 456, 25-micrometre isotropic voxels, file
+SHA-256 `af3e3f06ee84fdf57ab68a11cec2dc5e053f1671324097f88aab99b0400def6e`,
+decoded tensor SHA-256
+`36ed7e196bc41a850071246ed1d182f6331157df3a51b1145144848874025ad3`,
+and no duplicated atlas intensity. All 12 raw file hashes and prediction
+receipts match; the exact package artifact set contains 18 files.
+
+The scientific-quality gate is **FAIL / NOT ESTABLISHED** and is unchanged by
+the verifier-only repackaging. All 12 rows failed and animal-macro top-k recall
+is zero. Animal-macro physical finite-frame landmark error is
+11,670.371996520109 micrometres, absolute plane-offset error is
+3,591.523626490142 micrometres, projective-normal error is
+57.03649442936318 degrees, finite-frame rotation error is
+129.5270215366854 degrees, and mean foreground Dice is
+0.0006351621244078951.
 Uncertainty is uncalibrated and carries no coverage claim. Engineering remains
 **PASS**; improved honest retrieval and a newly trained finite S=9 pilot with
 materially better all-row animal-disjoint metrics are required before
