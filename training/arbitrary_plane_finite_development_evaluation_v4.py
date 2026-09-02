@@ -242,6 +242,55 @@ def _row_schedule_binding(row, runtime_contract):
     }
 
 
+def _posterior_from_raw_prediction(raw_joint, catalogue, checkpoint, config):
+    return inference_v3.posterior_summary_v3(
+        raw_joint,
+        catalogue,
+        catalogue["support_geometry"]["support_origin_ap_dv_ml_um"],
+        calibration_receipt=None,
+        checkpoint_binding_id=checkpoint["checkpoint_binding_id"],
+        model_state_sha256=checkpoint["model_state_sha256"],
+        failure_omitted_mass_threshold=config["omitted_mass_failure_threshold"],
+        gauss_hermite_order=config["gauss_hermite_order"],
+    )
+
+
+def _recomputed_metrics_from_raw(
+    raw_joint, row, catalogue, checkpoint, config, *, annotation=None
+):
+    geometry = checkpoint["inference_contract"]["atlas_geometry"]
+    converted = batch_v3.training_row_to_tensors_v3(
+        row,
+        atlas_shape_ap_dv_ml=tuple(geometry["shape_c_ap_dv_ml"][1:]),
+        origin_ap_dv_ml_um=geometry["origin_ap_dv_ml_um"],
+        voxel_size_ap_dv_ml_um=geometry["voxel_size_ap_dv_ml_um"],
+        finite_psf_capability=checkpoint["inference_contract"][
+            "finite_psf_capability"
+        ],
+        device="cpu",
+    )
+    metrics = metrics_v3._row_metrics(
+        {"probabilistic_output": _posterior_from_raw_prediction(
+            raw_joint, catalogue, checkpoint, config
+        )},
+        raw_joint,
+        row,
+        catalogue,
+        converted["tensors"]["truth_state"],
+        catalogue["support_geometry"]["support_origin_ap_dv_ml_um"],
+        None if annotation is None else torch.as_tensor(annotation).cpu(),
+        geometry["origin_ap_dv_ml_um"],
+        geometry["voxel_size_ap_dv_ml_um"],
+        config,
+    )
+    metrics["dense"] = _dense_summary(metrics["deformation"])
+    metrics["operational_abstention"] = bool(
+        not metrics["deformation"]["map_component_has_refined_deformation"]
+        or metrics["deformation"]["valid_pixel_count"] == 0
+    )
+    return metrics
+
+
 def run_arbitrary_plane_finite_development_evaluation_v4(
     cache_directory,
     checkpoint_path,
@@ -346,7 +395,6 @@ def run_arbitrary_plane_finite_development_evaluation_v4(
     output_root.mkdir(parents=True, exist_ok=True)
     raw_root = output_root / "raw_predictions"
     raw_root.mkdir()
-    atlas_shape = tuple(torch.as_tensor(atlas_volume_c_ap_dv_ml).shape[-3:])
     row_reports = []
     for order, cache_index in enumerate(selected_indices):
         record = manifest["rows"][cache_index]
@@ -395,33 +443,18 @@ def run_arbitrary_plane_finite_development_evaluation_v4(
             raw_prediction_output_path=raw_path,
             return_raw_prediction=True,
         )
-        raw_joint = result.pop("raw_prediction")
-        converted = batch_v3.training_row_to_tensors_v3(
-            row,
-            atlas_shape_ap_dv_ml=atlas_shape,
-            origin_ap_dv_ml_um=origin_ap_dv_ml_um,
-            voxel_size_ap_dv_ml_um=voxel_size_ap_dv_ml_um,
-            finite_psf_capability=capability,
-            device="cpu",
-        )
-        metrics = metrics_v3._row_metrics(
-            result,
+        result.pop("raw_prediction")
+        raw_artifact = torch.load(raw_path, map_location="cpu", weights_only=True)
+        raw_joint = raw_artifact["raw_prediction"]
+        metrics = _recomputed_metrics_from_raw(
             raw_joint,
             row,
             catalogue,
-            converted["tensors"]["truth_state"],
-            catalogue["support_geometry"]["support_origin_ap_dv_ml_um"],
-            annotation_volume_ap_dv_ml,
-            origin_ap_dv_ml_um,
-            voxel_size_ap_dv_ml_um,
+            checkpoint_binding,
             config,
+            annotation=annotation_volume_ap_dv_ml,
         )
-        metrics["dense"] = _dense_summary(metrics["deformation"])
-        abstained = bool(
-            not metrics["deformation"]["map_component_has_refined_deformation"]
-            or metrics["deformation"]["valid_pixel_count"] == 0
-        )
-        metrics["operational_abstention"] = abstained
+        abstained = metrics["operational_abstention"]
         support_contract = row.get("upstream_reference", {}).get(
             "support_supervision_contract", {}
         )
@@ -587,6 +620,16 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
         or report.get("external_validation_accessed") is not False
         or report.get("calibration_fitted") is not False
         or report.get("uncertainty_scope") != UNCALIBRATED_SCOPE
+        or report.get("data_role") != FINITE_DEVELOPMENT_EVALUATION_ROLE
+        or report.get("scientific_scope") != (
+            "internal synthetic animal-disjoint development only; not validation, "
+            "qualification, calibration, public benchmarking, external validation, or final test"
+        )
+        or report.get("metric_families") != [
+            "physical_landmark", "plane_offset", "plane_angle", "finite_frame_angle",
+            "regional_overlap", "dense_deformation", "failures", "input_mode",
+            "raw_uncalibrated_uncertainty",
+        ]
         or report.get("learned_dependencies") != {
             "prior_model_weights": [], "prior_features": [], "prior_pseudolabels": []
         }
@@ -605,6 +648,9 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
         or cache["finite_psf_capability"] != manifest["finite_psf_capability"]
         or cache["finite_psf_run_contract"] != manifest["finite_psf_run_contract"]
         or cache["freeze_audit"] != manifest["freeze_audit"]
+        or cache["generator_binding"] != manifest["generator_binding"]
+        or cache["generation_config"] != manifest["generation_config"]
+        or cache["seed_record"] != manifest["seed_record"]
         or len(rows) != manifest["row_count"]
         or report["row_accounting"]["no_rows_dropped"] is not True
         or report["row_accounting"]["marginal_or_empty_rows_retained"] is not True
@@ -622,6 +668,13 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
             "checkpoint_id", "checkpoint_binding_id", "model_state_sha256"
         )) or loaded["inference_contract"] != checkpoint["inference_contract"]:
             raise ValueError("finite development checkpoint binding differs")
+        if (
+            checkpoint["training_receipt"]
+            != inference_v3._json(loaded["checkpoint_receipt"]["training_receipt"])
+            or checkpoint["training_animal_ids"]
+            != sorted(loaded["checkpoint_receipt"]["training_receipt"]["training_animal_ids"])
+        ):
+            raise ValueError("finite development checkpoint training identity differs")
         if report["catalogue_binding"] != {
             "catalogue_id": catalogue["catalogue_id"],
             "receipt_sha256": catalogue["receipt_sha256"],
@@ -649,8 +702,13 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
             or row_report["animal_id"] != row["lineage"]["animal_id"]
             or row_report["specimen_id"] != row["lineage"]["specimen_id"]
             or row_report["experiment_id"] != row["lineage"]["experiment_id"]
+            or row_report["synthetic_animal_id"]
+            != row["lineage"]["synthetic_animal_id"]
             or row_report["section_id"] != row["lineage"]["section_id"]
             or row_report["synthetic_realization_id"] != row["synthetic_realization_id"]
+            or row_report["split"] != row["lineage"]["split"]
+            or row_report["selected_mode"] != row["selected_mode"]
+            or row_report["input_condition"] != _MODE_LABELS[row["selected_mode"]]
             or schedule != _row_schedule_binding(row, expected_runtime)
             or row_report["disposition"]["no_silent_drop"] is not True
             or row_report["disposition"]["included_in_row_metrics"] is not True
@@ -685,7 +743,10 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
             "lineage": [lineage],
         }
         if (
-            artifact.get("checkpoint_id") != checkpoint["checkpoint_id"]
+            artifact.get("schema_version")
+            != "anatomy-tracker.raw-joint-prediction/v3"
+            or row_report["evaluation_order"] != index
+            or artifact.get("checkpoint_id") != checkpoint["checkpoint_id"]
             or artifact.get("checkpoint_binding_id") != checkpoint["checkpoint_binding_id"]
             or artifact.get("catalogue_id") != report["catalogue_binding"]["catalogue_id"]
             or artifact.get("identifiers") != identifiers
@@ -717,6 +778,42 @@ def verify_arbitrary_plane_finite_development_evaluation_v4(
         }
         if inference_v3._sha(inference_receipt_payload) != raw["inference_receipt_sha256"]:
             raise ValueError("finite development inference receipt differs")
+        if catalogue is not None:
+            recomputed = _recomputed_metrics_from_raw(
+                artifact["raw_prediction"], row, catalogue, checkpoint, report["configuration"]
+            )
+            reported = row_report["metrics"]
+            for family in (
+                "pose", "retrieval", "deformation", "dense", "uncertainty",
+                "overall_failure", "operational_abstention",
+            ):
+                if reported[family] != recomputed[family]:
+                    raise ValueError("finite development metric differs from raw prediction")
+            annotation_bound = (
+                checkpoint["inference_contract"]["atlas_assets"][
+                    "annotation_volume_receipt"
+                ]
+                is not None
+            )
+            expected_regional_available = bool(
+                annotation_bound
+                and not recomputed["retrieval"]["map_component_unrefined_tail"]
+            )
+            if (
+                bool(reported["regional_overlap"]["available"])
+                != expected_regional_available
+                or (
+                    not annotation_bound
+                    and reported["regional_overlap"]
+                    != recomputed["regional_overlap"]
+                )
+            ):
+                raise ValueError("finite development regional metric availability differs")
+    expected_raw_paths = {
+        path.resolve() for path in (output_root / "raw_predictions").glob("*.pt")
+    }
+    if raw_paths != expected_raw_paths:
+        raise ValueError("finite development raw-prediction artifact set differs")
     failed = [item["training_row_id"] for item in rows if item["disposition"]["failed"]]
     abstained = [item["training_row_id"] for item in rows if item["disposition"]["abstained"]]
     if (

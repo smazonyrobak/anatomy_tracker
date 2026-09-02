@@ -2,8 +2,10 @@ import json
 
 import numpy as np
 import pytest
+import torch
 
 import test_arbitrary_plane_finite_training_runner_v4 as runner_fixture
+import training.arbitrary_plane_finite_development_evaluation_v4 as evaluation_v4
 import training.arbitrary_plane_finite_training_runner_v4 as runner_v4
 import training.arbitrary_plane_inference_v3 as inference_v3
 import training.arbitrary_plane_row_cache_v4 as cache_v4
@@ -190,3 +192,111 @@ def test_s1_ablation_is_packaged_only_under_its_exact_scope(tmp_path):
         for row in report["row_reports"]
     )
     assert verify_arbitrary_plane_finite_package_v4(output)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_cuda_evaluation_normalizes_raw_metrics_and_annotation_to_cpu(tmp_path):
+    run, _, _, manifest, _ = runner_fixture._prepared(
+        tmp_path / "training", row_count=1, target=1
+    )
+    runner_v4.run_finite_training_attempts_v4(run, max_attempts=1)
+    development, _, rows = _development_cache(tmp_path / "evaluation")
+    output = tmp_path / "package"
+    postrun_v4.run_arbitrary_plane_finite_postrun_v4(
+        run,
+        development,
+        output,
+        atlas_semantics=_semantics(manifest),
+        development_evaluation_animal_ids=tuple(
+            row["lineage"]["animal_id"] for row in rows
+        ),
+        annotation_volume_ap_dv_ml=np.zeros((10, 10, 10), dtype=np.int64),
+        top_k=2,
+        refinement_steps=1,
+        pose_only_steps=1,
+        retrieval_shape_h_w=(8, 8),
+        catalogue_chunk_size=2,
+        gauss_hermite_order=3,
+        device="cuda",
+    )
+    assert verify_arbitrary_plane_finite_package_v4(output)
+
+
+def test_resealed_metric_tamper_is_rejected_against_raw_prediction(tmp_path):
+    run, _, _, manifest, _ = runner_fixture._prepared(
+        tmp_path / "training", row_count=1, target=1
+    )
+    runner_v4.run_finite_training_attempts_v4(run, max_attempts=1)
+    development, _, rows = _development_cache(tmp_path / "evaluation")
+    output = tmp_path / "package"
+    postrun_v4.run_arbitrary_plane_finite_postrun_v4(
+        run,
+        development,
+        output,
+        atlas_semantics=_semantics(manifest),
+        development_evaluation_animal_ids=tuple(
+            row["lineage"]["animal_id"] for row in rows
+        ),
+        top_k=2,
+        refinement_steps=1,
+        pose_only_steps=1,
+        retrieval_shape_h_w=(8, 8),
+        catalogue_chunk_size=2,
+        gauss_hermite_order=3,
+        device="cpu",
+    )
+    evaluation_root = output / "internal_development_evaluation"
+    report_path = evaluation_root / "finite_development_evaluation_report.json"
+    bundle_path = evaluation_root / "bundle_receipt.json"
+    report = json.loads(report_path.read_text("ascii"))
+    report["row_reports"][0]["metrics"]["pose"][
+        "physical_finite_frame_landmark_mean_um"
+    ] += 1000.0
+    report["receipt_sha256"] = evaluation_v4._sha({
+        key: value for key, value in report.items() if key != "receipt_sha256"
+    })
+    report_path.write_bytes(evaluation_v4._canonical_json(report))
+    bundle = json.loads(bundle_path.read_text("ascii"))
+    bundle["report_file_sha256"] = evaluation_v4._file_sha256(report_path)
+    bundle["report_receipt_sha256"] = report["receipt_sha256"]
+    bundle["receipt_sha256"] = evaluation_v4._sha({
+        key: value for key, value in bundle.items() if key != "receipt_sha256"
+    })
+    bundle_path.write_bytes(evaluation_v4._canonical_json(bundle))
+    with pytest.raises(ValueError, match="metric differs from raw prediction"):
+        evaluation_v4.verify_arbitrary_plane_finite_development_evaluation_v4(
+            evaluation_root,
+            catalogue=runner_v4.load_finite_training_run_v4(run)["catalogue"],
+        )
+
+
+def test_unreported_raw_prediction_file_is_rejected(tmp_path):
+    run, _, _, manifest, _ = runner_fixture._prepared(
+        tmp_path / "training", row_count=1, target=1
+    )
+    runner_v4.run_finite_training_attempts_v4(run, max_attempts=1)
+    development, _, rows = _development_cache(tmp_path / "evaluation")
+    output = tmp_path / "package"
+    postrun_v4.run_arbitrary_plane_finite_postrun_v4(
+        run,
+        development,
+        output,
+        atlas_semantics=_semantics(manifest),
+        development_evaluation_animal_ids=tuple(
+            row["lineage"]["animal_id"] for row in rows
+        ),
+        top_k=2,
+        refinement_steps=1,
+        pose_only_steps=1,
+        retrieval_shape_h_w=(8, 8),
+        catalogue_chunk_size=2,
+        gauss_hermite_order=3,
+        device="cpu",
+    )
+    evaluation_root = output / "internal_development_evaluation"
+    torch.save({}, evaluation_root / "raw_predictions" / "unreported.pt")
+    with pytest.raises(ValueError, match="artifact set differs"):
+        evaluation_v4.verify_arbitrary_plane_finite_development_evaluation_v4(
+            evaluation_root,
+            catalogue=runner_v4.load_finite_training_run_v4(run)["catalogue"],
+        )

@@ -77,11 +77,21 @@ def verify_arbitrary_plane_finite_package_v4(output_directory):
         raise ValueError("finite-v4 export report hash differs")
     export_report = json.loads(export_path.read_text("ascii"))
     export_v4.verify_finite_training_run_inference_export_report_v4(export_report)
+    run_export_receipt = export_report["finite_training_run_export_receipt"]
     runner_v4.verify_finite_training_run_export_receipt_v4(
-        export_report["finite_training_run_export_receipt"], run["directory"]
+        run_export_receipt, run["directory"]
+    )
+    staged_path = (
+        context["run_root"] / state["latest_checkpoint"]["relative_path"]
+    ).resolve(strict=True)
+    expected_provenance = export_v4._dataset_provenance(
+        context, run_export_receipt, staged_path
     )
     if (
         export_report["receipt_sha256"] != export_record["receipt_sha256"]
+        or export_report["dataset_provenance"] != expected_provenance
+        or export_report["training_receipt"]
+        != run_export_receipt["staged_training_export_receipt"]
         or export_report["checkpoint"]["path"] != str(checkpoint_path)
         or any(export_report["checkpoint"][name] != checkpoint_record[name] for name in (
             "file_sha256", "checkpoint_id", "checkpoint_binding_id", "model_state_sha256"
@@ -99,6 +109,13 @@ def verify_arbitrary_plane_finite_package_v4(output_directory):
         "checkpoint_id", "checkpoint_binding_id", "model_state_sha256"
     )) or loaded["checkpoint_file_sha256"] != checkpoint_record["file_sha256"]:
         raise ValueError("finite-v4 capability checkpoint identity differs")
+    if (
+        loaded["checkpoint_receipt"]["training_receipt"]
+        != run_export_receipt["staged_training_export_receipt"]
+        or loaded["checkpoint_receipt"]["provenance"]["dataset_provenance"]
+        != [expected_provenance]
+    ):
+        raise ValueError("finite-v4 checkpoint training provenance differs")
     development = bundle["development_cache_binding"]
     development_manifest = row_cache_v4.load_training_row_cache_manifest_v4(
         postrun_v4._i_path(development["directory"], must_exist=True),
@@ -168,6 +185,24 @@ def verify_arbitrary_plane_finite_package_v4(output_directory):
         != bundle["configuration"]["development_evaluation_animal_ids"]
     ):
         raise ValueError("finite-v4 package all-row cross-binding differs")
+    expected_files = {
+        bundle_path.resolve(),
+        checkpoint_path.resolve(),
+        export_path.resolve(),
+        evaluation_bundle_path.resolve(),
+        (evaluation_root / "finite_development_evaluation_report.json").resolve(
+            strict=True
+        ),
+        *{
+            (evaluation_root / row["raw_prediction"]["relative_path"]).resolve(
+                strict=True
+            )
+            for row in evaluation_report["row_reports"]
+        },
+    }
+    actual_files = {path.resolve() for path in root.rglob("*") if path.is_file()}
+    if actual_files != expected_files:
+        raise ValueError("finite-v4 package artifact set differs")
     return True
 
 
