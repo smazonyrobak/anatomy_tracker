@@ -1,6 +1,6 @@
 # Arbitrary-plane synthetic acquisition-domain audit v2
 
-Date: 2026-09-02  
+Date: 2026-09-02
 Audited base commit: `bbb2b45c272188bfe8583ae34f7cafcd6daaced3`
 
 ## Scope and boundary
