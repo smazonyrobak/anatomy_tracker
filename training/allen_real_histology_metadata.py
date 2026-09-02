@@ -30,6 +30,13 @@ ALIGNMENT2D_KEYS = tuple(f"tsv_{index:02d}" for index in range(6))
 ALIGNMENT3D_KEYS = tuple(f"tvr_{index:02d}" for index in range(12))
 
 
+def _snapshot_root(output: str | Path) -> Path:
+    root = Path(output).resolve()
+    if root.drive.upper() != "I:":
+        raise ValueError(f"Allen model-development snapshots must resolve to I:, got {root}")
+    return root
+
+
 def _canonical_bytes(value) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
@@ -214,7 +221,7 @@ def acquire_metadata_snapshot(
     get=requests.get,
     retrieved_at_utc: str | None = None,
 ) -> dict:
-    output = Path(output)
+    output = _snapshot_root(output)
     if max_experiments < 1 or page_size < 1:
         raise ValueError("max_experiments and page_size must be positive")
     retrieved_at_utc = retrieved_at_utc or datetime.now(timezone.utc).isoformat()
@@ -358,7 +365,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def verify_metadata_snapshot(output: str | Path) -> dict:
-    output = Path(output)
+    output = _snapshot_root(output)
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     receipt = json.loads((output / "receipt.json").read_text(encoding="utf-8"))
     if manifest["schema_version"] != SCHEMA_VERSION or receipt["schema_version"] != SCHEMA_VERSION:
