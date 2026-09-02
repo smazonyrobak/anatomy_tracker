@@ -1,5 +1,6 @@
 import copy
 
+import numpy as np
 import pytest
 import torch
 
@@ -122,6 +123,40 @@ def test_runtime_version_guard_detects_in_place_tensor_mutation():
     with pytest.raises(TypeError):
         runtime._tensors["cell_states"] = torch.zeros_like(
             runtime._tensors["cell_states"]
+        )
+
+
+@pytest.mark.parametrize("name", ["cell_states", "support_origin_ap_dv_ml_um"])
+def test_runtime_content_seal_detects_data_bypass_mutation(name):
+    runtime = _runtime()
+    batch = runtime.expand(1)
+    runtime._tensors[name].data.add_(123.0)
+    with pytest.raises(ValueError, match="runtime is not intact"):
+        verify_bound_complete_catalogue_batch_v6(
+            batch, expected_runtime=runtime
+        )
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.complex128])
+def test_runtime_rejects_re_receipted_noninteger_cell_ids(dtype):
+    artifact = catalogue()
+    tampered = copy.deepcopy(artifact)
+    changed = tampered["arrays"]["cell_id_int64"].astype(dtype)
+    tampered["arrays"]["cell_id_int64"] = changed
+    tampered["tensors"]["cell_id"] = torch.from_numpy(changed)
+    tampered["array_receipts"] = {
+        name: catalogue_v3._array_receipt(value)
+        for name, value in tampered["arrays"].items()
+    }
+    tampered["receipt_sha256"] = catalogue_v3._hash(
+        catalogue_v3.catalogue_receipt_v3(tampered)
+    )
+    with pytest.raises(ValueError, match="ID dtypes"):
+        make_complete_catalogue_runtime_v6(
+            tampered,
+            expected_catalogue_receipt_sha256=tampered["receipt_sha256"],
+            device="cpu",
+            dtype=torch.float32,
         )
 
 

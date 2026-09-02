@@ -73,7 +73,7 @@ class BoundCompleteCatalogueBatchV6:
 class CompleteCatalogueRuntimeV6:
     """Device-local canonical tensors authenticated once against a trusted receipt."""
 
-    __slots__ = ("_token", "_binding", "_tensors", "_states")
+    __slots__ = ("_token", "_binding", "_tensors", "_seals", "_states")
 
     def __setattr__(self, name: str, value: object) -> None:
         if hasattr(self, name):
@@ -101,6 +101,8 @@ class CompleteCatalogueRuntimeV6:
         cell_count = counts["cell_count"]
         representation_count = counts["representation_count"]
         source = catalogue["tensors"]
+        array_cell_id = torch.as_tensor(catalogue["arrays"]["cell_id_int64"])
+        tensor_cell_id = torch.as_tensor(source["cell_id"])
         expected_shapes = {
             "cell_id": (cell_count,),
             "cell_states": (1, cell_count, 12),
@@ -121,9 +123,11 @@ class CompleteCatalogueRuntimeV6:
             or not isinstance(representation_count, int)
             or isinstance(representation_count, bool)
             or representation_count < 1
+            or array_cell_id.dtype != torch.int64
+            or tensor_cell_id.dtype != torch.int64
             or any(tuple(torch.as_tensor(source[name]).shape) != shape for name, shape in expected_shapes.items())
         ):
-            raise ValueError("verified catalogue tensor shapes or counts are invalid")
+            raise ValueError("verified catalogue tensor shapes, counts, or ID dtypes are invalid")
 
         tensors = {
             "cell_id": torch.as_tensor(
@@ -190,6 +194,9 @@ class CompleteCatalogueRuntimeV6:
             }
         )
         self._tensors = MappingProxyType(tensors)
+        self._seals = MappingProxyType(
+            {name: value.detach().clone() for name, value in tensors.items()}
+        )
         self._states = tuple(
             _tensor_handle_state(tensors[name]) for name in _TENSOR_NAMES
         )
@@ -242,8 +249,13 @@ def verify_complete_catalogue_runtime_v6(
         != COMPLETE_CATALOGUE_RUNTIME_V6_SCHEMA
         or not _is_sha256(runtime._binding.get("catalogue_receipt_sha256"))
         or set(runtime._tensors) != set(_TENSOR_NAMES)
+        or set(runtime._seals) != set(_TENSOR_NAMES)
         or tuple(_tensor_handle_state(runtime._tensors[name]) for name in _TENSOR_NAMES)
         != runtime._states
+        or any(
+            not torch.equal(runtime._tensors[name], runtime._seals[name])
+            for name in _TENSOR_NAMES
+        )
     ):
         raise ValueError("complete catalogue runtime is not intact")
     return True
