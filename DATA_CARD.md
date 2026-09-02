@@ -23,6 +23,13 @@ This card describes data roles for the frozen baseline and proposed unified-mode
 - **Limitation:** registered pose does not imply exact dense individual-to-template correspondence.
 - **Frozen inventory:** 132,442 training sections from 2,441 specimens; 6,513 validation sections from 122 specimens; 7,214 test sections from 133 specimens; 1,400 previously consumed DeepSlice-comparison sections from 10 specimens. Splits are by specimen.
 - **Development status:** the warm-start AtlasPose checkpoint has already learned from the training specimens, and all existing validation/test/comparison results have already been inspected. Those sets are historical and regression evidence for the joint model, not a new publication-grade hidden test.
+- **Standalone-model source:** the historical specimen-split cohort is not
+  reused. `training/allen_real_histology_metadata.py` defines a new
+  metadata-only official-API snapshot keyed and split by exact Allen
+  `Donor.id`; see
+  `docs/publication/ALLEN_REAL_HISTOLOGY_SOURCE_V1.md`. Product-5 sections are
+  an appearance/domain source, while arbitrary-plane geometry remains
+  CCF/synthetic. No image bytes have yet been acquired for this new source.
 
 ### Allen Product 8 slide-mounted sections
 
