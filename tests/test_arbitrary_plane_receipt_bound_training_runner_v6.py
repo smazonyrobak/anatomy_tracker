@@ -474,6 +474,18 @@ def test_initialization_binds_raw_and_decoded_atlas_complete_catalogue_and_stati
     assert runner.training_data_v6.load_frozen_training_rows_v6.calls == []
 
 
+def test_unrelated_head_advance_does_not_invalidate_byte_identical_frozen_run(monkeypatch, i_root):
+    run, initialized, _ = _initialize(monkeypatch, i_root)
+    monkeypatch.setattr(runner, "_current_git_commit", lambda: "b" * 40)
+    restored = runner.load_receipt_bound_training_run_v6(
+        run,
+        expected_run_manifest_receipt_sha256=initialized["manifest"][
+            "receipt_sha256"
+        ],
+    )
+    assert restored["manifest"]["git_commit"] == "a" * 40
+
+
 def test_optimizer_boundary_rejects_held_out_development_cache(monkeypatch, i_root):
     _install_fakes(monkeypatch, split="development")
     cache = i_root / "development-cache"

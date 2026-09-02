@@ -845,7 +845,6 @@ def _verify_manifest(manifest: Mapping[str, object]) -> None:
         or manifest.get("data_role") != "development-training"
         or manifest.get("retrieval_scope") != "complete_98304_cell_catalogue"
         or manifest.get("source_sha256") != _source_receipts()
-        or manifest.get("git_commit") != _current_git_commit()
         or manifest.get("initialization") != "fresh_random_only"
         or manifest.get("probabilities_calibrated") is not False
         or manifest.get("probability_status") != RAW_UNCALIBRATED
