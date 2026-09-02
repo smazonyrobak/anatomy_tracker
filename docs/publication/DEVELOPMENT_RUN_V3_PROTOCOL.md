@@ -1,0 +1,40 @@
+# Arbitrary-plane V3 development run protocol
+
+This is the predeclared first joint-model development run. It is not a public benchmark, final-test evaluation, or calibrated clinical/scientific performance claim.
+
+## Independence and data roles
+
+- Initialize every parameter from the recorded PyTorch seed. Prior model weights, features, embeddings, predictions, and pseudolabels are forbidden.
+- Use only pinned Allen CCF assets and authenticated synthetic rows for training and internal development.
+- Preserve exact animal, specimen, experiment, synthetic-animal, section, and synthetic-realization identifiers in every row, training receipt, and raw prediction.
+- Keep train and internal-development animals disjoint by component-specific ID prefixes. Public DeepSlice Ground Truth, real laboratory histology, external-validation animals, and final-test animals remain untouched.
+
+## First curriculum
+
+The first fast curriculum covers all brain-intersecting planes with Haar-uniform projective normals, length-uniform support-intersection offsets, uniform roll, exact black exteriors, imperfect smart-brush masks, and unmasked/raw-background inputs. It contains 3,072 identity-deformation pose rows and 2,048 affine-free nonrigid rows, grouped as 16 sections per synthetic animal. The internal development cache contains 384 and 256 rows respectively under disjoint identities.
+
+Coverage is distribution-preserving at the row level: one authenticated normal, roll, and support-chord offset is drawn for each global logical index and is never redrawn because its finite raster has too few tissue pixels. The requested pixel threshold is an identifiability label, not an acceptance gate. Marginal/empty raster cases remain authenticated cache rows, use an explicitly recorded identity/censored realization where necessary, and receive zero point-pose and dense-deformation loss weight rather than a falsely unique target. Downstream appearance, damage, outline, topology, or gauge retries use separate deterministic streams while retaining the exact same parent plane. Every row records the support count, threshold, eligibility bits, and zero/one supervision weights; training reports the identifiable fraction and computes pose metrics on that denominator.
+
+These direct rows are single-centre-plane observations. Their runner PSF is therefore exactly `axial_offsets_um=[0.0]`, `axial_weights=[1.0]`. This zero-thickness curriculum establishes pose capture and pose/deformation identifiability; it must not be presented as finite-thickness training. Finite-thickness subject-deformed rows are a subsequent authenticated stage.
+
+## Atlas and search space
+
+- Read `average_template_25.nrrd` and `annotation_25.nrrd` in F index order and bind their raw SHA-256 hashes and decoder versions.
+- Construct a two-channel `float32` AP/DV/ML atlas: template intensity clipped after the fixed in-support transform `(x-9)/(273-9)`, with exact zero outside `annotation != 0`; and a binary support channel.
+- Use 384 antipodal normals, 16 support-conditioned offsets per normal, and 16 rolls: 98,304 complete catalogue cells with two raster representations per physical cell.
+- Use a 160 by 160 raster and a 12,000 by 12,000 micrometre initial field of view. Continuous recurrent updates recover local normal, offset, roll, in-plane translation, scale, and shear residuals.
+
+## Randomly initialized model and optimization
+
+- Separate histology/atlas stems, a shared encoder, complete probabilistic coarse retrieval, shared-weight recurrent correlation updates, and an affine-free stationary-velocity deformation decoder.
+- `feature_channels=32`, `hidden_channels=64`, `top_k=4`, three recurrent refinements, and deformation enabled only after the fixed pose-capture iterations.
+- Deterministic uniform sampling over the entire frozen composite cache in both phases. During the first 1,000 applied steps the deformation decoder is frozen; identity and deformed views are both eligible so pose learning cannot assume undeformed tissue.
+- AdamW, learning rate `1e-3`, weight decay `1e-4`, batch size 4, 512-cell authenticated training banks containing the truth cell, AMP, gradient-norm clipping at 5, and a predeclared 4,000-step target. Check and preserve bounded milestones without changing the frozen target.
+
+## Development gates and later validation
+
+First inspect optimization, honest retrieval, physical landmark error, projective-normal/offset error, full-frame error, deformation error, Jacobians, inverse-cycle consistency, failures, abstentions, and smart-brush mode strata on animal-disjoint internal development rows. Save raw per-row predictions and treat animals as the reporting units. Uncalibrated scores remain explicitly labelled as such.
+
+After the method stabilizes, fit uncertainty only on held-out calibration animals and audit 50/80/90/95% coverage without sacrificing point accuracy. Then follow `FUTURE_VALIDATION_PLAN.md`: untouched final-test animals, DeepSlice Ground Truth DOI 10.25949/22802411, separate real laboratory histology where available, blinded expert references, fair tool comparisons, physical landmark error as the primary endpoint, effect sizes with 95% confidence intervals, and immutable splits/configs/seeds/raw predictions.
+
+All caches, temporary files, checkpoints, reports, feature caches, and predictions for this run live under `I:\AnatomyTracker`; C: is not a development target.

@@ -77,16 +77,29 @@ fixed-step RK4 update: for `q = ||Dv||_F / N`, accepted candidates require
 orientation-preserving between audit nodes. It has no learned, pretrained or
 previous-model dependency.
 
-The downstream source path now pulls every finite-depth sample through that
-animal transform, then applies section-processing warp, damage, modality and
-appearance, crop/window, and accurate/imperfect/absent brush descendants before
-issuing the final `synthetic_realization_id`. Exact make--verify--replay and
-lineage tests establish a source contract, not a passed scientific generator
-qualification. The frozen half-fine-knot audit grid contains 83,754 points for
+The receipt-bound v2 source path pulls every finite-depth sample through that
+animal transform and applies section processing, but then uses a tissue-centred
+integer crop before modality, appearance and damage. Its paired brush
+descendants and final `synthetic_realization_id` have exact make--verify--replay
+coverage, but the ordering and crop shortcut prevent treating it as the final
+release generator. The frozen half-fine-knot audit grid contains 83,754 points for
 representative Allen bounds at 500-um fine spacing; the current CPU
 implementation exceeded 180 seconds even for an identity timing probe. The
 density contract is retained, but the audit must be vectorized or moved to GPU
 before production-scale generation.
+
+The receipt-bound v2 observation remains immutable, including its known
+tissue-centred integer crop. The additive v3 acquisition-window primitive now
+implements the frozen pose/tissue-blind plan separately: a fixed `192 x 256`
+canvas, declared scale/aspect/offset ranges, exact float64 canvas--parent
+affines, analytic effective O/U/V, bilinear/nearest zero-exterior sampling,
+absolute-map and vector conjugation, weighted optical-support retention, and
+explicit partial/OOD status without rejection or redraw. `view_plan_id` binds
+the seed/split/sample-index schedule and implementation-fixed geometry; the later
+`acquisition_window_realization_id` binds the plan to parent receipts, grid,
+O/U/V, transformed arrays and retention. This is verified window plumbing, not
+an independent dataset artifact: the observation, training-row and frozen-cache
+contracts now carry it through the complete authenticated v3 row path.
 
 Initial animal-warp bounds are explicit engineering priors, not claimed
 population estimates: global scale `0.80--1.25`, low-frequency local Jacobian
@@ -129,7 +142,9 @@ release-eligible work uses a versioned v3 arbitrary-plane contract:
   normal on the antipodally identified sphere, not uniform Euler angles;
 - sample in-plane roll uniformly over a full turn;
 - sample signed offset uniformly over the annotation foreground projected onto
-  that normal, then verify actual rendered support;
+  that normal and retain that one continuous brain-intersecting plane even if
+  finite rasterization produces marginal or empty pixel support; raster support
+  is identifiability metadata and never a pose-rejection predicate;
 - retain named near-tangent, tiny-support and anatomically ambiguous stress
   strata without silently changing the reference validation measure;
 - store the constrained centre/frame/positive-triangular-basis state and exact QuickNII O/U/V,
@@ -181,7 +196,12 @@ The support backend is now integrated into a development-only finite-render
 precursor. It samples deterministic RP2 normals, roll and offsets from the
 merged component-interval union; uses isotropic physical pixel pitch with
 symmetric padding; emits official QuickNII `x/W,y/H` geometry; and renders CCF
-intensity, uint32 annotation IDs and tissue masks. A prepared immutable context
+intensity, uint32 annotation IDs and tissue masks. Exactly one pose draw is
+retained for each global logical sample. The former minimum-pixel acceptance
+gate is now only an authenticated point/dense-supervision identifiability
+threshold: marginal rows remain in the cache with zero point-pose and dense
+deformation loss weight, while deterministic appearance/deformation retry
+streams cannot redraw their normal, roll or offset. A prepared immutable context
 hashes the full Allen assets once and supports random-access samples without
 per-sample atlas rescans. Separate `plane_realization_id`,
 `finite_plane_geometry_sha256`, `rendered_artifacts_sha256` and

@@ -72,21 +72,107 @@ authorize full benchmarking or access to final-test animals. The semantic
 arbitrary-plane oracle subsequently passed, but the 64-case model-free
 image-information pilot failed its imperfect-outline consistency gate: context
 MIND top-1 was 63/64 absent, 62/64 accurate and 52/64 imperfect. The standalone
-probabilistic retriever and recurrent pose updater may therefore be implemented
-and source-tested, but learned screening remains unauthorized until a separate
-paired mask-mechanism contract is frozen. A separate positive-Jacobian non-SVF
-holdout also remains required before broad model claims to test for
-generator/decoder parameterization matching.
+probabilistic retriever and recurrent joint updater may be implemented,
+source-tested and exercised on bounded development pilots, but no
+mask-mechanism, calibration, benchmark, qualification or release claim follows
+from those pilots. The separately frozen paired mask-mechanism replay and a
+positive-Jacobian non-SVF development holdout remain required before broad
+model claims, including a check for generator/decoder parameterization
+matching.
 The model-free oracle protocol is predeclared in
 [`../publication/arbitrary_plane_oracle_pose_ranking_preflight.yaml`](../publication/arbitrary_plane_oracle_pose_ranking_preflight.yaml).
 
-`arbitrary_plane_recurrent_model.py` is the current untrained implementation
-scaffold. It keeps one canonical continuous state per physical cell, derives
-and marginalizes declared raster nuisance representations at every render,
-normalizes only a verifier-complete catalogue, and rerenders after each shared
-recurrent update. Its initial three-coordinate covariance is uncalibrated, its
-post-refinement masses are conditional within top-K, and it intentionally has
-no deformation decoder or checkpoint-loading path.
+The current v3 implementation is a fresh, randomly initialized joint model. It
+keeps one canonical continuous state per antipodal physical plane cell,
+derives and marginalizes declared raster nuisance representations, normalizes
+only a verifier-complete catalogue, renders an explicit finite-thickness PSF,
+and rerenders after every shared recurrent pose update. Once pose-only
+iterations have captured the large displacement, a shared decoder predicts an
+affine-free stationary velocity field in the fixed uniform canvas gauge.
+Active recurrent deformation outputs receive exponentially later-weighted
+sequence supervision (`gamma=0.8`). The returned point estimate and posterior
+summary use the final recurrent state, while the immutable raw-prediction
+artifact deliberately retains every recurrent pose/deformation sequence for
+audit and failure analysis. The three-coordinate local covariance is
+uncalibrated, refinement masses remain conditional within top-K, and exact
+omitted retrieval mass is retained separately.
+
+`arbitrary_plane_staged_training.py`, `arbitrary_plane_row_cache_v3.py` and
+`arbitrary_plane_training_runner_v3.py` provide the source-bound training and
+resume path. They reject learned dependencies and non-development rows, retain
+animal/specimen/experiment IDs and exact row/candidate-bank receipts, use two
+crash-safe rolling resume slots plus sparse immutable archives, and restrict
+generated rows, checkpoints and raw reports to the `I:` development volume. No
+pretrained weights, prior-model features or pseudo-labels enter this path.
+Checkpoint history is compact: each step retains authenticated row and
+candidate-bank hashes in a binding-seeded ordered SHA-256 chain, while the one
+full candidate-bank receipt remains in the immutable runner report. Resume and
+export reconstruct and cross-check that chain against the reports rather than
+duplicating an ever-growing history in every checkpoint.
+
+`arbitrary_plane_pose_curriculum_v3.py` is the fast initial data path. It draws
+support-conditioned Haar-uniform antipodal planes and length-uniform valid
+offsets from the pinned Allen assets. One pose draw is retained per global
+logical sample: finite-raster pixel count is recorded as supervision
+identifiability and never causes a normal/offset/roll redraw. Marginal and empty
+rasters use an authenticated censored path with zero point-pose/dense loss
+weights. Separate deterministic realization retries preserve the same parent
+plane. The pose curriculum otherwise forces exact identity G1 deformation,
+and retains varied appearance, damage, raw-background, exact-black and
+imperfect-brush descendants. It emits the same authenticated v3 row contract
+with full animal/specimen/experiment/section lineage and no learned
+dependencies. Its focused and row-cache regressions passed 13/13; a separate
+authentic Allen 160-by-160 row was generated, frozen, reloaded and audited with
+12,531 rendered brain pixels. This is an input-pipeline result, not model
+accuracy evidence.
+
+`arbitrary_plane_joint_curriculum_v3.py` adds exact nonidentity, affine-free
+multiscale deformation in explicit mild and moderate amplitude bands wherever
+the retained raster meets the declared identifiability threshold. Marginal
+rows stay in the distribution as explicitly identity/censored observations
+rather than being replaced by easier planes. Sampled
+similarity is fixed to identity and the uniform-canvas affine SVF component is
+moved into the physical pose, preserving pose/deformation identifiability. One
+authentic Allen 160-by-160 row had 0.363 px velocity RMS, positive forward and
+inverse Jacobian minima (`0.878` and `0.870`) and 0.0312 px gauge recomposition
+error. A composite binding places identity-pose and nonidentity-joint rows in
+one frozen cache without merging or concealing their component provenance.
+These fast rows are explicitly single-centre-plane finite-FOV curricula; they
+are not mislabeled as finite-thickness histology. Authentic section thickness
+comes from the slower subject-slab path, while the model renderer integrates an
+explicit through-plane PSF.
+
+Complete-catalogue inference may use an exact, same-checkpoint atlas-feature
+cache. The cache is bound to the checkpoint, atlas, catalogue, PSF, raster,
+dtype, layout and build chunking; it covers every representation and cannot be
+reused after any binding changes. `arbitrary_plane_development_evaluation_v3.py`
+then performs honest complete-catalogue, non-teacher-forced evaluation on an
+animal-disjoint development cache, writes immutable raw predictions per row,
+reports physical landmark error plus pose/deformation/failure/mode metrics and
+labels all uncertainty as uncalibrated. It does not open benchmark or final-test
+data.
+
+`arbitrary_plane_acquisition_window_v3.py` is the additive replacement for
+the known v2 tissue-centred crop without modifying frozen v2 receipts. Its plan
+API accepts only `root_seed`, `split` and `sample_index`; parent and canvas
+shapes are fixed by the receipt-bound implementation and pose/tissue never
+enter plan sampling. Application records partial/empty views rather than
+redrawing.
+The window affine is composed into the physical QuickNII plane while its
+residual deformation is re-expressed as an affine-free SVF and pullback map on
+one fixed uniform canvas. Observation, training-row and cache receipts bind
+that gauge, so this window path is part of complete authenticated v3 rows.
+
+One non-frozen authentic pinned-Allen general-oblique integration run completed
+the full v3 chain. Its gauge recomposition error was `0.021849987` px against
+the receipt-bound `0.05` px maximum (prepared receipt
+`e116a8a570133689ae59a2ede764be2f36580da443ac8491c4f586748a123ede`, row
+receipt `8ccc91ce47403cf47cb949e0f5a17c4a57e66dbfa52683d72e1788ef4c3e7fa5`).
+The run also identified the throughput boundary: authenticated parent
+construction took about 23 minutes, whereas one descendant observation took
+16.8 seconds. These timings are development evidence only; they require a
+content-addressed prepared-parent cache before large generation, and the
+ephemeral integration artifact itself is not represented as a frozen dataset.
 
 Future real validation remains strictly animal-split, with untouched final-test
 animals. Allen/synthetic data are for development; the DeepSlice Ground Truth
@@ -125,7 +211,7 @@ The 148-section published DeepSlice set was subsequently used as development fee
 
 The v6 model is an experimental predictor, not a demonstrated DeepSlice replacement. It is not source-approved for a new release.
 
-## v7 candidates
+## Historical v7 candidate plan (superseded; not a dependency)
 
 The pending v7 experiment compares the same task-specific pose heads and registered/synthetic data across three ImageNet-initialized backbones:
 
@@ -162,7 +248,7 @@ Model-family decisions use trusted product 5 registered-validation animal-level 
 
 Passing metrics alone does not deploy a model. The runtime accepts AtlasPose only when the ONNX model, metadata, raw sealed predictions, metrics, presealed commitment, exclusive claim, completion receipt, and release report form one verified hash chain whose model, metadata, and release-evidence hashes are pinned in application source. Promotion emits proposed hashes for human review and never edits those source pins.
 
-## Running v7
+## Reproducing the historical v7 plan
 
 Use the CUDA environment and explicit workspace/data roots:
 

@@ -703,8 +703,9 @@ def _sampling_measure() -> dict[str, str]:
             "length-uniform over merged lower/upper boundary bands of each merged support interval"
         ),
         "conditioning": (
-            "conditioned on brain_pixel_count >= minimum_brain_pixels; normal, roll, and offset "
-            "are all redrawn from independent attempt streams after a rejection"
+            "unconditioned by the finite raster: exactly one normal, roll, and support-chord "
+            "offset draw is retained; raster support only determines explicit supervision "
+            "identifiability metadata and never redraws pose"
         ),
     }
 
@@ -969,7 +970,7 @@ def _make_finite_arbitrary_plane_render_prepared(
     accepted_geometry = None
     accepted_raster = None
     accepted_index = None
-    for attempt in range(max_rejection_attempts):
+    for attempt in range(1):
         field_seeds = {
             field: _derived_seed(seed, split, sample_index, field, attempt)
             for field in ("normal", "roll", "offset")
@@ -999,16 +1000,13 @@ def _make_finite_arbitrary_plane_render_prepared(
             "geometry_sha256": geometry["geometry_sha256"],
             "raster_combined_sha256": raster["combined_sha256"],
             "brain_pixel_count": raster["brain_pixel_count"],
-            "accepted": bool(raster["brain_pixel_count"] >= minimum_brain_pixels),
+            "raster_support_meets_requested_identifiability_threshold": bool(
+                raster["brain_pixel_count"] >= minimum_brain_pixels
+            ),
+            "accepted": True,
         }
         attempts.append(attempt_record)
-        if attempt_record["accepted"]:
-            accepted_geometry, accepted_raster, accepted_index = geometry, raster, attempt
-            break
-    if accepted_geometry is None:
-        raise RuntimeError(
-            f"No nonempty finite tissue raster in {max_rejection_attempts} deterministic attempts"
-        )
+        accepted_geometry, accepted_raster, accepted_index = geometry, raster, attempt
     raster_hashes = {
         key: accepted_raster[key]
         for key in ("scalar_sha256", "annotation_sha256", "brain_mask_sha256", "combined_sha256")
@@ -1081,9 +1079,19 @@ def _make_finite_arbitrary_plane_render_prepared(
         "rendered_artifacts_receipt": rendered_artifacts_receipt,
         "rendered_artifacts_sha256": rendered_artifacts_sha256,
         "acceptance_contract": {
-            "predicate": "brain_pixel_count >= minimum_brain_pixels",
+            "predicate": "one authenticated continuous brain-intersecting plane draw; no raster-support rejection",
             "minimum_brain_pixels": minimum_brain_pixels,
             "brain_pixel_count": accepted_raster["brain_pixel_count"],
+            "continuous_plane_intersection_authenticated": True,
+            "pose_redrawn_for_raster_support": False,
+            "pose_draw_count": 1,
+            "raster_support_meets_requested_identifiability_threshold": bool(
+                accepted_raster["brain_pixel_count"] >= minimum_brain_pixels
+            ),
+            "minimum_brain_pixels_role": (
+                "requested downstream point/dense-supervision identifiability threshold; "
+                "not an acceptance predicate"
+            ),
         },
         "sampling_measure": sampling_measure,
         "development_scope": {
@@ -1341,7 +1349,9 @@ def verify_finite_arbitrary_plane_render(
         raise ValueError("Finite-render config, provenance, and top-level fields are not cross-linked")
     if artifact["sampling_measure"] != _sampling_measure():
         raise ValueError("Finite-render sampling-measure claim does not match the implemented algorithm")
-    if artifact["acceptance_contract"]["predicate"] != "brain_pixel_count >= minimum_brain_pixels":
+    if artifact["acceptance_contract"]["predicate"] != (
+        "one authenticated continuous brain-intersecting plane draw; no raster-support rejection"
+    ):
         raise ValueError("Finite-render acceptance predicate does not match the implemented algorithm")
     geometry = artifact["geometry"]
     if geometry["geometry_sha256"] != _payload_sha256(
@@ -1431,8 +1441,6 @@ def verify_finite_arbitrary_plane_render(
         raise ValueError("Finite-render raster dtype/shape receipts do not match")
     if not np.array_equal(np.asarray(raster["brain_mask"]), np.asarray(raster["annotation"]) != 0):
         raise ValueError("Finite-render brain mask does not match the annotation raster")
-    if not np.asarray(raster["brain_mask"]).any():
-        raise ValueError("Finite-render tissue raster is empty")
     attempts = artifact["rejection_attempts"]
     if artifact["rejection_attempts_sha256"] != _payload_sha256(attempts):
         raise ValueError("Finite-render rejection-attempt hash does not match")
@@ -1441,7 +1449,7 @@ def verify_finite_arbitrary_plane_render(
         or int(artifact["sample_index"]) < 0
         or artifact["stratum"] not in {REFERENCE_STRATUM, BOUNDARY_STRESS_STRATUM}
         or int(config["max_rejection_attempts"]) <= 0
-        or len(attempts) > int(config["max_rejection_attempts"])
+        or len(attempts) != 1
         or int(config["minimum_brain_pixels"]) <= 0
     ):
         raise ValueError("Finite-render sample/rejection eligibility config is invalid")
@@ -1481,10 +1489,8 @@ def verify_finite_arbitrary_plane_render(
         if any(attempt[key] != value for key, value in expected_attempt_pose.items()):
             raise ValueError("Finite-render attempt pose does not replay from seed and support")
     accepted = int(artifact["accepted_attempt_index"])
-    if accepted != len(attempts) - 1 or not attempts[accepted]["accepted"]:
+    if accepted != 0 or not attempts[accepted]["accepted"]:
         raise ValueError("Finite-render accepted attempt is inconsistent")
-    if any(attempt["accepted"] for attempt in attempts[:accepted]):
-        raise ValueError("Finite-render rejection history is inconsistent")
     accepted_attempt = attempts[accepted]
     brain_pixel_count = int(np.asarray(raster["brain_mask"]).sum())
     minimum_brain_pixels = int(config["minimum_brain_pixels"])
@@ -1494,11 +1500,26 @@ def verify_finite_arbitrary_plane_render(
         or accepted_attempt["brain_pixel_count"] != brain_pixel_count
         or artifact["acceptance_contract"]["brain_pixel_count"] != brain_pixel_count
         or artifact["acceptance_contract"]["minimum_brain_pixels"] != minimum_brain_pixels
-        or brain_pixel_count < minimum_brain_pixels
+        or artifact["acceptance_contract"].get(
+            "continuous_plane_intersection_authenticated"
+        ) is not True
+        or artifact["acceptance_contract"].get("pose_redrawn_for_raster_support") is not False
+        or artifact["acceptance_contract"].get("pose_draw_count") != 1
+        or artifact["acceptance_contract"].get(
+            "raster_support_meets_requested_identifiability_threshold"
+        )
+        != (brain_pixel_count >= minimum_brain_pixels)
+        or artifact["acceptance_contract"].get("minimum_brain_pixels_role")
+        != (
+            "requested downstream point/dense-supervision identifiability threshold; "
+            "not an acceptance predicate"
+        )
     ):
         raise ValueError("Finite-render accepted attempt does not match installed geometry or raster")
     if any(
-        bool(attempt["accepted"]) != (int(attempt["brain_pixel_count"]) >= minimum_brain_pixels)
+        bool(attempt["accepted"]) is not True
+        or attempt.get("raster_support_meets_requested_identifiability_threshold")
+        != (int(attempt["brain_pixel_count"]) >= minimum_brain_pixels)
         for attempt in attempts
     ):
         raise ValueError("Finite-render attempt acceptance predicate is inconsistent")

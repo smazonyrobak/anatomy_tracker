@@ -306,7 +306,7 @@ def test_support_is_verified_once_per_make_and_attempt_cross_links_are_enforced(
         verify_finite_arbitrary_plane_render(changed, support)
 
 
-def test_development_only_shape_finiteness_and_minimum_tissue_contracts():
+def test_development_only_shape_finiteness_and_marginal_support_contracts():
     template, annotation, support = _volumes()
     with pytest.raises(ValueError, match="train or development"):
         _make(template, annotation, support, split="test")
@@ -316,8 +316,21 @@ def test_development_only_shape_finiteness_and_minimum_tissue_contracts():
     bad[0, 0, 0] = np.nan
     with pytest.raises(ValueError, match="numeric 3-D"):
         _make(bad, annotation, support)
-    with pytest.raises(RuntimeError, match="No nonempty"):
-        _make(template, annotation, support, output_shape=(7, 7), minimum_brain_pixels=50)
+    marginal = _make(
+        template,
+        annotation,
+        support,
+        output_shape=(7, 7),
+        minimum_brain_pixels=50,
+    )
+    contract = marginal["acceptance_contract"]
+    assert marginal["accepted_attempt_index"] == 0
+    assert len(marginal["rejection_attempts"]) == 1
+    assert contract["pose_redrawn_for_raster_support"] is False
+    assert contract["pose_draw_count"] == 1
+    assert contract["raster_support_meets_requested_identifiability_threshold"] is False
+    assert "unconditioned" in marginal["sampling_measure"]["conditioning"]
+    verify_finite_arbitrary_plane_render(marginal, support)
 
 
 def test_reference_and_boundary_stress_strata_are_named_and_stay_in_component_union():
@@ -337,6 +350,43 @@ def test_reference_and_boundary_stress_strata_are_named_and_stay_in_component_un
         assert np.any((offset >= intervals[:, 0]) & (offset <= intervals[:, 1]))
     assert reference["stratum"] == "reference"
     assert stress["stratum"] == "boundary-stress"
+
+
+def test_raster_support_threshold_cannot_condition_or_redraw_pose():
+    template, annotation, support = _volumes()
+    permissive = _make(
+        template,
+        annotation,
+        support,
+        output_shape=(7, 7),
+        minimum_brain_pixels=1,
+    )
+    censored = _make(
+        template,
+        annotation,
+        support,
+        output_shape=(7, 7),
+        minimum_brain_pixels=10_000,
+    )
+    assert permissive["geometry"]["geometry_sha256"] == censored["geometry"][
+        "geometry_sha256"
+    ]
+    assert permissive["raster_hashes"] == censored["raster_hashes"]
+    assert permissive["rejection_attempts"][0]["normal_rp2_ap_dv_ml"] == censored[
+        "rejection_attempts"
+    ][0]["normal_rp2_ap_dv_ml"]
+    assert permissive["rejection_attempts"][0]["signed_offset_um"] == censored[
+        "rejection_attempts"
+    ][0]["signed_offset_um"]
+    assert permissive["rejection_attempts"][0]["roll_rad"] == censored[
+        "rejection_attempts"
+    ][0]["roll_rad"]
+    assert permissive["acceptance_contract"][
+        "raster_support_meets_requested_identifiability_threshold"
+    ] is True
+    assert censored["acceptance_contract"][
+        "raster_support_meets_requested_identifiability_threshold"
+    ] is False
 
 
 def test_prepared_context_hashes_atlas_once_then_supports_random_access_and_cached_replay(monkeypatch):

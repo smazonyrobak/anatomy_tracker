@@ -42,6 +42,7 @@ def _assets(shape=(17, 15, 13)):
 
 def _parent(
     *, seed=2**63 + 101, output_shape=(47, 53),
+    sample_index=29, minimum_brain_pixels=1,
     animal_id="animal-7", specimen_id="specimen-7a", experiment_id="experiment-71",
     generator_source_commit=None,
 ):
@@ -53,7 +54,7 @@ def _parent(
         "development",
         seed,
         output_shape,
-        sample_index=29,
+        sample_index=sample_index,
         margin_um=(13.0, 17.0),
         scalar_source_uri="file:///fixture/template.nrrd",
         scalar_source_sha256="4" * 64,
@@ -64,6 +65,7 @@ def _parent(
         animal_id=animal_id,
         specimen_id=specimen_id,
         experiment_id=experiment_id,
+        minimum_brain_pixels=minimum_brain_pixels,
         generator_source_commit=generator_source_commit,
     )
     return parent, support
@@ -100,6 +102,56 @@ def test_complete_realization_replays_preserves_provenance_and_is_model_independ
     assert all(artifact["generator"][key] == [] for key in dependency_keys)
     assert int(artifact["root_seed"], 16) > 2**53
     json.dumps(synthetic_realization_receipt(artifact), allow_nan=False)
+
+
+@pytest.mark.parametrize(
+    "outline_mode", (ACCURATE_OUTLINE, IMPERFECT_OUTLINE, ABSENT_OUTLINE)
+)
+def test_one_pixel_marginal_plane_is_retained_and_replays_without_pose_redraw(
+    outline_mode,
+):
+    parent, support = _parent(
+        output_shape=(7, 7),
+        sample_index=0,
+        minimum_brain_pixels=64,
+    )
+    assert parent["acceptance_contract"]["brain_pixel_count"] == 1
+    assert parent["acceptance_contract"]["pose_redrawn_for_raster_support"] is False
+    assert len(parent["rejection_attempts"]) == 1
+    artifact = make_arbitrary_plane_synthetic_realization(
+        parent,
+        support,
+        root_seed=2**63 + 57,
+        outline_mode=outline_mode,
+    )
+    replay = replay_arbitrary_plane_synthetic_realization(artifact, support)
+    verify_arbitrary_plane_synthetic_realization(artifact, support)
+    assert artifact["synthetic_receipt_sha256"] == replay[
+        "synthetic_receipt_sha256"
+    ]
+    assert artifact["support_supervision"] == {
+        "continuous_plane_sample_retained": True,
+        "pose_redrawn_for_raster_support": False,
+        "raster_brain_pixel_count": 1,
+        "requested_identifiability_threshold_pixels": 64,
+        "raster_support_meets_requested_identifiability_threshold": False,
+        "marginal_support_generation_policy": (
+            "identity deformation, damage/information/outline gates bypassed only as explicitly "
+            "recorded; point and dense loss eligibility is decided by the curriculum row"
+        ),
+    }
+    assert artifact["g1"]["parameters"][
+        "marginal_raster_support_identity_bypass"
+    ] is True
+    assert artifact["g2"]["parameters"][
+        "marginal_raster_support_information_bypass"
+    ] is True
+    assert artifact["g3"]["parameters"][
+        "marginal_raster_support_visibility_bypass"
+    ] is True
+    assert artifact["outline"]["parameters"][
+        "marginal_raster_support_outline_bypass"
+    ] is True
 
 
 def test_entrypoints_bind_finite_parent_source_commit_and_legacy_none_remains_compatible():

@@ -1,11 +1,19 @@
-"""Randomly initialized arbitrary-plane retrieval and pose-only recurrent refinement."""
+"""Randomly initialized arbitrary-plane retrieval and recurrent refinement."""
 
 from __future__ import annotations
+
+from contextlib import contextmanager
 
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
+from training.arbitrary_plane_deformation_primitives import (
+    AFFINE_FREE_DEFORMATION_TENSOR_KEYS,
+    inactive_affine_free_deformation,
+    warp_tensor_with_map_yx,
+)
 from training.arbitrary_plane_full_frame_primitives import (
     FULL_FRAME_STATE_SIZE,
     FULL_FRAME_UPDATE_SIZE,
@@ -25,6 +33,7 @@ PLANE_TANGENT_COORDINATES = (
 )
 PROBABILITIES_CALIBRATED = False
 RETRIEVAL_TAIL_SCOPE = "complete_catalogue_at_retrieval"
+_VERIFIED_CATALOGUE_FEATURE_CACHE_TOKEN = object()
 
 
 def local_correlation(
@@ -204,9 +213,10 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
     local Gaussian covers the two normal-tangent coordinates and normal offset;
     separated coarse modes remain separated.
 
-    This module intentionally has no deformation decoder. It establishes the
-    full-frame pose capture path before an affine-free, support-conditioned SVF
-    can be introduced under a separate gate.
+    The pose-only API remains available. The joint wrapper may inject a fresh
+    affine-free SVF decoder after a fixed pose-capture prefix; the decoder uses
+    this same recurrent context, and its absolute map warps the next freshly
+    rendered finite-thickness atlas before correlation.
     """
 
     def __init__(
@@ -269,7 +279,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             nn.Conv2d(hidden_channels, hidden_channels, 3, padding=1),
             nn.GELU(),
         )
-        self.candidate_log_likelihood = nn.Linear(hidden_channels, 1)
+        self.candidate_log_likelihood = nn.Linear(hidden_channels, 1, bias=False)
         self.candidate_update = nn.Linear(hidden_channels, FULL_FRAME_UPDATE_SIZE)
         self.candidate_plane_cholesky = nn.Linear(hidden_channels, 6)
 
@@ -279,12 +289,14 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         )
         self.recurrent_cell = ConvGRUCell(hidden_channels, hidden_channels)
         self.recurrent_update = nn.Linear(hidden_channels, FULL_FRAME_UPDATE_SIZE)
-        self.recurrent_log_likelihood = nn.Linear(hidden_channels, 1)
+        self.recurrent_log_likelihood = nn.Linear(hidden_channels, 1, bias=False)
+        self.recurrent_plane_cholesky = nn.Linear(hidden_channels, 6)
 
         self.register_buffer("update_limits", torch.tensor(update_limits))
         self.register_buffer(
             "plane_tangent_scales", torch.tensor(plane_tangent_scales)
         )
+        self._complete_catalogue_feature_cache = None
         for head in (
             self.candidate_log_likelihood,
             self.candidate_update,
@@ -292,10 +304,14 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             self.recurrent_log_likelihood,
         ):
             nn.init.normal_(head.weight, std=1e-3)
-            nn.init.zeros_(head.bias)
+            if head.bias is not None:
+                nn.init.zeros_(head.bias)
         nn.init.normal_(self.candidate_plane_cholesky.weight, std=1e-3)
         nn.init.zeros_(self.candidate_plane_cholesky.bias)
         nn.init.constant_(self.candidate_plane_cholesky.bias[:3], -2.0)
+        nn.init.normal_(self.recurrent_plane_cholesky.weight, std=1e-3)
+        nn.init.zeros_(self.recurrent_plane_cholesky.bias)
+        nn.init.constant_(self.recurrent_plane_cholesky.bias[:3], -2.0)
 
     def encode_histology(
         self,
@@ -315,7 +331,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             raise ValueError("outline availability must have shape (B,) or (B,1)")
         availability_plane = available[:, :, None, None].expand_as(image)
         encoded = self.histology_stem(
-            torch.cat((image, outline, availability_plane), dim=1)
+            torch.cat((image, outline * availability_plane, availability_plane), dim=1)
         )
         return self.shared_encoder(encoded)
 
@@ -424,6 +440,25 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         )
         return canonicalize_representation_raster(represented, affine)
 
+    @staticmethod
+    def _warp_representations_with_cell_map(
+        rendered: torch.Tensor,
+        cell_map_yx: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply one canonical output-to-input deformation to every cell representation."""
+        if rendered.ndim != 6:
+            raise ValueError("representation renders must have shape (B,K,R,C,H,W)")
+        batch, cells, representations, channels, height, width = rendered.shape
+        if cell_map_yx.shape != (batch, cells, 2, height, width):
+            raise ValueError("cell deformation maps must have shape (B,K,2,H,W)")
+        expanded_map = cell_map_yx[:, :, None].expand(
+            batch, cells, representations, 2, height, width
+        )
+        return warp_tensor_with_map_yx(
+            rendered.reshape(batch * cells * representations, channels, height, width),
+            expanded_map.reshape(batch * cells * representations, 2, height, width),
+        ).reshape_as(rendered)
+
     def _pair_context(
         self,
         source_features: torch.Tensor,
@@ -441,6 +476,132 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             _pair_evidence(source, atlas_features, self.correlation_radius)
         )
         return context.reshape(batch, count, *context.shape[1:])
+
+    @contextmanager
+    def use_complete_catalogue_feature_cache(
+        self,
+        atlas_features: torch.Tensor,
+        cell_id: torch.Tensor,
+        retrieval_shape_h_w: tuple[int, int],
+        *,
+        _verification_token=None,
+    ):
+        """Activate one verified, same-checkpoint atlas cache for one eval call."""
+        if self.training:
+            raise ValueError("complete-catalogue feature caches are inference-only")
+        if self._complete_catalogue_feature_cache is not None:
+            raise RuntimeError("complete-catalogue feature cache contexts cannot be nested")
+        features = torch.as_tensor(atlas_features)
+        ids = torch.as_tensor(cell_id, device=features.device)
+        already_verified = _verification_token is _VERIFIED_CATALOGUE_FEATURE_CACHE_TOKEN
+        if (
+            features.ndim != 5
+            or features.shape[0] < 1
+            or not torch.is_floating_point(features)
+            or ids.ndim != 1
+            or ids.shape[0] != features.shape[0]
+            or ids.dtype == torch.bool
+            or torch.is_floating_point(ids)
+            or len(retrieval_shape_h_w) != 2
+            or min(retrieval_shape_h_w) < 4
+            or (
+                not already_verified
+                and (
+                    not bool(torch.isfinite(features).all())
+                    or not torch.equal(
+                        ids.to(torch.long),
+                        torch.arange(ids.numel(), device=ids.device),
+                    )
+                )
+            )
+        ):
+            raise ValueError("cached atlas features require complete canonical cell coverage")
+        self._complete_catalogue_feature_cache = {
+            "atlas_features": features,
+            "cell_id": ids.to(torch.long),
+            "retrieval_shape_h_w": tuple(int(value) for value in retrieval_shape_h_w),
+            "already_verified": bool(already_verified),
+        }
+        try:
+            yield
+        finally:
+            self._complete_catalogue_feature_cache = None
+
+    def score_catalogue_feature_chunk(
+        self,
+        source_features: torch.Tensor,
+        atlas_features: torch.Tensor,
+        cell_id: torch.Tensor,
+        cell_log_mass: torch.Tensor,
+        representation_log_weight: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Exactly score one cached atlas-feature chunk without approximation."""
+        if self.training:
+            raise ValueError("cached atlas features cannot be used during training")
+        features = torch.as_tensor(
+            atlas_features, device=source_features.device, dtype=source_features.dtype
+        )
+        if features.ndim != 5 or features.shape[2:] != source_features.shape[1:]:
+            raise ValueError("cached atlas features must have shape (K,R,F,h,w)")
+        cells, representations = features.shape[:2]
+        ids = torch.as_tensor(cell_id, device=source_features.device)
+        if (
+            ids.ndim != 1
+            or ids.shape[0] != cells
+            or ids.dtype == torch.bool
+            or torch.is_floating_point(ids)
+            or torch.unique(ids).numel() != cells
+        ):
+            raise ValueError("cached cell IDs must be one unique integer vector")
+        ids = ids.to(torch.long)
+        batch = source_features.shape[0]
+        probability_dtype = (
+            torch.float32
+            if source_features.dtype in (torch.float16, torch.bfloat16)
+            else source_features.dtype
+        )
+        log_mass = torch.as_tensor(
+            cell_log_mass, device=source_features.device, dtype=probability_dtype
+        )
+        log_weight = torch.as_tensor(
+            representation_log_weight,
+            device=source_features.device,
+            dtype=probability_dtype,
+        )
+        if log_mass.shape != (batch, cells) or not bool(torch.isfinite(log_mass).all()):
+            raise ValueError("cell log mass must be finite with shape (B,K)")
+        if log_weight.shape != (batch, cells, representations) or not bool(
+            torch.isfinite(log_weight).all()
+        ):
+            raise ValueError("representation log weights must be finite with shape (B,K,R)")
+        if not torch.allclose(
+            torch.logsumexp(log_weight, dim=2),
+            torch.zeros_like(log_mass),
+            atol=2e-6,
+            rtol=0.0,
+        ):
+            raise ValueError("representation weights must have unit mass within every cell")
+        expanded = features[None].expand(batch, *features.shape).reshape(
+            batch * cells * representations, *features.shape[2:]
+        )
+        source = source_features[:, None, None].expand(
+            batch, cells, representations, *source_features.shape[1:]
+        ).reshape(batch * cells * representations, *source_features.shape[1:])
+        context = self.retrieval_pair_encoder(
+            _pair_evidence(source, expanded, self.correlation_radius)
+        ).reshape(batch, cells, representations, -1, *source_features.shape[-2:])
+        representation_log_score = self.candidate_log_likelihood(
+            context.mean(dim=(-2, -1))
+        ).squeeze(-1)
+        cell_log_evidence = torch.logsumexp(
+            log_weight + representation_log_score.to(probability_dtype), dim=2
+        )
+        return {
+            "cell_id": ids,
+            "representation_log_score": representation_log_score,
+            "cell_log_evidence": cell_log_evidence,
+            "cell_log_unnormalized_mass": log_mass + cell_log_evidence,
+        }
 
     def _bounded_update(self, raw: torch.Tensor) -> torch.Tensor:
         return torch.tanh(raw) * self.update_limits.to(raw)[None]
@@ -673,8 +834,17 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         axial_offsets_um: torch.Tensor,
         axial_weights: torch.Tensor,
         steps: int,
-    ) -> dict[str, torch.Tensor]:
-        """Marginalize raster nuisance states before each canonical cell update."""
+        *,
+        deformation_decoder: nn.Module | None = None,
+        pose_only_steps: int | None = None,
+    ) -> dict[str, object]:
+        """Marginalize raster nuisance states before each shared recurrent update.
+
+        When a deformation decoder is supplied, its absolute affine-free state is
+        decoded from the same recurrent context and fed into the next correlation
+        render. The fixed iteration gate prevents pose/deformation confounding
+        during the declared pose-capture prefix.
+        """
         if not isinstance(steps, int) or isinstance(steps, bool) or steps < 1:
             raise ValueError("refinement steps must be a positive integer")
         if initial_states.ndim != 3 or initial_states.shape[-1] != FULL_FRAME_STATE_SIZE:
@@ -683,6 +853,15 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         representations = representation_to_canonical_raster_affine.shape[2]
         if initial_joint_log_probability.shape != (batch, cells, representations):
             raise ValueError("initial joint log probability must have shape (B,K,R)")
+        if deformation_decoder is None:
+            if pose_only_steps is not None:
+                raise ValueError("pose_only_steps requires a deformation decoder")
+        elif (
+            not isinstance(pose_only_steps, int)
+            or isinstance(pose_only_steps, bool)
+            or not 0 <= pose_only_steps <= steps + 1
+        ):
+            raise ValueError("pose_only_steps must be between zero and T")
         source = source_features[:, None, None].expand(
             batch, cells, representations, *source_features.shape[1:]
         ).reshape(batch * cells * representations, *source_features.shape[1:])
@@ -696,6 +875,14 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         updates = []
         log_scores = []
         representation_log_conditionals = []
+        representation_contexts = []
+        representation_plane_covariances = []
+        cell_plane_covariances = []
+        deformation_outputs = []
+        deformation_cell_contexts = []
+        deformation_representation_probabilities = []
+        deformation_active = []
+        feedback_map = None
         initial_cell_log_probability = torch.logsumexp(
             initial_joint_log_probability, dim=2
         )
@@ -703,7 +890,37 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             initial_joint_log_probability - initial_cell_log_probability[..., None]
         )
         cell_log_score_increment = torch.zeros_like(initial_cell_log_probability)
-        for _ in range(steps):
+        for iteration in range(steps):
+            if deformation_decoder is not None:
+                probability = representation_log_conditional.exp().detach()
+                representation_hidden = hidden.reshape(
+                    batch,
+                    cells,
+                    representations,
+                    *hidden.shape[1:],
+                )
+                cell_context = (
+                    probability.to(representation_hidden)[..., None, None, None]
+                    * representation_hidden
+                ).sum(dim=2)
+                flat_context = cell_context.reshape(
+                    batch * cells, *cell_context.shape[2:]
+                )
+                active = iteration >= pose_only_steps
+                decoded = (
+                    deformation_decoder(flat_context, output_shape_h_w)
+                    if active
+                    else inactive_affine_free_deformation(
+                        flat_context, output_shape_h_w
+                    )
+                )
+                feedback_map = decoded["forward_map_yx_px"].reshape(
+                    batch, cells, 2, *output_shape_h_w
+                )
+                deformation_outputs.append(decoded)
+                deformation_cell_contexts.append(cell_context)
+                deformation_representation_probabilities.append(probability)
+                deformation_active.append(active)
             rendered = self._render_representations(
                 atlas_volume,
                 state,
@@ -714,6 +931,10 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 axial_offsets_um,
                 axial_weights,
             )
+            if feedback_map is not None:
+                rendered = self._warp_representations_with_cell_map(
+                    rendered, feedback_map.to(rendered)
+                )
             atlas_features = self._encode_atlas(
                 rendered.reshape(
                     batch * cells * representations,
@@ -725,6 +946,14 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 _pair_evidence(source, atlas_features, self.correlation_radius)
             )
             hidden = self.recurrent_cell(evidence, hidden)
+            representation_contexts.append(
+                hidden.reshape(
+                    batch,
+                    cells,
+                    representations,
+                    *hidden.shape[1:],
+                )
+            )
             pooled = hidden.mean(dim=(-2, -1))
             canonical_update = self._bounded_update(
                 self.recurrent_update(pooled)
@@ -749,6 +978,23 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 representation_log_conditional.exp().to(accumulation_dtype)[..., None]
                 * canonical_update.to(accumulation_dtype)
             ).sum(dim=2).to(state)
+            canonical_cholesky = self._plane_cholesky(
+                self.recurrent_plane_cholesky(pooled)
+            ).to(state)
+            canonical_covariance = (
+                canonical_cholesky @ canonical_cholesky.transpose(-1, -2)
+            ).reshape(batch, cells, representations, 3, 3)
+            plane_difference = (
+                canonical_update.to(state)[..., :3] - cell_update[..., None, :3]
+            )
+            cell_covariance = (
+                representation_log_conditional.exp().to(state)[..., None, None]
+                * (
+                    canonical_covariance
+                    + plane_difference[..., :, None]
+                    @ plane_difference[..., None, :]
+                )
+            ).sum(dim=2)
             with torch.autocast(device_type=state.device.type, enabled=False):
                 state = compose_antipodal_plane_frame_residual(
                     state.reshape(-1, FULL_FRAME_STATE_SIZE),
@@ -758,7 +1004,53 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             updates.append(cell_update)
             log_scores.append(log_score)
             representation_log_conditionals.append(representation_log_conditional)
+            representation_plane_covariances.append(canonical_covariance)
+            cell_plane_covariances.append(cell_covariance)
             state_sequence.append(state)
+
+        if deformation_decoder is not None:
+            final_probability_for_deformation = (
+                representation_log_conditional.exp().detach()
+            )
+            final_representation_hidden_for_deformation = hidden.reshape(
+                batch,
+                cells,
+                representations,
+                *hidden.shape[1:],
+            )
+            final_cell_context_for_deformation = (
+                final_probability_for_deformation.to(
+                    final_representation_hidden_for_deformation
+                )[..., None, None, None]
+                * final_representation_hidden_for_deformation
+            ).sum(dim=2)
+            flat_final_context_for_deformation = (
+                final_cell_context_for_deformation.reshape(
+                    batch * cells,
+                    *final_cell_context_for_deformation.shape[2:],
+                )
+            )
+            final_active_for_deformation = steps >= pose_only_steps
+            final_decoded_for_deformation = (
+                deformation_decoder(
+                    flat_final_context_for_deformation, output_shape_h_w
+                )
+                if final_active_for_deformation
+                else inactive_affine_free_deformation(
+                    flat_final_context_for_deformation, output_shape_h_w
+                )
+            )
+            feedback_map = final_decoded_for_deformation[
+                "forward_map_yx_px"
+            ].reshape(batch, cells, 2, *output_shape_h_w)
+            deformation_outputs.append(final_decoded_for_deformation)
+            deformation_cell_contexts.append(
+                final_cell_context_for_deformation
+            )
+            deformation_representation_probabilities.append(
+                final_probability_for_deformation
+            )
+            deformation_active.append(final_active_for_deformation)
 
         final_render = self._render_representations(
             atlas_volume,
@@ -770,8 +1062,15 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             axial_offsets_um,
             axial_weights,
         )
+        final_feedback_render = (
+            final_render
+            if feedback_map is None
+            else self._warp_representations_with_cell_map(
+                final_render, feedback_map.to(final_render)
+            )
+        )
         final_atlas_features = self._encode_atlas(
-            final_render.reshape(
+            final_feedback_render.reshape(
                 batch * cells * representations,
                 self.atlas_channels,
                 *output_shape_h_w,
@@ -781,6 +1080,14 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             _pair_evidence(source, final_atlas_features, self.correlation_radius)
         )
         final_hidden = self.recurrent_cell(final_evidence, hidden)
+        representation_contexts.append(
+            final_hidden.reshape(
+                batch,
+                cells,
+                representations,
+                *final_hidden.shape[1:],
+            )
+        )
         final_log_likelihood = self.recurrent_log_likelihood(
             final_hidden.mean(dim=(-2, -1))
         ).reshape(batch, cells, representations)
@@ -789,6 +1096,17 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         final_representation_log_conditional = (
             final_joint_within_cell - final_cell_log_score[..., None]
         )
+        final_pooled = final_hidden.mean(dim=(-2, -1))
+        final_canonical_cholesky = self._plane_cholesky(
+            self.recurrent_plane_cholesky(final_pooled)
+        ).to(state)
+        final_representation_covariance = (
+            final_canonical_cholesky @ final_canonical_cholesky.transpose(-1, -2)
+        ).reshape(batch, cells, representations, 3, 3)
+        final_cell_covariance = (
+            final_representation_log_conditional.exp().to(state)[..., None, None]
+            * final_representation_covariance
+        ).sum(dim=2)
         conditional_cell_log_probability = F.log_softmax(
             initial_cell_log_probability
             + cell_log_score_increment
@@ -799,20 +1117,335 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             conditional_cell_log_probability[..., None]
             + final_representation_log_conditional
         )
-        return {
+        result = {
             "refined_cell_state_sequence": torch.stack(state_sequence, dim=2),
             "refinement_cell_update_sequence": torch.stack(updates, dim=2),
             "refinement_representation_log_score_sequence": torch.stack(log_scores, dim=3),
             "refinement_representation_log_conditional_sequence": torch.stack(
                 representation_log_conditionals, dim=3
             ),
+            "refinement_representation_context_sequence": torch.stack(
+                representation_contexts, dim=3
+            ),
+            "refinement_representation_canonical_plane_covariance_sequence": torch.stack(
+                representation_plane_covariances, dim=3
+            ),
+            "refinement_cell_canonical_plane_covariance_sequence": torch.stack(
+                cell_plane_covariances, dim=2
+            ),
             "final_cell_state": state,
             "final_canonical_render": final_render,
             "final_representation_log_score": final_log_likelihood,
             "final_representation_log_conditional_within_cell": final_representation_log_conditional,
+            "final_representation_canonical_plane_covariance": final_representation_covariance,
+            "final_cell_canonical_plane_covariance": final_cell_covariance,
             "conditional_within_topk_representation_log_probability": conditional_joint_log_probability,
             "conditional_within_topk_cell_log_probability": conditional_cell_log_probability,
             "conditional_within_topk_cell_probability": conditional_cell_log_probability.exp(),
+        }
+        if deformation_decoder is not None:
+            result.update(
+                {
+                    "joint_deformation_output_sequences": {
+                        f"{key}_sequence": torch.stack(
+                            [
+                                output[key].reshape(
+                                    batch, cells, *output[key].shape[1:]
+                                )
+                                for output in deformation_outputs
+                            ],
+                            dim=2,
+                        )
+                        for key in AFFINE_FREE_DEFORMATION_TENSOR_KEYS
+                    },
+                    "joint_deformation_cell_context_sequence": torch.stack(
+                        deformation_cell_contexts, dim=2
+                    ),
+                    "joint_deformation_representation_probability_sequence": torch.stack(
+                        deformation_representation_probabilities, dim=3
+                    ),
+                    "joint_deformation_active_sequence": torch.tensor(
+                        deformation_active,
+                        device=state.device,
+                        dtype=torch.bool,
+                    ),
+                    "joint_final_feedback_deformed_canonical_render": final_feedback_render,
+                }
+            )
+        return result
+
+    def forward_streamed(
+        self,
+        image: torch.Tensor,
+        outline: torch.Tensor,
+        outline_available: torch.Tensor,
+        atlas_volume: torch.Tensor,
+        cell_id: torch.Tensor,
+        cell_states: torch.Tensor,
+        cell_log_mass: torch.Tensor,
+        representation_log_weight: torch.Tensor,
+        representation_to_canonical_raster_affine: torch.Tensor,
+        output_shape_h_w: tuple[int, int],
+        retrieval_shape_h_w: tuple[int, int],
+        origin_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
+        voxel_size_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
+        support_origin_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
+        axial_offsets_um: torch.Tensor,
+        axial_weights: torch.Tensor,
+        *,
+        expected_catalogue_cell_count: int,
+        catalogue_chunk_size: int,
+        top_k: int = 4,
+        refinement_steps: int = 3,
+        training_truth_catalogue_index: torch.Tensor | None = None,
+        deformation_decoder: nn.Module | None = None,
+        pose_only_steps: int | None = None,
+    ) -> dict[str, torch.Tensor | bool | str]:
+        """Checkpoint low-resolution catalogue chunks, then refine only top-K."""
+        if (
+            not isinstance(catalogue_chunk_size, int)
+            or isinstance(catalogue_chunk_size, bool)
+            or catalogue_chunk_size < 1
+        ):
+            raise ValueError("catalogue chunk size must be a positive integer")
+        if len(retrieval_shape_h_w) != 2 or min(retrieval_shape_h_w) < 4:
+            raise ValueError("retrieval spatial sizes must both be at least four")
+        if cell_states.shape[1] != expected_catalogue_cell_count:
+            raise ValueError("streamed retrieval requires the declared complete catalogue")
+
+        retrieval_image = F.interpolate(
+            image, retrieval_shape_h_w, mode="bilinear", align_corners=False
+        )
+        retrieval_outline = F.interpolate(
+            outline, retrieval_shape_h_w, mode="bilinear", align_corners=False
+        )
+        coarse_source = self.encode_histology(
+            retrieval_image, retrieval_outline, outline_available
+        )
+        feature_cache = self._complete_catalogue_feature_cache
+        if feature_cache is not None:
+            if self.training:
+                raise ValueError("complete-catalogue feature caches are inference-only")
+            incoming_ids = torch.as_tensor(cell_id, device=image.device).to(torch.long)
+            cached_features = feature_cache["atlas_features"]
+            if (
+                feature_cache["retrieval_shape_h_w"] != tuple(retrieval_shape_h_w)
+                or cached_features.shape[0] != expected_catalogue_cell_count
+                or cached_features.shape[2:] != coarse_source.shape[1:]
+                or (
+                    not feature_cache["already_verified"]
+                    and not torch.equal(
+                        feature_cache["cell_id"].to(image.device), incoming_ids
+                    )
+                )
+            ):
+                raise ValueError("active feature cache does not match this complete catalogue call")
+        chunks = []
+        for start in range(0, expected_catalogue_cell_count, catalogue_chunk_size):
+            stop = min(start + catalogue_chunk_size, expected_catalogue_cell_count)
+            ids = torch.as_tensor(cell_id, device=image.device)[start:stop]
+
+            def score_mass(
+                source: torch.Tensor,
+                volume: torch.Tensor,
+                states: torch.Tensor,
+                log_mass: torch.Tensor,
+                log_weight: torch.Tensor,
+                affine: torch.Tensor,
+                chunk_ids: torch.Tensor,
+            ) -> torch.Tensor:
+                return self.score_catalogue_chunk(
+                    source,
+                    volume,
+                    chunk_ids,
+                    states,
+                    log_mass,
+                    log_weight,
+                    affine,
+                    retrieval_shape_h_w,
+                    origin_ap_dv_ml_um,
+                    voxel_size_ap_dv_ml_um,
+                    support_origin_ap_dv_ml_um,
+                    axial_offsets_um,
+                    axial_weights,
+                )["cell_log_unnormalized_mass"]
+
+            if feature_cache is None:
+                arguments = (
+                    coarse_source,
+                    atlas_volume,
+                    cell_states[:, start:stop],
+                    cell_log_mass[:, start:stop],
+                    representation_log_weight[:, start:stop],
+                    representation_to_canonical_raster_affine[:, start:stop],
+                    ids,
+                )
+                mass = (
+                    checkpoint(score_mass, *arguments, use_reentrant=False)
+                    if self.training
+                    else score_mass(*arguments)
+                )
+            else:
+                mass = self.score_catalogue_feature_chunk(
+                    coarse_source,
+                    cached_features[start:stop],
+                    ids,
+                    cell_log_mass[:, start:stop],
+                    representation_log_weight[:, start:stop],
+                )["cell_log_unnormalized_mass"]
+            chunks.append({"cell_id": ids, "cell_log_unnormalized_mass": mass})
+
+        retrieval = self.normalize_complete_catalogue(
+            chunks, expected_catalogue_cell_count, top_k
+        )
+        retrieval.update(
+            {
+                "honest_retrieval_topk_catalogue_index": retrieval[
+                    "retrieval_topk_catalogue_index"
+                ],
+                "honest_retrieval_topk_cell_id": retrieval[
+                    "retrieval_topk_cell_id"
+                ],
+                "honest_retrieval_topk_log_probability": retrieval[
+                    "retrieval_topk_log_probability"
+                ],
+                "honest_retrieval_topk_retained_probability": retrieval[
+                    "retrieval_topk_retained_probability"
+                ],
+                "honest_retrieval_omitted_probability": retrieval[
+                    "retrieval_omitted_probability"
+                ],
+            }
+        )
+        teacher_forced = torch.zeros(
+            image.shape[0], device=image.device, dtype=torch.bool
+        )
+        if training_truth_catalogue_index is not None:
+            if not self.training:
+                raise ValueError("truth-forced refinement is training-only")
+            truth_index = torch.as_tensor(
+                training_truth_catalogue_index, device=image.device, dtype=torch.long
+            )
+            if truth_index.shape != (image.shape[0],) or bool(
+                ((truth_index < 0) | (truth_index >= expected_catalogue_cell_count)).any()
+            ):
+                raise ValueError("training truth catalogue indices must have shape (B,)")
+            forced_catalogue_index = retrieval[
+                "retrieval_topk_catalogue_index"
+            ].clone()
+            teacher_forced = ~forced_catalogue_index.eq(truth_index[:, None]).any(dim=1)
+            forced_catalogue_index[teacher_forced, -1] = truth_index[teacher_forced]
+            source_by_catalogue = torch.argsort(
+                torch.as_tensor(cell_id, device=image.device)
+            )
+            forced_source_index = source_by_catalogue[forced_catalogue_index]
+            forced_log_probability = torch.gather(
+                retrieval["retrieval_cell_log_probability"],
+                1,
+                forced_catalogue_index,
+            )
+            selected = torch.zeros_like(
+                retrieval["retrieval_cell_probability"], dtype=torch.bool
+            ).scatter(1, forced_catalogue_index, True)
+            probability = retrieval["retrieval_cell_probability"]
+            retrieval.update(
+                {
+                    "retrieval_topk_catalogue_index": forced_catalogue_index,
+                    "retrieval_topk_source_index": forced_source_index,
+                    "retrieval_topk_cell_id": retrieval["retrieval_cell_id"][
+                        forced_catalogue_index
+                    ],
+                    "retrieval_topk_log_probability": forced_log_probability,
+                    "retrieval_topk_retained_probability": probability.masked_fill(
+                        ~selected, 0.0
+                    ).sum(dim=1),
+                    "retrieval_omitted_probability": probability.masked_fill(
+                        selected, 0.0
+                    ).sum(dim=1),
+                }
+            )
+        retrieval["retrieval_teacher_forced_mask"] = teacher_forced
+        top_indices = retrieval["retrieval_topk_source_index"]
+
+        def gather_cells(value: torch.Tensor) -> torch.Tensor:
+            index = top_indices.reshape(
+                *top_indices.shape, *([1] * (value.ndim - 2))
+            ).expand(*top_indices.shape, *value.shape[2:])
+            return torch.gather(value, 1, index)
+
+        top_states = gather_cells(cell_states)
+        top_log_mass = gather_cells(cell_log_mass)
+        top_log_weight = gather_cells(representation_log_weight)
+        top_affine = gather_cells(representation_to_canonical_raster_affine)
+        full_source = (
+            coarse_source
+            if tuple(image.shape[-2:]) == tuple(output_shape_h_w)
+            and tuple(retrieval_shape_h_w) == tuple(output_shape_h_w)
+            else self.encode_histology(image, outline, outline_available)
+        )
+        top_chunk = self.score_catalogue_chunk(
+            full_source,
+            atlas_volume,
+            torch.arange(top_k, device=image.device),
+            top_states,
+            top_log_mass,
+            top_log_weight,
+            top_affine,
+            output_shape_h_w,
+            origin_ap_dv_ml_um,
+            voxel_size_ap_dv_ml_um,
+            support_origin_ap_dv_ml_um,
+            axial_offsets_um,
+            axial_weights,
+        )
+        initial_states = top_chunk["initial_cell_refined_state"]
+        initial_joint_log_probability = (
+            retrieval["retrieval_topk_log_probability"][..., None]
+            + top_chunk["representation_log_conditional_within_cell"]
+        )
+        refinement = self.refine(
+            full_source,
+            atlas_volume,
+            initial_states,
+            initial_joint_log_probability,
+            top_affine,
+            output_shape_h_w,
+            origin_ap_dv_ml_um,
+            voxel_size_ap_dv_ml_um,
+            support_origin_ap_dv_ml_um,
+            axial_offsets_um,
+            axial_weights,
+            refinement_steps,
+            deformation_decoder=deformation_decoder,
+            pose_only_steps=pose_only_steps,
+        )
+        return {
+            "cell_id": torch.as_tensor(cell_id, device=image.device),
+            "cell_log_unnormalized_mass": torch.cat(
+                [chunk["cell_log_unnormalized_mass"] for chunk in chunks], dim=1
+            ),
+            **retrieval,
+            "topk_initial_representation_log_score": top_chunk[
+                "representation_log_score"
+            ],
+            "topk_initial_representation_log_conditional_within_cell": top_chunk[
+                "representation_log_conditional_within_cell"
+            ],
+            "topk_initial_cell_state": initial_states,
+            "topk_initial_cell_canonical_plane_covariance": top_chunk[
+                "initial_cell_canonical_plane_covariance"
+            ],
+            "refinement_probability_scope": "conditional_within_retrieved_topk",
+            "retrieval_execution": (
+                "cached_complete_catalogue_features_exact"
+                if feature_cache is not None
+                else "checkpointed_low_resolution_chunks"
+            ),
+            "retrieval_shape_h_w": torch.tensor(
+                retrieval_shape_h_w, device=image.device
+            ),
+            "catalogue_chunk_size": int(catalogue_chunk_size),
+            **refinement,
         }
 
     def forward(
@@ -836,6 +1469,8 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         expected_catalogue_cell_count: int,
         top_k: int = 4,
         refinement_steps: int = 3,
+        deformation_decoder: nn.Module | None = None,
+        pose_only_steps: int | None = None,
     ) -> dict[str, torch.Tensor | bool | str]:
         source_features = self.encode_histology(image, outline, outline_available)
         chunk = self.score_catalogue_chunk(
@@ -889,6 +1524,8 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             axial_offsets_um,
             axial_weights,
             refinement_steps,
+            deformation_decoder=deformation_decoder,
+            pose_only_steps=pose_only_steps,
         )
         return {
             **chunk,

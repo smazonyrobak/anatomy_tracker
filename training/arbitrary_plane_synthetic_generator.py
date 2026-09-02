@@ -268,10 +268,11 @@ def _common_cell_mask(pixel_map: np.ndarray) -> np.ndarray:
 
 def _tissue_scale(tissue: np.ndarray, pixel_pitch_um: float) -> tuple[float, float, float]:
     y, x = np.nonzero(tissue)
-    if len(x) < 3:
-        raise ValueError("finite parent has too little tissue for a synthetic realization")
-    u_span = (float(x.max() - x.min()) + 1.0) * pixel_pitch_um
-    v_span = (float(y.max() - y.min()) + 1.0) * pixel_pitch_um
+    if len(x):
+        u_span = (float(x.max() - x.min()) + 1.0) * pixel_pitch_um
+        v_span = (float(y.max() - y.min()) + 1.0) * pixel_pitch_um
+    else:
+        u_span = v_span = pixel_pitch_um
     return min(u_span, v_span), u_span, v_span
 
 
@@ -322,8 +323,7 @@ def _g1(
         int(config["ordinary_minimum_clean_brain_pixels_floor"]),
         int(math.ceil(float(config["ordinary_minimum_clean_brain_fraction"]) * height * width)),
     )
-    if config["synthetic_stratum"] == "ordinary" and int(fixed_tissue.sum()) < ordinary_minimum:
-        raise ValueError("ordinary synthetic stratum does not meet the predeclared clean-brain-pixel gate")
+    marginal_support = int(fixed_tissue.sum()) < ordinary_minimum
     pitch_um = float(parent["geometry"]["reference_aspect_policy"]["pixel_pitch_u_um"])
     if pitch_um != float(parent["geometry"]["reference_aspect_policy"]["pixel_pitch_v_um"]):
         raise ValueError("finite parent must use the isotropic reference pixel-pitch contract")
@@ -336,7 +336,11 @@ def _g1(
     ]
     logs = []
     for attempt in range(int(config["maximum_g1_attempts"])):
-        identity = bool(_rng(config, "g1", "identity", attempt).random() < float(g1["identity_probability"]))
+        identity = bool(
+            marginal_support
+            or _rng(config, "g1", "identity", attempt).random()
+            < float(g1["identity_probability"])
+        )
         if identity:
             velocity_um = np.zeros((2, height, width), np.float32)
             target_rms_um = 0.0
@@ -388,16 +392,24 @@ def _g1(
             translation_xy=translation,
         )
         identity_map = identity_pixel_map((height, width))
-        initial_postintegration_rms_um = float(
-            np.sqrt(
-                np.mean(
-                    np.sum(
-                        (maps["local_fixed_to_fixed_map"][:, fixed_tissue] - identity_map[:, fixed_tissue]).astype(np.float64) ** 2,
-                        axis=0,
+        initial_postintegration_rms_um = (
+            0.0
+            if not fixed_tissue.any()
+            else float(
+                np.sqrt(
+                    np.mean(
+                        np.sum(
+                            (
+                                maps["local_fixed_to_fixed_map"][:, fixed_tissue]
+                                - identity_map[:, fixed_tissue]
+                            ).astype(np.float64)
+                            ** 2,
+                            axis=0,
+                        )
                     )
                 )
+                * pitch_um
             )
-            * pitch_um
         )
         reintegrated_after_rms_rescale = False
         if not identity and initial_postintegration_rms_um > 0.0:
@@ -410,16 +422,24 @@ def _g1(
                 translation_xy=translation,
             )
             reintegrated_after_rms_rescale = True
-        achieved_postintegration_rms_um = float(
-            np.sqrt(
-                np.mean(
-                    np.sum(
-                        (maps["local_fixed_to_fixed_map"][:, fixed_tissue] - identity_map[:, fixed_tissue]).astype(np.float64) ** 2,
-                        axis=0,
+        achieved_postintegration_rms_um = (
+            0.0
+            if not fixed_tissue.any()
+            else float(
+                np.sqrt(
+                    np.mean(
+                        np.sum(
+                            (
+                                maps["local_fixed_to_fixed_map"][:, fixed_tissue]
+                                - identity_map[:, fixed_tissue]
+                            ).astype(np.float64)
+                            ** 2,
+                            axis=0,
+                        )
                     )
                 )
+                * pitch_um
             )
-            * pitch_um
         )
         fixed_to_source = maps["fixed_to_source_map"]
         source_to_fixed = maps["source_to_fixed_map"]
@@ -450,7 +470,10 @@ def _g1(
             ).max()
             * pitch_um
         )
-        fov_passed = retained >= float(g1["minimum_tissue_retained_fraction"])
+        fov_passed = bool(
+            marginal_support
+            or retained >= float(g1["minimum_tissue_retained_fraction"])
+        )
         max_displacement_passed = max_displacement_um <= float(g1["maximum_displacement_over_D"]) * D_um
         steps_passed = int(maps["integration_steps"]) <= int(g1["maximum_squaring_steps"])
         rms_target_passed = bool(
@@ -557,6 +580,8 @@ def _g1(
                 "pixel_pitch_um": pitch_um,
                 "D_um": D_um,
                 "clean_tissue_span_u_v_um": [u_span, v_span],
+                "marginal_raster_support_identity_bypass": marginal_support,
+                "ordinary_requested_identifiability_threshold_pixels": ordinary_minimum,
                 "accepted_attempt_index": attempt,
                 "accepted_attempt": entry,
             }
@@ -641,7 +666,14 @@ def _g2_attempt(
     stage_rng = lambda field: _rng(config, "g2", field, attempt)
     normalized = robust_clean_normalization(scalar, tissue)
     source_values = scalar[tissue].astype(np.float64)
-    if len(source_values) >= 256:
+    if not len(source_values):
+        normalization = {
+            "method": "empty-tissue",
+            "lower": None,
+            "upper": None,
+            "tissue_pixel_count": 0,
+        }
+    elif len(source_values) >= 256:
         normalization = {
             "method": "clean-tissue-q01-q99",
             "lower": float(np.quantile(source_values, 0.01)),
@@ -655,7 +687,10 @@ def _g2_attempt(
             "upper": float(source_values.max()),
             "tissue_pixel_count": int(len(source_values)),
         }
-    identity = bool(stage_rng("identity").random() < float(g2["identity_probability"]))
+    identity = bool(
+        not tissue.any()
+        or stage_rng("identity").random() < float(g2["identity_probability"])
+    )
     if identity:
         family, alpha = "identity", 0.0
         appearance = normalized.copy()
@@ -781,9 +816,19 @@ def _g2(
     rejection_attempts = []
     for attempt in range(int(config["maximum_g2_attempts"])):
         arrays, parameters = _g2_attempt(g1_arrays, config, attempt)
+        marginal_support = int(g1_arrays["source_clean_tissue_mask"].sum()) < max(
+            int(config["ordinary_minimum_clean_brain_pixels_floor"]),
+            int(
+                math.ceil(
+                    float(config["ordinary_minimum_clean_brain_fraction"])
+                    * g1_arrays["source_clean_tissue_mask"].size
+                )
+            ),
+        )
         accepted = bool(
             parameters["information_metrics"]["accepted"]
             or config["synthetic_stratum"] == "low-information-stress"
+            or marginal_support
         )
         rejection_attempts.append(
             {
@@ -794,6 +839,7 @@ def _g2(
             }
         )
         if accepted:
+            parameters["marginal_raster_support_information_bypass"] = marginal_support
             parameters["accepted_attempt_index"] = attempt
             parameters["rejection_attempts"] = rejection_attempts
             return arrays, parameters
@@ -913,6 +959,15 @@ def _g3(
     tissue = g1_arrays["source_clean_tissue_mask"]
     map_valid = g1_arrays["source_map_domain_mask"]
     g3 = config["g3"]
+    marginal_support = int(tissue.sum()) < max(
+        int(config["ordinary_minimum_clean_brain_pixels_floor"]),
+        int(
+            math.ceil(
+                float(config["ordinary_minimum_clean_brain_fraction"])
+                * tissue.size
+            )
+        ),
+    )
     eligible = int(tissue.sum()) >= int(g3["disable_damage_below_pixels"])
     kinds = (
         "boundary-bite-or-missing-cortex", "internal-hole", "tear-or-crack",
@@ -982,7 +1037,7 @@ def _g3(
             "minimum_visible_passed": int(visible.sum()) >= minimum_visible,
             "declared_events_change_pixels": events_valid,
         }
-        accepted = config["synthetic_stratum"] != "ordinary" or all(
+        accepted = marginal_support or config["synthetic_stratum"] != "ordinary" or all(
             gates[key]
             for key in (
                 "partition_exact", "maximum_union_damage_fraction_passed",
@@ -1030,6 +1085,7 @@ def _g3(
     parameters = {
         "damage_eligible": eligible,
         "damage_disabled_reason": None if eligible else "source clean tissue below 128 pixels",
+        "marginal_raster_support_visibility_bypass": marginal_support,
         "event_count": event_count,
         "events": events,
         "accepted_attempt_index": damage_attempt,
@@ -1049,6 +1105,16 @@ def _outline(
     g3_arrays: dict[str, np.ndarray], config: dict[str, object]
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     mode = config["outline_mode"]
+    footprint = g3_arrays["observable_footprint_mask"]
+    marginal_support = int(footprint.sum()) < max(
+        int(config["ordinary_minimum_clean_brain_pixels_floor"]),
+        int(
+            math.ceil(
+                float(config["ordinary_minimum_clean_brain_fraction"])
+                * footprint.size
+            )
+        ),
+    )
     attempts = []
     for attempt in range(int(config["g3"]["maximum_outline_attempts"])):
         result = smart_brush_input(
@@ -1060,7 +1126,7 @@ def _outline(
             jitter_amplitude_px=max(0.25, 0.01 * min(g3_arrays["damaged_acquired_image"].shape)),
         )
         iou = result["outline_quality_iou"]
-        accepted = mode != IMPERFECT_OUTLINE or (
+        accepted = marginal_support or mode != IMPERFECT_OUTLINE or (
             float(config["g3"]["imperfect_iou"][0]) <= float(iou) <= float(config["g3"]["imperfect_iou"][1])
         )
         attempts.append({
@@ -1092,6 +1158,7 @@ def _outline(
         "accepted_attempt_index": attempts[-1]["attempt_index"],
         "rejection_attempts": attempts,
         "black_exterior_exact": black_exterior if result["outline_available"] else None,
+        "marginal_raster_support_outline_bypass": marginal_support,
         "automatic_perfect_mask_substitution": False,
         "truth_mask_used_as_model_validity_target": False,
     }
@@ -1166,6 +1233,23 @@ def _generate(
     )
     if parent["support_index_sha256"] != support["support_index_sha256"]:
         raise ValueError("finite parent and support index do not match")
+    brain_pixel_count = int(parent["acceptance_contract"]["brain_pixel_count"])
+    requested_threshold = int(
+        parent["acceptance_contract"]["minimum_brain_pixels"]
+    )
+    support_supervision = {
+        "continuous_plane_sample_retained": True,
+        "pose_redrawn_for_raster_support": False,
+        "raster_brain_pixel_count": brain_pixel_count,
+        "requested_identifiability_threshold_pixels": requested_threshold,
+        "raster_support_meets_requested_identifiability_threshold": bool(
+            brain_pixel_count >= requested_threshold
+        ),
+        "marginal_support_generation_policy": (
+            "identity deformation, damage/information/outline gates bypassed only as explicitly "
+            "recorded; point and dense loss eligibility is decided by the curriculum row"
+        ),
+    }
     g1_arrays, g1_parameters, g1_logs = _g1(parent, support, config)
     g2_arrays, g2_parameters = _g2(g1_arrays, config)
     g3_arrays, g3_parameters = _g3(g1_arrays, g2_arrays, config)
@@ -1211,6 +1295,7 @@ def _generate(
         "support_index_sha256": support["support_index_sha256"],
         "provenance": provenance,
         "provenance_sha256": _payload_sha256(provenance),
+        "support_supervision": support_supervision,
         "generator": {
             "implementation": implementation,
             "implementation_sha256": _payload_sha256(implementation),

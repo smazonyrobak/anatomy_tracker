@@ -392,11 +392,15 @@ The reference synthetic orientation distribution samples normals by the
 normalized-Gaussian sphere method of
 [Muller](https://doi.org/10.1145/377939.377946), quotients antipodes, samples
 roll uniformly, and samples the coupled signed normal/plane offset
-uniformly over the annotation support projected onto that normal. Rendering
-then verifies nonempty support. Training may add named rare/tangent stress
+uniformly over the annotation support projected onto that normal. The exact
+draw is retained without conditioning on finite-raster pixel count. Marginal
+or empty raster support is recorded as explicit identifiability metadata;
+point-pose and dense-deformation losses abstain instead of redrawing the plane.
+Deterministic realization retries reuse the identical normal, offset and roll.
+Training may add named rare/tangent stress
 strata, but they cannot silently change the reference validation measure.
 Tiny-support or symmetry-ambiguous slices remain in uncertainty/failure
-training; point-accuracy summaries use a frozen visible-support threshold and
+accounting; point-accuracy summaries use a frozen visible-support threshold and
 report abstention rather than pretending an unidentifiable plane is exact.
 
 The initial probabilistic geometry design uses equal-area antipodal normal
@@ -466,15 +470,17 @@ candidate-support handling the leading follow-up mechanism, but privileged
 support cannot become a model input or retroactively replace the primary gate.
 Consequently the image encoder must treat outline presence explicitly, retain
 raw-background input as a complete path, and avoid interpreting black exterior
-as anatomical evidence. No learned recurrent screen is authorized by this
-result. Implementation of the probabilistic retriever, renderer, and shared
-updater may continue, while any scientific screen waits for a separately frozen
-paired mask-mechanism test with unchanged shuffled controls.
+as anatomical evidence. This failed mechanism gate forbids a mask-robustness or
+release claim; it does not make ordinary source development or bounded
+animal-disjoint development training informative about that mechanism. Any
+broader scientific claim still waits for the separately frozen paired
+mask-mechanism test with unchanged shuffled controls.
 
-## Implementation update: canonical-cell recurrent pose scaffold
+## Implementation update: canonical-cell recurrent joint model
 
-`training/arbitrary_plane_recurrent_model.py` now implements an untrained,
-randomly initialized pose-only scaffold. It scores declared raster
+`training/arbitrary_plane_recurrent_model.py` implements the randomly
+initialized probabilistic coarse retriever and shared recurrent pose updater.
+It scores declared raster
 representations inside each physical antipodal cell, adds cell measure once
 after marginalization, and normalizes only after a verifier proves that every
 expected unique cell ID is present. Top-K therefore selects physical cells,
@@ -487,7 +493,26 @@ marginalized before one shared-weight recurrent update is composed. They are
 not evolved as independently reflected continuous states, because exact
 `x/W,y/H` flips include state-dependent finite-grid centre corrections. The
 initial three-coordinate plane covariance is positive definite but explicitly
-uncalibrated. The raw image is never replaced by the optional outline, and the
-module contains no deformation decoder, checkpoint loader, pretrained feature
-path or legacy-model dependency. Passing source tests establish implementation
-plumbing only; they do not rescue the failed image gate or authorize training.
+uncalibrated. The raw image is never replaced by the optional outline.
+
+`training/arbitrary_plane_joint_model.py` adds a shared recurrent correlation
+updater and an affine-free SVF deformation decoder. Pose-only iterations first
+capture large displacement; active deformation iterations then rerender the
+finite-thickness atlas and jointly update the full 12-coordinate frame plus the
+residual deformation. `training/arbitrary_plane_joint_loss.py` applies
+later-weighted sequence supervision to every active deformation output. The
+final recurrent state drives the returned point estimate and posterior summary;
+immutable raw inference artifacts retain all recurrent pose/deformation
+sequences for exact audit and failure diagnosis.
+
+The training path streams provenance-authenticated candidate banks from one
+complete immutable catalogue, starts from a recorded fresh random state and
+accepts no checkpoint/feature/pseudolabel dependency. Its compact checkpoint
+ledger is cross-checked against immutable full runner reports on resume and
+export. Exact same-checkpoint complete-catalogue atlas features may be cached at
+inference, but the cache is invalidated by any checkpoint, atlas, catalogue,
+PSF, raster, dtype, layout or chunking change. Animal-disjoint development
+evaluation is honest complete-catalogue inference without teacher forcing and
+writes immutable per-row raw predictions. Passing source and pipeline checks
+establishes implementation plumbing only; learned accuracy, mask robustness and
+calibration require their separate evidence gates.

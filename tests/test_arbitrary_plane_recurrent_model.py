@@ -128,6 +128,30 @@ def _forward(model, fixture, **kwargs):
     )
 
 
+def _forward_streamed(model, fixture, **kwargs):
+    return model.forward_streamed(
+        fixture["image"],
+        fixture["outline"],
+        fixture["available"],
+        fixture["volume"],
+        fixture["cell_id"],
+        fixture["states"],
+        fixture["log_mass"],
+        fixture["log_weight"],
+        fixture["raster"],
+        (8, 8),
+        (8, 8),
+        (0.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0),
+        (5.0, 5.0, 5.0),
+        torch.tensor([-0.5, 0.0, 0.5], dtype=fixture["volume"].dtype),
+        torch.tensor([0.25, 0.5, 0.25], dtype=fixture["volume"].dtype),
+        expected_catalogue_cell_count=fixture["states"].shape[1],
+        catalogue_chunk_size=2,
+        **kwargs,
+    )
+
+
 def _to(fixture, device):
     return {key: value.to(device) if isinstance(value, torch.Tensor) else value for key, value in fixture.items()}
 
@@ -206,12 +230,20 @@ def test_optional_outline_channels_never_replace_or_mask_the_image():
     observed = captured[0]
     assert torch.equal(observed[:, :1], fixture["image"])
     assert torch.count_nonzero(observed[:, 1:]) == 0
+    first = model.encode_histology(
+        fixture["image"], torch.zeros_like(fixture["outline"]), torch.zeros(1)
+    )
+    second = model.encode_histology(
+        fixture["image"], torch.rand_like(fixture["outline"]), torch.zeros(1)
+    )
+    assert torch.equal(first, second)
 
 
 def test_chunk_scores_are_unnormalized_and_cell_mass_is_added_once_after_representation_marginalization():
     model = _model()
     torch.nn.init.zeros_(model.candidate_log_likelihood.weight)
-    torch.nn.init.zeros_(model.candidate_log_likelihood.bias)
+    assert model.candidate_log_likelihood.bias is None
+    assert model.recurrent_log_likelihood.bias is None
     fixture = _fixture(batch=1, representations=3)
     output = _score(model, fixture)
     assert torch.allclose(output["cell_log_unnormalized_mass"], fixture["log_mass"], atol=1e-7)
@@ -320,6 +352,17 @@ def test_forward_preserves_cell_mass_tail_representation_axis_and_uncalibrated_s
     assert output["refined_cell_state_sequence"].shape == (2, 2, 3, 12)
     assert output["refinement_cell_update_sequence"].shape == (2, 2, 2, 9)
     assert output["final_canonical_render"].shape == (2, 2, 2, 2, 8, 8)
+    assert output["refinement_cell_canonical_plane_covariance_sequence"].shape == (
+        2,
+        2,
+        2,
+        3,
+        3,
+    )
+    assert output["final_cell_canonical_plane_covariance"].shape == (2, 2, 3, 3)
+    assert torch.all(
+        torch.linalg.eigvalsh(output["final_cell_canonical_plane_covariance"]) > 0.0
+    )
     assert torch.allclose(output["conditional_within_topk_cell_probability"].sum(1), torch.ones(2), atol=1e-6)
     assert torch.allclose(
         output["retrieval_topk_retained_probability"] + output["retrieval_omitted_probability"],
@@ -346,6 +389,95 @@ def test_forward_preserves_cell_mass_tail_representation_axis_and_uncalibrated_s
     assert torch.allclose(frame.transpose(-1, -2) @ frame, torch.eye(3).expand_as(frame), atol=2e-5)
     assert torch.all(torch.linalg.det(frame) > 0.0)
     assert torch.all(torch.linalg.diagonal(basis, dim1=-2, dim2=-1) > 0.0)
+
+
+def test_streamed_chunks_match_monolithic_retrieval_and_topk_refinement():
+    model = _model().eval()
+    fixture = _fixture(batch=2, cells=5)
+    whole = _forward(model, fixture, top_k=3, refinement_steps=2)
+    streamed = _forward_streamed(model, fixture, top_k=3, refinement_steps=2)
+    assert streamed["retrieval_execution"] == "checkpointed_low_resolution_chunks"
+    assert streamed["catalogue_chunk_size"] == 2
+    for key in (
+        "retrieval_cell_log_probability",
+        "retrieval_topk_log_probability",
+        "topk_initial_cell_state",
+        "topk_initial_cell_canonical_plane_covariance",
+        "final_cell_state",
+        "final_canonical_render",
+    ):
+        assert torch.allclose(streamed[key], whole[key], atol=3e-6, rtol=0.0), key
+    assert torch.equal(
+        streamed["retrieval_topk_cell_id"], whole["retrieval_topk_cell_id"]
+    )
+
+
+def test_streamed_checkpointed_training_reaches_coarse_and_refinement_parameters():
+    model = _model().train()
+    fixture = _fixture(batch=1, cells=5)
+    output = _forward_streamed(model, fixture, top_k=2, refinement_steps=2)
+    loss = (
+        output["retrieval_cell_log_probability"].square().mean()
+        + output["final_cell_state"].square().mean()
+        + output["topk_initial_cell_canonical_plane_covariance"].square().mean()
+        + output["final_cell_canonical_plane_covariance"].square().mean()
+    )
+    loss.backward()
+    for parameter in (
+        model.candidate_log_likelihood.weight,
+        model.candidate_update.weight,
+        model.candidate_plane_cholesky.weight,
+        model.recurrent_cell.gates.weight,
+        model.recurrent_update.weight,
+        model.recurrent_plane_cholesky.weight,
+    ):
+        assert parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        assert torch.count_nonzero(parameter.grad) > 0
+
+
+def test_training_only_truth_forcing_preserves_honest_complete_retrieval():
+    model = _model().train()
+    fixture = _fixture(batch=1, cells=5)
+    honest = _forward_streamed(model, fixture, top_k=2, refinement_steps=1)
+    omitted = next(
+        cell
+        for cell in range(5)
+        if cell not in honest["retrieval_topk_cell_id"][0].tolist()
+    )
+    forced = _forward_streamed(
+        model,
+        fixture,
+        top_k=2,
+        refinement_steps=1,
+        training_truth_catalogue_index=torch.tensor([omitted]),
+    )
+
+    assert torch.equal(
+        forced["retrieval_cell_log_probability"],
+        honest["retrieval_cell_log_probability"],
+    )
+    assert torch.equal(
+        forced["honest_retrieval_topk_cell_id"], honest["retrieval_topk_cell_id"]
+    )
+    assert omitted not in forced["honest_retrieval_topk_cell_id"][0].tolist()
+    assert omitted in forced["retrieval_topk_cell_id"][0].tolist()
+    assert forced["retrieval_teacher_forced_mask"].tolist() == [True]
+    assert torch.allclose(
+        forced["retrieval_topk_retained_probability"]
+        + forced["retrieval_omitted_probability"],
+        torch.ones(1),
+        atol=1e-7,
+    )
+
+    model.eval()
+    with pytest.raises(ValueError, match="training-only"):
+        _forward_streamed(
+            model,
+            fixture,
+            top_k=2,
+            refinement_steps=1,
+            training_truth_catalogue_index=torch.tensor([omitted]),
+        )
 
 
 def test_cell_order_is_equivariant_and_normalization_returns_canonical_cell_id_order():
@@ -398,6 +530,7 @@ def test_full_gradient_path_reaches_catalogue_state_mass_covariance_and_recurren
         + output["final_cell_state"].square().mean()
         + output["final_canonical_render"].square().mean()
         + output["final_representation_log_score"].square().mean()
+        + output["final_cell_canonical_plane_covariance"].square().mean()
     )
     loss.backward()
     for value in (fixture["volume"], fixture["image"], fixture["states"], fixture["log_mass"]):
@@ -408,6 +541,7 @@ def test_full_gradient_path_reaches_catalogue_state_mass_covariance_and_recurren
         model.candidate_plane_cholesky.weight,
         model.recurrent_cell.gates.weight,
         model.recurrent_update.weight,
+        model.recurrent_plane_cholesky.weight,
     ):
         assert parameter.grad is not None and torch.isfinite(parameter.grad).all()
         assert torch.count_nonzero(parameter.grad) > 0
