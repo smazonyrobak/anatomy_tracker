@@ -1,6 +1,9 @@
 import math
 import types
 
+import ast
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -9,6 +12,17 @@ from training.arbitrary_plane_catalogue_runtime_v6 import (
     make_complete_catalogue_runtime_v6,
 )
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
+
+
+def test_v6_joint_model_does_not_import_the_legacy_joint_model():
+    source = Path(__file__).resolve().parents[1] / "training" / "arbitrary_plane_joint_model_v6.py"
+    imports = {
+        alias.name
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8")))
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+    assert "training.arbitrary_plane_joint_model" not in imports
 
 
 def _runtime():

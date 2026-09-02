@@ -16,10 +16,6 @@ from training.arbitrary_plane_deformation_primitives import (
     AffineFreeSVFDecoder,
     warp_tensor_with_map_yx,
 )
-from training.arbitrary_plane_joint_model import (
-    DEFORMATION_GATE_POLICY,
-    DEFORMATION_UPDATE_SEMANTICS,
-)
 from training.arbitrary_plane_recurrent_model import (
     compose_antipodal_plane_frame_residual,
 )
@@ -29,6 +25,8 @@ from training.arbitrary_plane_recurrent_model_v6 import (
 
 
 JOINT_MODEL_V6_SCHEMA = "anatomy-tracker.joint-model/v6"
+DEFORMATION_GATE_POLICY = "fixed_iteration_index_and_dense_supervision"
+DEFORMATION_UPDATE_SEMANTICS = "absolute_per_iteration_not_accumulated"
 
 
 class ArbitraryPlaneJointModelV6(nn.Module):

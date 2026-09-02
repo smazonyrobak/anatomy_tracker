@@ -1,4 +1,7 @@
 import copy
+from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -170,3 +173,99 @@ def test_runtime_requires_a_canonical_sha256_receipt(receipt):
             device="cpu",
             dtype=torch.float32,
         )
+
+
+def test_runtime_import_does_not_load_candidate_or_staged_training_modules():
+    code = """
+import sys
+import training.arbitrary_plane_catalogue_runtime_v6
+
+forbidden = [
+    name
+    for name in sys.modules
+    if any(
+        fragment in name
+        for fragment in ("candidate_bank", "training_bank", "staged_training")
+    )
+]
+assert not forbidden, forbidden
+"""
+    subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_runtime_rejects_catalogue_receipt_tamper():
+    artifact = catalogue()
+    artifact["receipt_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="immutable receipt"):
+        make_complete_catalogue_runtime_v6(
+            artifact,
+            expected_catalogue_receipt_sha256=artifact["receipt_sha256"],
+            device="cpu",
+            dtype=torch.float32,
+        )
+
+
+def test_runtime_rejects_tensor_array_disagreement():
+    artifact = catalogue()
+    artifact["tensors"]["cell_states"] = artifact["tensors"][
+        "cell_states"
+    ].clone()
+    artifact["tensors"]["cell_states"][0, 0, 0] += 1.0
+    with pytest.raises(ValueError, match="arrays or immutable receipt"):
+        make_complete_catalogue_runtime_v6(
+            artifact,
+            expected_catalogue_receipt_sha256=artifact["receipt_sha256"],
+            device="cpu",
+            dtype=torch.float32,
+        )
+
+
+def test_runtime_rejects_re_receipted_noncanonical_cell_ids():
+    artifact = catalogue()
+    artifact["arrays"]["cell_id_int64"] = artifact["arrays"][
+        "cell_id_int64"
+    ][::-1].copy()
+    artifact["tensors"]["cell_id"] = torch.from_numpy(
+        artifact["arrays"]["cell_id_int64"]
+    )
+    artifact["array_receipts"]["cell_id_int64"] = catalogue_v3._array_receipt(
+        artifact["arrays"]["cell_id_int64"]
+    )
+    artifact["receipt_sha256"] = catalogue_v3._hash(
+        catalogue_v3.catalogue_receipt_v3(artifact)
+    )
+    with pytest.raises(ValueError, match="complete, unique, and canonical"):
+        make_complete_catalogue_runtime_v6(
+            artifact,
+            expected_catalogue_receipt_sha256=artifact["receipt_sha256"],
+            device="cpu",
+            dtype=torch.float32,
+        )
+
+
+def test_full_98304_cell_catalogue_binds_to_runtime_at_production_scale():
+    artifact = catalogue_v3.make_arbitrary_plane_catalogue_v3(
+        np.ones((2, 2, 2), dtype=bool),
+        (0.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0),
+        normal_count=384,
+        offset_count=16,
+        roll_count=16,
+        raster_shape_h_w=(8, 8),
+        raster_physical_span_y_x_um=(8.0, 8.0),
+    )
+    runtime = make_complete_catalogue_runtime_v6(
+        artifact,
+        expected_catalogue_receipt_sha256=artifact["receipt_sha256"],
+        device="cpu",
+        dtype=torch.float32,
+    )
+    assert artifact["counts"]["cell_count"] == 98_304
+    assert runtime.cell_count == 98_304
+    assert verify_complete_catalogue_runtime_v6(runtime)

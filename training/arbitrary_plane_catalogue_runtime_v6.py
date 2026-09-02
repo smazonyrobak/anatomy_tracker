@@ -7,7 +7,7 @@ from types import MappingProxyType
 
 import torch
 
-from training.arbitrary_plane_inference_v3 import verify_catalogue_binding_v3
+from training.arbitrary_plane_catalogue_binding_v3 import verify_catalogue_binding_v3
 
 
 COMPLETE_CATALOGUE_RUNTIME_V6_SCHEMA = (

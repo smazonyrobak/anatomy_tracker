@@ -29,6 +29,8 @@ from training.arbitrary_plane_retrieval_loss_v6 import (
 STAGED_TRAINER_V6_SCHEMA = "anatomy-tracker.staged-trainer/v6"
 STAGED_TRAINER_V6_MANIFEST_SCHEMA = "anatomy-tracker.staged-trainer-manifest/v6"
 STAGED_TRAINER_V6_CHECKPOINT_SCHEMA = "anatomy-tracker.staged-trainer-checkpoint/v6"
+FROZEN_ROWS_V6_SCHEMA = "anatomy-tracker.frozen-generated-row-payloads/v6"
+ROW_RECEIPTS_V6_SCHEMA = "anatomy-tracker.training-row-receipts/v6"
 FULL_CATALOGUE_CELL_COUNT_V6 = 98_304
 RAW_INPUT_MODE_V6 = "raw"
 BLACK_EXTERIOR_INPUT_MODE_V6 = "black-exterior"
@@ -74,8 +76,15 @@ _SOURCE_FILES = (
     "training/arbitrary_plane_geometry.py",
     "training/arbitrary_plane_full_frame_primitives.py",
     "training/arbitrary_plane_deformation_primitives.py",
+    "training/arbitrary_plane_manifest.py",
+    "training/arbitrary_plane_support.py",
+    "training/arbitrary_plane_rendered_generator.py",
+    "training/arbitrary_plane_acquisition_v2.py",
     "training/arbitrary_plane_recurrent_model.py",
-    "training/arbitrary_plane_joint_model.py",
+    "training/arbitrary_plane_catalogue_v3.py",
+    "training/arbitrary_plane_catalogue_binding_v3.py",
+    "training/arbitrary_plane_finite_row_binding_v6.py",
+    "training/arbitrary_plane_training_data_v6.py",
     "training/arbitrary_plane_catalogue_runtime_v6.py",
     "training/arbitrary_plane_coarse_proposal_v6.py",
     "training/arbitrary_plane_hybrid_posterior_v6.py",
@@ -210,6 +219,93 @@ def _same_device(left: torch.device | str, right: torch.device | str) -> bool:
     left_index = torch.cuda.current_device() if left.index is None else left.index
     right_index = torch.cuda.current_device() if right.index is None else right.index
     return left_index == right_index
+
+
+def _validated_frozen_row_source(
+    source: object, expected_manifest_receipt_sha256: str, batch_size: int
+) -> dict[str, object]:
+    keys = {
+        "schema_version",
+        "training_data_manifest_receipt_sha256",
+        "cache_manifest_receipt_sha256",
+        "generator_binding_receipt_sha256",
+        "generation_lineage_sha256",
+        "row_indices",
+        "training_row_ids",
+        "training_row_receipts_sha256",
+        "selection_receipt_sha256",
+    }
+    if not isinstance(source, Mapping) or set(source) != keys:
+        raise ValueError("v6 training requires one authenticated frozen-row selection")
+    receipt_payload = {
+        key: source[key] for key in keys if key != "selection_receipt_sha256"
+    }
+    row_indices = source["row_indices"]
+    row_ids = source["training_row_ids"]
+    row_receipts = source["training_row_receipts_sha256"]
+    if (
+        source["schema_version"] != FROZEN_ROWS_V6_SCHEMA
+        or source["training_data_manifest_receipt_sha256"]
+        != expected_manifest_receipt_sha256
+        or source["cache_manifest_receipt_sha256"]
+        != expected_manifest_receipt_sha256
+        or any(
+            not _is_sha256(source[key])
+            for key in (
+                "generator_binding_receipt_sha256",
+                "generation_lineage_sha256",
+                "selection_receipt_sha256",
+            )
+        )
+        or source["selection_receipt_sha256"] != _hash_json(receipt_payload)
+        or not isinstance(row_indices, list)
+        or not isinstance(row_ids, list)
+        or not isinstance(row_receipts, list)
+        or len(row_indices) != batch_size
+        or len(row_ids) != batch_size
+        or len(row_receipts) != batch_size
+        or any(
+            not isinstance(index, int) or isinstance(index, bool) or index < 0
+            for index in row_indices
+        )
+        or any(not isinstance(value, str) or not value for value in row_ids)
+        or any(not _is_sha256(value) for value in row_receipts)
+    ):
+        raise ValueError("v6 frozen-row selection receipt or run binding is invalid")
+    return _plain(source)
+
+
+def _validated_row_receipts(
+    value: object,
+    frozen_source: Mapping[str, object],
+    batch_size: int,
+) -> tuple[list[dict[str, object]], str]:
+    if not isinstance(value, list) or len(value) != batch_size:
+        raise ValueError("v6 training requires one exact receipt record per row")
+    receipts = _plain(value)
+    for index, receipt in enumerate(receipts):
+        if (
+            not isinstance(receipt, Mapping)
+            or receipt.get("training_row_id")
+            != frozen_source["training_row_ids"][index]
+            or receipt.get("training_row_receipt_sha256")
+            != frozen_source["training_row_receipts_sha256"][index]
+            or any(not isinstance(key, str) or not key for key in receipt)
+            or any(not isinstance(item, str) or not item for item in receipt.values())
+            or any(
+                not _is_sha256(item)
+                for key, item in receipt.items()
+                if key.endswith("sha256")
+            )
+        ):
+            raise ValueError("v6 row receipts differ from the frozen-row selection")
+    receipt_sha256 = _hash_json(
+        {
+            "schema_version": ROW_RECEIPTS_V6_SCHEMA,
+            "row_receipts": receipts,
+        }
+    )
+    return receipts, receipt_sha256
 
 
 def _validated_config(training_config: Mapping[str, object]) -> dict[str, object]:
@@ -359,7 +455,15 @@ def initialize_staged_trainer_v6(
     }
 
 
-def _validated_batch(state: Mapping[str, object], batch: Mapping[str, object]) -> tuple[torch.Tensor, list[dict[str, str]], list[str]]:
+def _validated_batch(
+    state: Mapping[str, object], batch: Mapping[str, object]
+) -> tuple[
+    torch.Tensor,
+    list[dict[str, str]],
+    list[str],
+    dict[str, object],
+    str,
+]:
     image = torch.as_tensor(batch["image"])
     outline = torch.as_tensor(batch["outline"], device=image.device)
     available = torch.as_tensor(batch["outline_available"], device=image.device)
@@ -374,6 +478,13 @@ def _validated_batch(state: Mapping[str, object], batch: Mapping[str, object]) -
     modes = [str(value) for value in batch["input_mode"]]
     if len(modes) != image.shape[0] or any(value not in INPUT_MODES_V6 for value in modes):
         raise ValueError("each v6 row must declare raw, black-exterior, or imperfect-mask input")
+    frozen_source = _validated_frozen_row_source(
+        batch.get("frozen_row_source"),
+        state["manifest"]["training_run_binding"][
+            "training_data_manifest_receipt_sha256"
+        ],
+        image.shape[0],
+    )
     provenance = []
     for value in batch["provenance"]:
         allowed = set(PROVENANCE_KEYS_V6) | set(OPTIONAL_PROVENANCE_RECEIPT_KEYS_V6)
@@ -392,6 +503,16 @@ def _validated_batch(state: Mapping[str, object], batch: Mapping[str, object]) -
         provenance.append({key: value[key] for key in (*PROVENANCE_KEYS_V6, *OPTIONAL_PROVENANCE_RECEIPT_KEYS_V6) if key in value})
     if len(provenance) != image.shape[0]:
         raise ValueError("row provenance count must equal batch size")
+    if (
+        [item.get("training_row_id") for item in provenance]
+        != frozen_source["training_row_ids"]
+        or [item.get("training_row_receipt_sha256") for item in provenance]
+        != frozen_source["training_row_receipts_sha256"]
+    ):
+        raise ValueError("v6 row provenance differs from the frozen-row selection")
+    _, row_receipts_sha256 = _validated_row_receipts(
+        batch.get("row_receipts"), frozen_source, image.shape[0]
+    )
     runtime = state["catalogue_runtime_v6"]
     catalogue_batch = batch["catalogue_batch"]
     verify_bound_complete_catalogue_batch_v6(catalogue_batch, expected_runtime=runtime)
@@ -403,7 +524,7 @@ def _validated_batch(state: Mapping[str, object], batch: Mapping[str, object]) -
     truth = truth.to(torch.long)
     if truth.shape != (image.shape[0],) or bool(((truth < 0) | (truth >= FULL_CATALOGUE_CELL_COUNT_V6)).any()):
         raise ValueError("truth catalogue indices must address the complete catalogue")
-    return truth, provenance, modes
+    return truth, provenance, modes, frozen_source, row_receipts_sha256
 
 
 def _model_arguments(state: Mapping[str, object], batch: Mapping[str, object]) -> tuple[object, ...]:
@@ -540,7 +661,9 @@ def _pose_rerank_loss(output: Mapping[str, object], truth: torch.Tensor, weight:
 
 def train_staged_step_v6(state: dict[str, object], batch: Mapping[str, object]) -> dict[str, object]:
     """Apply one update at the immutable proposal, rerank, or joint phase boundary."""
-    truth, provenance, modes = _validated_batch(state, batch)
+    truth, provenance, modes, frozen_source, row_receipts_sha256 = (
+        _validated_batch(state, batch)
+    )
     config = state["manifest"]["training_config"]
     step = int(state["global_step"])
     phase = _phase(config, step)
@@ -609,21 +732,7 @@ def train_staged_step_v6(state: dict[str, object], batch: Mapping[str, object]) 
     ready = output.get("refinement_ready_mask") if phase == "joint" else None
     ready_count = int(ready.sum().item()) if isinstance(ready, torch.Tensor) else None
     abstained_count = truth.shape[0] - ready_count if ready_count is not None else None
-    ledger_payload = {
-        "step": step,
-        "phase": phase,
-        "provenance_record_indices": list(range(record_start, record_start + len(provenance))),
-        "input_mode": modes,
-        "catalogue_cell_count": FULL_CATALOGUE_CELL_COUNT_V6,
-        "probability_status": "raw_uncalibrated",
-        "refinement_ready_row_count": ready_count,
-        "refinement_abstained_row_count": abstained_count,
-    }
-    previous = state["training_step_ledger"][-1]["receipt_sha256"] if state["training_step_ledger"] else state["manifest"]["receipt_sha256"]
-    ledger_payload["previous_receipt_sha256"] = previous
-    state["training_step_ledger"].append({**ledger_payload, "receipt_sha256": _hash_json(ledger_payload)})
-    state["global_step"] = step + 1
-    return {
+    trainer_output_payload = {
         "schema_version": STAGED_TRAINER_V6_SCHEMA,
         "step": step,
         "phase": phase,
@@ -640,6 +749,28 @@ def train_staged_step_v6(state: dict[str, object], batch: Mapping[str, object]) 
             for key, value in losses.items()
             if isinstance(value, (torch.Tensor, int, float, bool, str))
         },
+    }
+    trainer_output_receipt_sha256 = _hash_json(trainer_output_payload)
+    ledger_payload = {
+        "step": step,
+        "phase": phase,
+        "provenance_record_indices": list(range(record_start, record_start + len(provenance))),
+        "input_mode": modes,
+        "frozen_row_selection": frozen_source,
+        "row_receipts_sha256": row_receipts_sha256,
+        "trainer_output_receipt_sha256": trainer_output_receipt_sha256,
+        "catalogue_cell_count": FULL_CATALOGUE_CELL_COUNT_V6,
+        "probability_status": "raw_uncalibrated",
+        "refinement_ready_row_count": ready_count,
+        "refinement_abstained_row_count": abstained_count,
+    }
+    previous = state["training_step_ledger"][-1]["receipt_sha256"] if state["training_step_ledger"] else state["manifest"]["receipt_sha256"]
+    ledger_payload["previous_receipt_sha256"] = previous
+    state["training_step_ledger"].append({**ledger_payload, "receipt_sha256": _hash_json(ledger_payload)})
+    state["global_step"] = step + 1
+    return {
+        **trainer_output_payload,
+        "receipt_sha256": trainer_output_receipt_sha256,
     }
 
 
@@ -748,6 +879,14 @@ def verify_staged_checkpoint_v6(checkpoint: Mapping[str, object], *, verify_sour
         phase = _phase(manifest["training_config"], step)
         ready_count = entry.get("refinement_ready_row_count")
         abstained_count = entry.get("refinement_abstained_row_count")
+        try:
+            frozen_source = _validated_frozen_row_source(
+                entry.get("frozen_row_selection"),
+                run_binding["training_data_manifest_receipt_sha256"],
+                len(indices) if isinstance(indices, list) else -1,
+            )
+        except ValueError:
+            raise ValueError("v6 training step ledger failed verification") from None
         if (
             entry.get("step") != step
             or entry.get("phase") != phase
@@ -760,6 +899,15 @@ def verify_staged_checkpoint_v6(checkpoint: Mapping[str, object], *, verify_sour
             or any(mode not in INPUT_MODES_V6 for mode in entry.get("input_mode", []))
             or entry.get("catalogue_cell_count") != FULL_CATALOGUE_CELL_COUNT_V6
             or entry.get("probability_status") != "raw_uncalibrated"
+            or not _is_sha256(entry.get("row_receipts_sha256"))
+            or not _is_sha256(entry.get("trainer_output_receipt_sha256"))
+            or [records[index].get("training_row_id") for index in indices]
+            != frozen_source["training_row_ids"]
+            or [
+                records[index].get("training_row_receipt_sha256")
+                for index in indices
+            ]
+            != frozen_source["training_row_receipts_sha256"]
             or (
                 phase == "joint"
                 and (
@@ -874,6 +1022,7 @@ def restore_staged_trainer_v6(
 
 __all__ = [
     "BLACK_EXTERIOR_INPUT_MODE_V6",
+    "FROZEN_ROWS_V6_SCHEMA",
     "FULL_CATALOGUE_CELL_COUNT_V6",
     "IMPERFECT_MASK_INPUT_MODE_V6",
     "INPUT_MODES_V6",

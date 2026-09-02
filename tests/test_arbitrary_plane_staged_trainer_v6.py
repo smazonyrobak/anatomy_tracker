@@ -130,6 +130,17 @@ def _run_binding():
 def _batch():
     image = torch.ones(2, 1, 4, 4)
     outline = torch.stack((torch.zeros(1, 4, 4), torch.ones(1, 4, 4)))
+    frozen_source = {
+        "schema_version": trainer.FROZEN_ROWS_V6_SCHEMA,
+        "training_data_manifest_receipt_sha256": "3" * 64,
+        "cache_manifest_receipt_sha256": "3" * 64,
+        "generator_binding_receipt_sha256": "4" * 64,
+        "generation_lineage_sha256": "5" * 64,
+        "row_indices": [0, 1],
+        "training_row_ids": ["row0", "row1"],
+        "training_row_receipts_sha256": ["a" * 64, "c" * 64],
+    }
+    frozen_source["selection_receipt_sha256"] = trainer._hash_json(frozen_source)
     return {
         "image": image,
         "outline": outline,
@@ -145,6 +156,20 @@ def _batch():
             {
                 "specimen_id": "s1", "animal_id": "a1", "experiment_id": "e1",
                 "section_id": "x1", "synthetic_animal_id": "sa1",
+                "training_row_id": "row1", "training_row_receipt_sha256": "c" * 64,
+            },
+        ],
+        "frozen_row_source": frozen_source,
+        "row_receipts": [
+            {
+                "training_row_id": "row0",
+                "training_row_receipt_sha256": "a" * 64,
+                "synthetic_realization_id": "d" * 64,
+            },
+            {
+                "training_row_id": "row1",
+                "training_row_receipt_sha256": "c" * 64,
+                "synthetic_realization_id": "e" * 64,
             },
         ],
         "catalogue_batch": _CatalogueBatch(),
@@ -251,6 +276,42 @@ def test_batch_requires_declared_input_semantics_and_exact_five_id_provenance(mo
         trainer.train_staged_step_v6(state, batch)
 
 
+def test_batch_requires_run_bound_frozen_row_selection(monkeypatch):
+    state = _state(monkeypatch)
+    batch = _batch()
+    batch.pop("frozen_row_source")
+    with pytest.raises(ValueError, match="authenticated frozen-row selection"):
+        trainer.train_staged_step_v6(state, batch)
+
+    batch = _batch()
+    batch["frozen_row_source"]["training_data_manifest_receipt_sha256"] = "9" * 64
+    batch["frozen_row_source"]["cache_manifest_receipt_sha256"] = "9" * 64
+    batch["frozen_row_source"]["selection_receipt_sha256"] = trainer._hash_json(
+        {
+            key: value
+            for key, value in batch["frozen_row_source"].items()
+            if key != "selection_receipt_sha256"
+        }
+    )
+    with pytest.raises(ValueError, match="selection receipt or run binding"):
+        trainer.train_staged_step_v6(state, batch)
+
+    batch = _batch()
+    batch["frozen_row_source"]["selection_receipt_sha256"] = "9" * 64
+    with pytest.raises(ValueError, match="selection receipt or run binding"):
+        trainer.train_staged_step_v6(state, batch)
+
+    batch = _batch()
+    batch["provenance"][0]["training_row_id"] = "different"
+    with pytest.raises(ValueError, match="provenance differs"):
+        trainer.train_staged_step_v6(state, batch)
+
+    batch = _batch()
+    batch["row_receipts"][0]["training_row_receipt_sha256"] = "9" * 64
+    with pytest.raises(ValueError, match="row receipts differ"):
+        trainer.train_staged_step_v6(state, batch)
+
+
 def test_black_exterior_mode_accepts_nonzero_tissue_interior_with_boundary_only_outline(monkeypatch):
     state = _state(monkeypatch)
     batch = _batch()
@@ -298,6 +359,14 @@ def test_v6_checkpoint_binds_full_catalogue_provenance_dependencies_and_raw_unce
     assert checkpoint["manifest"]["training_run_binding"] == _run_binding()
     assert checkpoint["manifest"]["release_qualifying"] is False
     assert checkpoint["manifest"]["atlas_bytes_verified_by_trainer"] is False
+    assert trainer._is_sha256(
+        checkpoint["training_step_ledger"][0]["row_receipts_sha256"]
+    )
+    assert trainer._is_sha256(
+        checkpoint["training_step_ledger"][0][
+            "trainer_output_receipt_sha256"
+        ]
+    )
 
     tampered = copy.deepcopy(checkpoint)
     tampered["provenance_records"][0]["section_id"] = "changed"
