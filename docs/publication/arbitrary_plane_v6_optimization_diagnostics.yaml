@@ -1,0 +1,84 @@
+schema_version: anatomy-tracker.optimization-diagnostics/v6
+status: development_only_not_validation_not_release
+probability_status: raw_uncalibrated
+public_benchmark_accessed: false
+prior_model_weights_features_or_pseudolabels: []
+
+staged_300_step_smoke:
+  run_directory: I:\AnatomyTracker\runs\arbitrary_plane_v6_nonrelease_dev_001
+  source_commit: 9f8a2a4634b7844d7e29529ea5a1ed490cfeeb20
+  run_manifest_receipt_sha256: 639286413bc61481db9ad389581ea4a2bd2cf59096bbbd7d0bac32da9b1530ee
+  final_run_state_receipt_sha256: c3ba21c74dc724c0034ab49cc017fc6c02877f8ec5c83bd8a4ddf695ba82cdce
+  final_checkpoint_receipt_sha256: 6618b152b01f548a85ae70ff13b28d07c7ccbc49d286ff1b6da50c1f41fba559
+  final_global_step: 300
+  independent_exact_commit_reload: pass
+  schedule:
+    learning_rate: 0.0002
+    proposal_only_steps: 50
+    pose_rerank_steps: 100
+    joint_steps: 150
+    batch_size: 4
+    training_rows: 24
+  measured_windows:
+    proposal_first_10:
+      mean_full_catalogue_nll: 11.495386
+      mean_preclip_gradient_norm: 0.031
+    proposal_last_10:
+      mean_full_catalogue_nll: 11.488899
+      mean_preclip_gradient_norm: 0.077
+    joint_first_10:
+      mean_objective: 20.572668
+      mean_full_catalogue_nll: 11.493703
+      honest_truth_in_top_k_rows: 0
+      honest_truth_miss_rows: 40
+      mean_best_top_k_landmark_error_um: 1195.001
+    joint_last_10:
+      mean_objective: 18.636839
+      mean_full_catalogue_nll: 11.493067
+      honest_truth_in_top_k_rows: 0
+      honest_truth_miss_rows: 40
+      mean_best_top_k_landmark_error_um: 1193.154
+  decision: >-
+    The 50-step proposal prefix remained effectively uniform over 98,304 cells.
+    Every joint-stage truth mode was absent from honest top-K, so the later
+    teacher-forced refinement losses are not evidence of end-to-end capture.
+
+proposal_capacity_check:
+  scope: four_training_rows_only_not_generalization
+  source_commit: 9f8a2a4634b7844d7e29529ea5a1ed490cfeeb20
+  cache_manifest_receipt_sha256: b1be4b1dc6365fe4a508215c24c251a557cf43524e72d1f10b83f733224b5c8a
+  row_indices: [0, 12, 10, 23]
+  steps_per_fresh_trial: 750
+  exact_result_path: I:\AnatomyTracker\runs\proposal_capacity_v6_001.json
+  exact_result_file_sha256: 4ff2a8482bc958cd6469baecfd691a799a4ac0614c461bda8bc6b6f47ea88d35
+  result_payload_receipt_sha256: 895861eff9af7dce57a98bdc056c2847085b83f03f16d4c29e588888b226d53d
+  reproducer_path: I:\AnatomyTracker\tmp\proposal_capacity_v6_001.py
+  reproducer_file_sha256: 714ffd3e6baba2dae939e599de6e8d8c5f54773499e3c912212ae6d46f12e2c3
+  trials:
+    - seed: 2026090302
+      learning_rate: 0.0002
+      step_0: {nll: 11.495840, hit_at_1: 0, hit_at_8: 0, hit_at_32: 0}
+      step_500: {nll: 5.474504, hit_at_1: 0, hit_at_8: 0, hit_at_32: 2}
+      step_750: {nll: 2.454950, hit_at_1: 1, hit_at_8: 4, hit_at_32: 4}
+    - seed: 2026090303
+      learning_rate: 0.001
+      step_0: {nll: 11.495817, hit_at_1: 0, hit_at_8: 0, hit_at_32: 0}
+      step_100: {nll: 5.279629, hit_at_1: 0, hit_at_8: 2, hit_at_32: 2}
+      step_250: {nll: 0.962994, hit_at_1: 4, hit_at_8: 4, hit_at_32: 4}
+      step_750: {nll: 0.035563, hit_at_1: 4, hit_at_8: 4, hit_at_32: 4}
+  decision: >-
+    The proposal architecture can overfit the four training cases from fresh
+    random initialization. The failed 300-step smoke was a deliberately short,
+    underpowered schedule, not evidence that the head is incapable. Use a
+    proposal-only substantive run near 0.001 learning rate, and do not unlock
+    reranking or joint refinement until untouched internal-development animals
+    show clearly non-uniform NLL and useful honest top-K recall.
+
+next_gate:
+  training_partition: substantive_5120_rows_320_animals
+  internal_development_partition: untouched_640_rows_40_disjoint_animals
+  required_before_joint_training:
+    - authenticated complete-catalogue proposal-only checkpoint
+    - animal-macro internal-development NLL and top-k recall clearly better than uniform
+    - raw per-row predictions and failures saved with all five IDs
+    - no public benchmark access and no calibration fitting
