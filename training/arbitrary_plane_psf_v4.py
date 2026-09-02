@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 
 import numpy as np
@@ -242,6 +243,83 @@ def verify_training_row_psf_contract_v4(contract, *, capability=None):
     return True
 
 
+def finalize_training_row_v4(
+    row_like,
+    slab_observation_v4,
+    *,
+    capability=None,
+):
+    arrays = row_like.get("arrays", {})
+    upstream = row_like.get("upstream_reference", {})
+    if (
+        row_like.get("schema_version") != TRAINING_ROW_V4_SCHEMA
+        or any(
+            key in row_like
+            for key in (
+                "finite_psf_contract",
+                "training_row_id",
+                "receipt_sha256",
+            )
+        )
+        or set(arrays) != training_row_v3._ARRAY_KEYS
+        or row_like.get("array_receipts")
+        != {
+            name: acquisition_v2._array_receipt(value)
+            for name, value in arrays.items()
+        }
+        or not _valid_sha256(row_like.get("source_observation_receipt_sha256"))
+        or not _valid_sha256(row_like.get("synthetic_realization_id"))
+        or not isinstance(upstream, dict)
+    ):
+        raise ValueError(
+            "v4 finalization requires an unfinalized slab-derived v4 row"
+        )
+    if not isinstance(slab_observation_v4, dict):
+        raise ValueError("canonical slab_observation_v4 block is missing")
+    finite_psf = slab_observation_v4.get("finite_psf")
+    slab_receipt = slab_observation_v4.get("receipt_sha256")
+    verify_finite_psf_schedule_v4(finite_psf, capability=capability)
+    expected_source_binding = {
+        "slab_observation_id": slab_observation_v4.get(
+            "slab_observation_id"
+        ),
+        "centre_plane_targets_receipt_sha256": slab_observation_v4.get(
+            "centre_plane_targets_receipt_sha256"
+        ),
+        "slab_observation_v4_receipt_sha256": slab_receipt,
+        "finite_psf_sha256": finite_psf["finite_psf_sha256"],
+        "finite_psf_capability_sha256": finite_psf[
+            "finite_psf_capability_sha256"
+        ],
+    }
+    if (
+        not all(_valid_sha256(value) for value in expected_source_binding.values())
+        or any(upstream.get(key) != value for key, value in expected_source_binding.items())
+    ):
+        raise ValueError(
+            "v4 row upstream source does not bind the canonical slab observation"
+        )
+    row = copy.deepcopy(row_like)
+    row["finite_psf_contract"] = {
+        **copy.deepcopy(finite_psf),
+        "slab_observation_v4_receipt_sha256": slab_receipt,
+    }
+    row["training_row_id"] = acquisition_v2._payload_sha256(
+        {
+            "domain": TRAINING_ROW_V4_SCHEMA,
+            "synthetic_realization_id": row["synthetic_realization_id"],
+            "array_receipts": row["array_receipts"],
+            "finite_psf_sha256": finite_psf["finite_psf_sha256"],
+            "slab_observation_v4_receipt_sha256": slab_receipt,
+        }
+    )
+    row["receipt_sha256"] = acquisition_v2._payload_sha256(
+        training_row_receipt_v4(row)
+    )
+    verify_training_row_v4(row, capability=capability)
+    return row
+
+
 def training_row_receipt_v4(row):
     receipt = training_row_v3.training_row_receipt_v3(row)
     return {**receipt, "finite_psf_contract": row["finite_psf_contract"]}
@@ -249,6 +327,21 @@ def training_row_receipt_v4(row):
 
 def verify_training_row_v4(row, *, capability=None):
     arrays = row.get("arrays", {})
+    contract = row.get("finite_psf_contract", {})
+    upstream = row.get("upstream_reference", {})
+    source_binding_valid = (
+        isinstance(upstream, dict)
+        and _valid_sha256(upstream.get("slab_observation_id"))
+        and _valid_sha256(
+            upstream.get("centre_plane_targets_receipt_sha256")
+        )
+        and upstream.get("slab_observation_v4_receipt_sha256")
+        == contract.get("slab_observation_v4_receipt_sha256")
+        and upstream.get("finite_psf_sha256")
+        == contract.get("finite_psf_sha256")
+        and upstream.get("finite_psf_capability_sha256")
+        == contract.get("finite_psf_capability_sha256")
+    )
     if (
         row.get("schema_version") != TRAINING_ROW_V4_SCHEMA
         or set(arrays) != training_row_v3._ARRAY_KEYS
@@ -259,10 +352,11 @@ def verify_training_row_v4(row, *, capability=None):
         }
         or row.get("receipt_sha256")
         != acquisition_v2._payload_sha256(training_row_receipt_v4(row))
+        or not source_binding_valid
     ):
         raise ValueError("v4 training-row receipt or arrays changed")
     verify_training_row_psf_contract_v4(
-        row.get("finite_psf_contract"), capability=capability
+        contract, capability=capability
     )
     return True
 
