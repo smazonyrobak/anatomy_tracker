@@ -25,6 +25,10 @@ from training.arbitrary_plane_rendered_generator import (
     finite_render_receipt,
     verify_finite_arbitrary_plane_render,
 )
+from training.arbitrary_plane_psf_v4 import (
+    finite_psf_model_capability_v4,
+    verify_finite_psf_schedule_v4,
+)
 from training.arbitrary_plane_synthetic_observation import (
     ABSENT_OUTLINE,
     ACCURATE_OUTLINE,
@@ -43,6 +47,7 @@ from training.arbitrary_plane_synthetic_ops import (
     fixed_source_maps,
     identity_pixel_map,
     nearest_sample_labels,
+    pullback_slab_observation_v4,
     remove_tissue_affine_component,
     remove_uniform_canvas_affine_component_decoder_parity,
     sample_multiscale_physical_velocity,
@@ -52,6 +57,31 @@ from training.arbitrary_plane_synthetic_ops import (
 
 SYNTHETIC_SCHEMA = "anatomy-tracker.arbitrary-plane-synthetic-realization/v1"
 SYNTHETIC_ALGORITHM = "provenance-bound-arbitrary-plane-g1-g2-g3/v1"
+SLAB_OBSERVATION_V4_CONTRACT = (
+    "authenticated-finite-psf-slab-observation-with-centre-targets/v4"
+)
+SLAB_OBSERVATION_V4_ARRAY_NAMES = (
+    "observed_scalar_float32",
+    "slab_brain_occupancy_float32",
+    "slab_observable_support_mask",
+    "centre_label_psf_mass_float32",
+    "slab_modal_annotation_int64",
+    "slab_modal_purity_float32",
+    "dense_correspondence_weight_float32",
+    "dense_correspondence_abstention_mask",
+)
+SLAB_OBSERVATION_V4_PARENT_BINDINGS = (
+    "finite_plane_render_id",
+    "finite_render_receipt_sha256",
+    "plane_realization_id",
+    "support_index_sha256",
+    "provenance_sha256",
+    "split",
+    "sample_index",
+    "animal_id",
+    "specimen_id",
+    "experiment_id",
+)
 SYNTHETIC_STRATA = ("ordinary", "tiny-tangent-stress", "low-information-stress")
 SEED_ENCODING = "canonical-lowercase-uint64-hex/v1"
 _ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +93,7 @@ _SOURCE_FILES = {
     ),
     "observation": Path(__file__).with_name("arbitrary_plane_synthetic_observation.py"),
     "finite_renderer": Path(__file__).with_name("arbitrary_plane_rendered_generator.py"),
+    "finite_psf_v4": Path(__file__).with_name("arbitrary_plane_psf_v4.py"),
     "predeclared_config": _ROOT / "publication" / "arbitrary_plane_synthetic_preflight.yaml",
 }
 
@@ -138,6 +169,20 @@ def _canonical_json(value: object) -> str:
 
 def _payload_sha256(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _canonical_json_v4(value: object) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        ensure_ascii=False,
+    )
+
+
+def _payload_sha256_v4(value: object) -> str:
+    return hashlib.sha256(_canonical_json_v4(value).encode("utf-8")).hexdigest()
 
 
 def _file_sha256(path: Path) -> str:
@@ -246,6 +291,255 @@ def _array_receipts(arrays: dict[str, np.ndarray]) -> dict[str, dict[str, object
     return {name: _array_receipt(value) for name, value in sorted(arrays.items())}
 
 
+def slab_observation_v4_receipt(block: dict[str, object]) -> dict[str, object]:
+    """Return the authenticated JSON payload for an optional slab block."""
+    receipt = {
+        key: copy.deepcopy(value)
+        for key, value in block.items()
+        if key not in {*SLAB_OBSERVATION_V4_ARRAY_NAMES, "receipt_sha256"}
+    }
+    json.dumps(receipt, allow_nan=False)
+    return receipt
+
+
+def _slab_observation_array_receipt_v4(array: np.ndarray) -> dict[str, object]:
+    value = np.ascontiguousarray(array)
+    dtype = value.dtype.newbyteorder("<")
+    value = np.ascontiguousarray(value.astype(dtype, copy=False))
+    header = _canonical_json_v4(
+        {"dtype": value.dtype.str, "shape": list(value.shape)}
+    )
+    return {
+        "dtype": value.dtype.str,
+        "shape": list(value.shape),
+        "array_sha256": hashlib.sha256(
+            header.encode("utf-8") + value.tobytes(order="C")
+        ).hexdigest(),
+    }
+
+
+def _centre_plane_targets_receipt_sha256_v4(
+    parent: dict[str, object], support: dict[str, object]
+) -> str:
+    annotation = np.ascontiguousarray(
+        parent["raster"]["annotation"], dtype=np.int64
+    )
+    support_mask = np.ascontiguousarray(annotation != 0)
+    effective = effective_renderer_sampling_arrays(
+        parent["geometry"],
+        tuple(int(value) for value in support["annotation_shape"]),
+        origin_ap_dv_ml_um=tuple(support["origin_um"]),
+        voxel_size_ap_dv_ml_um=tuple(support["voxel_size_um"]),
+    )
+    allen = effective["coordinate_raster_allen_index_float32"].astype(np.float64)
+    origin = np.asarray(support["origin_um"], dtype=np.float64)
+    spacing = np.asarray(support["voxel_size_um"], dtype=np.float64)
+    ccf = np.ascontiguousarray(
+        origin + (allen + 0.5) * spacing, dtype=np.float32
+    )
+    array_receipts = {
+        name: _slab_observation_array_receipt_v4(value)
+        for name, value in sorted(
+            {
+                "centre_plane_annotation_int64": annotation,
+                "centre_plane_support_mask": support_mask,
+                "centre_plane_ccf_um_float32": ccf,
+            }.items()
+        )
+    }
+    combined_sha256 = _payload_sha256_v4(
+        {
+            "schema": "anatomy-tracker.centre-plane-target-arrays/v4",
+            "array_receipts": array_receipts,
+        }
+    )
+    receipt = {
+        "schema": "anatomy-tracker.authoritative-centre-plane-targets/v4",
+        "finite_plane_render_id": parent["finite_plane_render_id"],
+        "finite_render_receipt_sha256": parent["finite_render_receipt_sha256"],
+        "plane_realization_id": parent["plane_realization_id"],
+        "support_index_sha256": parent["support_index_sha256"],
+        "array_receipts": array_receipts,
+        "combined_sha256": combined_sha256,
+    }
+    return _payload_sha256_v4(receipt)
+
+
+def _validate_slab_observation_v4(
+    block: dict[str, object], parent: dict[str, object], support: dict[str, object]
+) -> dict[str, np.ndarray]:
+    if not isinstance(block, dict):
+        raise ValueError("slab_observation_v4 must be one authenticated mapping")
+    required = {
+        *SLAB_OBSERVATION_V4_ARRAY_NAMES,
+        *SLAB_OBSERVATION_V4_PARENT_BINDINGS,
+        "finite_psf",
+        "schema",
+        "thickness_selection",
+        "centre_plane_targets_receipt_sha256",
+        "array_receipts",
+        "combined_sha256",
+        "centre_plane_brain_pixel_count",
+        "slab_observable_pixel_count",
+        "slab_effective_brain_pixel_mass",
+        "dense_abstention_pixel_count",
+        "dense_eligible_pixel_count",
+        "dense_effective_supervision_mass",
+        "slab_observation_id",
+        "receipt_sha256",
+    }
+    if not required <= block.keys():
+        raise ValueError("slab_observation_v4 is missing required arrays or bindings")
+    if block["schema"] != "anatomy-tracker.slab-observation/v4":
+        raise ValueError("slab_observation_v4 schema does not match")
+    expected_bindings = {
+        "finite_plane_render_id": parent["finite_plane_render_id"],
+        "finite_render_receipt_sha256": parent["finite_render_receipt_sha256"],
+        "plane_realization_id": parent["plane_realization_id"],
+        "support_index_sha256": parent["support_index_sha256"],
+        "provenance_sha256": parent["provenance_sha256"],
+        "split": parent["split"],
+        "sample_index": parent["sample_index"],
+        "animal_id": parent["provenance"]["animal_id"],
+        "specimen_id": parent["provenance"]["specimen_id"],
+        "experiment_id": parent["provenance"]["experiment_id"],
+    }
+    if any(block[name] != value for name, value in expected_bindings.items()):
+        raise ValueError("slab_observation_v4 finite-parent binding does not match")
+    for name in (
+        "slab_observation_id",
+        "centre_plane_targets_receipt_sha256",
+        "receipt_sha256",
+    ):
+        value = block[name]
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError(f"slab_observation_v4 {name} is not canonical sha256")
+    if (
+        not isinstance(block["finite_psf"], dict)
+        or not block["finite_psf"]
+        or not isinstance(block["thickness_selection"], dict)
+        or not block["thickness_selection"]
+    ):
+        raise ValueError("slab_observation_v4 finite_psf recipe is missing")
+    verify_finite_psf_schedule_v4(
+        block["finite_psf"], capability=finite_psf_model_capability_v4()
+    )
+    shape = np.asarray(parent["raster"]["brain_mask"]).shape
+    expected_dtypes = {
+        "observed_scalar_float32": np.dtype(np.float32),
+        "slab_brain_occupancy_float32": np.dtype(np.float32),
+        "slab_observable_support_mask": np.dtype(bool),
+        "centre_label_psf_mass_float32": np.dtype(np.float32),
+        "slab_modal_annotation_int64": np.dtype(np.int64),
+        "slab_modal_purity_float32": np.dtype(np.float32),
+        "dense_correspondence_weight_float32": np.dtype(np.float32),
+        "dense_correspondence_abstention_mask": np.dtype(bool),
+    }
+    arrays = {
+        name: np.asarray(block[name]) for name in SLAB_OBSERVATION_V4_ARRAY_NAMES
+    }
+    if any(
+        value.shape != shape or value.dtype != expected_dtypes[name]
+        for name, value in arrays.items()
+    ):
+        raise ValueError("slab_observation_v4 array shape or dtype does not match")
+    for name, value in arrays.items():
+        if np.issubdtype(value.dtype, np.floating) and not np.isfinite(value).all():
+            raise ValueError(f"slab_observation_v4 {name} is nonfinite")
+    for name in (
+        "slab_brain_occupancy_float32",
+        "centre_label_psf_mass_float32",
+        "slab_modal_purity_float32",
+        "dense_correspondence_weight_float32",
+    ):
+        if np.any(arrays[name] < 0.0) or np.any(arrays[name] > 1.0):
+            raise ValueError(f"slab_observation_v4 {name} lies outside [0,1]")
+    support_mask = arrays["slab_observable_support_mask"]
+    if not np.array_equal(
+        support_mask, arrays["slab_brain_occupancy_float32"] > 0.0
+    ):
+        raise ValueError("slab support and occupancy do not match")
+    abstention = arrays["dense_correspondence_abstention_mask"]
+    dense_weight = arrays["dense_correspondence_weight_float32"]
+    center_tissue = np.asarray(parent["raster"]["brain_mask"], dtype=bool)
+    expected_abstention = (~center_tissue) | (
+        arrays["centre_label_psf_mass_float32"] <= 0.5
+    )
+    expected_dense_weight = np.where(
+        center_tissue,
+        np.clip(
+            (
+                arrays["centre_label_psf_mass_float32"].astype(np.float64)
+                - 0.5
+            )
+            / 0.3,
+            0.0,
+            1.0,
+        ),
+        0.0,
+    ).astype(np.float32)
+    if (
+        not np.array_equal(abstention, expected_abstention)
+        or not np.array_equal(dense_weight, expected_dense_weight)
+    ):
+        raise ValueError("slab-only or abstained pixels carry dense supervision")
+    live_receipts = {
+        name: _slab_observation_array_receipt_v4(value)
+        for name, value in sorted(arrays.items())
+    }
+    if block["array_receipts"] != live_receipts:
+        raise ValueError("slab_observation_v4 array receipts do not match")
+    expected_combined = _payload_sha256_v4(
+        {
+            "schema": "anatomy-tracker.slab-observation-arrays/v4",
+            "array_receipts": live_receipts,
+        }
+    )
+    expected_metadata = {
+        "combined_sha256": expected_combined,
+        "centre_plane_brain_pixel_count": int(center_tissue.sum()),
+        "slab_observable_pixel_count": int(support_mask.sum()),
+        "slab_effective_brain_pixel_mass": float(
+            arrays["slab_brain_occupancy_float32"].astype(np.float64).sum()
+        ),
+        "dense_abstention_pixel_count": int(abstention.sum()),
+        "dense_eligible_pixel_count": int((~abstention).sum()),
+        "dense_effective_supervision_mass": float(
+            dense_weight.astype(np.float64).sum()
+        ),
+    }
+    if any(block[name] != value for name, value in expected_metadata.items()):
+        raise ValueError("slab_observation_v4 summary metadata does not match")
+    selection = block["thickness_selection"]
+    selection_payload = {
+        key: value
+        for key, value in selection.items()
+        if key != "thickness_selection_sha256"
+    }
+    if (
+        selection.get("thickness_selection_sha256")
+        != _payload_sha256_v4(selection_payload)
+        or selection.get("thickness_selection_sha256")
+        != block["finite_psf"].get("thickness_selection_sha256")
+        or selection.get("nominal_cut_thickness_um")
+        != block["finite_psf"].get("nominal_cut_thickness_um")
+    ):
+        raise ValueError("slab thickness selection and finite PSF do not match")
+    if block["receipt_sha256"] != _payload_sha256_v4(
+        slab_observation_v4_receipt(block)
+    ):
+        raise ValueError("slab_observation_v4 receipt does not match")
+    if block["centre_plane_targets_receipt_sha256"] != (
+        _centre_plane_targets_receipt_sha256_v4(parent, support)
+    ):
+        raise ValueError("slab observation center-target receipt does not match")
+    return arrays
+
+
 def _merge_config(base: dict[str, object], changes: dict[str, object] | None) -> dict[str, object]:
     merged = copy.deepcopy(base)
     for key, value in (changes or {}).items():
@@ -324,7 +618,10 @@ def _analytic_velocity(
 
 
 def _g1(
-    parent: dict[str, object], support: dict[str, object], config: dict[str, object]
+    parent: dict[str, object],
+    support: dict[str, object],
+    config: dict[str, object],
+    slab_observation_arrays: dict[str, np.ndarray] | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, object], list[dict[str, object]]]:
     scalar = np.asarray(parent["raster"]["scalar"], dtype=np.float32)
     fixed_labels = np.asarray(parent["raster"]["annotation"])
@@ -588,6 +885,7 @@ def _g1(
                 (u0 + source_to_fixed[0].astype(np.float64) * pitch_um,
                  v0 + source_to_fixed[1].astype(np.float64) * pitch_um)
             )
+            source_center_scalar = bilinear_sample_scalar(scalar, source_to_fixed)
             arrays = {
                 "velocity_uv_um": velocity_um.astype(np.float32),
                 "velocity_xy_px": maps["velocity_xy_px"],
@@ -600,7 +898,7 @@ def _g1(
                 "fixed_map_domain_mask": fixed_valid,
                 "source_map_domain_mask": source_valid,
                 "fixed_clean_tissue_mask": fixed_tissue.copy(),
-                "source_scalar_clean": bilinear_sample_scalar(scalar, source_to_fixed),
+                "source_scalar_clean": source_center_scalar,
                 "source_annotation": source_labels,
                 "source_clean_tissue_mask": source_tissue,
                 "source_ccf_ap_dv_ml_um": source_ccf_um,
@@ -626,6 +924,89 @@ def _g1(
                 "accepted_attempt_index": attempt,
                 "accepted_attempt": entry,
             }
+            if slab_observation_arrays is not None:
+                slab_pullback = pullback_slab_observation_v4(
+                    slab_observation_arrays,
+                    source_to_fixed,
+                    source_tissue,
+                    source_valid,
+                )
+                arrays.update(
+                    {
+                        "fixed_slab_observed_scalar_float32": np.array(
+                            slab_observation_arrays["observed_scalar_float32"],
+                            dtype=np.float32,
+                            copy=True,
+                            order="C",
+                        ),
+                        "fixed_slab_brain_occupancy_float32": np.array(
+                            slab_observation_arrays[
+                                "slab_brain_occupancy_float32"
+                            ],
+                            dtype=np.float32,
+                            copy=True,
+                            order="C",
+                        ),
+                        "fixed_slab_observable_support_mask": np.array(
+                            slab_observation_arrays[
+                                "slab_observable_support_mask"
+                            ],
+                            dtype=bool,
+                            copy=True,
+                            order="C",
+                        ),
+                        "fixed_centre_label_psf_mass_float32": np.array(
+                            slab_observation_arrays[
+                                "centre_label_psf_mass_float32"
+                            ],
+                            dtype=np.float32,
+                            copy=True,
+                            order="C",
+                        ),
+                        "fixed_slab_modal_annotation_int64": np.array(
+                            slab_observation_arrays["slab_modal_annotation_int64"],
+                            dtype=np.int64,
+                            copy=True,
+                            order="C",
+                        ),
+                        "fixed_slab_modal_purity_float32": np.array(
+                            slab_observation_arrays["slab_modal_purity_float32"],
+                            dtype=np.float32,
+                            copy=True,
+                            order="C",
+                        ),
+                        "fixed_dense_correspondence_weight_float32": np.array(
+                            slab_observation_arrays[
+                                "dense_correspondence_weight_float32"
+                            ],
+                            dtype=np.float32,
+                            copy=True,
+                            order="C",
+                        ),
+                        "fixed_dense_correspondence_abstention_mask": np.array(
+                            slab_observation_arrays[
+                                "dense_correspondence_abstention_mask"
+                            ],
+                            dtype=bool,
+                            copy=True,
+                            order="C",
+                        ),
+                        "source_center_scalar_clean_float32": source_center_scalar,
+                        "source_scalar_clean": bilinear_sample_scalar(
+                            slab_observation_arrays["observed_scalar_float32"],
+                            source_to_fixed,
+                        ),
+                        **slab_pullback,
+                    }
+                )
+                parameters["slab_observation_contract"] = {
+                    "contract": SLAB_OBSERVATION_V4_CONTRACT,
+                    "observation_scalar": "finite-PSF slab scalar",
+                    "center_annotation_and_ccf": "immutable finite-parent targets",
+                    "continuous_pullback": "bilinear-zero",
+                    "modal_and_abstention_pullback": "nearest-integer-zero",
+                    "slab_only_dense_supervision": "always abstained",
+                }
             return arrays, parameters, logs
     raise ValueError("no G1 realization passed every predeclared topology, cycle, displacement, and FOV gate")
 
@@ -654,8 +1035,13 @@ def _label_conditioned_appearance(
     tissue: np.ndarray,
     config: dict[str, object],
     attempt: int,
+    *,
+    label_support: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[str, object]]:
-    region_ids = np.unique(labels[tissue])
+    conditioning_support = tissue if label_support is None else np.asarray(
+        label_support, dtype=bool
+    )
+    region_ids = np.unique(labels[conditioning_support])
     means_rng = _rng(config, "g2", "label-means", attempt)
     means = means_rng.uniform(*config["g2"]["label_mean_range"], len(region_ids)).astype(np.float32)
     anti_shortcut = bool(_rng(config, "g2", "label-anti-shortcut-enable", attempt).random() < 0.5)
@@ -669,12 +1055,21 @@ def _label_conditioned_appearance(
         0.0, 0.08, len(region_ids)
     ).astype(np.float32)
     noise = _rng(config, "g2", "label-noise-values", attempt).normal(size=normalized.shape).astype(np.float32)
-    rendered = np.zeros(normalized.shape, np.float32)
+    rendered = (
+        np.zeros(normalized.shape, np.float32)
+        if label_support is None
+        else normalized.copy()
+    )
     for region_id, mean, standard_deviation in zip(region_ids, effective_means, standard_deviations):
-        selected = tissue & (labels == region_id)
+        selected = conditioning_support & (labels == region_id)
         rendered[selected] = mean + standard_deviation * noise[selected]
     blur_sigma = float(_rng(config, "g2", "label-postrender-blur", attempt).uniform(0.5, 1.5))
-    rendered = ndimage.gaussian_filter(rendered, blur_sigma, mode="nearest").astype(np.float32)
+    blurred = ndimage.gaussian_filter(rendered, blur_sigma, mode="nearest").astype(np.float32)
+    rendered = (
+        blurred
+        if label_support is None
+        else np.where(conditioning_support, blurred, normalized).astype(np.float32)
+    )
     return np.clip(rendered, 0.0, 1.0), {
         "region_ids": [int(value) for value in region_ids],
         "sampled_region_means": [float(value) for value in means],
@@ -702,7 +1097,12 @@ def _g2_attempt(
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
     scalar = g1_arrays["source_scalar_clean"]
     labels = g1_arrays["source_annotation"]
-    tissue = g1_arrays["source_clean_tissue_mask"]
+    slab_mode = "source_slab_observable_support_mask" in g1_arrays
+    tissue = (
+        g1_arrays["source_slab_observable_support_mask"]
+        if slab_mode
+        else g1_arrays["source_clean_tissue_mask"]
+    )
     g2 = config["g2"]
     stage_rng = lambda field: _rng(config, "g2", field, attempt)
     normalized = robust_clean_normalization(scalar, tissue)
@@ -744,7 +1144,12 @@ def _g2_attempt(
         alpha = 0.0 if family_index == 0 else (1.0 if family_index == 1 else _uniform(stage_rng("mixture-alpha"), g2["mixture_alpha"]))
         if alpha > 0.0:
             label_image, label_parameters = _label_conditioned_appearance(
-                normalized, labels, tissue, config, attempt
+                normalized,
+                labels,
+                tissue,
+                config,
+                attempt,
+                label_support=(g1_arrays["source_clean_tissue_mask"] if slab_mode else None),
             )
             appearance = ((1.0 - alpha) * normalized + alpha * label_image).astype(np.float32)
         else:
@@ -842,6 +1247,12 @@ def _g2_attempt(
             ], attempt
         ),
     )
+    if slab_mode:
+        parameters["observation_support_contract"] = {
+            "appearance_and_background_partition": "post-G1 finite-slab observable support",
+            "label_conditioning_support": "centre-plane target tissue only",
+            "slab_only_label_conditioning": False,
+        }
     return {
         "normalized_source_scalar": normalized,
         "pre_damage_tissue_appearance": appearance,
@@ -857,12 +1268,17 @@ def _g2(
     rejection_attempts = []
     for attempt in range(int(config["maximum_g2_attempts"])):
         arrays, parameters = _g2_attempt(g1_arrays, config, attempt)
-        marginal_support = int(g1_arrays["source_clean_tissue_mask"].sum()) < max(
+        marginal_reference = (
+            g1_arrays["source_slab_observable_support_mask"]
+            if "source_slab_observable_support_mask" in g1_arrays
+            else g1_arrays["source_clean_tissue_mask"]
+        )
+        marginal_support = int(marginal_reference.sum()) < max(
             int(config["ordinary_minimum_clean_brain_pixels_floor"]),
             int(
                 math.ceil(
                     float(config["ordinary_minimum_clean_brain_fraction"])
-                    * g1_arrays["source_clean_tissue_mask"].size
+                    * marginal_reference.size
                 )
             ),
         )
@@ -997,7 +1413,13 @@ def _damage_event(
 def _g3(
     g1_arrays: dict[str, np.ndarray], g2_arrays: dict[str, np.ndarray], config: dict[str, object]
 ) -> tuple[dict[str, np.ndarray], dict[str, object]]:
-    tissue = g1_arrays["source_clean_tissue_mask"]
+    slab_mode = "source_slab_observable_support_mask" in g1_arrays
+    center_tissue = g1_arrays["source_clean_tissue_mask"]
+    tissue = (
+        g1_arrays["source_slab_observable_support_mask"]
+        if slab_mode
+        else center_tissue
+    )
     map_valid = g1_arrays["source_map_domain_mask"]
     g3 = config["g3"]
     marginal_support = int(tissue.sum()) < max(
@@ -1055,7 +1477,22 @@ def _g3(
         artifact = occlusion | appearance_artifact
         visible = tissue & ~(missing | artifact)
         observation_invalid = tissue & damage
-        source_valid = map_valid & visible
+        if slab_mode:
+            pre_damage_weight = g1_arrays[
+                "source_dense_correspondence_weight_pre_damage_float32"
+            ]
+            pre_damage_abstention = g1_arrays[
+                "source_dense_correspondence_abstention_pre_damage_mask"
+            ]
+            source_valid = (
+                map_valid
+                & center_tissue
+                & visible
+                & (pre_damage_weight > 0.0)
+                & ~pre_damage_abstention
+            )
+        else:
+            source_valid = map_valid & visible
         fixed_valid = (
             g1_arrays["fixed_map_domain_mask"]
             & g1_arrays["fixed_clean_tissue_mask"]
@@ -1123,6 +1560,19 @@ def _g3(
         "source_valid_correspondence_mask": source_valid,
         "fixed_valid_correspondence_mask": fixed_valid,
     }
+    if slab_mode:
+        final_dense_weight = np.where(
+            source_valid,
+            g1_arrays["source_dense_correspondence_weight_pre_damage_float32"],
+            np.float32(0.0),
+        ).astype(np.float32)
+        arrays.update(
+            {
+                "source_dense_correspondence_weight_float32": final_dense_weight,
+                "source_dense_correspondence_abstention_mask": ~source_valid,
+                "center_target_loss_valid_mask": source_valid.copy(),
+            }
+        )
     parameters = {
         "damage_eligible": eligible,
         "damage_disabled_reason": None if eligible else "source clean tissue below 128 pixels",
@@ -1139,6 +1589,14 @@ def _g3(
             config, "g3", ["event-count"] + [f"event-{slot}-{suffix}" for slot in range(2) for suffix in ("type", "parameters")], damage_attempt
         ),
     }
+    if slab_mode:
+        parameters["dual_mask_contract"] = {
+            "damage_and_brush_support": "post-G1 finite-slab observable support",
+            "center_annotation_and_ccf_targets": True,
+            "slab_only_pixels_are_dense_abstained": True,
+            "pose_loss_gated_by_pixel_mask": False,
+            "automatic_segmentation_dependency": False,
+        }
     return arrays, parameters
 
 
@@ -1265,6 +1723,7 @@ def _generate(
     support: dict[str, object],
     config: dict[str, object],
     *,
+    slab_observation_v4: dict[str, object] | None,
     finite_parent_generator_source_commit: str | None,
 ) -> dict[str, object]:
     verify_finite_arbitrary_plane_render(
@@ -1274,6 +1733,11 @@ def _generate(
     )
     if parent["support_index_sha256"] != support["support_index_sha256"]:
         raise ValueError("finite parent and support index do not match")
+    slab_observation_arrays = (
+        None
+        if slab_observation_v4 is None
+        else _validate_slab_observation_v4(slab_observation_v4, parent, support)
+    )
     brain_pixel_count = int(parent["acceptance_contract"]["brain_pixel_count"])
     requested_threshold = int(
         parent["acceptance_contract"]["minimum_brain_pixels"]
@@ -1291,7 +1755,26 @@ def _generate(
             "recorded; point and dense loss eligibility is decided by the curriculum row"
         ),
     }
-    g1_arrays, g1_parameters, g1_logs = _g1(parent, support, config)
+    g1_arrays, g1_parameters, g1_logs = _g1(
+        parent, support, config, slab_observation_arrays
+    )
+    if slab_observation_arrays is not None:
+        point_pose_evidence_pixels = int(
+            g1_arrays["source_slab_observable_support_mask"].sum()
+        )
+        support_supervision.update(
+            {
+                "center_plane_target_pixel_count": brain_pixel_count,
+                "point_pose_evidence_support": (
+                    "post-G1 finite-slab observable support"
+                ),
+                "point_pose_evidence_pixel_count": point_pose_evidence_pixels,
+                "point_pose_evidence_meets_requested_identifiability_threshold": bool(
+                    point_pose_evidence_pixels >= requested_threshold
+                ),
+                "point_pose_loss_gated_by_pixel_mask": False,
+            }
+        )
     g2_arrays, g2_parameters = _g2(g1_arrays, config)
     g3_arrays, g3_parameters = _g3(g1_arrays, g2_arrays, config)
     outline_arrays, outline_parameters = _outline(g3_arrays, config)
@@ -1303,6 +1786,24 @@ def _generate(
     g3_recipe, g3_realization = _stage_identity("damage", {"config": config["g3"], "parameters": g3_parameters}, g3_arrays)
     outline_recipe, outline_realization = _stage_identity("outline", outline_parameters, outline_arrays)
     parent_identity = _finite_identity(parent)
+    slab_identity = (
+        None
+        if slab_observation_v4 is None
+        else {
+            "contract": SLAB_OBSERVATION_V4_CONTRACT,
+            "slab_observation_id": slab_observation_v4["slab_observation_id"],
+            "receipt_sha256": slab_observation_v4["receipt_sha256"],
+            "centre_plane_targets_receipt_sha256": slab_observation_v4[
+                "centre_plane_targets_receipt_sha256"
+            ],
+            "finite_psf_sha256": slab_observation_v4["finite_psf"][
+                "finite_psf_sha256"
+            ],
+            "finite_psf_capability_sha256": slab_observation_v4["finite_psf"][
+                "finite_psf_capability_sha256"
+            ],
+        }
+    )
     provenance = copy.deepcopy(parent["provenance"])
     implementation = {
         "source_path": "training/arbitrary_plane_synthetic_generator.py",
@@ -1320,6 +1821,13 @@ def _generate(
         ],
         "g1_integration_contract": config["g1"]["integration_contract"],
     }
+    if slab_identity is not None:
+        implementation["dependency_contract_versions"][
+            "slab_observation_v4"
+        ] = SLAB_OBSERVATION_V4_CONTRACT
+        implementation["finite_psf_model_capability_receipt_sha256"] = (
+            finite_psf_model_capability_v4()["receipt_sha256"]
+        )
     model_independence = {
         "learned_checkpoint_dependencies": [],
         "previous_model_dependencies": [],
@@ -1372,7 +1880,17 @@ def _generate(
             "outline_realization_id": outline_realization,
         },
         "paired_view_group_id": _payload_sha256(
-            {"parent": parent_identity, "g1": g1_realization, "g2": g2_realization, "g3": g3_realization}
+            {
+                "parent": parent_identity,
+                **(
+                    {}
+                    if slab_identity is None
+                    else {"slab_observation_v4": slab_identity}
+                ),
+                "g1": g1_realization,
+                "g2": g2_realization,
+                "g3": g3_realization,
+            }
         ),
         "arrays": arrays,
         "array_receipts": array_receipts,
@@ -1384,6 +1902,16 @@ def _generate(
             "final_test_access": False,
         },
     }
+    if slab_observation_v4 is not None:
+        artifact.update(
+            {
+                "slab_observation_v4_identity": slab_identity,
+                "slab_observation_v4_receipt": slab_observation_v4_receipt(
+                    slab_observation_v4
+                ),
+                "slab_observation_v4": copy.deepcopy(slab_observation_v4),
+            }
+        )
     complete_identity = {
         "schema_version": SYNTHETIC_SCHEMA,
         "generator_algorithm": SYNTHETIC_ALGORITHM,
@@ -1402,6 +1930,8 @@ def _generate(
         "paired_view_group_id": artifact["paired_view_group_id"],
         "synthetic_artifacts_sha256": synthetic_artifacts_sha256,
     }
+    if slab_identity is not None:
+        complete_identity["slab_observation_v4_identity"] = slab_identity
     artifact["synthetic_realization_id"] = _payload_sha256(complete_identity)
     artifact["synthetic_receipt_sha256"] = _payload_sha256(synthetic_realization_receipt(artifact))
     return artifact
@@ -1411,6 +1941,7 @@ def make_arbitrary_plane_synthetic_realization(
     finite_parent: dict[str, object],
     support_index: dict[str, object],
     *,
+    slab_observation_v4: dict[str, object] | None = None,
     root_seed: int | str | None = None,
     sample_index: int | None = None,
     synthetic_stratum: str = "ordinary",
@@ -1426,6 +1957,7 @@ def make_arbitrary_plane_synthetic_realization(
         finite_parent,
         support_index,
         config,
+        slab_observation_v4=slab_observation_v4,
         finite_parent_generator_source_commit=finite_parent_generator_source_commit,
     )
 
@@ -1435,7 +1967,12 @@ def synthetic_realization_receipt(artifact: dict[str, object]) -> dict[str, obje
     receipt = {
         key: copy.deepcopy(value)
         for key, value in artifact.items()
-        if key not in {"finite_parent", "arrays", "synthetic_receipt_sha256"}
+        if key not in {
+            "finite_parent",
+            "slab_observation_v4",
+            "arrays",
+            "synthetic_receipt_sha256",
+        }
     }
     json.dumps(receipt, allow_nan=False)
     return receipt
@@ -1454,6 +1991,7 @@ def replay_arbitrary_plane_synthetic_realization(
         artifact["finite_parent"],
         support_index,
         copy.deepcopy(artifact["generator"]["resolved_config"]),
+        slab_observation_v4=copy.deepcopy(artifact.get("slab_observation_v4")),
         finite_parent_generator_source_commit=finite_parent_generator_source_commit,
     )
 
@@ -1482,6 +2020,39 @@ def verify_arbitrary_plane_synthetic_realization(
         raise ValueError("finite parent identity does not match")
     if artifact["finite_parent_receipt"] != finite_render_receipt(artifact["finite_parent"]):
         raise ValueError("finite parent receipt does not match")
+    slab_artifact_keys = {
+        "slab_observation_v4",
+        "slab_observation_v4_identity",
+        "slab_observation_v4_receipt",
+    }
+    present_slab_keys = slab_artifact_keys & artifact.keys()
+    if present_slab_keys and present_slab_keys != slab_artifact_keys:
+        raise ValueError("synthetic slab observation state is incomplete")
+    slab_mode = bool(present_slab_keys)
+    verified_slab_arrays = None
+    if slab_mode:
+        block = artifact["slab_observation_v4"]
+        verified_slab_arrays = _validate_slab_observation_v4(
+            block, artifact["finite_parent"], support_index
+        )
+        expected_slab_identity = {
+            "contract": SLAB_OBSERVATION_V4_CONTRACT,
+            "slab_observation_id": block["slab_observation_id"],
+            "receipt_sha256": block["receipt_sha256"],
+            "centre_plane_targets_receipt_sha256": block[
+                "centre_plane_targets_receipt_sha256"
+            ],
+            "finite_psf_sha256": block["finite_psf"]["finite_psf_sha256"],
+            "finite_psf_capability_sha256": block["finite_psf"][
+                "finite_psf_capability_sha256"
+            ],
+        }
+        if (
+            artifact["slab_observation_v4_identity"] != expected_slab_identity
+            or artifact["slab_observation_v4_receipt"]
+            != slab_observation_v4_receipt(block)
+        ):
+            raise ValueError("synthetic slab observation binding does not match")
     if artifact["provenance"] != artifact["finite_parent"]["provenance"]:
         raise ValueError("synthetic provenance must preserve finite-parent subject and atlas IDs exactly")
     if artifact["provenance_sha256"] != _payload_sha256(artifact["provenance"]):
@@ -1504,6 +2075,18 @@ def verify_arbitrary_plane_synthetic_realization(
         raise ValueError("synthetic generator must declare exactly three empty dependency lists")
     if artifact["generator"]["resolved_config_sha256"] != _payload_sha256(artifact["generator"]["resolved_config"]):
         raise ValueError("resolved synthetic config hash does not match")
+    dependency_versions = artifact["generator"]["implementation"][
+        "dependency_contract_versions"
+    ]
+    if slab_mode != (
+        dependency_versions.get("slab_observation_v4")
+        == SLAB_OBSERVATION_V4_CONTRACT
+    ):
+        raise ValueError("synthetic slab implementation contract does not match")
+    if slab_mode and artifact["generator"]["implementation"].get(
+        "finite_psf_model_capability_receipt_sha256"
+    ) != finite_psf_model_capability_v4()["receipt_sha256"]:
+        raise ValueError("synthetic finite-PSF capability binding does not match")
     current_sources = {name: _file_sha256(path) for name, path in _SOURCE_FILES.items()}
     if artifact["generator"]["implementation"]["loaded_source_sha256"] != current_sources:
         raise ValueError("loaded synthetic implementation sources do not match")
@@ -1516,8 +2099,12 @@ def verify_arbitrary_plane_synthetic_realization(
     tissue = arrays["source_clean_tissue_mask"]
     if not np.array_equal(tissue, arrays["source_annotation"] != 0):
         raise ValueError("source annotation/tissue consistency does not match")
+    observation_tissue = (
+        arrays["source_slab_observable_support_mask"] if slab_mode else tissue
+    )
     if not np.array_equal(
-        arrays["visible_mask"] | arrays["missing_mask"] | arrays["artifact_mask"], tissue
+        arrays["visible_mask"] | arrays["missing_mask"] | arrays["artifact_mask"],
+        observation_tissue,
     ) or np.any(arrays["missing_mask"] & arrays["artifact_mask"]):
         raise ValueError("damage supervision partition does not match")
     physical = arrays["physical_loss_mask"]
@@ -1527,14 +2114,94 @@ def verify_arbitrary_plane_synthetic_realization(
         np.any(physical & occlusion)
         or np.any(physical & appearance)
         or np.any(occlusion & appearance)
-        or not np.array_equal(arrays["observable_footprint_mask"], tissue & ~physical)
-        or not np.array_equal(arrays["observation_invalid_mask"], tissue & (physical | occlusion | appearance))
         or not np.array_equal(
-            arrays["source_valid_correspondence_mask"],
-            arrays["source_map_domain_mask"] & tissue & ~arrays["observation_invalid_mask"],
+            arrays["observable_footprint_mask"], observation_tissue & ~physical
+        )
+        or not np.array_equal(
+            arrays["observation_invalid_mask"],
+            observation_tissue & (physical | occlusion | appearance),
         )
     ):
-        raise ValueError("exclusive damage or source-valid mask algebra does not match")
+        raise ValueError("exclusive damage or observation mask algebra does not match")
+    if slab_mode:
+        expected_pullback = pullback_slab_observation_v4(
+            verified_slab_arrays,
+            arrays["source_to_fixed_map"],
+            tissue,
+            arrays["source_map_domain_mask"],
+        )
+        for name, expected in expected_pullback.items():
+            if not np.array_equal(arrays[name], expected):
+                raise ValueError(f"slab G1 pullback {name} does not match")
+        if not np.array_equal(
+            arrays["source_scalar_clean"],
+            bilinear_sample_scalar(
+                verified_slab_arrays["observed_scalar_float32"],
+                arrays["source_to_fixed_map"],
+            ),
+        ) or not np.array_equal(
+            arrays["source_center_scalar_clean_float32"],
+            bilinear_sample_scalar(
+                artifact["finite_parent"]["raster"]["scalar"],
+                arrays["source_to_fixed_map"],
+            ),
+        ):
+            raise ValueError("slab and center scalar G1 pullbacks do not match")
+        expected_source_valid = (
+            arrays["source_map_domain_mask"]
+            & tissue
+            & arrays["visible_mask"]
+            & (
+                arrays[
+                    "source_dense_correspondence_weight_pre_damage_float32"
+                ]
+                > 0.0
+            )
+            & ~arrays[
+                "source_dense_correspondence_abstention_pre_damage_mask"
+            ]
+        )
+        slab_only = observation_tissue & ~tissue
+        if (
+            not np.array_equal(arrays["source_slab_only_observation_mask"], slab_only)
+            or not np.array_equal(arrays["loss_valid_mask"], arrays["visible_mask"])
+            or not np.array_equal(
+                arrays["center_target_loss_valid_mask"], expected_source_valid
+            )
+            or np.any(arrays["source_annotation"][slab_only] != 0)
+            or not np.all(
+                arrays["source_dense_correspondence_abstention_mask"][slab_only]
+            )
+            or np.any(
+                arrays["source_dense_correspondence_weight_float32"][slab_only]
+                != 0.0
+            )
+            or not np.array_equal(
+                arrays["source_dense_correspondence_abstention_mask"],
+                ~expected_source_valid,
+            )
+            or not np.array_equal(
+                arrays["source_dense_correspondence_weight_float32"],
+                np.where(
+                    expected_source_valid,
+                    arrays[
+                        "source_dense_correspondence_weight_pre_damage_float32"
+                    ],
+                    np.float32(0.0),
+                ).astype(np.float32),
+            )
+        ):
+            raise ValueError("slab-only or final dense abstention algebra does not match")
+    else:
+        expected_source_valid = (
+            arrays["source_map_domain_mask"]
+            & tissue
+            & ~arrays["observation_invalid_mask"]
+        )
+    if not np.array_equal(
+        arrays["source_valid_correspondence_mask"], expected_source_valid
+    ):
+        raise ValueError("source-valid correspondence mask algebra does not match")
     expected_fixed_valid = (
         arrays["fixed_map_domain_mask"]
         & arrays["fixed_clean_tissue_mask"]
@@ -1566,7 +2233,9 @@ def verify_arbitrary_plane_synthetic_realization(
 
 __all__ = [
     "ABSENT_OUTLINE", "ACCURATE_OUTLINE", "IMPERFECT_OUTLINE", "SEED_ENCODING",
+    "SLAB_OBSERVATION_V4_ARRAY_NAMES", "SLAB_OBSERVATION_V4_CONTRACT",
     "SYNTHETIC_ALGORITHM", "SYNTHETIC_SCHEMA", "derive_field_seed",
     "make_arbitrary_plane_synthetic_realization", "replay_arbitrary_plane_synthetic_realization",
-    "synthetic_realization_receipt", "verify_arbitrary_plane_synthetic_realization",
+    "slab_observation_v4_receipt", "synthetic_realization_receipt",
+    "verify_arbitrary_plane_synthetic_realization",
 ]

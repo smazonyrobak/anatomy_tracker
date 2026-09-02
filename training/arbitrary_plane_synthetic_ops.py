@@ -19,7 +19,7 @@ from scipy.ndimage import gaussian_filter
 
 
 ARBITRARY_PLANE_SYNTHETIC_OPS_VERSION = (
-    "arbitrary-plane-synthetic-ops-g1-direct-gauge-option-v2"
+    "arbitrary-plane-synthetic-ops-g1-direct-gauge-and-slab-pullback-v3"
 )
 
 ADAPTIVE_NUMPY_INTEGRATION = "adaptive-float32-max-seed-0.5px"
@@ -140,6 +140,80 @@ def nearest_sample_labels(
     valid = (x >= 0) & (x < width) & (y >= 0) & (y < height)
     sampled = values[np.clip(y, 0, height - 1), np.clip(x, 0, width - 1)]
     return np.where(valid, sampled, np.asarray(outside_label, dtype=values.dtype))
+
+
+def pullback_slab_observation_v4(
+    slab_arrays: dict[str, np.ndarray],
+    source_to_fixed_map: np.ndarray,
+    source_center_tissue_mask: np.ndarray,
+    source_map_domain_mask: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Pull a finite-slab observation into G1 source coordinates.
+
+    Continuous PSF quantities use the same bilinear-zero pullback as the
+    observed scalar.  The modal annotation and upstream abstention decision use
+    the frozen nearest-centre rule.  Dense supervision is then conservatively
+    restricted to centre-plane anatomy; slab-only signal remains observable but
+    is always abstained.
+    """
+    source_center = np.asarray(source_center_tissue_mask, dtype=bool)
+    source_domain = np.asarray(source_map_domain_mask, dtype=bool)
+    if source_center.shape != source_domain.shape:
+        raise ValueError("source centre tissue and map domain shapes differ")
+    continuous = {
+        name: bilinear_sample_scalar(slab_arrays[name], source_to_fixed_map)
+        for name in (
+            "observed_scalar_float32",
+            "slab_brain_occupancy_float32",
+            "slab_observable_support_mask",
+            "centre_label_psf_mass_float32",
+            "slab_modal_purity_float32",
+            "dense_correspondence_weight_float32",
+        )
+    }
+    support_mass = continuous["slab_observable_support_mask"]
+    occupancy = continuous["slab_brain_occupancy_float32"]
+    source_observable = source_domain & (support_mass > 0.0) & (occupancy > 0.0)
+    modal = nearest_sample_labels(
+        slab_arrays["slab_modal_annotation_int64"], source_to_fixed_map
+    ).astype(np.int64, copy=False)
+    upstream_abstention = nearest_sample_labels(
+        np.asarray(
+            slab_arrays["dense_correspondence_abstention_mask"], dtype=np.uint8
+        ),
+        source_to_fixed_map,
+        outside_label=1,
+    ).astype(bool)
+    pre_damage_weight = continuous["dense_correspondence_weight_float32"]
+    pre_damage_abstention = (
+        ~source_domain
+        | ~source_center
+        | ~source_observable
+        | upstream_abstention
+        | ~(pre_damage_weight > 0.0)
+    )
+    pre_damage_weight = np.where(
+        pre_damage_abstention, np.float32(0.0), pre_damage_weight
+    ).astype(np.float32)
+    return {
+        "source_slab_brain_occupancy_float32": occupancy,
+        "source_slab_observable_support_mass_float32": support_mass,
+        "source_slab_observable_support_mask": source_observable,
+        "source_centre_label_psf_mass_float32": continuous[
+            "centre_label_psf_mass_float32"
+        ],
+        "source_slab_modal_annotation_int64": modal,
+        "source_slab_modal_purity_float32": continuous[
+            "slab_modal_purity_float32"
+        ],
+        "source_dense_correspondence_weight_pre_damage_float32": (
+            pre_damage_weight
+        ),
+        "source_dense_correspondence_abstention_pre_damage_mask": (
+            pre_damage_abstention
+        ),
+        "source_slab_only_observation_mask": source_observable & ~source_center,
+    }
 
 
 def compose_pixel_maps(
@@ -766,6 +840,7 @@ __all__ = [
     "jacobian_determinant",
     "nearest_sample_labels",
     "physical_velocity_to_pixel",
+    "pullback_slab_observation_v4",
     "remove_tissue_affine_component",
     "remove_uniform_canvas_affine_component_decoder_parity",
     "sample_multiscale_physical_velocity",
