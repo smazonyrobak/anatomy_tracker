@@ -21,6 +21,7 @@ from training.arbitrary_plane_recurrent_model import (
     _VERIFIED_CATALOGUE_FEATURE_CACHE_TOKEN,
 )
 from training.arbitrary_plane_staged_training import (
+    STAGED_TRAINING_EXPORT_SCHEMA,
     verify_staged_training_export_receipt_v3,
 )
 from training.arbitrary_plane_uncertainty_v3 import (
@@ -84,6 +85,40 @@ _MODEL_KEYS = {
     if name != "self"
 }
 _INFERENCE_SESSION_TOKEN = object()
+
+
+def _verify_training_export_receipt(
+    receipt,
+    *,
+    model_kwargs,
+    catalogue_id,
+    catalogue_receipt_sha256,
+    catalogue_cell_count,
+    model_state_sha256,
+    require_source_file=False,
+):
+    """Dispatch only between the authenticated v3 and finite-v4 training receipts."""
+    schema = receipt.get("schema_version") if isinstance(receipt, dict) else None
+    arguments = {
+        "model_kwargs": model_kwargs,
+        "catalogue_id": catalogue_id,
+        "catalogue_receipt_sha256": catalogue_receipt_sha256,
+        "catalogue_cell_count": catalogue_cell_count,
+        "model_state_sha256": model_state_sha256,
+        "require_source_file": require_source_file,
+    }
+    if schema == STAGED_TRAINING_EXPORT_SCHEMA:
+        return verify_staged_training_export_receipt_v3(receipt, **arguments)
+    from training.arbitrary_plane_finite_training_runner_v4 import (
+        FINITE_STAGED_TRAINING_EXPORT_V4_SCHEMA,
+        verify_finite_staged_training_export_receipt_v4,
+    )
+
+    if schema == FINITE_STAGED_TRAINING_EXPORT_V4_SCHEMA:
+        return verify_finite_staged_training_export_receipt_v4(
+            receipt, **arguments
+        )
+    raise ValueError("staged-training export receipt schema is unsupported")
 
 
 def _json(value):
@@ -674,7 +709,7 @@ def make_arbitrary_plane_joint_checkpoint_v3(
         raise ValueError("model instance hyperparameters do not match its declared config")
     state_receipts = _state_receipts(state)
     model_state_sha256 = _model_state_sha256(state_receipts)
-    verify_staged_training_export_receipt_v3(
+    _verify_training_export_receipt(
         training_receipt,
         model_kwargs=model_config,
         catalogue_id=catalogue["catalogue_id"],
@@ -799,7 +834,7 @@ def verify_arbitrary_plane_joint_checkpoint_v3(checkpoint, catalogue):
     )
     if not valid:
         raise ValueError("joint checkpoint or dependency binding failed verification")
-    verify_staged_training_export_receipt_v3(
+    _verify_training_export_receipt(
         checkpoint["training_receipt"],
         model_kwargs=config,
         catalogue_id=catalogue["catalogue_id"],
