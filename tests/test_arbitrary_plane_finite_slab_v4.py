@@ -7,6 +7,7 @@ import torch
 
 import training.arbitrary_plane_finite_slab_v4 as slab
 import training.arbitrary_plane_psf_v4 as psf_v4
+import training.arbitrary_plane_synthetic_generator as synthetic
 from training.arbitrary_plane_full_frame_primitives import (
     full_frame_state_from_components,
     render_finite_thickness_plane,
@@ -195,6 +196,41 @@ def test_adapter_replays_binds_provenance_and_never_mutates_or_redraws_parent():
     wrong_parent = _parent(context, seed=31337, sample_index=17)
     with pytest.raises(ValueError, match="parent reference"):
         slab.verify_finite_slab_render_v4(result, wrong_parent, context)
+
+
+def test_real_slab_producer_block_is_accepted_unchanged_by_synthetic_generator():
+    _, _, support, context = _context()
+    parent = _parent(context)
+    adapter = slab.make_finite_slab_render_v4(
+        parent,
+        context,
+        nominal_cut_thickness_um=55.0,
+    )
+    block = adapter["artifact"]["slab_observation_v4"]
+    realization = synthetic.make_arbitrary_plane_synthetic_realization(
+        parent,
+        support,
+        slab_observation_v4=block,
+        root_seed=91917,
+        sample_index=7,
+        outline_mode=synthetic.ABSENT_OUTLINE,
+    )
+
+    copied_block = realization["slab_observation_v4"]
+    assert synthetic.slab_observation_v4_receipt(copied_block) == (
+        synthetic.slab_observation_v4_receipt(block)
+    )
+    assert all(
+        np.array_equal(copied_block[name], block[name])
+        for name in synthetic.SLAB_OBSERVATION_V4_ARRAY_NAMES
+    )
+    assert realization["slab_observation_v4_identity"]["receipt_sha256"] == block[
+        "receipt_sha256"
+    ]
+    assert realization["slab_observation_v4_identity"]["finite_psf_sha256"] == block[
+        "finite_psf"
+    ]["finite_psf_sha256"]
+    synthetic.verify_arbitrary_plane_synthetic_realization(realization, support)
 
 
 @pytest.mark.parametrize("tensor_name", ["scalar_tensor", "annotation_tensor"])
