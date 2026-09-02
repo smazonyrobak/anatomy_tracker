@@ -55,6 +55,10 @@ FINITE_TRAINING_REPORT_LEDGER_EVIDENCE_V4_SCHEMA = (
 UNCALIBRATED_STATUS = "absent-uncalibrated"
 DEVELOPMENT_DATA_ROLE = staged_training.DEVELOPMENT_DATA_ROLE
 DEFAULT_CHECKPOINT_COMMIT_INTERVAL_ATTEMPTS = 25
+_RESUME_CHECKPOINT_RELATIVE_PATHS = {
+    "checkpoints/resume_slot_0.pt",
+    "checkpoints/resume_slot_1.pt",
+}
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_FILES = (
     "training/arbitrary_plane_finite_training_runner_v4.py",
@@ -503,19 +507,33 @@ def _load_manifest(run_root):
     return manifest, cache_manifest
 
 
-def _verify_checkpoint_record(run_root, manifest, checkpoint):
+def _verify_checkpoint_record(
+    run_root,
+    manifest,
+    checkpoint,
+    *,
+    immutable_file=True,
+    resume_slot=False,
+):
+    context = _checkpoint_context(manifest)
     if (
         not isinstance(checkpoint, dict)
-        or checkpoint != {
-            **checkpoint,
-            **_checkpoint_context(manifest),
-        }
+        or set(checkpoint) != {"relative_path", "file_sha256", *context}
+        or any(checkpoint.get(key) != value for key, value in context.items())
+        or not isinstance(checkpoint.get("relative_path"), str)
+        or not isinstance(checkpoint.get("file_sha256"), str)
+        or len(checkpoint["file_sha256"]) != 64
+        or bool(set(checkpoint["file_sha256"].lower()) - set("0123456789abcdef"))
+        or (
+            resume_slot
+            and checkpoint["relative_path"] not in _RESUME_CHECKPOINT_RELATIVE_PATHS
+        )
     ):
         raise ValueError("finite v4 checkpoint context differs from its run")
     checkpoint_path = runner_primitives._relative_child(
         run_root, checkpoint["relative_path"]
     )
-    if _file_sha256(checkpoint_path) != checkpoint["file_sha256"]:
+    if immutable_file and _file_sha256(checkpoint_path) != checkpoint["file_sha256"]:
         raise ValueError("latest finite training checkpoint hash differs")
     return checkpoint_path
 
@@ -537,7 +555,10 @@ def _load_run_state(run_root, manifest):
     ):
         raise ValueError("finite v4 training-run state failed authentication")
     checkpoint_path = _verify_checkpoint_record(
-        run_root, manifest, payload["latest_checkpoint"]
+        run_root,
+        manifest,
+        payload["latest_checkpoint"],
+        resume_slot=True,
     )
     applied = 0
     loaded_reports = []
@@ -549,6 +570,14 @@ def _load_run_state(run_root, manifest):
             raise ValueError("committed finite training-step report hash differs")
         report = json.loads(report_path.read_text(encoding="utf-8"))
         report_payload = _payload(report)
+        row_identity = report_payload.get("row_identity", [])
+        expected_row_indices = _row_indices(
+            manifest["run_id"],
+            manifest["runner_config"]["row_selection_seed"],
+            applied,
+            manifest["cache"]["row_count"],
+            manifest["runner_config"]["batch_size"],
+        )
         if (
             report.get("receipt_sha256") != _hash_json(report_payload)
             or report["receipt_sha256"] != record["report_receipt_sha256"]
@@ -562,6 +591,14 @@ def _load_run_state(run_root, manifest):
             != TRAINING_CANDIDATE_BANK_SCOPE
             or report_payload.get("global_step_before") != applied
             or report_payload.get("global_step_after") not in (applied, applied + 1)
+            or report_payload.get("row_cache_manifest_receipt_sha256")
+            != manifest["cache"]["manifest_receipt_sha256"]
+            or report_payload.get("row_indices") != expected_row_indices
+            or not isinstance(row_identity, list)
+            or len(row_identity) != len(expected_row_indices)
+            or any(not isinstance(identity.get("finite_psf"), dict) for identity in row_identity)
+            or report_payload.get("ordered_row_finite_psf_identity_sha256")
+            != _hash_json([identity["finite_psf"] for identity in row_identity])
             or bool(report_payload["training_report"]["optimizer_step_applied"])
             != (report_payload["global_step_after"] == applied + 1)
             or report_payload.get("finite_psf_cache_run_contract_receipt_sha256")
@@ -584,7 +621,16 @@ def _load_run_state(run_root, manifest):
             )
         ):
             raise ValueError("finite v4 training-step report failed authentication")
-        _verify_checkpoint_record(run_root, manifest, report_payload["checkpoint"])
+        # Resume slots are intentionally reused.  Historical reports authenticate
+        # the checkpoint hash that was current when they were committed, but only
+        # the latest slot can still be required to contain those bytes.
+        _verify_checkpoint_record(
+            run_root,
+            manifest,
+            report_payload["checkpoint"],
+            immutable_file=False,
+            resume_slot=True,
+        )
         archive = report_payload.get("archive_checkpoint")
         if archive is not None:
             _verify_checkpoint_record(run_root, manifest, archive)

@@ -248,6 +248,51 @@ def test_atomic_fault_before_run_state_replays_only_uncommitted_attempt(tmp_path
     assert report["global_step_after"] == 1
 
 
+def test_three_bounded_commits_preserve_history_across_resume_slot_reuse(tmp_path):
+    run, _, _, _, _ = _prepared(tmp_path, row_count=2, target=3)
+
+    for expected_step in (1, 2, 3):
+        report = runner_v4.run_finite_training_attempts_v4(
+            run, max_attempts=1
+        )[0]
+        assert report["global_step_after"] == expected_step
+
+    loaded = runner_v4.load_finite_training_run_v4(run)
+    assert loaded["run_state"]["attempt_count"] == 3
+    assert loaded["run_state"]["applied_step_count"] == 3
+    assert len(loaded["training_reports"]) == 3
+
+
+def test_rehashed_report_cannot_change_authenticated_per_row_psf_identity(tmp_path):
+    run, _, _, _, _ = _prepared(tmp_path, row_count=2)
+    runner_v4.run_finite_training_attempts_v4(run, max_attempts=1)
+    report_path = run / "reports" / "attempt_00000000.json"
+    report = __import__("json").loads(report_path.read_text(encoding="utf-8"))
+    report["ordered_row_finite_psf_identity_sha256"] = "0" * 64
+    report_payload = {
+        key: value for key, value in report.items() if key != "receipt_sha256"
+    }
+    report["receipt_sha256"] = runner_v4._hash_json(report_payload)
+    runner_v4.runner_primitives._atomic_json(report_path, report)
+
+    state_path = run / "run_state.json"
+    state = __import__("json").loads(state_path.read_text(encoding="utf-8"))
+    state["committed_reports"][0]["file_sha256"] = runner_v4._file_sha256(
+        report_path
+    )
+    state["committed_reports"][0]["report_receipt_sha256"] = report[
+        "receipt_sha256"
+    ]
+    state_payload = {
+        key: value for key, value in state.items() if key != "receipt_sha256"
+    }
+    state["receipt_sha256"] = runner_v4._hash_json(state_payload)
+    runner_v4.runner_primitives._atomic_json(state_path, state)
+
+    with pytest.raises(ValueError, match="failed authentication"):
+        runner_v4.load_finite_training_run_v4(run)
+
+
 def test_runner_rejects_global_psf_and_rehashed_schedule_tampering(tmp_path):
     binding = _binding(1)
     cache = tmp_path / "cache"
