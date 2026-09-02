@@ -14,11 +14,12 @@ import importlib.metadata
 import json
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
 ANATOMY_ROOT = Path(r"I:\AnatomyTracker")
-REPOSITORY_ROOT = ANATOMY_ROOT / "joint-model"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ATLAS_ROOT = ANATOMY_ROOT / "data" / "Allen Brain Atlas 25um"
 TEMPLATE_PATH = ATLAS_ROOT / "average_template_25.nrrd"
 ANNOTATION_PATH = ATLAS_ROOT / "annotation_25.nrrd"
@@ -39,6 +40,7 @@ TEMP_ROOT = ANATOMY_ROOT / "tmp" / "arbitrary_plane_v3_authentic_development_001
 OUTPUT_SHAPE_H_W = (160, 160)
 SECTIONS_PER_ANIMAL = 16
 CACHE_CHUNK_SIZE = 48
+CACHE_GENERATION_WORKERS = 4
 TRAIN_POSE_ROWS = 3072
 TRAIN_JOINT_ROWS = 2048
 DEVELOPMENT_POSE_ROWS = 384
@@ -176,6 +178,36 @@ def _component_rows(module, prepared, config, start_index, row_count):
     return module.make_joint_curriculum_training_rows_v3(prepared, **arguments)
 
 
+def _ordered_component_rows(
+    executor,
+    module,
+    prepared,
+    config,
+    start_index,
+    row_count,
+):
+    if executor is None or int(row_count) == 1:
+        return _component_rows(
+            module,
+            prepared,
+            config,
+            start_index,
+            row_count,
+        )
+    futures = [
+        executor.submit(
+            _component_rows,
+            module,
+            prepared,
+            config,
+            int(start_index) + offset,
+            1,
+        )
+        for offset in range(int(row_count))
+    ]
+    return [future.result()[0] for future in futures]
+
+
 def _resume_composite_cache(
     cache_path,
     prepared,
@@ -187,6 +219,8 @@ def _resume_composite_cache(
     composite_config,
     composite_binding,
     repository_head,
+    *,
+    executor=None,
 ):
     if not (cache_path / "manifest.json").exists():
         row_cache.initialize_training_row_cache_v3(
@@ -216,7 +250,8 @@ def _resume_composite_cache(
             module = joint_curriculum
             local_index = index - pose_count
             count = min(CACHE_CHUNK_SIZE, target_count - index)
-        rows = _component_rows(
+        rows = _ordered_component_rows(
+            executor,
             module,
             prepared,
             config,
@@ -385,24 +420,30 @@ def main():
         "0x2026090200000003",
         "0x2026090200000004",
     )
-    train_manifest = _resume_composite_cache(
-        TRAIN_CACHE,
-        prepared,
-        row_cache,
-        pose_curriculum,
-        joint_curriculum,
-        *train_configs,
-        repository_head,
-    )
-    development_manifest = _resume_composite_cache(
-        DEVELOPMENT_CACHE,
-        prepared,
-        row_cache,
-        pose_curriculum,
-        joint_curriculum,
-        *development_configs,
-        repository_head,
-    )
+    with ThreadPoolExecutor(
+        max_workers=CACHE_GENERATION_WORKERS,
+        thread_name_prefix="arbitrary-plane-cache",
+    ) as cache_executor:
+        train_manifest = _resume_composite_cache(
+            TRAIN_CACHE,
+            prepared,
+            row_cache,
+            pose_curriculum,
+            joint_curriculum,
+            *train_configs,
+            repository_head,
+            executor=cache_executor,
+        )
+        development_manifest = _resume_composite_cache(
+            DEVELOPMENT_CACHE,
+            prepared,
+            row_cache,
+            pose_curriculum,
+            joint_curriculum,
+            *development_configs,
+            repository_head,
+            executor=cache_executor,
+        )
     del prepared
 
     if not (TRAINING_RUN / "run_manifest.json").exists():
