@@ -280,7 +280,7 @@ FINITE_PILOT_CONFIGURATION_V4 = _make_configuration(
     },
     training_config={
         "seed": 20260902,
-        "pose_warmup_steps": 1000,
+        "pose_warmup_steps": 2000,
         "learning_rate": 1.0e-3,
         "weight_decay": 1.0e-4,
         "top_k": 4,
@@ -289,19 +289,19 @@ FINITE_PILOT_CONFIGURATION_V4 = _make_configuration(
         "retrieval_shape_h_w": [48, 48],
         "catalogue_chunk_size": 512,
         "amp": True,
-        "amp_initial_scale": 65536.0,
+        "amp_initial_scale": 256.0,
         "gradient_clip_norm": 5.0,
     },
     runner_config={
-        "target_applied_steps": 4000,
-        "batch_size": 4,
+        "target_applied_steps": 8000,
+        "batch_size": 2,
         "candidate_bank_size": 512,
         "row_selection_seed": "0x2026090200001201",
         "candidate_bank_root_seed": "0x2026090200001202",
         "axial_offsets_um": [],
         "axial_weights": [],
-        "archive_checkpoint_interval_applied_steps": 250,
-        "checkpoint_commit_interval_attempts": 25,
+        "archive_checkpoint_interval_applied_steps": 500,
+        "checkpoint_commit_interval_attempts": 50,
     },
 )
 

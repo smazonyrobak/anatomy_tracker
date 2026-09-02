@@ -29,7 +29,7 @@ def test_smoke_and_pilot_profiles_are_exact_s9_i_only_and_learned_independent():
     )
     for profile, expected_counts in (
         ("smoke", (12, 12, 6, 6, 24)),
-        ("pilot", (3072, 2048, 384, 256, 4000)),
+        ("pilot", (3072, 2048, 384, 256, 8000)),
     ):
         config = run.finite_development_configuration_v4(profile)
         assert run.verify_finite_development_configuration_v4(config)
@@ -80,6 +80,15 @@ def test_smoke_and_pilot_profiles_are_exact_s9_i_only_and_learned_independent():
         assert config["prior_model_weight_dependencies"] == []
         assert config["prior_feature_dependencies"] == []
         assert config["prior_pseudolabel_dependencies"] == []
+        if profile == "pilot":
+            assert config["runner_config"]["batch_size"] == 2
+            assert config["training_config"]["pose_warmup_steps"] == 2000
+            assert config["training_config"]["amp_initial_scale"] == 256.0
+            assert (
+                config["runner_config"]["target_applied_steps"]
+                * config["runner_config"]["batch_size"]
+                == 16000
+            )
 
 
 def test_s1_ablation_is_separately_named_and_cannot_enter_s9_orchestrator():
