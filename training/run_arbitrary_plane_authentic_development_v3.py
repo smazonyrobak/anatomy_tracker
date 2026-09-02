@@ -68,6 +68,10 @@ MODEL_KWARGS = {
     "deformation_integration_steps": 7,
     "deformation_support_floor": 1.0e-4,
     "deformation_maximum_velocity_gradient": 0.35,
+    "proposal_count": None,
+    "proposal_channels": 16,
+    "proposal_mixture_components": 8,
+    "proposal_offset_scale_um": 10000.0,
 }
 TRAINING_CONFIG = {
     "seed": 20260902,

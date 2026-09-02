@@ -154,6 +154,12 @@ def model_kwargs():
         "plane_tangent_scales": (0.08, 0.08, 0.5),
         "max_velocity_fraction_yx": (0.05, 0.04),
         "deformation_integration_steps": 3,
+        "deformation_support_floor": 1e-4,
+        "deformation_maximum_velocity_gradient": 0.35,
+        "proposal_count": None,
+        "proposal_channels": 16,
+        "proposal_mixture_components": 8,
+        "proposal_offset_scale_um": 10000.0,
     }
 
 

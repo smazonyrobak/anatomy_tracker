@@ -60,6 +60,10 @@ def prepared(tmp_path_factory):
         **fixture.model_kwargs(),
         "deformation_support_floor": 1e-4,
         "deformation_maximum_velocity_gradient": 0.35,
+        "proposal_count": None,
+        "proposal_channels": 16,
+        "proposal_mixture_components": 8,
+        "proposal_offset_scale_um": 10000.0,
     }
     run = root / "training-run"
     runner_v3.initialize_training_run_v3(

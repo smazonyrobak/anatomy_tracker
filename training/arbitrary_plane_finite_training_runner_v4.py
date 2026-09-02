@@ -68,6 +68,7 @@ _SOURCE_FILES = (
     "training/arbitrary_plane_staged_training.py",
     "training/arbitrary_plane_batch_v3.py",
     "training/arbitrary_plane_training_bank_v3.py",
+    "training/arbitrary_plane_coarse_proposal_v5.py",
     "training/arbitrary_plane_joint_model.py",
 )
 _RUN_MANIFEST_KEYS = {

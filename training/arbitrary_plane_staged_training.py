@@ -45,6 +45,7 @@ SOURCE_FILES = (
     "training/arbitrary_plane_geometry.py",
     "training/arbitrary_plane_full_frame_primitives.py",
     "training/arbitrary_plane_deformation_primitives.py",
+    "training/arbitrary_plane_coarse_proposal_v5.py",
     "training/arbitrary_plane_recurrent_model.py",
     "training/arbitrary_plane_joint_model.py",
     "training/arbitrary_plane_joint_loss.py",

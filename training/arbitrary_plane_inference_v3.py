@@ -16,6 +16,7 @@ import torch
 
 import training.arbitrary_plane_catalogue_v3 as catalogue_v3
 import training.arbitrary_plane_psf_v4 as psf_v4
+from training.arbitrary_plane_coarse_proposal_v5 import COARSE_PROPOSAL_GEOMETRY
 from training.arbitrary_plane_joint_model import ArbitraryPlaneJointModel
 from training.arbitrary_plane_recurrent_model import (
     _VERIFIED_CATALOGUE_FEATURE_CACHE_TOKEN,
@@ -50,6 +51,7 @@ INFERENCE_SOURCE_FILES = (
     "training/arbitrary_plane_geometry.py",
     "training/arbitrary_plane_full_frame_primitives.py",
     "training/arbitrary_plane_deformation_primitives.py",
+    "training/arbitrary_plane_coarse_proposal_v5.py",
     "training/arbitrary_plane_recurrent_model.py",
     "training/arbitrary_plane_joint_model.py",
     "training/arbitrary_plane_acquisition_v2.py",
@@ -189,6 +191,7 @@ def _inference_source_receipts():
 
 
 def _model_executable_contract(model):
+    proposal = model.pose_model.coarse_proposal
     return {
         "deformation_integration_steps": int(
             model.deformation_decoder.integration_steps
@@ -204,6 +207,19 @@ def _model_executable_contract(model):
         "plane_tangent_scales": model.pose_model.plane_tangent_scales.detach()
         .cpu()
         .tolist(),
+        "coarse_proposal": (
+            None
+            if proposal is None
+            else {
+                "proposal_count": int(model.pose_model.proposal_count),
+                "proposal_channels": int(proposal.proposal_channels),
+                "mixture_components": int(proposal.mixture_components),
+                "offset_scale_um": float(proposal.offset_scale_um),
+                "geometry_contract": list(COARSE_PROPOSAL_GEOMETRY),
+                "probabilities_calibrated": False,
+                "exact_render_scope": "top-M only",
+            }
+        ),
     }
 
 
@@ -1112,6 +1128,10 @@ def make_arbitrary_plane_catalogue_feature_cache_v3(
 ):
     """Freeze all current-checkpoint atlas features after model training ends."""
     model, _ = _verify_loaded_for_catalogue_cache_v3(loaded, catalogue)
+    if model.pose_model.coarse_proposal is not None:
+        raise ValueError(
+            "amortized proposal checkpoints do not build complete-catalogue feature caches"
+        )
     if (
         len(retrieval_shape_h_w) != 2
         or min(retrieval_shape_h_w) < 4
@@ -1403,6 +1423,10 @@ def _make_arbitrary_plane_inference_session_v3(
         )
         feature_cache_fresh = True
     if feature_cache is not None:
+        if loaded["model"].pose_model.coarse_proposal is not None:
+            raise ValueError(
+                "amortized proposal checkpoints do not consume complete-catalogue feature caches"
+            )
         _verify_catalogue_feature_cache_contents_v3(
             feature_cache,
             loaded,

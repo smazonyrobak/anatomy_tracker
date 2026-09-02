@@ -200,6 +200,21 @@ def arbitrary_plane_joint_loss(
         ),
         pose_weight,
     )
+    exact_rerank_nll = retrieval_nll * 0.0
+    if "exact_rerank_conditional_log_probability" in pose:
+        proposal_match = pose["proposal_topm_cell_id"].eq(
+            truth_catalogue_cell_id.long()[:, None]
+        )
+        truth_proposal_position = proposal_match.to(torch.long).argmax(dim=1)
+        exact_rerank_row_nll = -torch.gather(
+            pose["exact_rerank_conditional_log_probability"],
+            1,
+            truth_proposal_position[:, None],
+        ).squeeze(1)
+        exact_rerank_nll = _weighted_mean(
+            exact_rerank_row_nll,
+            pose_weight * proposal_match.any(dim=1).to(pose_weight),
+        )
     retained_log_mass = torch.log(
         pose["retrieval_topk_retained_probability"].clamp_min(1e-8)
     )[:, None]
@@ -342,6 +357,7 @@ def arbitrary_plane_joint_loss(
     )
     total = (
         retrieval_nll
+        + exact_rerank_nll
         + 0.1 * initial_plane_nll
         + 0.5 * final_plane_nll
         + final_landmark_nll
@@ -355,6 +371,7 @@ def arbitrary_plane_joint_loss(
     return {
         "total": total,
         "retrieval_nll": retrieval_nll,
+        "exact_rerank_nll": exact_rerank_nll,
         "initial_plane_mixture_nll": initial_plane_nll,
         "final_plane_mixture_nll": final_plane_nll,
         "final_landmark_mixture_nll": final_landmark_nll,

@@ -55,6 +55,10 @@ class ArbitraryPlaneJointModel(nn.Module):
         deformation_integration_steps: int = 7,
         deformation_support_floor: float = 1e-4,
         deformation_maximum_velocity_gradient: float = 0.35,
+        proposal_count: int | None = None,
+        proposal_channels: int = 16,
+        proposal_mixture_components: int = 8,
+        proposal_offset_scale_um: float = 10000.0,
     ):
         super().__init__()
         self.pose_model = ArbitraryPlaneRetrievalRefinementModel(
@@ -64,6 +68,10 @@ class ArbitraryPlaneJointModel(nn.Module):
             correlation_radius=correlation_radius,
             update_limits=update_limits,
             plane_tangent_scales=plane_tangent_scales,
+            proposal_count=proposal_count,
+            proposal_channels=proposal_channels,
+            proposal_mixture_components=proposal_mixture_components,
+            proposal_offset_scale_um=proposal_offset_scale_um,
         )
         self.deformation_decoder = AffineFreeSVFDecoder(
             hidden_channels,

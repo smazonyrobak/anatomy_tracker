@@ -15,6 +15,9 @@ from training.arbitrary_plane_deformation_primitives import (
     inactive_affine_free_deformation,
     warp_tensor_with_map_yx,
 )
+from training.arbitrary_plane_coarse_proposal_v5 import (
+    AntipodalPlaneProposalV5,
+)
 from training.arbitrary_plane_full_frame_primitives import (
     FULL_FRAME_STATE_SIZE,
     FULL_FRAME_UPDATE_SIZE,
@@ -238,6 +241,10 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             0.12,
         ),
         plane_tangent_scales: tuple[float, float, float] = (0.18, 0.18, 600.0),
+        proposal_count: int | None = None,
+        proposal_channels: int = 16,
+        proposal_mixture_components: int = 8,
+        proposal_offset_scale_um: float = 10000.0,
     ):
         super().__init__()
         if atlas_channels < 1 or feature_channels < 1 or hidden_channels < 1:
@@ -252,9 +259,16 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             value <= 0.0 for value in plane_tangent_scales
         ):
             raise ValueError("plane tangent scales must contain three positive values")
+        if proposal_count is not None and (
+            not isinstance(proposal_count, int)
+            or isinstance(proposal_count, bool)
+            or proposal_count < 1
+        ):
+            raise ValueError("proposal count must be a positive integer or None")
 
         self.atlas_channels = int(atlas_channels)
         self.correlation_radius = int(correlation_radius)
+        self.proposal_count = proposal_count
         self.histology_stem = nn.Sequential(
             nn.Conv2d(MODEL_INPUT_CHANNELS, feature_channels, 5, padding=2),
             nn.GroupNorm(1, feature_channels),
@@ -296,6 +310,16 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         self.register_buffer("update_limits", torch.tensor(update_limits))
         self.register_buffer(
             "plane_tangent_scales", torch.tensor(plane_tangent_scales)
+        )
+        self.coarse_proposal = (
+            None
+            if proposal_count is None
+            else AntipodalPlaneProposalV5(
+                feature_channels,
+                proposal_channels=proposal_channels,
+                mixture_components=proposal_mixture_components,
+                offset_scale_um=proposal_offset_scale_um,
+            )
         )
         self._complete_catalogue_feature_cache = None
         for head in (
@@ -1265,6 +1289,299 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             )
         return result
 
+    def forward_proposed(
+        self,
+        image: torch.Tensor,
+        outline: torch.Tensor,
+        outline_available: torch.Tensor,
+        atlas_volume: torch.Tensor,
+        cell_id: torch.Tensor,
+        cell_states: torch.Tensor,
+        cell_log_mass: torch.Tensor,
+        representation_log_weight: torch.Tensor,
+        representation_to_canonical_raster_affine: torch.Tensor,
+        output_shape_h_w: tuple[int, int],
+        retrieval_shape_h_w: tuple[int, int],
+        origin_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
+        voxel_size_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
+        support_origin_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
+        axial_offsets_um: torch.Tensor,
+        axial_weights: torch.Tensor,
+        *,
+        expected_catalogue_cell_count: int,
+        catalogue_chunk_size: int,
+        top_k: int = 4,
+        refinement_steps: int = 3,
+        training_truth_catalogue_index: torch.Tensor | None = None,
+        deformation_decoder: nn.Module | None = None,
+        pose_only_steps: int | None = None,
+        dense_deformation_supervision_weight: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor | bool | str]:
+        """Propose globally, exactly rerank top-M finite renders, then refine."""
+        if self.coarse_proposal is None or self.proposal_count is None:
+            raise RuntimeError("the scalable proposal head is not configured")
+        if self._complete_catalogue_feature_cache is not None:
+            raise ValueError(
+                "amortized proposals use exact row-specific finite renders, not a feature cache"
+            )
+        if (
+            not isinstance(catalogue_chunk_size, int)
+            or isinstance(catalogue_chunk_size, bool)
+            or catalogue_chunk_size < 1
+        ):
+            raise ValueError("catalogue chunk size must be a positive integer")
+        if len(retrieval_shape_h_w) != 2 or min(retrieval_shape_h_w) < 4:
+            raise ValueError("retrieval spatial sizes must both be at least four")
+        if (
+            cell_states.shape[1] != expected_catalogue_cell_count
+            or not 1 <= top_k <= self.proposal_count <= expected_catalogue_cell_count
+        ):
+            raise ValueError("proposal/top-k counts must fit the declared catalogue")
+        ids = torch.as_tensor(cell_id, device=image.device)
+        expected_ids = torch.arange(expected_catalogue_cell_count, device=image.device)
+        if ids.dtype == torch.bool or torch.is_floating_point(ids) or not torch.equal(
+            ids.to(torch.long), expected_ids
+        ):
+            raise ValueError(
+                "scalable proposal requires canonical contiguous local cell IDs"
+            )
+
+        retrieval_image = F.interpolate(
+            image, retrieval_shape_h_w, mode="bilinear", align_corners=False
+        )
+        retrieval_outline = F.interpolate(
+            outline, retrieval_shape_h_w, mode="bilinear", align_corners=False
+        )
+        coarse_source = self.encode_histology(
+            retrieval_image, retrieval_outline, outline_available
+        )
+        proposal = self.coarse_proposal(
+            coarse_source,
+            cell_states,
+            cell_log_mass,
+            support_origin_ap_dv_ml_um,
+        )
+        proposal_log_probability = proposal["cell_log_probability"]
+        proposal_probability = proposal["cell_probability"]
+        proposal_source_index = torch.argsort(
+            proposal_log_probability, dim=1, descending=True, stable=True
+        )[:, : self.proposal_count]
+
+        def gather(value: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+            expanded = index.reshape(
+                *index.shape, *([1] * (value.ndim - 2))
+            ).expand(*index.shape, *value.shape[2:])
+            return torch.gather(value, 1, expanded)
+
+        proposed_states = gather(cell_states, proposal_source_index)
+        proposed_log_mass = gather(cell_log_mass, proposal_source_index)
+        proposed_log_weight = gather(
+            representation_log_weight, proposal_source_index
+        )
+        proposed_affine = gather(
+            representation_to_canonical_raster_affine, proposal_source_index
+        )
+        exact_log_evidence_chunks = []
+        for start in range(0, self.proposal_count, catalogue_chunk_size):
+            stop = min(start + catalogue_chunk_size, self.proposal_count)
+
+            def score_evidence(
+                source: torch.Tensor,
+                volume: torch.Tensor,
+                states: torch.Tensor,
+                log_mass: torch.Tensor,
+                log_weight: torch.Tensor,
+                affine: torch.Tensor,
+            ) -> torch.Tensor:
+                return self.score_catalogue_chunk(
+                    source,
+                    volume,
+                    torch.arange(states.shape[1], device=source.device),
+                    states,
+                    log_mass,
+                    log_weight,
+                    affine,
+                    retrieval_shape_h_w,
+                    origin_ap_dv_ml_um,
+                    voxel_size_ap_dv_ml_um,
+                    support_origin_ap_dv_ml_um,
+                    axial_offsets_um,
+                    axial_weights,
+                )["cell_log_evidence"]
+
+            arguments = (
+                coarse_source,
+                atlas_volume,
+                proposed_states[:, start:stop],
+                proposed_log_mass[:, start:stop],
+                proposed_log_weight[:, start:stop],
+                proposed_affine[:, start:stop],
+            )
+            exact_log_evidence_chunks.append(
+                checkpoint(score_evidence, *arguments, use_reentrant=False)
+                if self.training
+                else score_evidence(*arguments)
+            )
+        exact_log_evidence = torch.cat(exact_log_evidence_chunks, dim=1)
+        proposal_topm_log_probability = gather(
+            proposal_log_probability, proposal_source_index
+        )
+        exact_rerank_log_probability = F.log_softmax(
+            proposal_topm_log_probability + exact_log_evidence.float(), dim=1
+        )
+        exact_topk_position = torch.argsort(
+            exact_rerank_log_probability, dim=1, descending=True, stable=True
+        )[:, :top_k]
+        honest_topk_index = gather(proposal_source_index, exact_topk_position)
+        honest_topk_log_probability = gather(
+            proposal_log_probability, honest_topk_index
+        )
+
+        def selected_mass(index: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            selected = torch.zeros_like(proposal_probability, dtype=torch.bool).scatter(
+                1, index, True
+            )
+            retained = proposal_probability.masked_fill(~selected, 0.0).sum(dim=1)
+            omitted = proposal_probability.masked_fill(selected, 0.0).sum(dim=1)
+            return retained.clamp(0.0, 1.0), omitted.clamp(0.0, 1.0)
+
+        honest_retained, honest_omitted = selected_mass(honest_topk_index)
+        top_indices = honest_topk_index.clone()
+        teacher_forced = torch.zeros(
+            image.shape[0], device=image.device, dtype=torch.bool
+        )
+        if training_truth_catalogue_index is not None:
+            if not self.training:
+                raise ValueError("truth-forced refinement is training-only")
+            truth_index = torch.as_tensor(
+                training_truth_catalogue_index, device=image.device, dtype=torch.long
+            )
+            if truth_index.shape != (image.shape[0],) or bool(
+                ((truth_index < 0) | (truth_index >= expected_catalogue_cell_count)).any()
+            ):
+                raise ValueError("training truth catalogue indices must have shape (B,)")
+            teacher_forced = ~top_indices.eq(truth_index[:, None]).any(dim=1)
+            top_indices[teacher_forced, -1] = truth_index[teacher_forced]
+        top_log_probability = gather(proposal_log_probability, top_indices)
+        retained, omitted = selected_mass(top_indices)
+        proposal_topm_retained, proposal_topm_omitted = selected_mass(
+            proposal_source_index
+        )
+
+        retrieval = {
+            "retrieval_cell_id": expected_ids,
+            "retrieval_cell_log_probability": proposal_log_probability,
+            "retrieval_cell_probability": proposal_probability,
+            "retrieval_topk_catalogue_index": top_indices,
+            "retrieval_topk_source_index": top_indices,
+            "retrieval_topk_cell_id": top_indices,
+            "retrieval_topk_log_probability": top_log_probability,
+            "retrieval_topk_retained_probability": retained,
+            "retrieval_omitted_probability": omitted,
+            "honest_retrieval_topk_catalogue_index": honest_topk_index,
+            "honest_retrieval_topk_cell_id": honest_topk_index,
+            "honest_retrieval_topk_log_probability": honest_topk_log_probability,
+            "honest_retrieval_topk_retained_probability": honest_retained,
+            "honest_retrieval_omitted_probability": honest_omitted,
+            "retrieval_teacher_forced_mask": teacher_forced,
+            "proposal_topm_catalogue_index": proposal_source_index,
+            "proposal_topm_cell_id": proposal_source_index,
+            "proposal_topm_log_probability": proposal_topm_log_probability,
+            "proposal_topm_retained_probability": proposal_topm_retained,
+            "proposal_omitted_probability": proposal_topm_omitted,
+            "proposal_mixture_log_probability": proposal[
+                "mixture_log_probability"
+            ],
+            "proposal_entropy": proposal["entropy"],
+            "proposal_normalized_entropy": proposal["normalized_entropy"],
+            "exact_rerank_cell_log_evidence": exact_log_evidence,
+            "exact_rerank_conditional_log_probability": exact_rerank_log_probability,
+            "exact_rerank_topk_proposal_position": exact_topk_position,
+            "catalogue_complete": True,
+            "probabilities_calibrated": False,
+            "retrieval_tail_scope": (
+                "complete_amortized_proposal; exact_finite_likelihood_top_m_only"
+            ),
+            "proposal_probability_scope": "all_supplied_catalogue_cells",
+            "exact_rerank_probability_scope": "conditional_within_proposed_top_m",
+        }
+
+        top_states = gather(cell_states, top_indices)
+        top_log_mass = gather(cell_log_mass, top_indices)
+        top_log_weight = gather(representation_log_weight, top_indices)
+        top_affine = gather(representation_to_canonical_raster_affine, top_indices)
+        full_source = (
+            coarse_source
+            if tuple(image.shape[-2:]) == tuple(output_shape_h_w)
+            and tuple(retrieval_shape_h_w) == tuple(output_shape_h_w)
+            else self.encode_histology(image, outline, outline_available)
+        )
+        top_chunk = self.score_catalogue_chunk(
+            full_source,
+            atlas_volume,
+            torch.arange(top_k, device=image.device),
+            top_states,
+            top_log_mass,
+            top_log_weight,
+            top_affine,
+            output_shape_h_w,
+            origin_ap_dv_ml_um,
+            voxel_size_ap_dv_ml_um,
+            support_origin_ap_dv_ml_um,
+            axial_offsets_um,
+            axial_weights,
+        )
+        initial_states = top_chunk["initial_cell_refined_state"]
+        initial_joint_log_probability = (
+            top_log_probability[..., None]
+            + top_chunk["representation_log_conditional_within_cell"]
+        )
+        refinement = self.refine(
+            full_source,
+            atlas_volume,
+            initial_states,
+            initial_joint_log_probability,
+            top_affine,
+            output_shape_h_w,
+            origin_ap_dv_ml_um,
+            voxel_size_ap_dv_ml_um,
+            support_origin_ap_dv_ml_um,
+            axial_offsets_um,
+            axial_weights,
+            refinement_steps,
+            deformation_decoder=deformation_decoder,
+            pose_only_steps=pose_only_steps,
+            dense_deformation_supervision_weight=dense_deformation_supervision_weight,
+        )
+        return {
+            "cell_id": ids,
+            "cell_log_score": proposal["cell_log_score"],
+            "cell_log_unnormalized_mass": proposal[
+                "cell_log_unnormalized_mass"
+            ],
+            **retrieval,
+            "topk_initial_representation_log_score": top_chunk[
+                "representation_log_score"
+            ],
+            "topk_initial_representation_log_conditional_within_cell": top_chunk[
+                "representation_log_conditional_within_cell"
+            ],
+            "topk_initial_cell_state": initial_states,
+            "topk_initial_cell_canonical_plane_covariance": top_chunk[
+                "initial_cell_canonical_plane_covariance"
+            ],
+            "refinement_probability_scope": "conditional_within_retrieved_topk",
+            "retrieval_execution": (
+                "amortized_antipodal_proposal_plus_exact_finite_top_m_rerank"
+            ),
+            "retrieval_shape_h_w": torch.tensor(
+                retrieval_shape_h_w, device=image.device
+            ),
+            "catalogue_chunk_size": int(catalogue_chunk_size),
+            "proposal_count": int(self.proposal_count),
+            **refinement,
+        }
+
     def forward_streamed(
         self,
         image: torch.Tensor,
@@ -1294,6 +1611,35 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         dense_deformation_supervision_weight: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor | bool | str]:
         """Checkpoint low-resolution catalogue chunks, then refine only top-K."""
+        if self.coarse_proposal is not None:
+            return self.forward_proposed(
+                image,
+                outline,
+                outline_available,
+                atlas_volume,
+                cell_id,
+                cell_states,
+                cell_log_mass,
+                representation_log_weight,
+                representation_to_canonical_raster_affine,
+                output_shape_h_w,
+                retrieval_shape_h_w,
+                origin_ap_dv_ml_um,
+                voxel_size_ap_dv_ml_um,
+                support_origin_ap_dv_ml_um,
+                axial_offsets_um,
+                axial_weights,
+                expected_catalogue_cell_count=expected_catalogue_cell_count,
+                catalogue_chunk_size=catalogue_chunk_size,
+                top_k=top_k,
+                refinement_steps=refinement_steps,
+                training_truth_catalogue_index=training_truth_catalogue_index,
+                deformation_decoder=deformation_decoder,
+                pose_only_steps=pose_only_steps,
+                dense_deformation_supervision_weight=(
+                    dense_deformation_supervision_weight
+                ),
+            )
         if (
             not isinstance(catalogue_chunk_size, int)
             or isinstance(catalogue_chunk_size, bool)

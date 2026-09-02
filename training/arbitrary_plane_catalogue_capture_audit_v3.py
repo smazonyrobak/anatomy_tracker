@@ -70,6 +70,7 @@ _SOURCE_FILES = (
     "training/arbitrary_plane_geometry.py",
     "training/arbitrary_plane_joint_loss.py",
     "training/arbitrary_plane_joint_model.py",
+    "training/arbitrary_plane_coarse_proposal_v5.py",
     "training/arbitrary_plane_recurrent_model.py",
     "training/arbitrary_plane_row_cache_v3.py",
 )
@@ -504,6 +505,7 @@ def audit_catalogue_capture_v3(
                 "training/arbitrary_plane_full_frame_primitives.py",
                 "training/arbitrary_plane_joint_loss.py",
                 "training/arbitrary_plane_joint_model.py",
+                "training/arbitrary_plane_coarse_proposal_v5.py",
                 "training/arbitrary_plane_recurrent_model.py",
             )
         },
