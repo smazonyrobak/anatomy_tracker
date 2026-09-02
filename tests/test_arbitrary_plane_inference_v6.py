@@ -114,18 +114,18 @@ def _schedule(thickness=80.0):
 
 def test_truth_free_imperfect_mask_inference_and_receipts(monkeypatch):
     loaded = _loaded(monkeypatch)
-    image = np.arange(16, dtype=np.float32).reshape(4, 4) / 15.0
-    outline = np.zeros((4, 4), dtype=np.uint8)
-    outline[1:3, 1:3] = 1
+    image = np.arange(36, dtype=np.float32).reshape(6, 6) / 35.0
+    brush_mask = np.zeros((6, 6), dtype=np.uint8)
+    brush_mask[1:5, 1:5] = 1
     offsets, weights = _schedule()
     result = inference_v6.run_arbitrary_plane_inference_v6(
         loaded,
         image,
         input_mode="imperfect-mask",
-        outline=outline,
-        outline_available=True,
+        brush_mask=brush_mask,
+        brush_available=True,
         physical_fov_y_x_um=(40.0, 80.0),
-        pixel_size_y_x_um=(10.0, 20.0),
+        pixel_size_y_x_um=(40.0 / 6.0, 80.0 / 6.0),
         nominal_cut_thickness_um=80.0,
         axial_offsets_um=offsets,
         axial_weights=weights,
@@ -135,7 +135,9 @@ def test_truth_free_imperfect_mask_inference_and_receipts(monkeypatch):
     assert not training and not grad_enabled
     assert not ({"training_truth_catalogue_index", "dense_deformation_supervision_weight"} & set(kwargs))
     assert args[4] == "complete-catalogue-batch"
-    assert torch.count_nonzero(args[0][0, 0][args[1][0, 0] == 0]) == 0
+    assert torch.count_nonzero(args[0][0, 0][brush_mask == 0]) == 0
+    assert np.array_equal(args[1][0, 0].numpy(), inference_v6._outline_from_mask(brush_mask))
+    assert np.count_nonzero(args[1][0, 0].numpy()) < np.count_nonzero(brush_mask)
     assert result["probability_status"] == "raw_uncalibrated"
     assert result["posterior"]["honest_hybrid_posterior"]["hybrid_topk_catalogue_index"].tolist() == [[4, 8]]
     assert result["k_poses"]["pose"]["final_state"].shape == (1, 2, 12)
@@ -158,8 +160,8 @@ def test_raw_mode_is_unmodified_and_assisted_contract_is_explicit(monkeypatch):
         loaded,
         image,
         input_mode="raw",
-        outline=None,
-        outline_available=False,
+        brush_mask=None,
+        brush_available=False,
         physical_fov_y_x_um=(40.0, 80.0),
         pixel_size_y_x_um=(10.0, 20.0),
         nominal_cut_thickness_um=80.0,
@@ -185,8 +187,8 @@ def test_schedule_geometry_model_and_source_tampering_are_rejected(monkeypatch):
             loaded,
             image,
             input_mode="raw",
-            outline=None,
-            outline_available=False,
+            brush_mask=None,
+            brush_available=False,
             physical_fov_y_x_um=(40.0, 80.0),
             pixel_size_y_x_um=(10.0, 20.0),
             nominal_cut_thickness_um=80.0,
@@ -201,8 +203,8 @@ def test_schedule_geometry_model_and_source_tampering_are_rejected(monkeypatch):
             loaded,
             image,
             input_mode="raw",
-            outline=None,
-            outline_available=False,
+            brush_mask=None,
+            brush_available=False,
             physical_fov_y_x_um=(40.0, 80.0),
             pixel_size_y_x_um=(10.0, 20.0),
             nominal_cut_thickness_um=80.0,

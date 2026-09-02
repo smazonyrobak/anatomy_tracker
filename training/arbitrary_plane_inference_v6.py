@@ -188,26 +188,38 @@ def _scalar_image(value) -> np.ndarray:
     return np.ascontiguousarray(image, dtype=np.float32)
 
 
-def _prepare_input(image, input_mode, outline, outline_available):
+def _outline_from_mask(mask: np.ndarray) -> np.ndarray:
+    mask = np.asarray(mask, dtype=bool)
+    eroded = mask.copy()
+    eroded[1:] &= mask[:-1]
+    eroded[:-1] &= mask[1:]
+    eroded[:, 1:] &= mask[:, :-1]
+    eroded[:, :-1] &= mask[:, 1:]
+    eroded[[0, -1], :] = False
+    eroded[:, [0, -1]] = False
+    return np.ascontiguousarray(mask & ~eroded, dtype=np.float32)
+
+
+def _prepare_input(image, input_mode, brush_mask, brush_available):
     raw = _scalar_image(image)
-    if input_mode not in INPUT_MODES_V6 or not isinstance(outline_available, bool):
-        raise ValueError("input mode or explicit outline availability is invalid")
+    if input_mode not in INPUT_MODES_V6 or not isinstance(brush_available, bool):
+        raise ValueError("input mode or explicit smart-brush availability is invalid")
     if input_mode == "raw":
-        if outline_available or outline is not None:
-            raise ValueError("raw mode requires an explicitly unavailable, absent outline")
+        if brush_available or brush_mask is not None:
+            raise ValueError("raw mode requires an explicitly unavailable, absent brush mask")
         mask = np.zeros(raw.shape, dtype=np.float32)
-        return raw, mask, raw.copy()
-    if not outline_available or outline is None:
-        raise ValueError("assisted modes require an explicitly available user outline")
-    mask = np.asarray(outline)
+        return raw, mask, mask.copy(), raw.copy()
+    if not brush_available or brush_mask is None:
+        raise ValueError("assisted modes require an explicitly available smart-brush mask")
+    mask = np.asarray(brush_mask)
     if mask.shape != raw.shape or mask.dtype.kind not in "bifu" or not np.isfinite(mask).all():
-        raise ValueError("outline must be a finite binary array matching the image")
+        raise ValueError("smart-brush mask must be a finite binary array matching the image")
     mask = np.ascontiguousarray(mask, dtype=np.float32)
     if not np.logical_or(mask == 0.0, mask == 1.0).all():
-        raise ValueError("outline must be exactly binary")
+        raise ValueError("smart-brush mask must be exactly binary")
     model_image = np.ascontiguousarray(raw * mask, dtype=np.float32)
     model_image[mask == 0.0] = 0.0
-    return raw, mask, model_image
+    return raw, mask, _outline_from_mask(mask), model_image
 
 
 def _detach_cpu(value):
@@ -227,8 +239,8 @@ def run_arbitrary_plane_inference_v6(
     image,
     *,
     input_mode: str,
-    outline,
-    outline_available: bool,
+    brush_mask,
+    brush_available: bool,
     physical_fov_y_x_um,
     pixel_size_y_x_um,
     nominal_cut_thickness_um: float,
@@ -263,8 +275,8 @@ def run_arbitrary_plane_inference_v6(
     ):
         raise ValueError("v6 inference model state changed after authentication")
 
-    raw, mask, model_image = _prepare_input(
-        image, input_mode, outline, outline_available
+    raw, brush, model_outline, model_image = _prepare_input(
+        image, input_mode, brush_mask, brush_available
     )
     geometry = context["catalogue"]["support_geometry"]
     output_shape = tuple(raw.shape)
@@ -295,9 +307,10 @@ def run_arbitrary_plane_inference_v6(
     ids = _case_ids(case_ids)
     input_payload = {
         "input_mode": input_mode,
-        "outline_available": outline_available,
+        "brush_available": brush_available,
         "raw_image": _array_receipt(raw),
-        "outline": None if outline is None else _array_receipt(mask),
+        "brush_mask": None if brush_mask is None else _array_receipt(brush),
+        "model_outline": _array_receipt(model_outline),
         "model_image": _array_receipt(model_image),
         "physical_fov_y_x_um": list(fov),
         "pixel_size_y_x_um": list(pixels),
@@ -312,8 +325,8 @@ def run_arbitrary_plane_inference_v6(
     with torch.no_grad():
         output = model(
             torch.from_numpy(model_image)[None, None].to(device),
-            torch.from_numpy(mask)[None, None].to(device),
-            torch.tensor([outline_available], dtype=torch.bool, device=device),
+            torch.from_numpy(model_outline)[None, None].to(device),
+            torch.tensor([brush_available], dtype=torch.bool, device=device),
             torch.as_tensor(context["atlas_volume"], dtype=torch.float32, device=device),
             context["catalogue_runtime"].expand(1),
             output_shape,
