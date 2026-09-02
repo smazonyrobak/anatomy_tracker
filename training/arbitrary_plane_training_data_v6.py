@@ -731,12 +731,8 @@ def _verify_row_v6(row: Mapping[str, object], capability: Mapping[str, object]) 
         for key in LINEAGE_KEYS_V6
     ):
         raise ValueError("v6 rows require exact nonempty five-part string lineage")
-    split = str(lineage.get("split", "")).lower()
-    if not split or any(
-        token in split
-        for token in ("test", "benchmark", "qualification", "external", "validation")
-    ):
-        raise ValueError("v6 optimization accepts development-training rows only")
+    if lineage.get("split") != "train":
+        raise ValueError("v6 optimization accepts only exact train-split rows")
     if not _valid_sha256(row.get("receipt_sha256")) or not _valid_sha256(
         row.get("synthetic_realization_id")
     ):

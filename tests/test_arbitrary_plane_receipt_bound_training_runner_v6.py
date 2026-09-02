@@ -30,7 +30,7 @@ class _Runtime:
     }
 
 
-def _rows():
+def _rows(split="train"):
     animals = ("animal-a", "animal-a", "animal-b", "animal-c")
     return [
         {
@@ -40,6 +40,7 @@ def _rows():
                 "experiment_id": f"experiment-{index}",
                 "synthetic_animal_id": f"synthetic-{index}",
                 "section_id": f"section-{index}",
+                "split": split,
             },
             "training_row_id": f"training-row-{index}",
             "receipt_sha256": f"{index + 1:x}" * 64,
@@ -77,14 +78,15 @@ def i_root():
     shutil.rmtree(path)
 
 
-def _install_fakes(monkeypatch):
-    rows = _rows()
+def _install_fakes(monkeypatch, *, split="train"):
+    rows = _rows(split)
 
     def load_manifest(cache_directory, *, expected_manifest_receipt_sha256):
         assert expected_manifest_receipt_sha256 == STABLE_DATA_RECEIPT
         return {
             "receipt_sha256": STABLE_DATA_RECEIPT,
             "row_count": len(rows),
+            "generation_lineage": {"split": split},
             "rows": [
                 {
                     "lineage": row["lineage"],
@@ -285,6 +287,9 @@ def _install_fakes(monkeypatch):
 
     monkeypatch.setattr(runner, "_current_git_commit", lambda: "a" * 40)
     monkeypatch.setattr(
+        runner, "_verify_declared_sources_match_git_commit", lambda commit: None
+    )
+    monkeypatch.setattr(
         runner.allen_atlas_v6,
         "verify_bound_allen_atlas_v6",
         lambda bundle: True,
@@ -467,6 +472,29 @@ def test_initialization_binds_raw_and_decoded_atlas_complete_catalogue_and_stati
     assert len(animals) == len(set(animals))
     assert (run / "checkpoints" / "resume_slot_0.pt").is_file()
     assert runner.training_data_v6.load_frozen_training_rows_v6.calls == []
+
+
+def test_optimizer_boundary_rejects_held_out_development_cache(monkeypatch, i_root):
+    _install_fakes(monkeypatch, split="development")
+    cache = i_root / "development-cache"
+    cache.mkdir()
+    with pytest.raises(ValueError, match="exact train-split"):
+        runner._training_data_record(cache, STABLE_DATA_RECEIPT)
+
+
+def test_declared_source_bytes_must_match_recorded_git_blob(monkeypatch, i_root):
+    source = i_root / "source.py"
+    source.write_bytes(b"dirty bytes\n")
+    monkeypatch.setattr(runner, "_SOURCE_ROOT", i_root)
+    monkeypatch.setattr(runner, "_SOURCE_FILES", ("source.py",))
+    monkeypatch.setattr(runner.staged_trainer_v6, "_SOURCE_FILES", ())
+
+    class Result:
+        stdout = b"committed bytes\n"
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: Result())
+    with pytest.raises(ValueError, match="differs from recorded git commit"):
+        runner._verify_declared_sources_match_git_commit("a" * 40)
 
 
 def test_one_step_then_verified_resume_preserves_ids_and_selection_receipts(monkeypatch, i_root):

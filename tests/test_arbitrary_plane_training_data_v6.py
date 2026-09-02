@@ -77,7 +77,7 @@ def _quicknii_from_physical_state(state):
     ).reshape(3, 3)
 
 
-def _row(catalogue, index, mode, *, thickness):
+def _row(catalogue, index, mode, *, thickness, split="train"):
     height, width = RASTER_SHAPE
     y, x = np.meshgrid(np.arange(height), np.arange(width), indexing="ij")
     acquired = (0.1 + 0.8 * (x + width * y) / (height * width - 1)).astype(
@@ -175,7 +175,7 @@ def _row(catalogue, index, mode, *, thickness):
             "experiment_id": f"experiment-{index}",
             "synthetic_animal_id": f"synthetic-animal-{index}",
             "section_id": f"section-{index}",
-            "split": "development",
+            "split": split,
         },
         "upstream_reference": upstream,
         "numeric_rng_provenance": {"sample_index": index},
@@ -323,6 +323,27 @@ def test_model_batch_rejects_bare_rows_and_wrong_run_manifest(catalogue, runtime
             runtime,
             torch.ones(2, *ATLAS_SHAPE),
             **kwargs,
+        )
+
+
+def test_model_batch_rejects_held_out_development_rows(catalogue, runtime):
+    row = _row(
+        catalogue,
+        137,
+        "smart-brush-absent",
+        thickness=25.0,
+        split="development",
+    )[0]
+    with pytest.raises(ValueError, match="exact train-split"):
+        data_v6.model_ready_rows_v6(
+            _frozen_payload([row]),
+            catalogue,
+            runtime,
+            torch.ones(2, *ATLAS_SHAPE),
+            origin_ap_dv_ml_um=ORIGIN,
+            voxel_size_ap_dv_ml_um=SPACING,
+            finite_psf_capability=psf_v4.finite_psf_model_capability_v4(),
+            expected_training_data_manifest_receipt_sha256="e" * 64,
         )
 
 

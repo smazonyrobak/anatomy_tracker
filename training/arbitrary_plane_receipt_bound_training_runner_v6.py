@@ -315,6 +315,24 @@ def _source_receipts() -> dict[str, str]:
     }
 
 
+def _declared_source_files() -> tuple[str, ...]:
+    return tuple(sorted(set(_SOURCE_FILES) | set(staged_trainer_v6._SOURCE_FILES)))
+
+
+def _verify_declared_sources_match_git_commit(commit: str) -> None:
+    """Require every executable source byte to be recoverable from ``commit``."""
+    for name in _declared_source_files():
+        result = subprocess.run(
+            ["git", "-C", str(_SOURCE_ROOT), "show", f"{commit}:{name}"],
+            check=True,
+            capture_output=True,
+        )
+        if result.stdout != (_SOURCE_ROOT / name).read_bytes():
+            raise ValueError(
+                f"declared v6 source differs from recorded git commit: {name}"
+            )
+
+
 def _current_git_commit() -> str:
     result = subprocess.run(
         ["git", "-C", str(_SOURCE_ROOT), "rev-parse", "HEAD"],
@@ -416,8 +434,12 @@ def _training_data_record(
         or cache_manifest.get("receipt_sha256")
         != expected_manifest_receipt_sha256
         or cache_manifest.get("row_count") != len(records)
+        or cache_manifest.get("generation_lineage", {}).get("split") != "train"
+        or any(record.get("lineage", {}).get("split") != "train" for record in records)
     ):
-        raise ValueError("v6 training requires one nonempty exact frozen cache manifest")
+        raise ValueError(
+            "v6 optimization requires one nonempty exact train-split frozen cache manifest"
+        )
     identities = [
         _row_identity(
             {
@@ -459,6 +481,7 @@ def _training_data_record(
             "generation_lineage_sha256": selection[
                 "generation_lineage_sha256"
             ],
+            "optimization_split": "train",
             "row_count": len(records),
             "ordered_row_identities": identities,
         },
@@ -679,6 +702,7 @@ def initialize_receipt_bound_training_run_v6(
     commit = _current_git_commit()
     if expected_git_commit is not None and expected_git_commit.lower() != commit:
         raise ValueError("current git commit differs from the trusted expected commit")
+    _verify_declared_sources_match_git_commit(commit)
 
     staging = run_root.with_name(
         f".{run_root.name}.initializing-{os.getpid()}-{uuid.uuid4().hex}"
@@ -831,6 +855,7 @@ def _verify_manifest(manifest: Mapping[str, object]) -> None:
         or manifest.get("prior_pseudolabel_dependencies") != []
     ):
         raise ValueError("receipt-bound v6 run manifest is invalid")
+    _verify_declared_sources_match_git_commit(manifest["git_commit"])
     config = _validated_runner_config(manifest["runner_config"])
     training_data = manifest.get("training_data", {})
     if (
@@ -842,6 +867,7 @@ def _verify_manifest(manifest: Mapping[str, object]) -> None:
         or training_data.get("row_count")
         != len(training_data.get("ordered_row_identities", []))
         or training_data.get("row_count", 0) < 1
+        or training_data.get("optimization_split") != "train"
         or manifest.get("row_sampling_policy")
         != _sampling_policy(training_data, config)
         or manifest.get("seed_record")

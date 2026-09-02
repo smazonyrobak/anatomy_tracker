@@ -1,0 +1,72 @@
+schema_version: anatomy-tracker.arbitrary-plane-v6-gpu-smoke-result/v1
+scientific_scope: internal synthetic engineering smoke; not validation, calibration, benchmarking, external validation, final testing, or a shipping-quality claim
+decision:
+  engineering_gate: PASS
+  scientific_quality_status: NOT_ESTABLISHED
+  release_qualifying: false
+  performance_claim: none
+run:
+  label: arbitrary_plane_v6_gpu_smoke_001
+  repository_commit: 4c81344e3ce6ccabb96d20cae16425ebc26d945c
+  repository_branch: codex/joint-v6-integration
+  output_root: 'I:\AnatomyTracker\runs\arbitrary_plane_v6_gpu_smoke_001'
+  run_id: 5754cb0b7f217c31211a10b72bc12d08e0ea17a2db0e83d4f3efaca47254ce2d
+  run_manifest_receipt_sha256: 4e2d6c2090dda64e598b909c6ecc7fb0609c30da0f4a0df94aedb3004e6f61bc
+  run_manifest_file_sha256: de148d4f328aed0e7f49b825400d096f15c53473c074fe678fee8d57fab6bdf7
+  run_state_receipt_sha256: 2d2f543e48c15edbfb530c45e35f2a52935ee8525b3b514705a2a8e29e3c3dae
+  run_state_file_sha256: 1380f9ab4eceb850686d53c9df58fce46fe7e79dd898f9a2ef2e0612dffd6654
+  device: cuda:0
+  authenticated_loader: PASS
+  global_step: 3
+  committed_transaction_count: 3
+  immutable_archive_count: 3
+  latest_checkpoint_relative_path: checkpoints/resume_slot_1.pt
+  latest_checkpoint_file_sha256: 6ad330f126f795277bed5765cc26f0265308f8874b5279e242148737daa73f05
+inputs:
+  initialization: fresh_random_only
+  prior_model_weight_dependencies: []
+  prior_feature_dependencies: []
+  prior_pseudolabel_dependencies: []
+  allen_binding_receipt_sha256: fd1dc8901f9554ad28f592603d0ad794d346179e39a6a70a6b7492dc5418901c
+  decoded_atlas_sha256: 255c2df028b8e973305d5edb2eb26dadd8c96530c638a28aec5183be83ffd832
+  support_index_sha256: f0e89d9e2abdacdbe3eeffb55c3bcda077d38ce3419004d2fbf88aa239f4d4cc
+  complete_catalogue_receipt_sha256: 4555cfce64031b4d7ba20b8c63b1b6185dbda2e4a90b40eb19a9c1ef01dee536
+  complete_catalogue_cell_count: 98304
+  training_cache_manifest_receipt_sha256: b1be4b1dc6365fe4a508215c24c251a557cf43524e72d1f10b83f733224b5c8a
+  training_row_count: 24
+  training_animal_count: 4
+  finite_thickness_axial_sample_count: 9
+  smart_brush_required: false
+  training_modes:
+    - smart-brush-absent
+    - smart-brush-accurate
+    - smart-brush-imperfect
+optimization:
+  phases:
+    - step: 0
+      phase: proposal-only
+      objective: 11.49582576751709
+      preclip_gradient_norm: 0.04196551442146301
+      optimizer_step_applied: true
+    - step: 1
+      phase: pose-rerank
+      objective: 12.59446907043457
+      preclip_gradient_norm: 0.13591019809246063
+      optimizer_step_applied: true
+    - step: 2
+      phase: joint
+      objective: 20.602153778076172
+      preclip_gradient_norm: 21.509809494018555
+      optimizer_step_applied: true
+      refinement_ready_rows: 2
+      refinement_abstained_rows: 0
+      mean_best_topk_landmark_error_um: 1388.4237060546875
+  probability_status: raw_uncalibrated
+interpretation:
+  engineering_result: the exact pinned Allen raw-source decode, 98304-cell arbitrary-plane catalogue, provenance-bound finite-thickness rows, fresh model initialization, full-catalogue proposal, finite rendering, recurrent pose/deformation update, atomic transaction ledger, immutable archives, and authenticated restore all executed successfully on CUDA
+  quality_caveat: three optimizer steps over 24 rows establish only end-to-end viability; accuracy, generalization, uncertainty calibration, and shipping quality remain unmeasured
+  next_gate: train on a substantially larger identity-preserving arbitrary-plane cache, then evaluate every held-out synthetic-animal row with saved raw predictions before fitting calibration or accessing any public benchmark
+access:
+  public_benchmark_accessed: false
+  external_validation_accessed: false
+  final_test_accessed: false
