@@ -11,6 +11,7 @@ from torch.utils.checkpoint import checkpoint
 
 from training.arbitrary_plane_deformation_primitives import (
     AFFINE_FREE_DEFORMATION_TENSOR_KEYS,
+    identity_pixel_map_yx,
     inactive_affine_free_deformation,
     warp_tensor_with_map_yx,
 )
@@ -837,13 +838,15 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         *,
         deformation_decoder: nn.Module | None = None,
         pose_only_steps: int | None = None,
+        dense_deformation_supervision_weight: torch.Tensor | None = None,
     ) -> dict[str, object]:
         """Marginalize raster nuisance states before each shared recurrent update.
 
         When a deformation decoder is supplied, its absolute affine-free state is
         decoded from the same recurrent context and fed into the next correlation
         render. The fixed iteration gate prevents pose/deformation confounding
-        during the declared pose-capture prefix.
+        during the declared pose-capture prefix. Dense-censored rows use an
+        exact detached identity feedback map at every iteration.
         """
         if not isinstance(steps, int) or isinstance(steps, bool) or steps < 1:
             raise ValueError("refinement steps must be a positive integer")
@@ -862,6 +865,24 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             or not 0 <= pose_only_steps <= steps + 1
         ):
             raise ValueError("pose_only_steps must be between zero and T")
+        if dense_deformation_supervision_weight is None:
+            dense_weight = source_features.new_ones(batch)
+        else:
+            dense_weight = torch.as_tensor(
+                dense_deformation_supervision_weight,
+                device=source_features.device,
+                dtype=source_features.dtype,
+            )
+            if dense_weight.shape != (batch,) or not bool(
+                torch.isfinite(dense_weight).all()
+                and (dense_weight >= 0.0).all()
+                and (dense_weight <= 1.0).all()
+            ):
+                raise ValueError(
+                    "dense deformation supervision weight must be finite in [0,1] with shape (B,)"
+                )
+        feedback_enabled = dense_weight > 0.0
+        feedback_enabled_map = feedback_enabled[:, None, None, None, None]
         source = source_features[:, None, None].expand(
             batch, cells, representations, *source_features.shape[1:]
         ).reshape(batch * cells * representations, *source_features.shape[1:])
@@ -882,6 +903,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         deformation_cell_contexts = []
         deformation_representation_probabilities = []
         deformation_active = []
+        deformation_feedback_maps = []
         feedback_map = None
         initial_cell_log_probability = torch.logsumexp(
             initial_joint_log_probability, dim=2
@@ -914,13 +936,25 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                         flat_context, output_shape_h_w
                     )
                 )
-                feedback_map = decoded["forward_map_yx_px"].reshape(
+                decoded_feedback_map = decoded["forward_map_yx_px"].reshape(
                     batch, cells, 2, *output_shape_h_w
+                )
+                identity_feedback_map = identity_pixel_map_yx(
+                    batch * cells,
+                    output_shape_h_w,
+                    device=decoded_feedback_map.device,
+                    dtype=decoded_feedback_map.dtype,
+                ).reshape(batch, cells, 2, *output_shape_h_w)
+                feedback_map = torch.where(
+                    feedback_enabled_map,
+                    decoded_feedback_map,
+                    identity_feedback_map.detach(),
                 )
                 deformation_outputs.append(decoded)
                 deformation_cell_contexts.append(cell_context)
                 deformation_representation_probabilities.append(probability)
                 deformation_active.append(active)
+                deformation_feedback_maps.append(feedback_map)
             rendered = self._render_representations(
                 atlas_volume,
                 state,
@@ -1040,9 +1074,20 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                     flat_final_context_for_deformation, output_shape_h_w
                 )
             )
-            feedback_map = final_decoded_for_deformation[
+            decoded_feedback_map = final_decoded_for_deformation[
                 "forward_map_yx_px"
             ].reshape(batch, cells, 2, *output_shape_h_w)
+            identity_feedback_map = identity_pixel_map_yx(
+                batch * cells,
+                output_shape_h_w,
+                device=decoded_feedback_map.device,
+                dtype=decoded_feedback_map.dtype,
+            ).reshape(batch, cells, 2, *output_shape_h_w)
+            feedback_map = torch.where(
+                feedback_enabled_map,
+                decoded_feedback_map,
+                identity_feedback_map.detach(),
+            )
             deformation_outputs.append(final_decoded_for_deformation)
             deformation_cell_contexts.append(
                 final_cell_context_for_deformation
@@ -1051,6 +1096,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 final_probability_for_deformation
             )
             deformation_active.append(final_active_for_deformation)
+            deformation_feedback_maps.append(feedback_map)
 
         final_render = self._render_representations(
             atlas_volume,
@@ -1169,6 +1215,10 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                         device=state.device,
                         dtype=torch.bool,
                     ),
+                    "joint_deformation_feedback_map_yx_px_sequence": torch.stack(
+                        deformation_feedback_maps, dim=2
+                    ),
+                    "joint_deformation_feedback_enabled_mask": feedback_enabled,
                     "joint_final_feedback_deformed_canonical_render": final_feedback_render,
                 }
             )
@@ -1200,6 +1250,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         training_truth_catalogue_index: torch.Tensor | None = None,
         deformation_decoder: nn.Module | None = None,
         pose_only_steps: int | None = None,
+        dense_deformation_supervision_weight: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor | bool | str]:
         """Checkpoint low-resolution catalogue chunks, then refine only top-K."""
         if (
@@ -1418,6 +1469,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             refinement_steps,
             deformation_decoder=deformation_decoder,
             pose_only_steps=pose_only_steps,
+            dense_deformation_supervision_weight=dense_deformation_supervision_weight,
         )
         return {
             "cell_id": torch.as_tensor(cell_id, device=image.device),
@@ -1471,6 +1523,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         refinement_steps: int = 3,
         deformation_decoder: nn.Module | None = None,
         pose_only_steps: int | None = None,
+        dense_deformation_supervision_weight: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor | bool | str]:
         source_features = self.encode_histology(image, outline, outline_available)
         chunk = self.score_catalogue_chunk(
@@ -1526,6 +1579,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             refinement_steps,
             deformation_decoder=deformation_decoder,
             pose_only_steps=pose_only_steps,
+            dense_deformation_supervision_weight=dense_deformation_supervision_weight,
         )
         return {
             **chunk,

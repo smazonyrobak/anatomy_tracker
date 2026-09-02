@@ -134,8 +134,9 @@ def arbitrary_plane_joint_loss(
     *,
     landmark_scale_um: float = 250.0,
     pose_supervision_weight: torch.Tensor | None = None,
+    dense_deformation_supervision_weight: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Combine catalogue, calibrated-plane, landmark and pose-gated SVF losses."""
+    """Combine pose losses with independently gated dense deformation losses."""
     pose = output["pose"]
     batch = truth_state.shape[0]
     if pose_supervision_weight is None:
@@ -156,6 +157,26 @@ def arbitrary_plane_joint_loss(
             and (pose_weight <= 1.0).all()
         ):
             raise ValueError("pose supervision weight must be finite in [0,1] with shape (B,)")
+    if dense_deformation_supervision_weight is None:
+        dense_weight = torch.ones(
+            batch,
+            device=truth_state.device,
+            dtype=truth_state.dtype,
+        )
+    else:
+        dense_weight = torch.as_tensor(
+            dense_deformation_supervision_weight,
+            device=truth_state.device,
+            dtype=truth_state.dtype,
+        )
+        if dense_weight.shape != (batch,) or not bool(
+            torch.isfinite(dense_weight).all()
+            and (dense_weight >= 0.0).all()
+            and (dense_weight <= 1.0).all()
+        ):
+            raise ValueError(
+                "dense deformation supervision weight must be finite in [0,1] with shape (B,)"
+            )
     retrieval_nll = _weighted_mean(
         F.nll_loss(
             pose["retrieval_cell_log_probability"],
@@ -173,6 +194,7 @@ def arbitrary_plane_joint_loss(
     )
     eligible = truth_topk_index >= 0
     point_eligible = eligible & (pose_weight > 0.0)
+    dense_eligible = point_eligible & (dense_weight > 0.0)
     landmark_error_um = torch.linalg.vector_norm(
         physical_frame_landmarks(pose["final_cell_state"])
         - physical_frame_landmarks(truth_state)[:, None],
@@ -240,9 +262,15 @@ def arbitrary_plane_joint_loss(
         active.numel() - 1 - iteration
     )
     sequence_weight = sequence_weight.reshape(1, -1, 1, 1, 1)
-    weight = deformation_weight.to(selected_velocity)[:, None] * point_eligible.reshape(
-        batch, 1, 1, 1
-    )[:, None] * sequence_weight
+    dense_gate = (
+        dense_weight.to(selected_velocity)
+        * dense_eligible.to(selected_velocity)
+    ).reshape(batch, 1, 1, 1, 1)
+    weight = (
+        deformation_weight.to(selected_velocity)[:, None]
+        * dense_gate
+        * sequence_weight
+    )
     vector_weight = weight.expand(-1, -1, 2, -1, -1)
     deformation_svf = _weighted_mean(
         F.smooth_l1_loss(
@@ -270,8 +298,7 @@ def arbitrary_plane_joint_loss(
             .clamp(0.0, 1.0),
             reduction="none",
         ),
-        point_eligible.reshape(batch, 1, 1, 1, 1).to(selected_support_logits)
-        * sequence_weight,
+        dense_gate.to(selected_support_logits) * sequence_weight,
     )
     topology = _weighted_mean(
         F.relu(0.05 - selected_jacobian).square(), weight
@@ -327,5 +354,5 @@ def arbitrary_plane_joint_loss(
             pose_weight,
         ),
         "pose_identifiable_fraction": (pose_weight > 0.0).to(truth_state.dtype).mean(),
-        "deformation_eligible_fraction": point_eligible.to(truth_state.dtype).mean(),
+        "deformation_eligible_fraction": dense_eligible.to(truth_state.dtype).mean(),
     }

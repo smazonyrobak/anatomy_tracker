@@ -67,6 +67,10 @@ def test_row_adapter_uses_correspondence_truth_not_smart_brush_as_loss_gate():
     assert weight[0, 0, 0, 1] == 0.0
     assert weight.sum() == height * width - 2
     assert converted["tensors"]["pose_supervision_weight"].item() == 1.0
+    assert (
+        converted["tensors"]["dense_deformation_supervision_weight"].item()
+        == 1.0
+    )
 
     row["upstream_reference"] = {
         "support_supervision_contract": {
@@ -81,7 +85,11 @@ def test_row_adapter_uses_correspondence_truth_not_smart_brush_as_loss_gate():
         voxel_size_ap_dv_ml_um=(25.0, 25.0, 25.0),
     )
     assert censored["tensors"]["pose_supervision_weight"].item() == 0.0
-    assert censored["tensors"]["deformation_weight"].count_nonzero() == 0
+    assert (
+        censored["tensors"]["dense_deformation_supervision_weight"].item()
+        == 0.0
+    )
+    assert torch.equal(censored["tensors"]["deformation_weight"], weight)
 
 
 def test_exact_catalogue_state_assigns_to_its_own_cell_and_topk_position():

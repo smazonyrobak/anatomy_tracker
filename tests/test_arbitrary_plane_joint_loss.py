@@ -19,7 +19,7 @@ def _state(center):
     )
 
 
-def _model_output(batch=2):
+def _model_output(batch=2, dense_deformation_supervision_weight=None):
     torch.manual_seed(47)
     model = ArbitraryPlaneJointModel(
         atlas_channels=2,
@@ -61,6 +61,7 @@ def _model_output(batch=2):
         top_k=2,
         refinement_steps=3,
         pose_only_steps=2,
+        dense_deformation_supervision_weight=dense_deformation_supervision_weight,
     )
     return model, output
 
@@ -76,6 +77,7 @@ def _truth(output):
         truth_stationary_velocity_yx_px=torch.zeros(batch, 2, 8, 8),
         truth_pullback_map_yx_px=identity_pixel_map_yx(batch, (8, 8)),
         deformation_weight=torch.ones(batch, 1, 8, 8),
+        dense_deformation_supervision_weight=torch.ones(batch),
         support_origin_ap_dv_ml_um=(5.0, 5.0, 5.0),
     )
 
@@ -155,10 +157,12 @@ def test_topk_miss_trains_retrieval_without_inflating_local_uncertainty():
 
 
 def test_censored_marginal_support_has_no_false_point_or_dense_supervision():
-    model, output = _model_output(batch=1)
+    model, output = _model_output(
+        batch=1, dense_deformation_supervision_weight=torch.zeros(1)
+    )
     truth = _truth(output)
     truth["pose_supervision_weight"] = torch.zeros(1)
-    truth["deformation_weight"] = torch.zeros_like(truth["deformation_weight"])
+    truth["dense_deformation_supervision_weight"] = torch.zeros(1)
     losses = joint_loss.arbitrary_plane_joint_loss(output, **truth)
     for name in (
         "retrieval_nll",
@@ -174,10 +178,40 @@ def test_censored_marginal_support_has_no_false_point_or_dense_supervision():
     ):
         assert losses[name] == 0.0
     assert losses["pose_identifiable_fraction"] == 0.0
+    assert losses["deformation_eligible_fraction"] == 0.0
+    assert not output["deformation_feedback_enabled_mask"].any()
     losses["total"].backward()
     assert all(
         parameter.grad is None or torch.count_nonzero(parameter.grad) == 0
         for parameter in model.parameters()
+    )
+
+
+def test_pose_valid_dense_censored_row_has_pose_only_gradients_and_losses():
+    model, output = _model_output(
+        batch=1, dense_deformation_supervision_weight=torch.zeros(1)
+    )
+    truth = _truth(output)
+    truth["dense_deformation_supervision_weight"] = torch.zeros(1)
+    losses = joint_loss.arbitrary_plane_joint_loss(output, **truth)
+    assert losses["retrieval_nll"] > 0.0
+    assert losses["pose_identifiable_fraction"] == 1.0
+    assert losses["deformation_eligible_fraction"] == 0.0
+    for name in (
+        "deformation_svf",
+        "deformation_map",
+        "deformation_support",
+        "deformation_topology",
+        "deformation_smoothness",
+        "deformation_inverse_consistency",
+    ):
+        assert losses[name] == 0.0
+    losses["total"].backward()
+    pose_gradient = model.pose_model.candidate_log_likelihood.weight.grad
+    assert pose_gradient is not None and torch.count_nonzero(pose_gradient) > 0
+    assert all(
+        parameter.grad is None or torch.count_nonzero(parameter.grad) == 0
+        for parameter in model.deformation_decoder.parameters()
     )
 
 

@@ -90,7 +90,6 @@ def training_row_to_tensors_v3(
     dense_weight = float(
         support_contract["dense_deformation_supervision_weight"]
     )
-    loss_weight = loss_weight * dense_weight
     state = physical_state_from_quicknii_ouv_v3(
         row["canonical_effective_quicknii_ouv_float64"],
         atlas_shape_ap_dv_ml,
@@ -103,6 +102,9 @@ def training_row_to_tensors_v3(
         "outline_available": channels[:, 2].mean(dim=(-2, -1)),
         "truth_state": state,
         "pose_supervision_weight": torch.tensor([pose_weight], dtype=torch.float32),
+        "dense_deformation_supervision_weight": torch.tensor(
+            [dense_weight], dtype=torch.float32
+        ),
         "truth_stationary_velocity_yx_px": velocity,
         "truth_pullback_map_yx_px": pullback,
         "deformation_weight": loss_weight,

@@ -318,6 +318,9 @@ def model_ready_rows_v3(
         "pose_supervision_weight": torch.cat(
             [item["pose_supervision_weight"] for item in converted]
         ),
+        "dense_deformation_supervision_weight": torch.cat(
+            [item["dense_deformation_supervision_weight"] for item in converted]
+        ),
         "truth_catalogue_cell_index": truth_catalogue_cell_index,
         "truth_catalogue_cell_source_index": truth_catalogue_cell_index.clone(),
         "truth_catalogue_cell_id": truth_catalogue_cell_id,
@@ -469,6 +472,14 @@ def _model_forward(state, batch, phase):
         retrieval_shape_h_w=tuple(config["retrieval_shape_h_w"]),
         catalogue_chunk_size=int(config["catalogue_chunk_size"]),
         training_truth_catalogue_index=batch["truth_catalogue_cell_id"],
+        dense_deformation_supervision_weight=batch.get(
+            "dense_deformation_supervision_weight",
+            torch.ones(
+                batch["truth_state"].shape[0],
+                device=batch["truth_state"].device,
+                dtype=batch["truth_state"].dtype,
+            ),
+        ),
     )
 
 
@@ -549,6 +560,14 @@ def train_staged_step(state, batch):
             batch["support_origin_ap_dv_ml_um"],
             pose_supervision_weight=batch.get(
                 "pose_supervision_weight",
+                torch.ones(
+                    batch["truth_state"].shape[0],
+                    device=batch["truth_state"].device,
+                    dtype=batch["truth_state"].dtype,
+                ),
+            ),
+            dense_deformation_supervision_weight=batch.get(
+                "dense_deformation_supervision_weight",
                 torch.ones(
                     batch["truth_state"].shape[0],
                     device=batch["truth_state"].device,

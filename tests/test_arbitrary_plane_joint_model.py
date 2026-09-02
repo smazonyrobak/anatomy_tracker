@@ -159,9 +159,10 @@ def test_joint_shapes_fixed_gate_and_exact_inactive_identity():
     )
     assert output["deformation_gating_audit"] == {
         "pose_only_steps": 2,
-        "gate_policy": "fixed_iteration_index_only",
+        "gate_policy": "fixed_iteration_index_and_dense_supervision",
         "update_semantics": "absolute_per_iteration_not_accumulated",
         "representation_probabilities_detached": True,
+        "dense_supervision_feedback_gate": "positive_weight_only; censored rows use detached identity",
         "feedback_semantics": "absolute_deformation_warps_next_finite_thickness_render",
         "shared_recurrent_context": True,
     }
@@ -307,6 +308,73 @@ def test_final_pose_objective_reaches_decoder_only_through_recurrent_feedback():
     gradient = model.deformation_decoder.velocity_head.weight.grad
     assert gradient is not None and torch.isfinite(gradient).all()
     assert torch.count_nonzero(gradient) > 0
+
+
+def test_dense_censored_sample_uses_detached_identity_feedback_for_pose():
+    model = _model().train()
+    output = _forward(
+        model,
+        _fixture(),
+        pose_only_steps=0,
+        refinement_steps=3,
+        dense_deformation_supervision_weight=torch.zeros(1),
+    )
+    identity = joint_module.identity_pixel_map_yx(1, (8, 8))
+    assert not output["deformation_feedback_enabled_mask"].any()
+    assert torch.equal(
+        output["deformation_feedback_map_yx_px_sequence"],
+        identity[:, None, None].expand(1, 2, 4, 2, 8, 8),
+    )
+    loss = output["pose"]["final_cell_state"].square().mean()
+    loss.backward()
+    pose_gradient = model.pose_model.recurrent_update.weight.grad
+    assert pose_gradient is not None and torch.count_nonzero(pose_gradient) > 0
+    assert all(
+        parameter.grad is None or torch.count_nonzero(parameter.grad) == 0
+        for parameter in model.deformation_decoder.parameters()
+    )
+
+
+def test_explicit_dense_one_preserves_normal_joint_outputs_exactly():
+    model = _model().eval()
+    fixture = _fixture()
+    default = _forward(model, fixture)
+    explicit = _forward(
+        model,
+        fixture,
+        dense_deformation_supervision_weight=torch.ones(1),
+    )
+    assert explicit["deformation_feedback_enabled_mask"].all()
+    for key in (
+        "stationary_velocity_yx_px_sequence",
+        "deformation_feedback_map_yx_px_sequence",
+        "final_deformed_canonical_render",
+    ):
+        assert torch.equal(default[key], explicit[key])
+    assert torch.equal(
+        default["pose"]["final_cell_state"], explicit["pose"]["final_cell_state"]
+    )
+
+
+def test_dense_feedback_gate_is_independent_for_each_batch_row():
+    output = _forward(
+        _model().eval(),
+        _fixture(batch=2),
+        pose_only_steps=0,
+        dense_deformation_supervision_weight=torch.tensor([0.0, 1.0]),
+    )
+    identity = joint_module.identity_pixel_map_yx(1, (8, 8))
+    assert torch.equal(
+        output["deformation_feedback_enabled_mask"], torch.tensor([False, True])
+    )
+    assert torch.equal(
+        output["deformation_feedback_map_yx_px_sequence"][0],
+        identity[:, None].expand(2, 4, 2, 8, 8),
+    )
+    assert torch.equal(
+        output["deformation_feedback_map_yx_px_sequence"][1],
+        output["forward_map_yx_px_sequence"][1],
+    )
 
 
 def test_gate_rejects_data_dependent_or_out_of_range_values():

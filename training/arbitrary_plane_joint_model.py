@@ -17,7 +17,7 @@ from training.arbitrary_plane_recurrent_model import (
 )
 
 
-DEFORMATION_GATE_POLICY = "fixed_iteration_index_only"
+DEFORMATION_GATE_POLICY = "fixed_iteration_index_and_dense_supervision"
 DEFORMATION_UPDATE_SEMANTICS = "absolute_per_iteration_not_accumulated"
 
 _SEQUENCE_KEYS = AFFINE_FREE_DEFORMATION_TENSOR_KEYS
@@ -98,6 +98,7 @@ class ArbitraryPlaneJointModel(nn.Module):
         retrieval_shape_h_w: tuple[int, int] | None = None,
         catalogue_chunk_size: int | None = None,
         training_truth_catalogue_index: torch.Tensor | None = None,
+        dense_deformation_supervision_weight: torch.Tensor | None = None,
     ) -> dict[str, object]:
         pose_arguments = (
             image,
@@ -122,6 +123,7 @@ class ArbitraryPlaneJointModel(nn.Module):
             refinement_steps=refinement_steps,
             deformation_decoder=self.deformation_decoder,
             pose_only_steps=pose_only_steps,
+            dense_deformation_supervision_weight=dense_deformation_supervision_weight,
         )
         if (retrieval_shape_h_w is None) != (catalogue_chunk_size is None):
             raise ValueError(
@@ -151,13 +153,19 @@ class ArbitraryPlaneJointModel(nn.Module):
         feedback_render = pose.pop(
             "joint_final_feedback_deformed_canonical_render"
         )
+        feedback_maps = pose.pop(
+            "joint_deformation_feedback_map_yx_px_sequence"
+        )
+        feedback_enabled = pose.pop(
+            "joint_deformation_feedback_enabled_mask"
+        )
         batch, cells = cell_contexts.shape[:2]
         final_render = pose["final_canonical_render"]
         final_probability = representation_probability[..., -1]
         marginalized_render = (
             final_probability.to(final_render)[..., None, None, None] * final_render
         ).sum(dim=2)
-        final_map = sequences["forward_map_yx_px_sequence"][:, :, -1]
+        final_map = feedback_maps[:, :, -1]
         deformed_render = warp_tensor_with_map_yx(
             marginalized_render.reshape(
                 batch * cells, *marginalized_render.shape[2:]
@@ -175,11 +183,14 @@ class ArbitraryPlaneJointModel(nn.Module):
             "deformation_representation_probability_sequence": representation_probability,
             "deformation_cell_context_sequence": cell_contexts,
             "deformation_active_sequence": active,
+            "deformation_feedback_map_yx_px_sequence": feedback_maps,
+            "deformation_feedback_enabled_mask": feedback_enabled,
             "deformation_gating_audit": {
                 "pose_only_steps": int(pose_only_steps),
                 "gate_policy": DEFORMATION_GATE_POLICY,
                 "update_semantics": DEFORMATION_UPDATE_SEMANTICS,
                 "representation_probabilities_detached": True,
+                "dense_supervision_feedback_gate": "positive_weight_only; censored rows use detached identity",
                 "feedback_semantics": "absolute_deformation_warps_next_finite_thickness_render",
                 "shared_recurrent_context": True,
             },

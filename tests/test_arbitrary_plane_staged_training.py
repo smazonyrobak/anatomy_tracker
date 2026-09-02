@@ -127,6 +127,8 @@ def _batch():
         "truth_stationary_velocity_yx_px": truth_velocity,
         "truth_pullback_map_yx_px": truth_map,
         "deformation_weight": torch.ones(batch_size, 1, height, width),
+        "pose_supervision_weight": torch.ones(batch_size),
+        "dense_deformation_supervision_weight": torch.ones(batch_size),
     }
 
 
@@ -196,6 +198,34 @@ def test_pose_phase_is_bit_exact_for_deformation_then_joint_updates_it():
     )
     assert math.isfinite(joint_report["objective"])
     assert all(math.isfinite(value) for value in joint_report["losses"].values())
+
+
+def test_joint_stage_pose_valid_dense_censored_row_never_updates_decoder():
+    state = _training_state(seed=181)
+    staged.train_staged_step(state, _batch())
+    before_decoder = _deformation_state(state)
+    before_pose = {
+        name: value.detach().clone()
+        for name, value in state["model"].pose_model.state_dict().items()
+    }
+    batch = _batch()
+    batch["dense_deformation_supervision_weight"] = torch.zeros(1)
+    report = staged.train_staged_step(state, batch)
+    after_decoder = _deformation_state(state)
+    assert report["phase"] == "joint"
+    assert report["losses"]["pose_identifiable_fraction"] == 1.0
+    assert report["losses"]["deformation_eligible_fraction"] == 0.0
+    for name, value in report["losses"].items():
+        if name.startswith("deformation_") and name != "deformation_eligible_fraction":
+            assert value == 0.0
+    assert all(
+        torch.equal(before_decoder[name], after_decoder[name])
+        for name in before_decoder
+    )
+    assert any(
+        not torch.equal(before_pose[name], value)
+        for name, value in state["model"].pose_model.state_dict().items()
+    )
 
 
 def test_staged_training_reports_honest_miss_while_refining_the_truth_cell():
@@ -653,6 +683,10 @@ def test_v3_rows_become_model_ready_without_learned_dependencies():
     assert batch["truth_catalogue_cell_id"].item() == 0
     assert torch.allclose(batch["truth_state"][0], truth.to(torch.float32))
     assert torch.equal(batch["deformation_weight"], torch.ones(1, 1, height, width))
+    assert torch.equal(batch["pose_supervision_weight"], torch.ones(1))
+    assert torch.equal(
+        batch["dense_deformation_supervision_weight"], torch.ones(1)
+    )
 
     changed = copy.deepcopy(row)
     changed["arrays"]["model_input_channels_float32"][0, 0, 0] += 0.25
