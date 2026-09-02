@@ -29,7 +29,9 @@ This card describes data roles for the frozen baseline and proposed unified-mode
   `Donor.id`; see
   `docs/publication/ALLEN_REAL_HISTOLOGY_SOURCE_V1.md`. Product-5 sections are
   an appearance/domain source, while arbitrary-plane geometry remains
-  CCF/synthetic. No image bytes have yet been acquired for this new source.
+  CCF/synthetic. A three-image, three-donor transport dry run is documented
+  in `docs/publication/ALLEN_REAL_HISTOLOGY_IMAGES_V1.md`; it is not a training
+  cohort or validation panel.
 
 ### Allen Product 8 slide-mounted sections
 
