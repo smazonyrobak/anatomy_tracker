@@ -1071,11 +1071,32 @@ to export receipt
 `77a40efbe66965a1dac6dd213126a1d76c6ae6c174cf1c0c9b73738d1376ff6e`.
 This is an engineering **PASS**, not a model-performance result.
 
-Scientific quality remains **NOT ESTABLISHED**: there are no
-internal-development predictions or calibration results, and truth was absent
-from the selected top-k on every applied update while refinement was
-truth-forced on every update. The next gate is a new bounded, receipt-bound
-finite S=9 pilot followed by complete animal-disjoint internal-development
-prediction and uncalibrated pose/deformation, retrieval and failure audits.
-Exact evidence is recorded in
+The initial training-only readout left scientific quality **NOT ESTABLISHED**:
+truth was absent from the selected top-k on every applied update while
+refinement was truth-forced on every update. The first CUDA postrun then
+exposed a CPU/CUDA mismatch in annotation-dependent metric recomputation.
+Commit `017879e8f789ac7862fda7d33c520a894c32629d` fixed and regression-tested
+the device normalization and raw-prediction metric replay. Its incomplete
+two-file output was archived under
+`I:\AnatomyTracker\rejected_launches\finite_v4_smoke_postrun_001_annotation_device_bug_9f9e88a`
+and was not reused.
+
+The hardened all-row package passes independent verification under package
+receipt `02de5983fca6f82b56ed0c0c01ec0a79139c9f588098f3003084eb215f5ee7ba`
+and evaluation receipt
+`a2e94006b8164d7d47c4706beaf37bbfd6cf53e7f19267fa5e25a966e7731697`.
+All 12 development rows are present, four per input mode, across two animal
+units. The independently replayed cache scientific audit exactly matches
+receipt `8e2e5033b003ee41378932e20147c760b8b635426992c1fc584958b8b6a43706`
+and passes every contractual cache/provenance gate.
+
+The scientific-quality gate is **FAIL / NOT ESTABLISHED**. All 12 rows failed
+and animal-macro top-k recall is zero. Animal-macro physical finite-frame
+landmark error is 11,670.37 micrometres, absolute plane-offset error is
+3,591.52 micrometres, projective-normal error is 57.04 degrees, finite-frame
+rotation error is 129.53 degrees, and mean foreground Dice is 0.000635.
+Uncertainty is uncalibrated and carries no coverage claim. Engineering remains
+**PASS**; improved honest retrieval and a newly trained finite S=9 pilot with
+materially better all-row animal-disjoint metrics are required before
+calibration or public benchmarking. Exact evidence is recorded in
 `publication/arbitrary_plane_finite_v4_smoke_result.yaml`.

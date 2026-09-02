@@ -2,7 +2,8 @@ schema_version: anatomy-tracker.arbitrary-plane-finite-development-smoke-result/
 scientific_scope: internal synthetic engineering smoke; not validation, qualification, benchmarking, calibration, external validation, or final test
 decision:
   engineering_gate: PASS
-  scientific_quality_gate: NOT_ESTABLISHED
+  scientific_quality_gate: FAIL
+  scientific_quality_status: NOT_ESTABLISHED
   performance_claim: none
 run:
   label: finite_v4_smoke_001
@@ -116,6 +117,89 @@ optimization_audit:
     applied_attempt_count: 24
     mean: 1.0
     every_applied_attempt_one: true
+hardened_all_row_postrun:
+  verifier_source_commits:
+    evaluation_and_package_hardening: 017879e8f789ac7862fda7d33c520a894c32629d
+    cache_scientific_audit: 3e39887bda6c6fc77c7bb0b8632958563d7762b9
+  output_directory: 'I:\AnatomyTracker\runs\arbitrary_plane_finite_v4_smoke_001\finite_postrun_v4'
+  independent_package_verifier: PASS
+  package_receipt_sha256: 02de5983fca6f82b56ed0c0c01ec0a79139c9f588098f3003084eb215f5ee7ba
+  package_bundle_file_sha256: f5bcf126d7acb6eb8c0df94926c6b8d8564f26e5f9ce0534e74e0ea08fa2809e
+  inference_export_report_receipt_sha256: 8f78390679fd7e33ea4e14fcd31af713e0a528be9014bfc6938953aef2a5e1d1
+  inference_export_report_file_sha256: ba78123103bf25ba908c7155e0ece1a13f416f477578cc59a3585b0e7f6000ce
+  capability_checkpoint_file_sha256: 84a3e8bad72c18ba79d76d72130644d7c53a1100b5bcca54b2f19ffeef913e39
+  evaluation_receipt_sha256: a2e94006b8164d7d47c4706beaf37bbfd6cf53e7f19267fa5e25a966e7731697
+  evaluation_report_file_sha256: c17260b5b8beaf73626949021a985ac650070bacb96054d43f41ae225fdc1215
+  evaluation_bundle_receipt_sha256: 2e1eeb26a8f48daac454d53c20b832f9b81b70f62ef52a387e092d3aa3eaccc5
+  evaluation_bundle_file_sha256: bc414bf36faee5a22e73675dd93ef6db80b4f14fdacd76f0a56bf0e7041cb63c
+  row_accounting:
+    selected_rows: 12
+    reported_rows: 12
+    raw_prediction_files: 12
+    no_rows_dropped: true
+    marginal_or_empty_rows_retained: true
+    failed_rows: 12
+    abstained_rows: 0
+  mode_accounting:
+    smart-brush-absent: {rows: 4, failed_rows: 4}
+    smart-brush-accurate: {rows: 4, failed_rows: 4}
+    smart-brush-imperfect: {rows: 4, failed_rows: 4}
+  animal_level_metrics:
+    statistical_unit: animal
+    animal_count: 2
+    confidence_intervals: deferred; internal development only
+    retrieval_topk_recall: 0.0
+    retrieval_failure_fraction: 1.0
+    overall_failure_fraction: 1.0
+    physical_finite_frame_landmark_mean_um: 11670.371996520109
+    absolute_signed_plane_offset_error_um: 3591.523626490142
+    plane_normal_projective_error_deg: 57.03649442936318
+    finite_frame_rotation_error_deg: 129.5270215366854
+    mean_dice_foreground: 0.0006351621244078951
+    dense_mean_endpoint_error_px: 0.19711727064889523
+    raw_normalized_retrieval_entropy: 0.9999984714516456
+  uncertainty:
+    status: absent-uncalibrated
+    calibration_fitted: false
+    coverage_claimed: false
+  access:
+    public_benchmark_accessed: false
+    external_validation_accessed: false
+    final_test_accessed: false
+  gate:
+    engineering: PASS
+    scientific_quality: FAIL
+    shipping_quality: NOT_ESTABLISHED
+initial_postrun_device_failure:
+  source_commit: 9f9e88a
+  failure: CUDA evaluation metric recomputation mixed CPU truth/annotation state with CUDA prediction tensors
+  resolution_commit: 017879e8f789ac7862fda7d33c520a894c32629d
+  resolution: raw predictions, truth conversion, and annotation-dependent metric recomputation are normalized to CPU and independently replayed from the saved raw prediction
+  archived_partial_output: 'I:\AnatomyTracker\rejected_launches\finite_v4_smoke_postrun_001_annotation_device_bug_9f9e88a'
+  archived_partial_file_count: 2
+  archived_partial_reused: false
+  regression_verification: 11 relevant finite-postrun and cache-scientific-audit tests passed under current main semantics
+finite_cache_scientific_audit:
+  verifier_source_commit: 3e39887bda6c6fc77c7bb0b8632958563d7762b9
+  path: 'I:\AnatomyTracker\runs\arbitrary_plane_finite_v4_smoke_001\finite_cache_scientific_audit_v4.json'
+  receipt_sha256: 8e2e5033b003ee41378932e20147c760b8b635426992c1fc584958b8b6a43706
+  file_sha256: b08a1742271650bd66a94e16bfba7b6a75e4dc92cfd6752521abaaaed14b0831
+  independent_verifier: PASS
+  exact_live_cache_replay_equal: true
+  all_contractual_gates_passed: true
+  contractual_gates:
+    - cache-authentication
+    - no-dropped-logical-rows
+    - arbitrary-plane-parent
+    - independent-thickness-lineage
+    - finite-s9-trapezoid-psf
+    - occupancy-mass-lineage
+    - pose-joint-strata
+    - appearance-damage-lineage
+    - smart-brush-optional
+    - development-identity-disjointness
+    - finite-values
+    - internal-development-only-scope
 independence_and_access:
   all_marginal_or_empty_rows_retained: true
   prior_model_weight_dependencies: []
@@ -129,7 +213,9 @@ independence_and_access:
   final_test_accessed: false
 scientific_interpretation:
   engineering_result: the finite S=9 cache-to-mixed-curriculum training, authenticated atomic checkpoint/report ledger, resumable load, and capability-bound export path completed successfully
-  quality_result: not established; this 24-step smoke produced no animal-disjoint development predictions or calibration and is not an accuracy result
-  retrieval_caveat: truth was absent from the model-selected top-k on every applied update while refinement was truth-forced on every applied update, so honest coarse retrieval was not demonstrated
+  quality_result: failed and not established; hardened all-row postrun evaluated all 12 animal-disjoint internal-development rows, but every row failed and animal-macro top-k recall was zero
+  retrieval_caveat: truth was absent from the model-selected top-k both on every applied training update and on all 12 honest internal-development inferences; training refinement was truth-forced on every applied update
+  metric_caveat: the two-animal internal-development smoke has 11.670 mm animal-macro landmark error, 3.592 mm absolute plane-offset error, 57.036 degree projective-normal error, 129.527 degree finite-frame error, and 0.000635 mean foreground Dice; these are failure-localization metrics, not validation estimates
+  uncertainty_caveat: uncertainty remains uncalibrated and no coverage is claimed
   optimization_caveat: eight AMP overflow attempts were safely skipped, but the 65536 initial scale is inefficient for the next bounded run
-  next_gate: run a new receipt-bound bounded finite S=9 pilot, then evaluate every animal-disjoint internal-development row with raw predictions, honest retrieval, physical pose and deformation metrics, failure accounting, and uncalibrated uncertainty diagnostics before calibration or any public benchmark
+  next_gate: improve honest coarse retrieval and train a new receipt-bound finite S=9 pilot; require nonzero animal-disjoint top-k recall and materially improved physical pose/overlap metrics with complete raw predictions before calibration or any public benchmark
