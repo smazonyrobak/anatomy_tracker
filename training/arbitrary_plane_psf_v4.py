@@ -96,6 +96,19 @@ def _finite_psf_payload(contract):
     }
 
 
+def _canonical_axial_offsets_v4(thickness):
+    offsets = np.linspace(
+        -float(thickness) / 2.0,
+        float(thickness) / 2.0,
+        PRODUCTION_AXIAL_SAMPLE_COUNT,
+        dtype=np.float64,
+    )
+    centre = PRODUCTION_AXIAL_SAMPLE_COUNT // 2
+    offsets[centre] = 0.0
+    offsets[:centre] = -offsets[:centre:-1]
+    return offsets
+
+
 def make_finite_psf_schedule_v4(
     render_mode,
     nominal_cut_thickness_um,
@@ -105,13 +118,7 @@ def make_finite_psf_schedule_v4(
     capability = finite_psf_model_capability_v4()
     thickness = float(nominal_cut_thickness_um)
     if render_mode == "finite_boxcar":
-        offsets = np.linspace(
-            -thickness / 2.0,
-            thickness / 2.0,
-            PRODUCTION_AXIAL_SAMPLE_COUNT,
-            dtype=np.float64,
-        )
-        offsets[PRODUCTION_AXIAL_SAMPLE_COUNT // 2] = 0.0
+        offsets = _canonical_axial_offsets_v4(thickness)
         masses = np.asarray(PRODUCTION_INTEGER_MASSES, dtype=np.int64)
         step = thickness / 8.0
         projection = "finite-full-slab-boxcar-trapezoidal-quadrature"
@@ -192,13 +199,7 @@ def verify_finite_psf_schedule_v4(contract, *, capability=None):
     if not basic:
         raise ValueError("v4 finite-PSF schedule failed capability or receipt validation")
     if mode == "finite_boxcar":
-        expected_offsets = np.linspace(
-            -float(thickness) / 2.0,
-            float(thickness) / 2.0,
-            PRODUCTION_AXIAL_SAMPLE_COUNT,
-            dtype=np.float64,
-        )
-        expected_offsets[PRODUCTION_AXIAL_SAMPLE_COUNT // 2] = 0.0
+        expected_offsets = _canonical_axial_offsets_v4(thickness)
         valid = (
             PRODUCTION_THICKNESS_RANGE_UM[0]
             <= float(thickness)
@@ -316,12 +317,7 @@ def runtime_schedule_contract_v4(
                 <= PRODUCTION_THICKNESS_RANGE_UM[1]
                 or not np.array_equal(
                     offsets,
-                    np.linspace(
-                        -thickness / 2.0,
-                        thickness / 2.0,
-                        PRODUCTION_AXIAL_SAMPLE_COUNT,
-                        dtype=np.float64,
-                    ),
+                    _canonical_axial_offsets_v4(thickness),
                 )
             )
         )
