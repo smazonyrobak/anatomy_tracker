@@ -59,7 +59,9 @@ def finite_psf_model_capability_v4():
         "family": "boxcar",
         "sampling_direction": SAMPLING_DIRECTION,
         "training_schedule_scope": "authenticated-exact-per-row",
-        "runtime_schedule_scope": "caller-explicit-exact-checkpoint-bound",
+        "runtime_schedule_scope": (
+            "caller-explicit-exact-inference-session-or-feature-cache-bound"
+        ),
         "production": {
             "render_mode": "finite_boxcar",
             "nominal_cut_thickness_range_um": list(
@@ -342,6 +344,8 @@ def runtime_schedule_contract_v4(
 
 def verify_runtime_schedule_contract_v4(contract, capability):
     verify_finite_psf_model_capability_v4(capability)
+    if not isinstance(contract, dict):
+        raise ValueError("runtime finite-PSF schedule contract is missing")
     expected = runtime_schedule_contract_v4(
         contract.get("axial_offsets_um", ()),
         contract.get("axial_weights", ()),
