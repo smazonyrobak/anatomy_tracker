@@ -293,6 +293,35 @@ def test_rehashed_report_cannot_change_authenticated_per_row_psf_identity(tmp_pa
         runner_v4.load_finite_training_run_v4(run)
 
 
+def test_until_target_retries_a_transient_final_step_amp_overflow(tmp_path, monkeypatch):
+    run, _, _, _, _ = _prepared(tmp_path, row_count=1, target=1)
+    original = runner_v4.staged_training.train_staged_step
+    calls = {"count": 0}
+
+    def overflow_once(state, batch):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {
+                "step": int(state["global_step"]),
+                "retrieval_scope": batch["catalogue_scope"],
+                "optimizer_step_applied": False,
+                "simulated_transient_amp_overflow": True,
+            }
+        return original(state, batch)
+
+    monkeypatch.setattr(
+        runner_v4.staged_training, "train_staged_step", overflow_once
+    )
+    state = runner_v4.run_finite_training_until_target_v4(run)
+
+    assert calls["count"] == 2
+    assert state["attempt_count"] == 2
+    assert state["applied_step_count"] == 1
+    reports = runner_v4.load_finite_training_run_v4(run)["training_reports"]
+    assert not reports[0]["training_report"]["optimizer_step_applied"]
+    assert reports[1]["training_report"]["optimizer_step_applied"]
+
+
 def test_runner_rejects_global_psf_and_rehashed_schedule_tampering(tmp_path):
     binding = _binding(1)
     cache = tmp_path / "cache"

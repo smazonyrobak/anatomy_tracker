@@ -1379,8 +1379,19 @@ def run_finite_training_until_target_v4(run_directory):
         ) - int(context["training_state"]["global_step"])
         if remaining <= 0:
             return context["run_state"]
+        # Near the target, ``remaining`` may be one even though AMP legitimately
+        # needs several same-step retries while its scaler backs off.  Keep a
+        # bounded operational retry window without allowing an overshoot.
+        attempt_budget = max(
+            remaining,
+            int(
+                context["manifest"]["runner_config"][
+                    "checkpoint_commit_interval_attempts"
+                ]
+            ),
+        )
         reports = run_finite_training_attempts_v4(
-            run_directory, max_attempts=remaining
+            run_directory, max_attempts=attempt_budget
         )
         if reports and any(
             report["training_report"]["optimizer_step_applied"]
