@@ -232,10 +232,12 @@ def test_independent_verifier_rehashes_raw_metadata_responses(tmp_path: Path):
 
 def test_image_output_inside_git_is_rejected_before_download(tmp_path: Path):
     metadata = _metadata_snapshot(tmp_path)
+    git_root = tmp_path / "git-worktree"
+    (git_root / ".git").mkdir(parents=True)
     with pytest.raises(ValueError, match="outside a Git worktree"):
         acquire_image_snapshot(
             metadata,
-            Path.cwd() / "data" / "forbidden-raw-images",
+            git_root / "data" / "forbidden-raw-images",
             {"development_train": 1},
             get=_image_get([]),
         )
