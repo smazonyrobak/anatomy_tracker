@@ -122,7 +122,7 @@ def test_fixed_s9_psf_and_reducer_are_exact_v2_parity(thickness_um):
 def test_capability_hash_is_shared_exact_random_init_contract():
     capability = slab.finite_psf_capability_v4()
     assert capability["receipt_sha256"] == (
-        "4d82f3c7b14ca00399befd7983252b2dc7fcb1719d06e8de671c8a8570165f00"
+        "bcd6441a685e902fb5b59e85bb7003ef3261207d906a0b9390d4a219c3ae3d3e"
     )
     assert capability["prior_model_weight_dependencies"] == []
     assert capability["prior_feature_dependencies"] == []

@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+import training.arbitrary_plane_psf_v4 as psf_v4
 import training.arbitrary_plane_rendered_generator as parent_generator
 from training.arbitrary_plane_geometry import (
     QUICKNII_RASTER_INDEX_SAMPLING,
@@ -32,14 +33,14 @@ from training.arbitrary_plane_rendered_generator import (
 
 FINITE_SLAB_V4_SCHEMA = "anatomy-tracker.authenticated-finite-thickness-slab-render/v4"
 FINITE_SLAB_V4_ALGORITHM = "verified-v3-parent-physical-normal-boxcar/v4"
-FINITE_PSF_V4_SCHEMA = "anatomy-tracker.finite-psf-contract/v4"
-FINITE_PSF_CAPABILITY_V4_SCHEMA = "anatomy-tracker.finite-psf-model-capability/v4"
+FINITE_PSF_V4_SCHEMA = psf_v4.FINITE_PSF_V4_SCHEMA
+FINITE_PSF_CAPABILITY_V4_SCHEMA = psf_v4.FINITE_PSF_CAPABILITY_V4_SCHEMA
 SLAB_OBSERVATION_V4_SCHEMA = "anatomy-tracker.slab-observation/v4"
 FINITE_BOXCAR = "finite_boxcar"
 CENTRE_PLANE_ABLATION = "centre_plane_ablation"
-PRODUCTION_THICKNESS_RANGE_UM = (25.0, 100.0)
-PRODUCTION_AXIAL_SAMPLE_COUNT = 9
-PRODUCTION_AXIAL_STEP_UM_MAX = 12.5
+PRODUCTION_THICKNESS_RANGE_UM = psf_v4.PRODUCTION_THICKNESS_RANGE_UM
+PRODUCTION_AXIAL_SAMPLE_COUNT = psf_v4.PRODUCTION_AXIAL_SAMPLE_COUNT
+PRODUCTION_AXIAL_STEP_UM_MAX = psf_v4.AXIAL_STEP_UM_MAX
 PHYSICAL_DISPLACEMENT_TOLERANCE_UM = 0.01
 UINT64_SEED_ENCODING = "canonical-lowercase-uint64-hex/v1"
 
@@ -101,6 +102,7 @@ _SOURCE_ROOT = Path(__file__).parent
 _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 _DEPENDENCY_FILES = (
     "arbitrary_plane_geometry.py",
+    "arbitrary_plane_psf_v4.py",
     "arbitrary_plane_rendered_generator.py",
 )
 _LOADED_DEPENDENCY_SOURCE_SHA256 = {
@@ -110,31 +112,7 @@ _LOADED_DEPENDENCY_SOURCE_SHA256 = {
 
 
 def finite_psf_capability_v4() -> dict[str, object]:
-    capability = {
-        "schema_version": FINITE_PSF_CAPABILITY_V4_SCHEMA,
-        "family": "boxcar",
-        "production": {
-            "render_mode": FINITE_BOXCAR,
-            "nominal_cut_thickness_range_um": list(PRODUCTION_THICKNESS_RANGE_UM),
-            "axial_sample_count": PRODUCTION_AXIAL_SAMPLE_COUNT,
-            "axial_integer_masses": [1, 2, 2, 2, 2, 2, 2, 2, 1],
-            "axial_step_um_max": PRODUCTION_AXIAL_STEP_UM_MAX,
-        },
-        "training_schedule_scope": "authenticated-exact-per-row",
-        "runtime_schedule_scope": "caller-explicit-exact-checkpoint-bound",
-        "sampling_direction": "canonical physical AP-DV-ML arbitrary-plane normal",
-        "unknown_thickness_policy": "reject",
-        "zero_thickness_ablation": {
-            "render_mode": CENTRE_PLANE_ABLATION,
-            "nominal_cut_thickness_um": 0.0,
-            "axial_offsets_um": [0.0],
-            "axial_weights": [1.0],
-        },
-        "prior_model_weight_dependencies": [],
-        "prior_feature_dependencies": [],
-        "prior_pseudolabel_dependencies": [],
-    }
-    return {**capability, "receipt_sha256": _payload_sha256(capability)}
+    return psf_v4.finite_psf_model_capability_v4()
 
 
 def _resolve_thickness_selection(
@@ -199,63 +177,16 @@ def finite_psf_v4(
     thickness_selection_sha256: str,
 ) -> dict[str, object]:
     """Build the exact fixed-S production schedule or zero-thickness ablation."""
-    thickness = float(nominal_cut_thickness_um)
-    capability = finite_psf_capability_v4()
-    capability_sha256 = capability["receipt_sha256"]
-    if render_mode == FINITE_BOXCAR:
-        lower, upper = PRODUCTION_THICKNESS_RANGE_UM
-        if not math.isfinite(thickness) or not lower <= thickness <= upper:
-            raise ValueError("Finite boxcar thickness must lie in [25,100] um")
-        offsets = np.linspace(
-            -thickness / 2.0,
-            thickness / 2.0,
-            PRODUCTION_AXIAL_SAMPLE_COUNT,
-            dtype=np.float64,
-        )
-        offsets[PRODUCTION_AXIAL_SAMPLE_COUNT // 2] = 0.0
-        offsets[: PRODUCTION_AXIAL_SAMPLE_COUNT // 2] = -offsets[: PRODUCTION_AXIAL_SAMPLE_COUNT // 2 : -1]
-        masses = np.full(PRODUCTION_AXIAL_SAMPLE_COUNT, 2, dtype=np.int64)
-        masses[[0, -1]] = 1
-        operator = "finite-full-slab-boxcar-trapezoidal-quadrature"
-        axial_step = thickness / (PRODUCTION_AXIAL_SAMPLE_COUNT - 1)
-    elif render_mode == CENTRE_PLANE_ABLATION:
-        if thickness != 0.0:
-            raise ValueError("Centre-plane ablation thickness must be exactly zero")
-        offsets = np.asarray([0.0], dtype=np.float64)
-        masses = np.asarray([1], dtype=np.int64)
-        operator = "direct-centre-plane-ablation"
-        axial_step = 0.0
-    else:
-        raise ValueError("Unknown finite-slab render mode")
-    weights = masses.astype(np.float64) / int(masses.sum())
-    if (
-        not np.array_equal(offsets, -offsets[::-1])
-        or not np.array_equal(masses, masses[::-1])
-        or math.fsum(weights.tolist()) != 1.0
-        or math.fsum((weights * offsets).tolist()) != 0.0
-        or axial_step > PRODUCTION_AXIAL_STEP_UM_MAX
-    ):
-        raise ValueError("Finite PSF failed symmetry, unit-mass, or maximum-step contract")
-    payload = {
-        "schema": FINITE_PSF_V4_SCHEMA,
-        "family": "boxcar",
-        "render_mode": render_mode,
-        "nominal_cut_thickness_um": thickness,
-        "production_thickness_range_um": list(PRODUCTION_THICKNESS_RANGE_UM),
-        "axial_sample_count": int(offsets.size),
-        "axial_offsets_um": offsets.tolist(),
-        "axial_integer_masses": masses.tolist(),
-        "axial_weights": weights.tolist(),
-        "axial_step_um": axial_step,
-        "axial_step_um_max": PRODUCTION_AXIAL_STEP_UM_MAX,
-        "sampling_direction": "canonical physical AP-DV-ML arbitrary-plane normal",
-        "normalization": "global unit-mass PSF; no per-pixel in-bounds renormalization",
-        "outside_atlas_rule": "zero padding before global weighted sum",
-        "projection_operator": operator,
-        "thickness_selection_sha256": str(thickness_selection_sha256),
-        "finite_psf_capability_sha256": capability_sha256,
-    }
-    return {**payload, "finite_psf_sha256": _payload_sha256(payload)}
+    contract = psf_v4.make_finite_psf_schedule_v4(
+        render_mode,
+        nominal_cut_thickness_um,
+        thickness_selection_sha256=thickness_selection_sha256,
+    )
+    psf_v4.verify_finite_psf_schedule_v4(
+        contract,
+        capability=finite_psf_capability_v4(),
+    )
+    return contract
 
 
 def _reduce_samples(
