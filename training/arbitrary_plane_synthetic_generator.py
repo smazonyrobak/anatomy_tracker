@@ -1762,6 +1762,12 @@ def _generate(
         point_pose_evidence_pixels = int(
             g1_arrays["source_slab_observable_support_mask"].sum()
         )
+        point_pose_evidence_effective_mass = float(
+            np.asarray(
+                g1_arrays["source_slab_brain_occupancy_float32"],
+                dtype=np.float64,
+            ).sum()
+        )
         support_supervision.update(
             {
                 "center_plane_target_pixel_count": brain_pixel_count,
@@ -1771,6 +1777,15 @@ def _generate(
                 "point_pose_evidence_pixel_count": point_pose_evidence_pixels,
                 "point_pose_evidence_meets_requested_identifiability_threshold": bool(
                     point_pose_evidence_pixels >= requested_threshold
+                ),
+                "point_pose_evidence_effective_brain_pixel_mass": (
+                    point_pose_evidence_effective_mass
+                ),
+                "point_pose_effective_mass_meets_requested_identifiability_threshold": bool(
+                    point_pose_evidence_effective_mass >= requested_threshold
+                ),
+                "point_pose_supervision_evidence_metric": (
+                    "post-G1 sum(source_slab_brain_occupancy_float32)"
                 ),
                 "point_pose_loss_gated_by_pixel_mask": False,
             }

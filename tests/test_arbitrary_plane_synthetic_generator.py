@@ -740,6 +740,22 @@ def test_slab_support_controls_g2_g3_and_point_pose_evidence_when_center_is_marg
     assert artifact["g3"]["parameters"]["damage_eligible"]
     assert artifact["g2"]["parameters"]["normalization"]["tissue_pixel_count"] == full_count
     assert artifact["support_supervision"]["point_pose_evidence_pixel_count"] == full_count
+    effective_mass = float(
+        np.asarray(
+            artifact["arrays"]["source_slab_brain_occupancy_float32"],
+            dtype=np.float64,
+        ).sum()
+    )
+    assert artifact["support_supervision"][
+        "point_pose_evidence_effective_brain_pixel_mass"
+    ] == pytest.approx(effective_mass)
+    assert 0.0 < effective_mass < full_count
+    assert artifact["support_supervision"][
+        "point_pose_effective_mass_meets_requested_identifiability_threshold"
+    ] is (effective_mass >= threshold)
+    assert artifact["support_supervision"]["point_pose_supervision_evidence_metric"] == (
+        "post-G1 sum(source_slab_brain_occupancy_float32)"
+    )
     assert artifact["support_supervision"]["center_plane_target_pixel_count"] == center_count
     assert not artifact["support_supervision"]["point_pose_loss_gated_by_pixel_mask"]
     verify_arbitrary_plane_synthetic_realization(artifact, support)
@@ -873,6 +889,12 @@ def test_authenticated_empty_slab_is_retained_and_nonfinite_input_is_rejected():
         outline_mode=ABSENT_OUTLINE,
     )
     assert retained["support_supervision"]["point_pose_evidence_pixel_count"] == 0
+    assert retained["support_supervision"][
+        "point_pose_evidence_effective_brain_pixel_mass"
+    ] == 0.0
+    assert not retained["support_supervision"][
+        "point_pose_effective_mass_meets_requested_identifiability_threshold"
+    ]
     assert retained["g2"]["parameters"]["marginal_raster_support_information_bypass"]
     assert retained["g3"]["parameters"]["marginal_raster_support_visibility_bypass"]
     assert not retained["arrays"]["source_valid_correspondence_mask"].any()
