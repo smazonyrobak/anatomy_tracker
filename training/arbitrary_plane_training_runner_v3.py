@@ -27,11 +27,15 @@ from training.arbitrary_plane_training_bank_v3 import (
 TRAINING_RUN_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-training-run/v3"
 TRAINING_RUN_STATE_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-training-run-state/v3"
 TRAINING_STEP_REPORT_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-training-step-report/v3"
+TRAINING_COMMIT_CONTRACT_V3_SCHEMA = (
+    "anatomy-tracker.arbitrary-plane-training-commit-contract/v3"
+)
 ATLAS_BINDING_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-atlas-binding/v3"
 FINITE_PSF_CONTRACT_V3_SCHEMA = "anatomy-tracker.finite-psf-training-contract/v3"
 ROW_SAMPLING_POLICY_V3_SCHEMA = (
     "anatomy-tracker.frozen-cache-row-sampling-policy/v3"
 )
+DEFAULT_CHECKPOINT_COMMIT_INTERVAL_ATTEMPTS = 25
 DEVELOPMENT_DATA_ROLE = staged_training.DEVELOPMENT_DATA_ROLE
 RUNNER_CONFIG_KEYS = {
     "target_applied_steps",
@@ -42,6 +46,7 @@ RUNNER_CONFIG_KEYS = {
     "axial_offsets_um",
     "axial_weights",
     "archive_checkpoint_interval_applied_steps",
+    "checkpoint_commit_interval_attempts",
 }
 RUNNER_SOURCE_FILES = (
     "training/arbitrary_plane_row_cache_v3.py",
@@ -324,6 +329,37 @@ def _row_sampling_policy(cache_manifest, runner_config, training_config):
     return {**payload, "receipt_sha256": _hash_json(payload)}
 
 
+def _training_commit_contract(runner_config):
+    payload = {
+        "schema_version": TRAINING_COMMIT_CONTRACT_V3_SCHEMA,
+        "checkpoint_commit_interval_attempts": int(
+            runner_config["checkpoint_commit_interval_attempts"]
+        ),
+        "resume_checkpoint_slots": [
+            "checkpoints/resume_slot_0.pt",
+            "checkpoints/resume_slot_1.pt",
+        ],
+        "publication_order": [
+            "unreferenced-checkpoint-write-and-fsync",
+            "unreferenced-per-attempt-report-write-and-fsync",
+            "atomic-run-state-replacement",
+        ],
+        "commit_boundaries": [
+            "attempt-interval",
+            "archive-applied-step",
+            "target-applied-step",
+            "bounded-call-end",
+            "safe-pre-update-exception",
+        ],
+        "crash_recovery": (
+            "load the last authenticated run state and deterministically replay only "
+            "attempts that were not published by that state"
+        ),
+        "per_attempt_reports_preserved": True,
+    }
+    return {**payload, "receipt_sha256": _hash_json(payload)}
+
+
 def _validate_runner_config(
     config,
     *,
@@ -335,6 +371,10 @@ def _validate_runner_config(
     joint_pose_only_steps,
 ):
     config = _plain(config)
+    config.setdefault(
+        "checkpoint_commit_interval_attempts",
+        DEFAULT_CHECKPOINT_COMMIT_INTERVAL_ATTEMPTS,
+    )
     offsets = np.asarray(config.get("axial_offsets_um", ()), dtype=np.float64)
     weights = np.asarray(config.get("axial_weights", ()), dtype=np.float64)
     offset_tolerance = 16.0 * np.finfo(np.float32).eps * max(
@@ -371,6 +411,9 @@ def _validate_runner_config(
         or not isinstance(config["archive_checkpoint_interval_applied_steps"], int)
         or isinstance(config["archive_checkpoint_interval_applied_steps"], bool)
         or config["archive_checkpoint_interval_applied_steps"] < 1
+        or not isinstance(config["checkpoint_commit_interval_attempts"], int)
+        or isinstance(config["checkpoint_commit_interval_attempts"], bool)
+        or config["checkpoint_commit_interval_attempts"] < 1
         or offsets.ndim != 1
         or weights.shape != offsets.shape
         or offsets.size < 1
@@ -451,6 +494,15 @@ def _manifest_payload(manifest):
 def _with_receipt(payload):
     payload = _plain(payload)
     return {**payload, "receipt_sha256": _hash_json(payload)}
+
+
+def _scientific_run_id_payload(core):
+    payload = dict(core)
+    payload.pop("training_commit_contract", None)
+    runner_config = dict(payload["runner_config"])
+    runner_config.pop("checkpoint_commit_interval_attempts", None)
+    payload["runner_config"] = runner_config
+    return payload
 
 
 def initialize_training_run_v3(
@@ -538,6 +590,7 @@ def initialize_training_run_v3(
         "row_sampling_policy": _row_sampling_policy(
             cache_manifest, runner_config, training_config
         ),
+        "training_commit_contract": _training_commit_contract(runner_config),
         "seed_record": {
             "model_initialization_seed": _plain(training_config["seed"]),
             "row_selection_seed": runner_config["row_selection_seed"],
@@ -557,7 +610,12 @@ def initialize_training_run_v3(
         "prior_feature_dependencies": [],
         "prior_pseudolabel_dependencies": [],
     }
-    core["run_id"] = _hash_json({"domain": TRAINING_RUN_V3_SCHEMA, "core": core})
+    core["run_id"] = _hash_json(
+        {
+            "domain": TRAINING_RUN_V3_SCHEMA,
+            "scientific_core": _scientific_run_id_payload(core),
+        }
+    )
     manifest = _with_receipt(core)
     _atomic_json(run_root / "run_manifest.json", manifest)
     checkpoint_relative = "checkpoints/resume_slot_0.pt"
@@ -584,9 +642,18 @@ def initialize_training_run_v3(
 def _load_manifest(run_root):
     manifest = json.loads((run_root / "run_manifest.json").read_text(encoding="utf-8"))
     payload = _manifest_payload(manifest)
+    identity_core = dict(payload)
+    identity_core.pop("run_id", None)
     if (
         manifest.get("receipt_sha256") != _hash_json(payload)
         or payload.get("schema_version") != TRAINING_RUN_V3_SCHEMA
+        or payload.get("run_id")
+        != _hash_json(
+            {
+                "domain": TRAINING_RUN_V3_SCHEMA,
+                "scientific_core": _scientific_run_id_payload(identity_core),
+            }
+        )
         or payload.get("data_role") != DEVELOPMENT_DATA_ROLE
         or payload.get("retrieval_scope") != TRAINING_CANDIDATE_BANK_SCOPE
         or payload.get("finite_psf_contract")
@@ -618,6 +685,8 @@ def _load_manifest(run_root):
             payload.get("runner_config", {}),
             payload.get("training_config", {}),
         )
+        or payload.get("training_commit_contract")
+        != _training_commit_contract(payload.get("runner_config", {}))
     ):
         raise ValueError("training-run frozen cache binding differs")
     return manifest, cache_manifest
@@ -761,35 +830,34 @@ def _row_indices(run_id, root_seed, step, row_count, batch_size):
     return rng.choice(row_count, size=batch_size, replace=False).tolist()
 
 
-def _commit_attempt(context, train_report, row_indices, batch):
-    run_root = context["run_root"]
+def _commit_fault_injection_point(point):
+    """Test hook: production execution intentionally does nothing here."""
+
+
+def _fsync_existing_file(path):
+    with _i_path(path).open("r+b") as handle:
+        os.fsync(handle.fileno())
+
+
+def _next_resume_checkpoint_relative(old_run_state):
+    slots = (
+        "checkpoints/resume_slot_0.pt",
+        "checkpoints/resume_slot_1.pt",
+    )
+    current = old_run_state["latest_checkpoint"]["relative_path"]
+    if current not in slots:
+        raise ValueError("committed resume checkpoint is not one of the frozen slots")
+    return slots[1] if current == slots[0] else slots[0]
+
+
+def _pending_attempt_payload(context, train_report, row_indices, batch, attempt_index):
     manifest = context["manifest"]
     state = context["training_state"]
-    old_run_state = context["run_state"]
-    attempt_index = int(old_run_state["attempt_count"])
-    checkpoint_relative = f"checkpoints/resume_slot_{(attempt_index + 1) % 2}.pt"
-    staged_training.save_staged_training_checkpoint(state, run_root / checkpoint_relative)
-    checkpoint_sha = _file_sha256(run_root / checkpoint_relative)
-    interval = int(
-        manifest["runner_config"]["archive_checkpoint_interval_applied_steps"]
-    )
-    target = int(manifest["runner_config"]["target_applied_steps"])
-    applied = bool(train_report["optimizer_step_applied"])
-    archive_checkpoint = None
-    if applied and (int(state["global_step"]) % interval == 0 or int(state["global_step"]) == target):
-        archive_relative = f"checkpoints/archive_step_{state['global_step']:08d}.pt"
-        staged_training.save_staged_training_checkpoint(
-            state, run_root / archive_relative
-        )
-        archive_checkpoint = {
-            "relative_path": archive_relative,
-            "file_sha256": _file_sha256(run_root / archive_relative),
-        }
-    report_payload = {
+    return {
         "schema_version": TRAINING_STEP_REPORT_V3_SCHEMA,
         "run_id": manifest["run_id"],
         "run_manifest_receipt_sha256": manifest["receipt_sha256"],
-        "attempt_index": attempt_index,
+        "attempt_index": int(attempt_index),
         "global_step_before": int(train_report["step"]),
         "global_step_after": int(state["global_step"]),
         "row_cache_manifest_receipt_sha256": manifest["cache"][
@@ -805,42 +873,99 @@ def _commit_attempt(context, train_report, row_indices, batch):
         "optimizer_learning_rates_after": [
             float(group["lr"]) for group in state["optimizer"].param_groups
         ],
-        "checkpoint": {
-            "relative_path": checkpoint_relative,
-            "file_sha256": checkpoint_sha,
-        },
-        "archive_checkpoint": archive_checkpoint,
         "prior_model_weight_dependencies": [],
         "prior_feature_dependencies": [],
         "prior_pseudolabel_dependencies": [],
     }
-    report = _with_receipt(report_payload)
-    report_relative = f"reports/attempt_{attempt_index:08d}.json"
-    _atomic_json(run_root / report_relative, report)
-    report_record = {
-        "relative_path": report_relative,
-        "file_sha256": _file_sha256(run_root / report_relative),
-        "report_receipt_sha256": report["receipt_sha256"],
+
+
+def _commit_attempt_batch(context, pending_payloads):
+    if not pending_payloads:
+        return []
+    run_root = context["run_root"]
+    manifest = context["manifest"]
+    state = context["training_state"]
+    old_run_state = context["run_state"]
+    attempt_index = int(old_run_state["attempt_count"])
+    if [payload["attempt_index"] for payload in pending_payloads] != list(
+        range(attempt_index, attempt_index + len(pending_payloads))
+    ):
+        raise ValueError("pending training attempts are not one contiguous ledger suffix")
+    checkpoint_relative = _next_resume_checkpoint_relative(old_run_state)
+    checkpoint_path = run_root / checkpoint_relative
+    staged_training.save_staged_training_checkpoint(state, checkpoint_path)
+    _fsync_existing_file(checkpoint_path)
+    checkpoint_sha = _file_sha256(run_root / checkpoint_relative)
+    interval = int(
+        manifest["runner_config"]["archive_checkpoint_interval_applied_steps"]
+    )
+    target = int(manifest["runner_config"]["target_applied_steps"])
+    last_payload = pending_payloads[-1]
+    applied = bool(last_payload["training_report"]["optimizer_step_applied"])
+    archive_checkpoint = None
+    if applied and (int(state["global_step"]) % interval == 0 or int(state["global_step"]) == target):
+        archive_relative = f"checkpoints/archive_step_{state['global_step']:08d}.pt"
+        archive_path = run_root / archive_relative
+        staged_training.save_staged_training_checkpoint(
+            state, archive_path
+        )
+        _fsync_existing_file(archive_path)
+        archive_checkpoint = {
+            "relative_path": archive_relative,
+            "file_sha256": _file_sha256(archive_path),
+        }
+    checkpoint_record = {
+        "relative_path": checkpoint_relative,
+        "file_sha256": checkpoint_sha,
     }
+    _commit_fault_injection_point("after_checkpoint")
+    reports = []
+    report_records = []
+    for offset, pending_payload in enumerate(pending_payloads):
+        report = _with_receipt(
+            {
+                **pending_payload,
+                "checkpoint": checkpoint_record,
+                "archive_checkpoint": (
+                    archive_checkpoint
+                    if offset + 1 == len(pending_payloads)
+                    else None
+                ),
+            }
+        )
+        report_relative = (
+            f"reports/attempt_{pending_payload['attempt_index']:08d}.json"
+        )
+        report_path = run_root / report_relative
+        _atomic_json(report_path, report)
+        reports.append(report)
+        report_records.append(
+            {
+                "relative_path": report_relative,
+                "file_sha256": _file_sha256(report_path),
+                "report_receipt_sha256": report["receipt_sha256"],
+            }
+        )
+        _commit_fault_injection_point("after_report")
+    _commit_fault_injection_point("after_reports")
     run_state_payload = {
         "schema_version": TRAINING_RUN_STATE_V3_SCHEMA,
         "run_id": manifest["run_id"],
         "run_manifest_receipt_sha256": manifest["receipt_sha256"],
-        "attempt_count": attempt_index + 1,
+        "attempt_count": attempt_index + len(pending_payloads),
         "applied_step_count": int(state["global_step"]),
-        "latest_checkpoint": {
-            "relative_path": checkpoint_relative,
-            "file_sha256": checkpoint_sha,
-        },
+        "latest_checkpoint": checkpoint_record,
         "committed_reports": [
             *old_run_state["committed_reports"],
-            report_record,
+            *report_records,
         ],
     }
     run_state = _with_receipt(run_state_payload)
     _atomic_json(run_root / "run_state.json", run_state)
+    _commit_fault_injection_point("after_run_state")
     context["run_state"] = run_state
-    return report
+    context["training_reports"].extend(reports)
+    return reports
 
 
 def _run_training_attempts_locked_v3(run_directory, max_attempts):
@@ -854,58 +979,96 @@ def _run_training_attempts_locked_v3(run_directory, max_attempts):
         dtype=torch.float32,
     )
     reports = []
+    pending_payloads = []
+    commit_interval = int(config["checkpoint_commit_interval_attempts"])
     for _ in range(max_attempts):
         step = int(context["training_state"]["global_step"])
         if step >= target:
             break
-        indices = _row_indices(
-            manifest["run_id"],
-            config["row_selection_seed"],
-            step,
-            context["cache_manifest"]["row_count"],
-            config["batch_size"],
-        )
-        rows = row_cache_v3.load_training_rows_v3(
-            manifest["cache"]["directory"],
-            indices,
-            expected_manifest_receipt_sha256=manifest["cache"][
-                "manifest_receipt_sha256"
-            ],
-        )
-        geometry = context["catalogue"]["support_geometry"]
-        full_batch = staged_training.model_ready_rows_v3(
-            rows,
-            context["catalogue"],
-            atlas,
-            origin_ap_dv_ml_um=geometry["origin_ap_dv_ml_um"],
-            voxel_size_ap_dv_ml_um=geometry["voxel_size_ap_dv_ml_um"],
-            support_origin_ap_dv_ml_um=geometry[
-                "support_origin_ap_dv_ml_um"
-            ],
-            axial_offsets_um=config["axial_offsets_um"],
-            axial_weights=config["axial_weights"],
-            device=manifest["execution_device"],
-            data_role=DEVELOPMENT_DATA_ROLE,
-        )
-        bank_root_seed = _hash_json(
-            {
-                "root_seed": str(config["candidate_bank_root_seed"]),
-                "run_id": manifest["run_id"],
-                "global_step": step,
-            }
-        )
-        batch = make_training_candidate_batch_v3(
-            full_batch,
-            context["catalogue"],
-            bank_size=int(config["candidate_bank_size"]),
-            root_seed=bank_root_seed,
-        )
-        if batch["catalogue_scope"] != TRAINING_CANDIDATE_BANK_SCOPE:
-            raise RuntimeError("production trainer must never reinterpret sampled banks as a posterior")
+        preparation_rng_state = staged_training._rng_state()
+        try:
+            indices = _row_indices(
+                manifest["run_id"],
+                config["row_selection_seed"],
+                step,
+                context["cache_manifest"]["row_count"],
+                config["batch_size"],
+            )
+            rows = row_cache_v3.load_training_rows_v3(
+                manifest["cache"]["directory"],
+                indices,
+                expected_manifest_receipt_sha256=manifest["cache"][
+                    "manifest_receipt_sha256"
+                ],
+            )
+            geometry = context["catalogue"]["support_geometry"]
+            full_batch = staged_training.model_ready_rows_v3(
+                rows,
+                context["catalogue"],
+                atlas,
+                origin_ap_dv_ml_um=geometry["origin_ap_dv_ml_um"],
+                voxel_size_ap_dv_ml_um=geometry["voxel_size_ap_dv_ml_um"],
+                support_origin_ap_dv_ml_um=geometry[
+                    "support_origin_ap_dv_ml_um"
+                ],
+                axial_offsets_um=config["axial_offsets_um"],
+                axial_weights=config["axial_weights"],
+                device=manifest["execution_device"],
+                data_role=DEVELOPMENT_DATA_ROLE,
+            )
+            bank_root_seed = _hash_json(
+                {
+                    "root_seed": str(config["candidate_bank_root_seed"]),
+                    "run_id": manifest["run_id"],
+                    "global_step": step,
+                }
+            )
+            batch = make_training_candidate_batch_v3(
+                full_batch,
+                context["catalogue"],
+                bank_size=int(config["candidate_bank_size"]),
+                root_seed=bank_root_seed,
+            )
+            if batch["catalogue_scope"] != TRAINING_CANDIDATE_BANK_SCOPE:
+                raise RuntimeError(
+                    "production trainer must never reinterpret sampled banks as a posterior"
+                )
+        except BaseException:
+            staged_training._restore_rng_state(preparation_rng_state)
+            reports.extend(_commit_attempt_batch(context, pending_payloads))
+            pending_payloads = []
+            raise
         train_report = staged_training.train_staged_step(
             context["training_state"], batch
         )
-        reports.append(_commit_attempt(context, train_report, indices, batch))
+        attempt_index = int(context["run_state"]["attempt_count"]) + len(
+            pending_payloads
+        )
+        pending_payloads.append(
+            _pending_attempt_payload(
+                context,
+                train_report,
+                indices,
+                batch,
+                attempt_index,
+            )
+        )
+        applied = bool(train_report["optimizer_step_applied"])
+        global_step = int(context["training_state"]["global_step"])
+        archive_interval = int(
+            config["archive_checkpoint_interval_applied_steps"]
+        )
+        archive_due = applied and (
+            global_step % archive_interval == 0 or global_step == target
+        )
+        if (
+            len(pending_payloads) >= commit_interval
+            or archive_due
+            or global_step >= target
+        ):
+            reports.extend(_commit_attempt_batch(context, pending_payloads))
+            pending_payloads = []
+    reports.extend(_commit_attempt_batch(context, pending_payloads))
     return reports
 
 

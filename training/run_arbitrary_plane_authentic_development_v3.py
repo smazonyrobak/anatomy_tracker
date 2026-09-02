@@ -86,6 +86,7 @@ RUNNER_CONFIG = {
     "axial_offsets_um": [0.0],
     "axial_weights": [1.0],
     "archive_checkpoint_interval_applied_steps": 250,
+    "checkpoint_commit_interval_attempts": 25,
 }
 
 

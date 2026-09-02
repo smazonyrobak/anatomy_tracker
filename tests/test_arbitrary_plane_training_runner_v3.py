@@ -47,6 +47,54 @@ def _prepared(tmp_path, target=2):
     return run, frozen, manifest, state
 
 
+def _shared_inputs(tmp_path):
+    cache = tmp_path / "shared-cache"
+    row_cache_v3.initialize_training_row_cache_v3(
+        cache,
+        generator_binding=fixture.generator_binding(),
+        generation_config={"row_count": 2, "plane_domain": "all brain-intersecting"},
+        seed_record={"root_seed": "0xabc", "subject_seed": "0xdef"},
+    )
+    row_cache_v3.append_training_rows_v3(cache, [fixture.row(0), fixture.row(1)])
+    row_cache_v3.freeze_training_row_cache_v3(cache)
+    atlas_source = tmp_path / "shared-allen-source.bin"
+    atlas_source.write_bytes(b"authenticated Allen source fixture")
+    return cache, atlas_source
+
+
+def _initialize_shared_run(
+    run,
+    cache,
+    atlas_source,
+    *,
+    target,
+    commit_interval,
+    archive_interval=100,
+):
+    config = fixture.runner_config(target)
+    config["archive_checkpoint_interval_applied_steps"] = archive_interval
+    config["checkpoint_commit_interval_attempts"] = commit_interval
+    return runner_v3.initialize_training_run_v3(
+        run,
+        cache_directory=cache,
+        expected_generator_binding=fixture.generator_binding(),
+        catalogue=fixture.catalogue(),
+        atlas_volume=fixture.atlas(),
+        atlas_source_assets=(
+            {
+                "path": str(atlas_source),
+                "role": "Allen template and annotation test asset",
+                "sha256": hashlib.sha256(atlas_source.read_bytes()).hexdigest(),
+            },
+        ),
+        atlas_preprocessing={"normalization": "fixed deterministic fixture"},
+        model_kwargs=fixture.model_kwargs(),
+        training_config=fixture.training_config(),
+        runner_config=config,
+        device="cpu",
+    )
+
+
 def test_runner_resumes_exact_conditional_training_with_atomic_reports(tmp_path):
     run, frozen, manifest, initial_state = _prepared(tmp_path, target=2)
     assert manifest["data_role"] == "development-training"
@@ -62,6 +110,8 @@ def test_runner_resumes_exact_conditional_training_with_atomic_reports(tmp_path)
     ]["pose_warmup_eligibility"]
     assert manifest["cache"]["manifest_receipt_sha256"] == frozen["receipt_sha256"]
     assert manifest["seed_record"]["model_initialization_seed"] == 173
+    assert manifest["runner_config"]["checkpoint_commit_interval_attempts"] == 25
+    assert manifest["training_commit_contract"]["per_attempt_reports_preserved"]
     assert initial_state["applied_step_count"] == 0
 
     first = runner_v3.run_training_attempts_v3(run, max_attempts=1)
@@ -103,6 +153,218 @@ def test_runner_resumes_exact_conditional_training_with_atomic_reports(tmp_path)
         "resume_slot_1.pt",
         "archive_step_00000002.pt",
     }
+
+
+def _checkpoint_sha(run):
+    context = runner_v3.load_training_run_v3(run)
+    return runner_v3._file_sha256(
+        context["run_root"]
+        / context["run_state"]["latest_checkpoint"]["relative_path"]
+    )
+
+
+@pytest.mark.parametrize(
+    "fault_point,committed_after_fault",
+    [
+        ("after_checkpoint", 0),
+        ("after_report", 0),
+        ("after_reports", 0),
+        ("after_run_state", 3),
+    ],
+)
+def test_atomic_batch_fault_boundaries_replay_only_uncommitted_attempts(
+    tmp_path, monkeypatch, fault_point, committed_after_fault
+):
+    cache, atlas_source = _shared_inputs(tmp_path)
+    baseline = tmp_path / "baseline"
+    interrupted = tmp_path / "interrupted"
+    _initialize_shared_run(
+        baseline,
+        cache,
+        atlas_source,
+        target=3,
+        commit_interval=3,
+    )
+    _initialize_shared_run(
+        interrupted,
+        cache,
+        atlas_source,
+        target=3,
+        commit_interval=3,
+    )
+    runner_v3.run_training_attempts_v3(baseline, max_attempts=3)
+
+    def fail(point):
+        if point == fault_point:
+            raise RuntimeError(f"simulated crash {point}")
+
+    monkeypatch.setattr(runner_v3, "_commit_fault_injection_point", fail)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        runner_v3.run_training_attempts_v3(interrupted, max_attempts=3)
+    assert runner_v3.load_training_run_v3(interrupted)["run_state"][
+        "attempt_count"
+    ] == committed_after_fault
+
+    monkeypatch.setattr(
+        runner_v3, "_commit_fault_injection_point", lambda point: None
+    )
+    runner_v3.run_training_attempts_v3(interrupted, max_attempts=3)
+    assert _checkpoint_sha(interrupted) == _checkpoint_sha(baseline)
+    complete = runner_v3.load_training_run_v3(interrupted)
+    assert complete["run_state"]["attempt_count"] == 3
+    assert len(complete["training_reports"]) == 3
+
+
+def test_interval_one_and_batched_commits_have_identical_final_artifact(
+    tmp_path, monkeypatch
+):
+    cache, atlas_source = _shared_inputs(tmp_path)
+    legacy = tmp_path / "legacy-interval-one"
+    batched = tmp_path / "batched-interval-25"
+    legacy_manifest, _ = _initialize_shared_run(
+        legacy,
+        cache,
+        atlas_source,
+        target=5,
+        commit_interval=1,
+    )
+    batched_manifest, _ = _initialize_shared_run(
+        batched,
+        cache,
+        atlas_source,
+        target=5,
+        commit_interval=25,
+    )
+    assert legacy_manifest["run_id"] == batched_manifest["run_id"]
+
+    saves = []
+    original_save = staged_v3.save_staged_training_checkpoint
+
+    def counted_save(state, path):
+        saves.append((str(path), int(state["global_step"])))
+        return original_save(state, path)
+
+    monkeypatch.setattr(staged_v3, "save_staged_training_checkpoint", counted_save)
+    legacy_reports = runner_v3.run_training_attempts_v3(legacy, max_attempts=5)
+    legacy_save_count = len(saves)
+    saves.clear()
+    batched_reports = runner_v3.run_training_attempts_v3(batched, max_attempts=5)
+    batched_save_count = len(saves)
+
+    assert legacy_save_count == 6
+    assert batched_save_count == 2
+    assert _checkpoint_sha(legacy) == _checkpoint_sha(batched)
+    assert len(
+        {
+            (report["checkpoint"]["relative_path"], report["checkpoint"]["file_sha256"])
+            for report in batched_reports
+        }
+    ) == 1
+    assert all(report["archive_checkpoint"] is None for report in batched_reports[:-1])
+    assert batched_reports[-1]["archive_checkpoint"] is not None
+    for legacy_report, batched_report in zip(legacy_reports, batched_reports):
+        excluded = {
+            "receipt_sha256",
+            "run_manifest_receipt_sha256",
+            "checkpoint",
+            "archive_checkpoint",
+        }
+        assert {
+            key: value
+            for key, value in legacy_report.items()
+            if key not in excluded
+        } == {
+            key: value
+            for key, value in batched_report.items()
+            if key not in excluded
+        }
+
+
+def test_archive_boundaries_flush_pending_reports_exactly(tmp_path, monkeypatch):
+    cache, atlas_source = _shared_inputs(tmp_path)
+    run = tmp_path / "archive-boundaries"
+    _initialize_shared_run(
+        run,
+        cache,
+        atlas_source,
+        target=5,
+        commit_interval=25,
+        archive_interval=2,
+    )
+    saves = []
+    original_save = staged_v3.save_staged_training_checkpoint
+
+    def counted_save(state, path):
+        saves.append((str(path), int(state["global_step"])))
+        return original_save(state, path)
+
+    monkeypatch.setattr(staged_v3, "save_staged_training_checkpoint", counted_save)
+    reports = runner_v3.run_training_attempts_v3(run, max_attempts=5)
+    resume_steps = [
+        step for path, step in saves if "resume_slot_" in path
+    ]
+    archive_steps = [
+        step for path, step in saves if "archive_step_" in path
+    ]
+    assert resume_steps == [2, 4, 5]
+    assert archive_steps == [2, 4, 5]
+    assert [
+        index
+        for index, report in enumerate(reports)
+        if report["archive_checkpoint"] is not None
+    ] == [1, 3, 4]
+    checkpoint_groups = [
+        (report["checkpoint"]["relative_path"], report["checkpoint"]["file_sha256"])
+        for report in reports
+    ]
+    assert checkpoint_groups[0] == checkpoint_groups[1]
+    assert checkpoint_groups[2] == checkpoint_groups[3]
+    assert checkpoint_groups[1] != checkpoint_groups[2]
+    assert checkpoint_groups[3] != checkpoint_groups[4]
+    assert runner_v3.load_training_run_v3(run)["run_state"]["attempt_count"] == 5
+
+
+def test_safe_preupdate_exception_flushes_successful_pending_attempts(
+    tmp_path, monkeypatch
+):
+    cache, atlas_source = _shared_inputs(tmp_path)
+    baseline = tmp_path / "safe-exception-baseline"
+    run = tmp_path / "safe-exception"
+    _initialize_shared_run(
+        baseline,
+        cache,
+        atlas_source,
+        target=4,
+        commit_interval=25,
+    )
+    _initialize_shared_run(
+        run,
+        cache,
+        atlas_source,
+        target=4,
+        commit_interval=25,
+    )
+    runner_v3.run_training_attempts_v3(baseline, max_attempts=2)
+    original = runner_v3.make_training_candidate_batch_v3
+    calls = 0
+
+    def fail_before_third_update(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            torch.rand(1)
+            raise RuntimeError("pre-update fixture failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        runner_v3, "make_training_candidate_batch_v3", fail_before_third_update
+    )
+    with pytest.raises(RuntimeError, match="pre-update fixture failure"):
+        runner_v3.run_training_attempts_v3(run, max_attempts=4)
+    recovered = runner_v3.load_training_run_v3(run)
+    assert recovered["run_state"]["attempt_count"] == 2
+    assert recovered["run_state"]["applied_step_count"] == 2
+    assert _checkpoint_sha(run) == _checkpoint_sha(baseline)
 
 
 def test_runner_detects_persisted_input_and_report_tampering(tmp_path):

@@ -1388,7 +1388,10 @@ def save_staged_training_checkpoint(state, path):
         },
     }
     temporary = target.with_suffix(target.suffix + ".tmp")
-    torch.save(checkpoint, temporary)
+    with temporary.open("wb") as handle:
+        torch.save(checkpoint, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temporary, target)
     return target
 
