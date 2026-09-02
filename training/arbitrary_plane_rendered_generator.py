@@ -1358,16 +1358,6 @@ def verify_finite_arbitrary_plane_render(
         {key: value for key, value in geometry.items() if key != "geometry_sha256"}
     ):
         raise ValueError("Finite-render geometry hash does not match")
-    reconstructed_geometry = _finite_plane_raster_geometry_trusted(
-        np.asarray(geometry["normal_rp2_ap_dv_ml"], dtype=np.float64),
-        float(geometry["signed_offset_um"]),
-        float(geometry["roll_rad"]),
-        support_index,
-        tuple(geometry["output_shape_h_w"]),
-        tuple(geometry["margin_u_v_um"]),
-    )
-    if geometry != reconstructed_geometry:
-        raise ValueError("Finite-render geometry does not replay from pose and support")
     effective_arrays = effective_renderer_sampling_arrays(
         geometry,
         tuple(int(value) for value in support_index["annotation_shape"]),
@@ -1454,6 +1444,7 @@ def verify_finite_arbitrary_plane_render(
     ):
         raise ValueError("Finite-render sample/rejection eligibility config is invalid")
     root_seed = _parse_seed_hex(artifact["root_seed"])
+    accepted = int(artifact["accepted_attempt_index"])
     for attempt_index, attempt in enumerate(attempts):
         field_seeds = {
             field: _derived_seed(
@@ -1488,7 +1479,19 @@ def verify_finite_arbitrary_plane_render(
         }
         if any(attempt[key] != value for key, value in expected_attempt_pose.items()):
             raise ValueError("Finite-render attempt pose does not replay from seed and support")
-    accepted = int(artifact["accepted_attempt_index"])
+        if attempt_index == accepted:
+            replayed_geometry = _finite_plane_raster_geometry_trusted(
+                normal,
+                offset,
+                roll,
+                support_index,
+                tuple(geometry["output_shape_h_w"]),
+                tuple(geometry["margin_u_v_um"]),
+            )
+            if geometry != replayed_geometry:
+                raise ValueError(
+                    "Finite-render geometry does not replay exactly from its authenticated seed"
+                )
     if accepted != 0 or not attempts[accepted]["accepted"]:
         raise ValueError("Finite-render accepted attempt is inconsistent")
     accepted_attempt = attempts[accepted]
@@ -1523,12 +1526,6 @@ def verify_finite_arbitrary_plane_render(
         for attempt in attempts
     ):
         raise ValueError("Finite-render attempt acceptance predicate is inconsistent")
-    if (
-        accepted_attempt["normal_rp2_ap_dv_ml"] != geometry["normal_rp2_ap_dv_ml"]
-        or accepted_attempt["signed_offset_um"] != geometry["signed_offset_um"]
-        or accepted_attempt["roll_rad"] != geometry["roll_rad"]
-    ):
-        raise ValueError("Finite-render accepted pose does not match installed geometry")
     plane_identity = {
         "schema": "anatomy-tracker.finite-plane-realization/v1",
         "sampler_algorithm": FINITE_RENDER_ALGORITHM,

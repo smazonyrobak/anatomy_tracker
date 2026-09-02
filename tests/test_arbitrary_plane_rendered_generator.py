@@ -259,6 +259,60 @@ def test_render_is_replayable_hash_bound_json_receipted_and_model_independent():
         verify_finite_arbitrary_plane_render(tampered, support)
 
 
+def test_verifier_replays_geometry_from_authenticated_seed_not_rounded_pose():
+    template, annotation, support = _volumes()
+    artifact = _make(template, annotation, support, sample_index=22)
+    geometry = artifact["geometry"]
+    rounded_pose_replay = rendered._finite_plane_raster_geometry_trusted(
+        np.asarray(geometry["normal_rp2_ap_dv_ml"], dtype=np.float64),
+        float(geometry["signed_offset_um"]),
+        float(geometry["roll_rad"]),
+        support,
+        tuple(geometry["output_shape_h_w"]),
+        tuple(geometry["margin_u_v_um"]),
+    )
+
+    assert geometry != rounded_pose_replay
+    assert geometry["signed_offset_um"] - rounded_pose_replay["signed_offset_um"] == np.spacing(
+        np.float64(geometry["signed_offset_um"])
+    )
+    verify_finite_arbitrary_plane_render(artifact, support)
+
+    changed = copy.deepcopy(artifact)
+    changed["geometry"] = rounded_pose_replay
+    accepted = changed["accepted_attempt_index"]
+    changed["rejection_attempts"][accepted]["geometry_sha256"] = rounded_pose_replay[
+        "geometry_sha256"
+    ]
+    changed["rejection_attempts_sha256"] = rendered._payload_sha256(
+        changed["rejection_attempts"]
+    )
+    changed["finite_plane_geometry_sha256"] = rendered._payload_sha256(
+        {
+            "schema": "anatomy-tracker.finite-plane-geometry/v1",
+            "plane_realization_id": changed["plane_realization_id"],
+            "geometry_sha256": rounded_pose_replay["geometry_sha256"],
+        }
+    )
+    effective_receipts = changed["rendered_artifacts_receipt"][
+        "effective_sampling_array_receipts"
+    ]
+    for key in effective_receipts:
+        effective_receipts[key] = rounded_pose_replay["array_receipts"][key]
+    changed["rendered_artifacts_sha256"] = rendered._payload_sha256(
+        changed["rendered_artifacts_receipt"]
+    )
+    changed["finite_plane_render_id"] = rendered._payload_sha256(
+        rendered._finite_render_identity(changed)
+    )
+    changed["finite_render_receipt_sha256"] = rendered._payload_sha256(
+        rendered._receipt_payload(changed)
+    )
+
+    with pytest.raises(ValueError, match="authenticated seed"):
+        verify_finite_arbitrary_plane_render(changed, support)
+
+
 def test_plane_and_finite_identifier_layers_have_distinct_dependencies():
     template, annotation, support = _volumes()
     first = _make(template, annotation, support, output_shape=(47, 53), margin_um=(5.0, 7.0))
