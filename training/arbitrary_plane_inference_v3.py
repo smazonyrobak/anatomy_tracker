@@ -15,6 +15,7 @@ from types import MappingProxyType
 import torch
 
 import training.arbitrary_plane_catalogue_v3 as catalogue_v3
+import training.arbitrary_plane_psf_v4 as psf_v4
 from training.arbitrary_plane_joint_model import ArbitraryPlaneJointModel
 from training.arbitrary_plane_recurrent_model import (
     _VERIFIED_CATALOGUE_FEATURE_CACHE_TOKEN,
@@ -32,6 +33,9 @@ from training.arbitrary_plane_uncertainty_v3 import (
 CHECKPOINT_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-joint-checkpoint/v3"
 INFERENCE_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-inference/v3"
 INFERENCE_CONTRACT_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-inference-contract/v3"
+RUNTIME_INFERENCE_CONTRACT_V4_SCHEMA = (
+    "anatomy-tracker.arbitrary-plane-runtime-inference-contract/v4"
+)
 ATLAS_SEMANTICS_V3_SCHEMA = "anatomy-tracker.atlas-semantics/v3"
 CATALOGUE_FEATURE_CACHE_V3_SCHEMA = (
     "anatomy-tracker.complete-catalogue-atlas-feature-cache/v3"
@@ -49,6 +53,7 @@ INFERENCE_SOURCE_FILES = (
     "training/arbitrary_plane_joint_model.py",
     "training/arbitrary_plane_acquisition_v2.py",
     "training/arbitrary_plane_catalogue_v3.py",
+    "training/arbitrary_plane_psf_v4.py",
     "training/arbitrary_plane_uncertainty_v3.py",
     "training/arbitrary_plane_staged_training.py",
     "training/arbitrary_plane_inference_v3.py",
@@ -67,6 +72,11 @@ FEATURE_RECIPE_V3 = {
     "photometric_contract": "raw color/dtype conversion is upstream and must yield one scalar brightfield channel in [0,1]; 0-255 floats are invalid",
     "spatial_recipe": "input is already placed on the immutable catalogue canonical H-W canvas; inference performs no resize, crop, or segmentation",
     "external_or_legacy_feature_dependencies": [],
+}
+CHECKPOINT_FINITE_PSF_CAPABILITY_SCOPE_V4 = {
+    "schedule_scope": "caller-explicit-known-thickness-at-session-or-cache-creation",
+    "normalization": psf_v4.NORMALIZATION,
+    "unknown_thickness_policy": "reject",
 }
 _MODEL_KEYS = {
     name
@@ -278,13 +288,23 @@ def make_inference_contract_v3(
     *,
     atlas_semantics,
     annotation_volume_ap_dv_ml=None,
+    finite_psf_capability=None,
 ):
     """Bind immutable atlas assets, geometry, feature recipe, and finite PSF."""
     atlas = torch.as_tensor(atlas_volume_c_ap_dv_ml)
     origin = torch.as_tensor(origin_ap_dv_ml_um, dtype=torch.float64).cpu()
     spacing = torch.as_tensor(voxel_size_ap_dv_ml_um, dtype=torch.float64).cpu()
-    offsets = torch.as_tensor(axial_offsets_um, dtype=torch.float64).cpu()
-    weights = torch.as_tensor(axial_weights, dtype=torch.float64).cpu()
+    capability_bound = finite_psf_capability is not None
+    if capability_bound:
+        psf_v4.verify_finite_psf_model_capability_v4(finite_psf_capability)
+        if axial_offsets_um is not None or axial_weights is not None:
+            raise ValueError(
+                "v4 checkpoints bind PSF capability only; exact schedules belong to sessions and caches"
+            )
+        offsets = weights = None
+    else:
+        offsets = torch.as_tensor(axial_offsets_um, dtype=torch.float64).cpu()
+        weights = torch.as_tensor(axial_weights, dtype=torch.float64).cpu()
     annotation = (
         None
         if annotation_volume_ap_dv_ml is None
@@ -302,7 +322,7 @@ def make_inference_contract_v3(
         or bool((spacing <= 0.0).any())
     ):
         raise ValueError("atlas contract requires a finite C-AP-DV-ML asset and physical geometry")
-    if (
+    if not capability_bound and (
         offsets.ndim != 1
         or weights.shape != offsets.shape
         or offsets.numel() < 1
@@ -336,14 +356,20 @@ def make_inference_contract_v3(
         },
         "atlas_semantics": _json(atlas_semantics),
         "feature_recipe": dict(FEATURE_RECIPE_V3),
-        "finite_psf": {
-            "axial_offsets_um": offsets.tolist(),
-            "axial_weights": weights.tolist(),
-            "axial_offsets_receipt": _tensor_receipt(offsets),
-            "axial_weights_receipt": _tensor_receipt(weights),
-            "normalization": "positive symmetric discrete unit mass",
-        },
+        "finite_psf": (
+            dict(CHECKPOINT_FINITE_PSF_CAPABILITY_SCOPE_V4)
+            if capability_bound
+            else {
+                "axial_offsets_um": offsets.tolist(),
+                "axial_weights": weights.tolist(),
+                "axial_offsets_receipt": _tensor_receipt(offsets),
+                "axial_weights_receipt": _tensor_receipt(weights),
+                "normalization": "positive symmetric discrete unit mass",
+            }
+        ),
     }
+    if capability_bound:
+        payload["finite_psf_capability"] = _json(finite_psf_capability)
     return {**payload, "receipt_sha256": _sha(payload)}
 
 
@@ -391,6 +417,43 @@ def verify_inference_contract_v3(contract):
             set(annotation_receipt["sha256"].lower()) - set("0123456789abcdef")
         )
     )
+    capability = contract.get("finite_psf_capability")
+    if capability is None:
+        schedule_valid = (
+            "finite_psf_capability" not in contract
+            and "finite_psf_runtime_contract" not in contract
+            and offsets.ndim == 1
+            and offsets.numel() > 0
+            and weights.shape == offsets.shape
+            and bool(torch.isfinite(offsets).all())
+            and bool(torch.isfinite(weights).all())
+            and bool((weights > 0.0).all())
+            and torch.allclose(
+                weights.sum(),
+                torch.ones((), dtype=weights.dtype),
+                atol=1e-12,
+                rtol=1e-12,
+            )
+            and torch.allclose(
+                offsets, -offsets.flip(0), atol=1e-12, rtol=1e-12
+            )
+            and torch.allclose(
+                weights, weights.flip(0), atol=1e-12, rtol=1e-12
+            )
+            and psf.get("axial_offsets_receipt") == _tensor_receipt(offsets)
+            and psf.get("axial_weights_receipt") == _tensor_receipt(weights)
+            and psf.get("normalization")
+            == "positive symmetric discrete unit mass"
+        )
+    else:
+        try:
+            psf_v4.verify_finite_psf_model_capability_v4(capability)
+            schedule_valid = (
+                psf == CHECKPOINT_FINITE_PSF_CAPABILITY_SCOPE_V4
+                and "finite_psf_runtime_contract" not in contract
+            )
+        except (TypeError, ValueError):
+            schedule_valid = False
     valid = (
         contract.get("schema_version") == INFERENCE_CONTRACT_V3_SCHEMA
         and contract.get("feature_recipe") == FEATURE_RECIPE_V3
@@ -402,18 +465,7 @@ def verify_inference_contract_v3(contract):
         and semantics_valid
         and torch.as_tensor(geometry.get("origin_ap_dv_ml_um", ())).shape == (3,)
         and torch.as_tensor(geometry.get("voxel_size_ap_dv_ml_um", ())).shape == (3,)
-        and offsets.ndim == 1
-        and offsets.numel() > 0
-        and weights.shape == offsets.shape
-        and bool(torch.isfinite(offsets).all())
-        and bool(torch.isfinite(weights).all())
-        and bool((weights > 0.0).all())
-        and torch.allclose(weights.sum(), torch.ones((), dtype=weights.dtype), atol=1e-12, rtol=1e-12)
-        and torch.allclose(offsets, -offsets.flip(0), atol=1e-12, rtol=1e-12)
-        and torch.allclose(weights, weights.flip(0), atol=1e-12, rtol=1e-12)
-        and psf.get("axial_offsets_receipt") == _tensor_receipt(offsets)
-        and psf.get("axial_weights_receipt") == _tensor_receipt(weights)
-        and psf.get("normalization") == "positive symmetric discrete unit mass"
+        and schedule_valid
         and contract.get("receipt_sha256") == _sha(payload)
     )
     if not valid:
@@ -424,6 +476,47 @@ def verify_inference_contract_v3(contract):
         (spacing <= 0.0).any()
     ):
         raise ValueError("atlas geometry in the inference contract is invalid")
+    return True
+
+
+def make_runtime_inference_contract_v4(
+    checkpoint_inference_contract,
+    axial_offsets_um,
+    axial_weights,
+):
+    verify_inference_contract_v3(checkpoint_inference_contract)
+    capability = checkpoint_inference_contract.get("finite_psf_capability")
+    if capability is None:
+        raise ValueError("v4 runtime contracts require a capability-bound checkpoint")
+    runtime_psf = psf_v4.runtime_schedule_contract_v4(
+        axial_offsets_um,
+        axial_weights,
+        capability=capability,
+    )
+    payload = {
+        "schema_version": RUNTIME_INFERENCE_CONTRACT_V4_SCHEMA,
+        "checkpoint_inference_contract": _json(checkpoint_inference_contract),
+        "finite_psf_capability_receipt_sha256": capability["receipt_sha256"],
+        "finite_psf_runtime_contract": runtime_psf,
+    }
+    return {**payload, "receipt_sha256": _sha(payload)}
+
+
+def verify_runtime_inference_contract_v4(
+    runtime_contract,
+    checkpoint_inference_contract,
+):
+    expected = make_runtime_inference_contract_v4(
+        checkpoint_inference_contract,
+        runtime_contract.get("finite_psf_runtime_contract", {}).get(
+            "axial_offsets_um", ()
+        ),
+        runtime_contract.get("finite_psf_runtime_contract", {}).get(
+            "axial_weights", ()
+        ),
+    )
+    if runtime_contract != expected:
+        raise ValueError("runtime inference PSF or checkpoint binding changed")
     return True
 
 
@@ -590,6 +683,10 @@ def make_arbitrary_plane_joint_checkpoint_v3(
         model_state_sha256=model_state_sha256,
         require_source_file=True,
     )
+    if training_receipt.get("binding", {}).get("finite_psf_capability") != (
+        inference_contract.get("finite_psf_capability")
+    ):
+        raise ValueError("training and inference finite-PSF capabilities differ")
     binding_payload = {
         "schema_version": CHECKPOINT_V3_SCHEMA,
         "architecture_name": ARCHITECTURE_NAME,
@@ -711,6 +808,10 @@ def verify_arbitrary_plane_joint_checkpoint_v3(checkpoint, catalogue):
         model_state_sha256=checkpoint["model_state_sha256"],
         require_source_file=False,
     )
+    if checkpoint["training_receipt"].get("binding", {}).get(
+        "finite_psf_capability"
+    ) != inference_contract.get("finite_psf_capability"):
+        raise ValueError("checkpoint finite-PSF capability differs from training")
     if checkpoint.get("calibration_receipt") is not None:
         verify_temperature_calibration_receipt_v3(
             checkpoint["calibration_receipt"],
@@ -801,8 +902,37 @@ def _catalogue_feature_cache_payload_v3(
     retrieval_shape_h_w,
     build_chunk_size,
     atlas_features_receipt,
+    finite_psf_runtime_contract=None,
 ):
     shape = atlas_features_receipt["shape"]
+    render_recipe = {
+        "retrieval_shape_h_w": list(retrieval_shape_h_w),
+        "raster_support_geometry": _json(catalogue["support_geometry"]),
+        "representation_affine_receipt": catalogue["array_receipts"][
+            "representation_to_canonical_raster_affine_float64"
+        ],
+        "rendering": "finite-thickness atlas render followed by the frozen atlas stem and shared encoder",
+        "source_resize": "bilinear align_corners=False before histology encoding; atlas renders are produced directly at retrieval size",
+        "tensor_layout": "canonical_cell,representation,feature_channel,encoded_h,encoded_w; contiguous row-major",
+        "tensor_dtype": atlas_features_receipt["dtype"],
+        "tensor_shape": shape,
+        "build_chunk_size": int(build_chunk_size),
+    }
+    if "finite_psf_capability" in loaded["inference_contract"]:
+        psf_v4.verify_runtime_schedule_contract_v4(
+            finite_psf_runtime_contract,
+            loaded["inference_contract"]["finite_psf_capability"],
+        )
+        render_recipe["finite_psf_capability"] = loaded["inference_contract"][
+            "finite_psf_capability"
+        ]
+        render_recipe["finite_psf_runtime_contract"] = finite_psf_runtime_contract
+    else:
+        if finite_psf_runtime_contract is not None:
+            raise ValueError("v3 feature caches cannot add a v4 runtime PSF")
+        render_recipe["finite_thickness_psf"] = loaded["inference_contract"][
+            "finite_psf"
+        ]
     return {
         "schema_version": CATALOGUE_FEATURE_CACHE_V3_SCHEMA,
         "feature_origin": {
@@ -827,20 +957,7 @@ def _catalogue_feature_cache_payload_v3(
             "cell_id_receipt": catalogue["array_receipts"]["cell_id_int64"],
         },
         "atlas_inference_contract": loaded["inference_contract"],
-        "render_and_storage_recipe": {
-            "retrieval_shape_h_w": list(retrieval_shape_h_w),
-            "finite_thickness_psf": loaded["inference_contract"]["finite_psf"],
-            "raster_support_geometry": _json(catalogue["support_geometry"]),
-            "representation_affine_receipt": catalogue["array_receipts"][
-                "representation_to_canonical_raster_affine_float64"
-            ],
-            "rendering": "finite-thickness atlas render followed by the frozen atlas stem and shared encoder",
-            "source_resize": "bilinear align_corners=False before histology encoding; atlas renders are produced directly at retrieval size",
-            "tensor_layout": "canonical_cell,representation,feature_channel,encoded_h,encoded_w; contiguous row-major",
-            "tensor_dtype": atlas_features_receipt["dtype"],
-            "tensor_shape": shape,
-            "build_chunk_size": int(build_chunk_size),
-        },
+        "render_and_storage_recipe": render_recipe,
         "complete_coverage": {
             "cell_id_min": 0,
             "cell_id_max": int(catalogue["counts"]["cell_count"]) - 1,
@@ -878,6 +995,7 @@ def _verify_catalogue_feature_cache_contents_v3(
         recipe.get("retrieval_shape_h_w", ()),
         recipe.get("build_chunk_size", 0),
         feature_receipt,
+        recipe.get("finite_psf_runtime_contract"),
     )
     expected_cells = int(catalogue["counts"]["cell_count"])
     expected_representations = int(catalogue["counts"]["representation_count"])
@@ -971,17 +1089,26 @@ def make_arbitrary_plane_catalogue_feature_cache_v3(
         or build_chunk_size < 1
     ):
         raise ValueError("cache retrieval shape and build chunk size are invalid")
-    runtime_contract = make_inference_contract_v3(
+    capability = loaded["inference_contract"].get("finite_psf_capability")
+    checkpoint_contract = make_inference_contract_v3(
         atlas_volume_c_ap_dv_ml,
         origin_ap_dv_ml_um,
         voxel_size_ap_dv_ml_um,
-        axial_offsets_um,
-        axial_weights,
+        None if capability is not None else axial_offsets_um,
+        None if capability is not None else axial_weights,
         atlas_semantics=loaded["inference_contract"]["atlas_semantics"],
         annotation_volume_ap_dv_ml=annotation_volume_ap_dv_ml,
+        finite_psf_capability=capability,
     )
-    if runtime_contract != loaded["inference_contract"]:
+    if checkpoint_contract != loaded["inference_contract"]:
         raise ValueError("cache atlas assets, geometry, semantics, or PSF do not match checkpoint")
+    finite_psf_runtime_contract = None
+    if capability is not None:
+        finite_psf_runtime_contract = make_runtime_inference_contract_v4(
+            checkpoint_contract,
+            axial_offsets_um,
+            axial_weights,
+        )["finite_psf_runtime_contract"]
     output = Path(cache_output_path).resolve()
     if output.drive.upper() != "I:" or output.exists():
         raise ValueError("catalogue feature caches require a new file path on the I: drive")
@@ -1040,6 +1167,7 @@ def make_arbitrary_plane_catalogue_feature_cache_v3(
         tuple(int(value) for value in retrieval_shape_h_w),
         int(build_chunk_size),
         feature_receipt,
+        finite_psf_runtime_contract,
     )
     artifact = {
         "cache_receipt": {**payload, "cache_id": _sha(payload)},
@@ -1178,19 +1306,30 @@ def _make_arbitrary_plane_inference_session_v3(
     else:
         model = _verify_loaded_checkpoint_runtime_v3(loaded, catalogue)
     inference_contract = loaded["inference_contract"]
-    runtime_contract = make_inference_contract_v3(
+    capability = inference_contract.get("finite_psf_capability")
+    checkpoint_contract = make_inference_contract_v3(
         atlas_volume_c_ap_dv_ml,
         origin_ap_dv_ml_um,
         voxel_size_ap_dv_ml_um,
-        axial_offsets_um,
-        axial_weights,
+        None if capability is not None else axial_offsets_um,
+        None if capability is not None else axial_weights,
         atlas_semantics=inference_contract["atlas_semantics"],
         annotation_volume_ap_dv_ml=annotation_volume_ap_dv_ml,
+        finite_psf_capability=capability,
     )
-    if runtime_contract != inference_contract:
+    if checkpoint_contract != inference_contract:
         raise ValueError(
             "runtime atlas assets, geometry, feature recipe, or PSF do not match checkpoint"
         )
+    runtime_contract = (
+        make_runtime_inference_contract_v4(
+            checkpoint_contract,
+            axial_offsets_um,
+            axial_weights,
+        )
+        if capability is not None
+        else checkpoint_contract
+    )
     parameter = next(model.parameters())
     device, model_dtype = parameter.device, parameter.dtype
     atlas = torch.as_tensor(
@@ -1236,6 +1375,12 @@ def _make_arbitrary_plane_inference_session_v3(
             model,
             verify_file_binding=not feature_cache_fresh,
         )
+        if capability is not None and feature_cache["cache_receipt"][
+            "render_and_storage_recipe"
+        ].get("finite_psf_runtime_contract") != runtime_contract[
+            "finite_psf_runtime_contract"
+        ]:
+            raise ValueError("catalogue feature cache runtime PSF differs from session")
     cache_binding = None
     sealed_feature_cache = None
     if feature_cache is not None:
@@ -1330,7 +1475,8 @@ def _make_arbitrary_plane_inference_session_v3(
             "calibration_receipt": _freeze(loaded["calibration_receipt"])
             if loaded.get("calibration_receipt") is not None
             else None,
-            "inference_contract": _freeze(runtime_contract),
+            "inference_contract": _freeze(inference_contract),
+            "runtime_inference_contract": _freeze(runtime_contract),
             "model_executable_contract": _freeze(
                 loaded["model_executable_contract"]
             ),
@@ -1477,7 +1623,7 @@ def run_arbitrary_plane_inference_session_v3(
     model = session["model"]
     device, model_dtype = session["device"], session["model_dtype"]
     inference_contract = session["inference_contract"]
-    runtime_contract = _json(inference_contract)
+    runtime_contract = _json(session["runtime_inference_contract"])
     atlas = session["atlas"]
     tensors = session["catalogue_tensors"]
     raw_image = _validate_raw_inference_input_v3(input_b3hw)

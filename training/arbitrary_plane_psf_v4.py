@@ -44,6 +44,41 @@ FINITE_PSF_KEYS = {
     "finite_psf_sha256",
 }
 ROW_PSF_KEYS = FINITE_PSF_KEYS | {"slab_observation_v4_receipt_sha256"}
+TRAINING_ROW_V4_KEYS = {
+    "schema_version",
+    "source_observation_receipt_sha256",
+    "lineage",
+    "upstream_reference",
+    "numeric_rng_provenance",
+    "rng_sources",
+    "selected_mode",
+    "selected_descendant_id",
+    "deformation_pose_gauge_reference",
+    "reflection_state",
+    "reflection_representation_index",
+    "reflection_representation_affine_xy_float64",
+    "canonical_effective_quicknii_ouv_float64",
+    "observed_effective_quicknii_ouv_float64",
+    "proper_physical_pose_unchanged",
+    "prior_model_dependencies",
+    "prior_feature_dependencies",
+    "prior_pseudolabel_dependencies",
+    "reflection_transform_id",
+    "reflection_realization_id",
+    "paired_view_group_id",
+    "synthetic_realization_id",
+    "paired_mode_reflected_receipts",
+    "arrays",
+    "array_receipts",
+    "training_row_id",
+    "finite_psf_contract",
+    "receipt_sha256",
+}
+PREFINAL_TRAINING_ROW_V4_KEYS = TRAINING_ROW_V4_KEYS - {
+    "training_row_id",
+    "finite_psf_contract",
+    "receipt_sha256",
+}
 
 
 def _valid_sha256(value):
@@ -252,15 +287,8 @@ def finalize_training_row_v4(
     arrays = row_like.get("arrays", {})
     upstream = row_like.get("upstream_reference", {})
     if (
-        row_like.get("schema_version") != TRAINING_ROW_V4_SCHEMA
-        or any(
-            key in row_like
-            for key in (
-                "finite_psf_contract",
-                "training_row_id",
-                "receipt_sha256",
-            )
-        )
+        set(row_like) != PREFINAL_TRAINING_ROW_V4_KEYS
+        or row_like.get("schema_version") != TRAINING_ROW_V4_SCHEMA
         or set(arrays) != training_row_v3._ARRAY_KEYS
         or row_like.get("array_receipts")
         != {
@@ -343,7 +371,8 @@ def verify_training_row_v4(row, *, capability=None):
         == contract.get("finite_psf_capability_sha256")
     )
     if (
-        row.get("schema_version") != TRAINING_ROW_V4_SCHEMA
+        set(row) != TRAINING_ROW_V4_KEYS
+        or row.get("schema_version") != TRAINING_ROW_V4_SCHEMA
         or set(arrays) != training_row_v3._ARRAY_KEYS
         or row.get("array_receipts")
         != {

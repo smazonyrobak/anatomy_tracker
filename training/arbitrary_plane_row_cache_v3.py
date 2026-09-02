@@ -12,6 +12,7 @@ import numpy as np
 import training.arbitrary_plane_acquisition_v2 as acquisition_v2
 import training.arbitrary_plane_deformation_gauge_v3 as deformation_gauge_v3
 import training.arbitrary_plane_deformation_gauge_v4 as deformation_gauge_v4
+import training.arbitrary_plane_psf_v4 as psf_v4
 import training.arbitrary_plane_training_row_v3 as training_row_v3
 
 
@@ -699,9 +700,24 @@ def verify_cached_training_row_v3(row, *, expected_geometry_gauge_contract=None)
         for name, value in expected_geometry_gauge_contract.items()
     ):
         raise ValueError("training row uses a stale or mismatched deformation-pose gauge")
+    schema = row.get("schema_version")
+    if schema == training_row_v3.TRAINING_ROW_V3_SCHEMA:
+        row_receipt_valid = row.get("receipt_sha256") == acquisition_v2._payload_sha256(
+            training_row_v3.training_row_receipt_v3(row)
+        )
+    elif schema == psf_v4.TRAINING_ROW_V4_SCHEMA:
+        try:
+            psf_v4.verify_training_row_v4(
+                row,
+                capability=psf_v4.finite_psf_model_capability_v4(),
+            )
+            row_receipt_valid = True
+        except (KeyError, TypeError, ValueError):
+            row_receipt_valid = False
+    else:
+        row_receipt_valid = False
     if (
-        row.get("schema_version") != training_row_v3.TRAINING_ROW_V3_SCHEMA
-        or any(token in split for token in FORBIDDEN_SPLIT_TOKENS)
+        any(token in split for token in FORBIDDEN_SPLIT_TOKENS)
         or any(name not in lineage or lineage[name] in (None, "") for name in required_lineage)
         or any(
             row.get(name) != []
@@ -717,8 +733,7 @@ def verify_cached_training_row_v3(row, *, expected_geometry_gauge_contract=None)
             name: acquisition_v2._array_receipt(value)
             for name, value in row.get("arrays", {}).items()
         }
-        or row.get("receipt_sha256")
-        != acquisition_v2._payload_sha256(training_row_v3.training_row_receipt_v3(row))
+        or not row_receipt_valid
     ):
         raise ValueError("training row is unauthenticated, non-development, or learned-dependent")
     return True
@@ -1084,8 +1099,19 @@ def audit_training_row_cache_v3(cache_directory):
         and manifest["row_count"] != composite_contract["total_row_count"]
     ):
         raise ValueError("composite cache component counts differ from the declaration")
+    row_schemas = set()
+    finite_psf_render_modes = set()
+    finite_psf_axial_sample_counts = set()
     for record in manifest["rows"]:
         row = _load_record(root, record, geometry_gauge_contract)
+        row_schemas.add(row["schema_version"])
+        if row["schema_version"] == psf_v4.TRAINING_ROW_V4_SCHEMA:
+            finite_psf_render_modes.add(
+                row["finite_psf_contract"]["render_mode"]
+            )
+            finite_psf_axial_sample_counts.add(
+                row["finite_psf_contract"]["axial_sample_count"]
+            )
         if composite_contract is not None:
             expected = _composite_row_receipts_v3(
                 row, record["row_index"], composite_contract
@@ -1101,6 +1127,11 @@ def audit_training_row_cache_v3(cache_directory):
         "all_rows_authenticated": True,
         "learned_dependencies": [],
         "data_role": DEVELOPMENT_DATA_ROLE,
+        "training_row_schema_versions": sorted(row_schemas),
+        "finite_psf_render_modes": sorted(finite_psf_render_modes),
+        "finite_psf_axial_sample_counts": sorted(
+            finite_psf_axial_sample_counts
+        ),
     }
 
 

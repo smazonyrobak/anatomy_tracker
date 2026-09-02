@@ -191,14 +191,22 @@ def _dataset_provenance(context, training_receipt, latest_checkpoint_path):
         "atlas_binding_receipt_sha256": manifest["atlas"]["binding"][
             "receipt_sha256"
         ],
-        "finite_psf_contract_receipt_sha256": manifest["finite_psf_contract"][
-            "receipt_sha256"
-        ],
         "runner_source_sha256": _plain(manifest["runner_source_sha256"]),
         "prior_model_weight_dependencies": [],
         "prior_feature_dependencies": [],
         "prior_pseudolabel_dependencies": [],
     }
+    if "finite_psf_capability" in manifest:
+        payload["finite_psf_capability"] = _plain(
+            manifest["finite_psf_capability"]
+        )
+        payload["finite_psf_training_schedule_source"] = _plain(
+            manifest["finite_psf_training_schedule_source"]
+        )
+    else:
+        payload["finite_psf_contract_receipt_sha256"] = manifest[
+            "finite_psf_contract"
+        ]["receipt_sha256"]
     return {**payload, "receipt_sha256": _sha(payload)}
 
 
@@ -312,15 +320,22 @@ def export_training_run_to_inference_checkpoint_v3(
             atlas_semantics, manifest["atlas"]["binding"]
         )
         geometry = context["catalogue"]["support_geometry"]
-        psf = manifest["finite_psf_contract"]
+        capability = manifest.get("finite_psf_capability")
+        if capability is None:
+            psf = manifest["finite_psf_contract"]
+            offsets = psf["axial_offsets_um"]
+            weights = psf["axial_weights"]
+        else:
+            offsets = weights = None
         inference_contract = inference_v3.make_inference_contract_v3(
             context["atlas_volume"],
             geometry["origin_ap_dv_ml_um"],
             geometry["voxel_size_ap_dv_ml_um"],
-            psf["axial_offsets_um"],
-            psf["axial_weights"],
+            offsets,
+            weights,
             atlas_semantics=atlas_semantics,
             annotation_volume_ap_dv_ml=annotation_volume_ap_dv_ml,
+            finite_psf_capability=capability,
         )
         provenance = _make_provenance(
             context, training_receipt, latest_checkpoint_path

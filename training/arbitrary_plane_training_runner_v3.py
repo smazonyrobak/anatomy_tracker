@@ -15,6 +15,7 @@ import torch
 
 import training.arbitrary_plane_acquisition_v2 as acquisition_v2
 import training.arbitrary_plane_catalogue_v3 as catalogue_v3
+import training.arbitrary_plane_psf_v4 as psf_v4
 import training.arbitrary_plane_row_cache_v3 as row_cache_v3
 import training.arbitrary_plane_staged_training as staged_training
 from training.arbitrary_plane_joint_model import ArbitraryPlaneJointModel
@@ -32,6 +33,9 @@ TRAINING_COMMIT_CONTRACT_V3_SCHEMA = (
 )
 ATLAS_BINDING_V3_SCHEMA = "anatomy-tracker.arbitrary-plane-atlas-binding/v3"
 FINITE_PSF_CONTRACT_V3_SCHEMA = "anatomy-tracker.finite-psf-training-contract/v3"
+FINITE_PSF_TRAINING_SOURCE_V4_SCHEMA = (
+    "anatomy-tracker.finite-psf-training-schedule-source/v4"
+)
 ROW_SAMPLING_POLICY_V3_SCHEMA = (
     "anatomy-tracker.frozen-cache-row-sampling-policy/v3"
 )
@@ -49,6 +53,7 @@ RUNNER_CONFIG_KEYS = {
     "checkpoint_commit_interval_attempts",
 }
 RUNNER_SOURCE_FILES = (
+    "training/arbitrary_plane_psf_v4.py",
     "training/arbitrary_plane_row_cache_v3.py",
     "training/arbitrary_plane_training_runner_v3.py",
 )
@@ -302,6 +307,47 @@ def _finite_psf_contract(config):
     return {**payload, "receipt_sha256": _hash_json(payload)}
 
 
+def _per_row_finite_psf_training_source(
+    cache_manifest,
+    capability,
+    render_mode,
+    axial_sample_count,
+):
+    psf_v4.verify_finite_psf_model_capability_v4(capability)
+    allowed_sample_counts = {
+        "finite_boxcar": psf_v4.PRODUCTION_AXIAL_SAMPLE_COUNT,
+        "centre_plane_ablation": 1,
+    }
+    if (
+        render_mode not in allowed_sample_counts
+        or not isinstance(axial_sample_count, int)
+        or isinstance(axial_sample_count, bool)
+        or axial_sample_count != allowed_sample_counts[render_mode]
+    ):
+        raise ValueError("v4 run PSF render mode or sample count is unsupported")
+    payload = {
+        "schema_version": FINITE_PSF_TRAINING_SOURCE_V4_SCHEMA,
+        "schedule_source": "authenticated-per-row",
+        "training_row_schema_version": psf_v4.TRAINING_ROW_V4_SCHEMA,
+        "training_row_contract_field": "finite_psf_contract",
+        "render_mode": render_mode,
+        "row_schedule_shape": [axial_sample_count],
+        "finite_psf_capability_receipt_sha256": capability[
+            "receipt_sha256"
+        ],
+        "frozen_cache_manifest_receipt_sha256": cache_manifest[
+            "receipt_sha256"
+        ],
+        "per_row_receipt_binding": (
+            "each ordered cache training_row_receipt_sha256 authenticates its exact "
+            "finite_psf_contract and slab_observation_v4_receipt_sha256"
+        ),
+        "global_schedule_fallback": None,
+        "unknown_thickness_policy": "reject",
+    }
+    return {**payload, "receipt_sha256": _hash_json(payload)}
+
+
 def _row_sampling_policy(cache_manifest, runner_config, training_config):
     payload = {
         "schema_version": ROW_SAMPLING_POLICY_V3_SCHEMA,
@@ -369,6 +415,7 @@ def _validate_runner_config(
     pose_warmup_steps,
     refinement_steps,
     joint_pose_only_steps,
+    per_row_finite_psf=False,
 ):
     config = _plain(config)
     config.setdefault(
@@ -414,18 +461,29 @@ def _validate_runner_config(
         or not isinstance(config["checkpoint_commit_interval_attempts"], int)
         or isinstance(config["checkpoint_commit_interval_attempts"], bool)
         or config["checkpoint_commit_interval_attempts"] < 1
-        or offsets.ndim != 1
-        or weights.shape != offsets.shape
-        or offsets.size < 1
-        or not np.isfinite(offsets).all()
-        or not np.isfinite(weights).all()
-        or np.any(weights <= 0.0)
-        or not math.isclose(float(weights.sum()), 1.0, rel_tol=0.0, abs_tol=1e-7)
-        or not np.allclose(
-            offsets, -offsets[::-1], rtol=0.0, atol=offset_tolerance
+        or (
+            per_row_finite_psf
+            and (offsets.ndim != 1 or weights.ndim != 1 or offsets.size or weights.size)
         )
-        or not np.allclose(
-            weights, weights[::-1], rtol=0.0, atol=weight_tolerance
+        or (
+            not per_row_finite_psf
+            and (
+                offsets.ndim != 1
+                or weights.shape != offsets.shape
+                or offsets.size < 1
+                or not np.isfinite(offsets).all()
+                or not np.isfinite(weights).all()
+                or np.any(weights <= 0.0)
+                or not math.isclose(
+                    float(weights.sum()), 1.0, rel_tol=0.0, abs_tol=1e-7
+                )
+                or not np.allclose(
+                    offsets, -offsets[::-1], rtol=0.0, atol=offset_tolerance
+                )
+                or not np.allclose(
+                    weights, weights[::-1], rtol=0.0, atol=weight_tolerance
+                )
+            )
         )
     ):
         raise ValueError("runner config must specify bounded conditional training and normalized PSF weights")
@@ -518,6 +576,7 @@ def initialize_training_run_v3(
     training_config,
     runner_config,
     device="cuda",
+    finite_psf_capability=None,
 ):
     """Freeze all inputs and create a fresh random initialization checkpoint."""
     run_root = _i_path(run_directory)
@@ -530,7 +589,25 @@ def initialize_training_run_v3(
     )
     if cache_manifest["status"] != row_cache_v3.FROZEN_CACHE_STATUS or cache_manifest["row_count"] < 1:
         raise ValueError("training requires a nonempty, fully audited frozen row cache")
-    row_cache_v3.audit_training_row_cache_v3(cache_root)
+    cache_audit = row_cache_v3.audit_training_row_cache_v3(cache_root)
+    expected_row_schema = (
+        psf_v4.TRAINING_ROW_V4_SCHEMA
+        if finite_psf_capability is not None
+        else "anatomy-tracker.arbitrary-plane-training-row/v3"
+    )
+    if cache_audit.get("training_row_schema_versions") != [expected_row_schema]:
+        raise ValueError("frozen cache row PSF capability differs from the runner")
+    finite_psf_render_mode = None
+    finite_psf_axial_sample_count = None
+    if finite_psf_capability is not None:
+        modes = cache_audit.get("finite_psf_render_modes")
+        sample_counts = cache_audit.get("finite_psf_axial_sample_counts")
+        if len(modes or ()) != 1 or len(sample_counts or ()) != 1:
+            raise ValueError(
+                "one v4 run/cache must use one PSF render mode and sample count"
+            )
+        finite_psf_render_mode = modes[0]
+        finite_psf_axial_sample_count = sample_counts[0]
     _verify_catalogue(catalogue)
     runner_config = _validate_runner_config(
         runner_config,
@@ -540,7 +617,10 @@ def initialize_training_run_v3(
         pose_warmup_steps=training_config.get("pose_warmup_steps"),
         refinement_steps=training_config.get("refinement_steps"),
         joint_pose_only_steps=training_config.get("joint_pose_only_steps"),
+        per_row_finite_psf=finite_psf_capability is not None,
     )
+    if finite_psf_capability is not None:
+        psf_v4.verify_finite_psf_model_capability_v4(finite_psf_capability)
     atlas = np.ascontiguousarray(_tensor_to_numpy(atlas_volume), dtype=np.float32)
     atlas_binding = make_atlas_binding_v3(
         atlas,
@@ -564,6 +644,7 @@ def initialize_training_run_v3(
         catalogue_cell_count=int(catalogue["counts"]["cell_count"]),
         generator_ids=cache_manifest["generator_binding"]["generator_ids"],
         device=device,
+        finite_psf_capability=finite_psf_capability,
     )
     core = {
         "schema_version": TRAINING_RUN_V3_SCHEMA,
@@ -586,7 +667,6 @@ def initialize_training_run_v3(
         "model_kwargs": _plain(model_kwargs),
         "training_config": _plain(training_config),
         "runner_config": runner_config,
-        "finite_psf_contract": _finite_psf_contract(runner_config),
         "row_sampling_policy": _row_sampling_policy(
             cache_manifest, runner_config, training_config
         ),
@@ -610,6 +690,18 @@ def initialize_training_run_v3(
         "prior_feature_dependencies": [],
         "prior_pseudolabel_dependencies": [],
     }
+    if finite_psf_capability is not None:
+        core["finite_psf_capability"] = _plain(finite_psf_capability)
+        core["finite_psf_training_schedule_source"] = (
+            _per_row_finite_psf_training_source(
+                cache_manifest,
+                finite_psf_capability,
+                finite_psf_render_mode,
+                finite_psf_axial_sample_count,
+            )
+        )
+    else:
+        core["finite_psf_contract"] = _finite_psf_contract(runner_config)
     core["run_id"] = _hash_json(
         {
             "domain": TRAINING_RUN_V3_SCHEMA,
@@ -656,8 +748,6 @@ def _load_manifest(run_root):
         )
         or payload.get("data_role") != DEVELOPMENT_DATA_ROLE
         or payload.get("retrieval_scope") != TRAINING_CANDIDATE_BANK_SCOPE
-        or payload.get("finite_psf_contract")
-        != _finite_psf_contract(payload.get("runner_config", {}))
         or payload.get("runner_source_sha256") != _source_receipts()
         or any(
             payload.get(name) != []
@@ -669,11 +759,64 @@ def _load_manifest(run_root):
         )
     ):
         raise ValueError("training-run manifest failed authentication")
+    capability = payload.get("finite_psf_capability")
+    if capability is None:
+        if (
+            "finite_psf_capability" in payload
+            or "finite_psf_training_schedule_source" in payload
+            or payload.get("staged_training_binding", {}).get(
+                "finite_psf_capability"
+            )
+            is not None
+            or payload.get("finite_psf_contract")
+            != _finite_psf_contract(payload.get("runner_config", {}))
+        ):
+            raise ValueError("legacy training run has an incomplete PSF capability binding")
+    else:
+        psf_v4.verify_finite_psf_model_capability_v4(capability)
+        _validate_runner_config(
+            payload["runner_config"],
+            catalogue_cell_count=int(payload["catalogue"]["catalogue_cell_count"]),
+            cache_row_count=int(payload["cache"]["row_count"]),
+            training_top_k=payload["training_config"].get("top_k"),
+            pose_warmup_steps=payload["training_config"].get("pose_warmup_steps"),
+            refinement_steps=payload["training_config"].get("refinement_steps"),
+            joint_pose_only_steps=payload["training_config"].get(
+                "joint_pose_only_steps"
+            ),
+            per_row_finite_psf=True,
+        )
+        if "finite_psf_contract" in payload:
+            raise ValueError("v4 training manifest must not bind one global PSF schedule")
+        if payload.get("staged_training_binding", {}).get(
+            "finite_psf_capability"
+        ) != capability:
+            raise ValueError("staged trainer finite-PSF capability differs")
     cache = payload["cache"]
     cache_manifest = row_cache_v3.load_training_row_cache_manifest_v3(
         cache["directory"],
         expected_receipt_sha256=cache["manifest_receipt_sha256"],
     )
+    expected_finite_psf_training_source = None
+    if capability is not None:
+        finite_psf_training_source = payload.get(
+            "finite_psf_training_schedule_source"
+        )
+        schedule_shape = (
+            finite_psf_training_source.get("row_schedule_shape")
+            if isinstance(finite_psf_training_source, dict)
+            else None
+        )
+        if not isinstance(schedule_shape, list) or len(schedule_shape) != 1:
+            raise ValueError("v4 training schedule source binding is missing")
+        expected_finite_psf_training_source = (
+            _per_row_finite_psf_training_source(
+                cache_manifest,
+                capability,
+                finite_psf_training_source.get("render_mode"),
+                schedule_shape[0],
+            )
+        )
     if (
         cache_manifest["status"] != row_cache_v3.FROZEN_CACHE_STATUS
         or cache_manifest["row_count"] != cache["row_count"]
@@ -687,6 +830,11 @@ def _load_manifest(run_root):
         )
         or payload.get("training_commit_contract")
         != _training_commit_contract(payload.get("runner_config", {}))
+        or (
+            capability is not None
+            and payload.get("finite_psf_training_schedule_source")
+            != expected_finite_psf_training_source
+        )
     ):
         raise ValueError("training-run frozen cache binding differs")
     return manifest, cache_manifest
@@ -1015,6 +1163,7 @@ def _run_training_attempts_locked_v3(run_directory, max_attempts):
                 axial_weights=config["axial_weights"],
                 device=manifest["execution_device"],
                 data_role=DEVELOPMENT_DATA_ROLE,
+                finite_psf_capability=manifest.get("finite_psf_capability"),
             )
             bank_root_seed = _hash_json(
                 {

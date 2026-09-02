@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+import training.arbitrary_plane_psf_v4 as psf_v4
 from training.arbitrary_plane_full_frame_primitives import (
     full_frame_state_from_components,
     full_frame_state_to_components,
@@ -53,7 +54,19 @@ def training_row_to_tensors_v3(
     origin_ap_dv_ml_um,
     voxel_size_ap_dv_ml_um,
     device=None,
+    finite_psf_capability=None,
 ):
+    row_schema = row.get("schema_version")
+    if row_schema == psf_v4.TRAINING_ROW_V4_SCHEMA:
+        if finite_psf_capability is None:
+            raise ValueError("v4 training rows require an explicit finite-PSF capability")
+        row_psf = psf_v4.schedule_tensors_from_training_row_v4(
+            row, capability=finite_psf_capability
+        )
+    elif row_schema in (None, "anatomy-tracker.arbitrary-plane-training-row/v3"):
+        row_psf = None
+    else:
+        raise ValueError("only authenticated v3 or v4 training rows are accepted")
     arrays = row["arrays"]
     channels = torch.from_numpy(
         np.asarray(arrays["model_input_channels_float32"])
@@ -109,6 +122,28 @@ def training_row_to_tensors_v3(
         "truth_pullback_map_yx_px": pullback,
         "deformation_weight": loss_weight,
     }
+    if row_psf is not None:
+        tensors.update(
+            {
+                "axial_offsets_um": torch.from_numpy(
+                    row_psf["axial_offsets_um"]
+                )[None],
+                "axial_weights": torch.from_numpy(row_psf["axial_weights"])[None],
+            }
+        )
+    provenance = {
+        "training_row_id": row["training_row_id"],
+        "synthetic_realization_id": row["synthetic_realization_id"],
+        "animal_id": row["lineage"]["animal_id"],
+        "specimen_id": row["lineage"]["specimen_id"],
+        "experiment_id": row["lineage"]["experiment_id"],
+        "selected_mode": row["selected_mode"],
+        "reflection_state": row["reflection_state"],
+        "point_pose_supervision_identifiable": bool(pose_weight),
+        "dense_deformation_supervision_identifiable": bool(dense_weight),
+    }
+    if row_psf is not None:
+        provenance["finite_psf_contract"] = row["finite_psf_contract"]
     return {
         "tensors": {
             name: value.to(device=device, dtype=torch.float32)
@@ -116,17 +151,7 @@ def training_row_to_tensors_v3(
             else value.to(device=device)
             for name, value in tensors.items()
         },
-        "provenance": {
-            "training_row_id": row["training_row_id"],
-            "synthetic_realization_id": row["synthetic_realization_id"],
-            "animal_id": row["lineage"]["animal_id"],
-            "specimen_id": row["lineage"]["specimen_id"],
-            "experiment_id": row["lineage"]["experiment_id"],
-            "selected_mode": row["selected_mode"],
-            "reflection_state": row["reflection_state"],
-            "point_pose_supervision_identifiable": bool(pose_weight),
-            "dense_deformation_supervision_identifiable": bool(dense_weight),
-        },
+        "provenance": provenance,
     }
 
 

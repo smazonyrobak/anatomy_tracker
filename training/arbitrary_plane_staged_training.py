@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 import training.arbitrary_plane_acquisition_v2 as acquisition_v2
+import training.arbitrary_plane_psf_v4 as psf_v4
 import training.arbitrary_plane_training_row_v3 as training_row_v3
 from training.arbitrary_plane_batch_v3 import (
     nearest_catalogue_cell_v3,
@@ -49,6 +50,7 @@ SOURCE_FILES = (
     "training/arbitrary_plane_joint_loss.py",
     "training/arbitrary_plane_catalogue_v3.py",
     "training/arbitrary_plane_batch_v3.py",
+    "training/arbitrary_plane_psf_v4.py",
     "training/arbitrary_plane_training_bank_v3.py",
     "training/arbitrary_plane_training_row_v3.py",
     "training/arbitrary_plane_staged_training.py",
@@ -168,7 +170,7 @@ def _development_split(split):
 
 def _row_identity(row):
     lineage = row["lineage"]
-    return {
+    identity = {
         "training_row_id": row["training_row_id"],
         "training_row_receipt_sha256": row["receipt_sha256"],
         "synthetic_realization_id": row["synthetic_realization_id"],
@@ -179,6 +181,19 @@ def _row_identity(row):
         "section_id": lineage["section_id"],
         "split": lineage["split"],
     }
+    if row.get("schema_version") == psf_v4.TRAINING_ROW_V4_SCHEMA:
+        contract = row["finite_psf_contract"]
+        identity["finite_psf"] = {
+            "finite_psf_sha256": contract["finite_psf_sha256"],
+            "slab_observation_v4_receipt_sha256": contract[
+                "slab_observation_v4_receipt_sha256"
+            ],
+            "render_mode": contract["render_mode"],
+            "nominal_cut_thickness_um": contract[
+                "nominal_cut_thickness_um"
+            ],
+        }
+    return identity
 
 
 def model_ready_rows_v3(
@@ -193,6 +208,7 @@ def model_ready_rows_v3(
     axial_weights,
     device="cpu",
     data_role=DEVELOPMENT_DATA_ROLE,
+    finite_psf_capability=None,
 ):
     """Convert authenticated v3 rows and a fixed catalogue to model/loss tensors."""
     if data_role != DEVELOPMENT_DATA_ROLE:
@@ -223,9 +239,28 @@ def model_ready_rows_v3(
         )
     ):
         raise ValueError("atlas physical geometry differs from the catalogue")
+    row_schemas = {row.get("schema_version") for row in rows}
+    if len(row_schemas) != 1:
+        raise ValueError("one model-ready batch cannot mix v3 and v4 PSF row contracts")
+    row_schema = next(iter(row_schemas), None)
+    if finite_psf_capability is not None:
+        psf_v4.verify_finite_psf_model_capability_v4(finite_psf_capability)
+        if np.asarray(axial_offsets_um).size or np.asarray(axial_weights).size:
+            raise ValueError(
+                "v4 training schedules come only from authenticated rows; global PSF arrays must be empty"
+            )
     for row in rows:
-        if row.get("schema_version") != "anatomy-tracker.arbitrary-plane-training-row/v3":
-            raise ValueError("only provenance-bound v3 training rows are accepted")
+        if row_schema == psf_v4.TRAINING_ROW_V4_SCHEMA:
+            if finite_psf_capability is None:
+                raise ValueError("v4 rows require a checkpoint-bound finite-PSF capability")
+            psf_v4.verify_training_row_v4(
+                row, capability=finite_psf_capability
+            )
+        elif row_schema == training_row_v3.TRAINING_ROW_V3_SCHEMA:
+            if finite_psf_capability is not None:
+                raise ValueError("v3 rows cannot be reinterpreted as per-row PSF rows")
+        else:
+            raise ValueError("only provenance-bound v3 or v4 training rows are accepted")
         _development_split(row["lineage"]["split"])
         if any(
             row.get(name) != []
@@ -236,7 +271,7 @@ def model_ready_rows_v3(
             )
         ):
             raise ValueError("v3 rows must not contain learned dependencies")
-        if (
+        if row_schema == training_row_v3.TRAINING_ROW_V3_SCHEMA and (
             row.get("array_receipts")
             != {
                 name: acquisition_v2._array_receipt(value)
@@ -248,6 +283,18 @@ def model_ready_rows_v3(
             )
         ):
             raise ValueError("v3 training-row receipt or arrays changed")
+    if row_schema == psf_v4.TRAINING_ROW_V4_SCHEMA:
+        schedule_signatures = {
+            (
+                row["finite_psf_contract"]["render_mode"],
+                row["finite_psf_contract"]["axial_sample_count"],
+            )
+            for row in rows
+        }
+        if len(schedule_signatures) != 1:
+            raise ValueError(
+                "one v4 batch must use one render mode and axial sample count"
+            )
     target_device = torch.device(device)
     atlas = torch.as_tensor(atlas_volume, device=target_device, dtype=torch.float32)
     if tuple(atlas.shape[-3:]) != tuple(geometry["support_mask_receipt"]["shape"]):
@@ -259,6 +306,7 @@ def model_ready_rows_v3(
             origin_ap_dv_ml_um=origin_ap_dv_ml_um,
             voxel_size_ap_dv_ml_um=voxel_size_ap_dv_ml_um,
             device=target_device,
+            finite_psf_capability=finite_psf_capability,
         )["tensors"]
         for row in rows
     ]
@@ -286,6 +334,16 @@ def model_ready_rows_v3(
     if not torch.equal(truth_catalogue_cell_id, truth_catalogue_cell_index):
         raise RuntimeError("canonical catalogue source-index and cell-ID contracts diverged")
     expand = lambda value: torch.as_tensor(value, device=target_device, dtype=atlas.dtype)
+    axial_offsets = (
+        torch.cat([item["axial_offsets_um"] for item in converted])
+        if row_schema == psf_v4.TRAINING_ROW_V4_SCHEMA
+        else expand(axial_offsets_um)
+    )
+    axial_weight_tensor = (
+        torch.cat([item["axial_weights"] for item in converted])
+        if row_schema == psf_v4.TRAINING_ROW_V4_SCHEMA
+        else expand(axial_weights)
+    )
     return {
         "data_role": data_role,
         "catalogue_id": catalogue["catalogue_id"],
@@ -312,8 +370,8 @@ def model_ready_rows_v3(
         "origin_ap_dv_ml_um": tuple(origin_ap_dv_ml_um),
         "voxel_size_ap_dv_ml_um": tuple(voxel_size_ap_dv_ml_um),
         "support_origin_ap_dv_ml_um": tuple(support_origin_ap_dv_ml_um),
-        "axial_offsets_um": expand(axial_offsets_um),
-        "axial_weights": expand(axial_weights),
+        "axial_offsets_um": axial_offsets,
+        "axial_weights": axial_weight_tensor,
         "truth_state": truth_state,
         "pose_supervision_weight": torch.cat(
             [item["pose_supervision_weight"] for item in converted]
@@ -345,6 +403,7 @@ def initialize_staged_training(
     catalogue_cell_count,
     generator_ids,
     device="cuda",
+    finite_psf_capability=None,
 ):
     """Fresh random initialization; learned dependency inputs do not exist."""
     config = dict(training_config)
@@ -376,6 +435,8 @@ def initialize_staged_training(
     seed = int(config["seed"])
     target_device = torch.device(device)
     generator_ids = tuple(str(value) for value in generator_ids)
+    if finite_psf_capability is not None:
+        psf_v4.verify_finite_psf_model_capability_v4(finite_psf_capability)
     if (
         not str(catalogue_id)
         or not str(catalogue_receipt_sha256)
@@ -415,6 +476,8 @@ def initialize_staged_training(
         "prior_feature_dependencies": [],
         "prior_pseudolabel_dependencies": [],
     }
+    if finite_psf_capability is not None:
+        binding["finite_psf_capability"] = _json(finite_psf_capability)
     initial_hash = _state_sha256(model)
     return {
         "model": model,
@@ -868,6 +931,10 @@ def verify_staged_training_checkpoint_payload_v3(
         raise ValueError("checkpoint source/config/catalogue/generator binding differs")
     if binding.get("source_sha256") != _source_receipts():
         raise ValueError("checkpoint source hashes differ from the running code")
+    if "finite_psf_capability" in binding:
+        psf_v4.verify_finite_psf_model_capability_v4(
+            binding["finite_psf_capability"]
+        )
     dependencies = checkpoint.get("learned_dependency_arrays")
     if dependencies != {
         "prior_model_weights": [],
@@ -929,6 +996,7 @@ def verify_staged_training_checkpoint_payload_v3(
                 catalogue_cell_count=binding["catalogue_cell_count"],
                 generator_ids=binding["generator_ids"],
                 device="cpu",
+                finite_psf_capability=binding.get("finite_psf_capability"),
             )
             if replay["initialization_receipt"] != initialization:
                 raise ValueError("fresh initialization receipt does not replay")
@@ -1336,6 +1404,13 @@ def verify_staged_training_export_receipt_v3(
             )
         )
     )
+    if valid and "finite_psf_capability" in binding:
+        try:
+            psf_v4.verify_finite_psf_model_capability_v4(
+                binding["finite_psf_capability"]
+            )
+        except (TypeError, ValueError):
+            valid = False
     if valid and require_source_file:
         try:
             target = _checkpoint_path(receipt["staged_checkpoint_path"])
@@ -1439,6 +1514,7 @@ def load_staged_training_checkpoint(
         catalogue_cell_count=binding["catalogue_cell_count"],
         generator_ids=binding["generator_ids"],
         device=device,
+        finite_psf_capability=binding.get("finite_psf_capability"),
     )
     if state["initialization_receipt"] != checkpoint["initialization_receipt"]:
         raise ValueError("fresh initialization receipt does not replay")
