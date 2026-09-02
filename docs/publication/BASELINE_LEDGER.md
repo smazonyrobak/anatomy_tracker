@@ -1049,3 +1049,33 @@ frozen run remains untouched and will not be resumed. A numerically stable
 loss and finite-gradient regression must precede a newly identified pilot.
 Exact receipts, hashes and the negative gate are recorded in
 `publication/arbitrary_plane_v4_zero_thickness_pilot_failure.yaml`.
+
+### First finite-thickness S=9 engineering smoke
+
+The receipt-bound smoke from commit
+`89bcac192a4a8d3ac456693e3c759b2c9f53e963` authenticated and retained all
+24 training rows and all 12 animal-disjoint internal-development rows. The
+partitions have zero overlap in animal, specimen, experiment, section and
+synthetic-animal identifiers. Each partition evenly covers raw/no-brush,
+exact-black-exterior and imperfect-smart-brush inputs. Every row carries the
+production nine-sample finite-boxcar PSF with global unit mass, the fixed
+`[1,2,2,2,2,2,2,2,1]` integer masses, a 25--100 micrometre thickness policy,
+and an observed axial step below 12.5 micrometres.
+
+The exact 24-update target completed in 32 attempts. Eight AMP overflow
+attempts were safely skipped while the loss scale reduced from 65,536 to 256;
+the authenticated report ledger contains no non-finite numeric value. The v4
+run loader and export verifier both passed, binding checkpoint SHA-256
+`4887c8328cc6ad84ff4be21d3105f32a45489106f05c1e606bcb07938d3bc7cd`
+to export receipt
+`77a40efbe66965a1dac6dd213126a1d76c6ae6c174cf1c0c9b73738d1376ff6e`.
+This is an engineering **PASS**, not a model-performance result.
+
+Scientific quality remains **NOT ESTABLISHED**: there are no
+internal-development predictions or calibration results, and truth was absent
+from the selected top-k on every applied update while refinement was
+truth-forced on every update. The next gate is a new bounded, receipt-bound
+finite S=9 pilot followed by complete animal-disjoint internal-development
+prediction and uncalibrated pose/deformation, retrieval and failure audits.
+Exact evidence is recorded in
+`publication/arbitrary_plane_finite_v4_smoke_result.yaml`.
