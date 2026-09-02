@@ -111,6 +111,18 @@ _LOADED_DEPENDENCY_SOURCE_SHA256 = {
 }
 
 
+def _validate_live_prepared_context_assets(context: dict[str, object]) -> None:
+    parent_generator._validate_prepared_context(context)
+    asset_receipt = context["asset_receipt"]
+    if (
+        _array_sha256(context["scalar_tensor"].numpy())
+        != asset_receipt["scalar_conversion"]["array_sha256"]
+        or _array_sha256(context["annotation_tensor"].numpy())
+        != asset_receipt["annotation_decoded"]["array_sha256"]
+    ):
+        raise ValueError("Prepared finite-render context authenticated bytes changed")
+
+
 def finite_psf_capability_v4() -> dict[str, object]:
     return psf_v4.finite_psf_model_capability_v4()
 
@@ -641,7 +653,7 @@ def make_finite_slab_render_v4(
     parent_generator_source_commit: str | None = None,
 ) -> dict[str, object]:
     """Create a standalone authenticated slab observation without redrawing pose."""
-    parent_generator._validate_prepared_context(prepared_context)
+    _validate_live_prepared_context_assets(prepared_context)
     support = prepared_context["support_index"]
     verify_finite_arbitrary_plane_render(
         parent,
@@ -823,7 +835,7 @@ def verify_finite_slab_render_v4(
         or artifact["algorithm"] != FINITE_SLAB_V4_ALGORITHM
     ):
         raise ValueError("Unsupported finite-slab schema or algorithm")
-    parent_generator._validate_prepared_context(prepared_context)
+    _validate_live_prepared_context_assets(prepared_context)
     support = prepared_context["support_index"]
     verify_finite_arbitrary_plane_render(
         parent,

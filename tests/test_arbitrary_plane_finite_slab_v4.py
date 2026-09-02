@@ -190,6 +190,50 @@ def test_adapter_replays_binds_provenance_and_never_mutates_or_redraws_parent():
         slab.verify_finite_slab_render_v4(result, wrong_parent, context)
 
 
+@pytest.mark.parametrize("tensor_name", ["scalar_tensor", "annotation_tensor"])
+def test_numpy_alias_byte_mutation_is_rejected_before_rendering(monkeypatch, tensor_name):
+    _, _, _, context = _context()
+    parent = _parent(context)
+    tensor = context[tensor_name]
+    original_version = tensor._version
+    tensor.numpy().reshape(-1)[0] += 1
+    assert tensor._version == original_version
+
+    monkeypatch.setattr(
+        slab,
+        "_render_samples",
+        lambda *args, **kwargs: pytest.fail("renderer ran before live asset authentication"),
+    )
+    with pytest.raises(ValueError, match="authenticated bytes changed"):
+        slab.make_finite_slab_render_v4(
+            parent,
+            context,
+            nominal_cut_thickness_um=55.0,
+        )
+
+
+def test_numpy_alias_byte_mutation_is_rejected_before_replay_rendering(monkeypatch):
+    _, _, _, context = _context()
+    parent = _parent(context)
+    result = slab.make_finite_slab_render_v4(
+        parent,
+        context,
+        nominal_cut_thickness_um=55.0,
+    )
+    tensor = context["scalar_tensor"]
+    original_version = tensor._version
+    tensor.numpy().reshape(-1)[0] += 1.0
+    assert tensor._version == original_version
+
+    monkeypatch.setattr(
+        slab,
+        "_render_samples",
+        lambda *args, **kwargs: pytest.fail("replay renderer ran before live asset authentication"),
+    )
+    with pytest.raises(ValueError, match="authenticated bytes changed"):
+        slab.replay_finite_slab_render_v4(result, parent, context)
+
+
 def test_thickness_seed_is_independent_of_parent_pose_and_changes_only_descendant():
     _, _, _, context = _context()
     parent_a = _parent(context, seed=111, sample_index=3)
