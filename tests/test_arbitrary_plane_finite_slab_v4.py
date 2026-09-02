@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import training.arbitrary_plane_finite_slab_v4 as slab
+import training.arbitrary_plane_psf_v4 as psf_v4
 from training.arbitrary_plane_full_frame_primitives import (
     full_frame_state_from_components,
     render_finite_thickness_plane,
@@ -81,6 +82,11 @@ def test_fixed_s9_psf_and_reducer_are_exact_v2_parity(thickness_um):
         thickness_um,
         thickness_selection_sha256=selection["thickness_selection_sha256"],
     )
+    assert actual == psf_v4.make_finite_psf_schedule_v4(
+        slab.FINITE_BOXCAR,
+        thickness_um,
+        thickness_selection_sha256=selection["thickness_selection_sha256"],
+    )
     expected = finite_boxcar_kernel(
         "finite_boxcar",
         thickness_um,
@@ -121,6 +127,7 @@ def test_fixed_s9_psf_and_reducer_are_exact_v2_parity(thickness_um):
 
 def test_capability_hash_is_shared_exact_random_init_contract():
     capability = slab.finite_psf_capability_v4()
+    assert capability == psf_v4.finite_psf_model_capability_v4()
     assert capability["receipt_sha256"] == (
         "bcd6441a685e902fb5b59e85bb7003ef3261207d906a0b9390d4a219c3ae3d3e"
     )
