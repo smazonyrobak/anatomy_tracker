@@ -3168,15 +3168,16 @@ def session_points_to_volume(
     """Lift fixed-raster x/y to Allen AP/DV/ML voxels, preserving full O/U/V.
 
     O/U/V are absolute CCF physical micrometres, not QuickNII RAS coordinates.
-    Pixel (x,y) maps to O+(x/W)U+(y/H)V, matching the joint renderer. The
-    installed tracker atlas has 25-um isotropic voxels and physical origin zero.
+    Pixel (x,y) maps to O+(x/W)U+(y/H)V, matching the joint renderer.
+    The training atlas uses 25-um isotropic voxels with voxel-face origin zero;
+    index zero has physical centre 12.5 um, so physical-to-index subtracts 0.5.
     Explicit legacy pose arguments are used only when no full-plane state exists.
     """
     points = np.asarray(points_xy, dtype=np.float64).reshape(-1, 2)
     if session.atlas_ouv_ap_dv_ml_um is not None:
         origin, edge_u, edge_v = np.asarray(session.atlas_ouv_ap_dv_ml_um, dtype=np.float64).reshape(3, 3)
         height, width = session.atlas_raster_shape_h_w
-        return (origin + points[:, :1] * edge_u / width + points[:, 1:] * edge_v / height) / VOXEL_UM
+        return (origin + points[:, :1] * edge_u / width + points[:, 1:] * edge_v / height) / VOXEL_UM - 0.5
     return np.asarray(
         [point_to_volume(
             point,

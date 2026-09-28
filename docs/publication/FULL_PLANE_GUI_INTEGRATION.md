@@ -5,8 +5,10 @@ claim. The new model is not enabled in the desktop application.
 
 `SliceSession.atlas_ouv_ap_dv_ml_um` stores absolute physical Allen CCF O/U/V
 vectors; `atlas_raster_shape_h_w` stores their fixed raster. Pixel `(x,y)` maps
-to `O + (x/W)U + (y/H)V`. The installed atlas uses 25-um AP/DV/ML voxels with
-physical origin zero. These are not QuickNII RAS coordinates.
+to `O + (x/W)U + (y/H)V`. The training atlas uses 25-um AP/DV/ML voxels with
+voxel-face origin zero: voxel index zero has physical centre 12.5 um. Therefore
+the GUI index conversion is `physical_um / 25 - 0.5`, matching the training
+renderer. These are not QuickNII RAS coordinates.
 
 One session-aware mapping now drives probe-coordinate creation/recomputation,
 atlas-plane sampling and 3D plane corners. Existing `SliceAtlasTransform2D`
@@ -30,10 +32,13 @@ Other coronal samplers belong to the guarded legacy optimizer/warp paths.
 `from __future__ import annotations` supports the geometry helpers appearing
 before `SliceSession`.
 
-A small numerical check found zero legacy mapping discrepancy and agreement
-with the training full-frame mapping within 1.14e-13 um. Linear-volume sampling
-agreed within 5.69e-14 intensity units; O/U/V corners were correct. Syntax and
-diff checks passed. No GUI was launched or packaged for this check.
+A small numerical check found zero legacy mapping discrepancy. A follow-up
+review caught a missing half-voxel shift in the original GUI conversion (the
+initial check compared physical points, not voxel indices). After correction,
+the GUI matches `physical_um_to_allen_index_points` within 3.56e-15 voxels and
+the differentiable finite-thickness renderer on a linear volume within 7.11e-14
+intensity units. O/U/V corners use the same corrected conversion. Syntax and
+diff checks passed. No GUI was launched or packaged for these checks.
 
 Before release: install the actual trained joint runtime and exact image
 preprocessing/dense-map directions atomically with O/U/V, raster dimensions,
