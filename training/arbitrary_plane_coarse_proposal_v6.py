@@ -169,35 +169,42 @@ class AntipodalPlaneProposalV6(nn.Module):
         ):
             raise ValueError("complete-catalogue cell log mass must have unit mass")
 
-        geometry_dtype = self.normal_embedding[0].weight.dtype
-        geometry_states = cell_states.to(
-            device=source_features.device, dtype=geometry_dtype
-        )
-        normal, offset, roll = self._geometry(
-            geometry_states, support_origin_ap_dv_ml_um
-        )
-        normal_embedding = self.normal_embedding(normal)
-        offset_embedding = self.offset_embedding(offset)
-        roll_embedding = self.roll_embedding(roll)
+        # Cell-constant score offsets cancel analytically in each softmax but
+        # can erase pose contrasts in FP16. Keep this whole density head outside
+        # encoder autocast and remove its unidentifiable embedding constants.
+        with torch.autocast(device_type=source_features.device.type, enabled=False):
+            geometry_dtype = self.normal_embedding[0].weight.dtype
+            geometry_states = cell_states.to(
+                device=source_features.device, dtype=geometry_dtype
+            )
+            normal, offset, roll = self._geometry(
+                geometry_states, support_origin_ap_dv_ml_um
+            )
+            normal_embedding = self.normal_embedding(normal)
+            normal_embedding = normal_embedding - normal_embedding.mean(dim=1, keepdim=True)
+            offset_embedding = self.offset_embedding(offset)
+            offset_embedding = offset_embedding - offset_embedding.mean(dim=1, keepdim=True)
+            roll_embedding = self.roll_embedding(roll)
+            roll_embedding = roll_embedding - roll_embedding.mean(dim=1, keepdim=True)
 
-        pooled = F.adaptive_avg_pool2d(
-            source_features, self.spatial_bins_h_w
-        ).flatten(1)
-        context = self.source_context(pooled.to(self.source_context[0].weight))
-        mixture_log_probability = F.log_softmax(
-            self.mixture_logit(context).to(probability_dtype), dim=1
-        )
-
-        def query(head: nn.Linear) -> torch.Tensor:
-            return head(context).reshape(
-                batch, self.mixture_components, self.proposal_channels
+            pooled = F.adaptive_avg_pool2d(
+                source_features, self.spatial_bins_h_w
+            ).flatten(1)
+            context = self.source_context(pooled.to(self.source_context[0].weight))
+            mixture_log_probability = F.log_softmax(
+                self.mixture_logit(context).to(probability_dtype), dim=1
             )
 
-        component_cell_log_score = self.proposal_channels ** -0.5 * (
-            torch.einsum("bld,bkd->blk", query(self.normal_query), normal_embedding)
-            + torch.einsum("bld,bkd->blk", query(self.offset_query), offset_embedding)
-            + torch.einsum("bld,bkd->blk", query(self.roll_query), roll_embedding)
-        )
+            def query(head: nn.Linear) -> torch.Tensor:
+                return head(context).reshape(
+                    batch, self.mixture_components, self.proposal_channels
+                )
+
+            component_cell_log_score = self.proposal_channels ** -0.5 * (
+                torch.einsum("bld,bkd->blk", query(self.normal_query), normal_embedding)
+                + torch.einsum("bld,bkd->blk", query(self.offset_query), offset_embedding)
+                + torch.einsum("bld,bkd->blk", query(self.roll_query), roll_embedding)
+            )
         component_cell_log_probability = F.log_softmax(
             log_mass[:, None] + component_cell_log_score.to(probability_dtype), dim=2
         )

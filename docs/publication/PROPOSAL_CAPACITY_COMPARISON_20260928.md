@@ -33,3 +33,25 @@ All rows derive from one Allen atlas. Existing synthetic-animal IDs are sample
 groups, not independent biological anatomies; their macro statistics are
 internal diagnostics only. Public benchmarking, claims of calibrated
 uncertainty, and release remain deferred.
+
+## Completed outcome
+
+Both runs exited successfully. Their training-row schedules and development
+identity files are identical. At step 10,000 the baseline/capacity run have
+respectively NLL 9.5803/11.8712, normal error 50.83/49.77 degrees, offset error
+2,921/2,819 um, and exact nearest-cell top-128 recall 8.906/4.688 percent.
+The baseline applied 10,000 optimizer steps; capacity applied 9,997 of 10,000
+attempts (three AMP skips). The capacity loss deteriorated late, so increased
+capacity alone is not a successful result. Neither result enables refinement
+qualification, calibrated probabilities, benchmarking or release.
+
+`training/compare_joint_v6_proposal_runs.py` writes the matched curves, exact
+checkpoint/config hashes and descriptive comparison to
+`I:\AnatomyTracker\runs\joint_v6_proposal_comparison_001_002`.
+Separate fixed-case diagnosis identified a substantial mixed-precision density
+head error. The next controlled continuation starts from capacity step 3,000,
+retains its optimizer/scaler/RNG states and remaining row order, and changes
+only the head's numerical computation: full precision and removal of
+cell-constant embedding offsets before dot products. Its corrected step-3,000
+evaluation separates the immediate inference effect from subsequent learning.
+Original frozen predictions are retained, not retroactively replaced.

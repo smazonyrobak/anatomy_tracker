@@ -18,7 +18,7 @@ from training import arbitrary_plane_allen_atlas_binding_v6 as allen
 from training import arbitrary_plane_finite_row_binding_v6 as rows
 from training.arbitrary_plane_full_frame_primitives import render_finite_thickness_plane, full_frame_state_to_components
 
-run = Path(r"I:\AnatomyTracker\runs\joint_v6_proposal_substantive_001")
+run = Path(r"I:\AnatomyTracker\runs\joint_v6_proposal_capacity_002")
 cache = Path(r"I:\AnatomyTracker\runs\arbitrary_plane_finite_v6_substantive_data_001\internal_development_cache")
 step = 10000
 indices = [0, 53, 106, 159, 212, 265, 318, 371, 424, 477, 530, 583]
@@ -57,7 +57,7 @@ for axis_row, index, row in zip(axes, indices, selected):
     for ax in axis_row:
         ax.axis("off")
 fig.suptitle(
-    "Held-out synthetic animals: fixed case panel\n"
+    f"{run.name}: held-out synthetic sample groups\n"
     "Canonical atlas renders; raster reflections and nonlinear deformation are not applied",
     fontsize=11,
 )
