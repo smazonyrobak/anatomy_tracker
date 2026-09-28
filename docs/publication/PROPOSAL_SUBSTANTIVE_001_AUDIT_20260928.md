@@ -20,6 +20,14 @@ array, frozen physical truth states, catalogue frames, and animal identities.
 Ties use the canonical catalogue-index ordering. Sections are averaged within
 each animal before averaging across the 40 development animals.
 
+**Interpretation correction:** the recorded `animal_id` values are organizational
+synthetic groups of 16 independently sampled sections, not 40 consistent 3D
+subject anatomies. Thus the unchanged saved `animal_macro` values mean
+`synthetic_group_macro` diagnostics, not biological animal-level generalization.
+The exact seeding/grouping evidence is in
+`SYNTHETIC_GROUPING_CORRECTION_20260928.md`. No frozen metrics, predictions,
+identities, receipts or conclusions of inadequate localization have been changed.
+
 | Metric | Initial saved result | Final independently recomputed result |
 | --- | ---: | ---: |
 | Catalogue target NLL, nats | 11.495820 | 9.580307304 |

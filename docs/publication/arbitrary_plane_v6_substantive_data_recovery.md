@@ -16,6 +16,13 @@ Both caches are under
 Training contains 3,072 pose and 2,048 joint rows; development contains 384 pose
 and 256 joint rows. Each synthetic animal contributes 16 sections.
 
+**Interpretation correction:** these "synthetic animals" are organizational
+16-row provenance groups, not distinct consistent 3D subject anatomies. Plane,
+section deformation and appearance streams are sampled per row from one Allen
+atlas. Empty ID intersections therefore establish separate generated records,
+not biological animal-level generalization. See
+`SYNTHETIC_GROUPING_CORRECTION_20260928.md`; frozen data and receipts are unchanged.
+
 Recovery verification recomputed the summary receipt, authenticated both frozen
 manifests using `load_frozen_row_cache_manifest_v6`, and independently recomputed
 cross-partition intersections for animal, specimen, experiment, synthetic-animal
@@ -42,6 +49,6 @@ step, and row loading authenticates the full cache manifest each batch. The next
 training experiment should load authenticated data once and use periodic
 checkpoints with exact sampled IDs and raw metrics retained. Begin with fresh
 random initialization and a substantive proposal-training phase around learning
-rate 0.001, then use disjoint development animals to decide when to introduce
+rate 0.001, then use disjoint synthetic development groups to decide when to introduce
 rendering/refinement and joint deformation. The four-row capacity diagnostic is
 evidence that optimization can work, not evidence of generalization.
