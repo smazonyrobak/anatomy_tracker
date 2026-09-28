@@ -36,6 +36,21 @@ catalogue discretization, but the large physical plane errors independently
 support the failed gate. Probabilities remain uncalibrated. This run does not
 evaluate a learned joint deformation model or electrode-site localization.
 
+The final 100 training batches have mean weighted NLL 8.738299, while held-out
+NLL plateaus around 9.55 after approximately 6,000 updates. The aggregations and
+support censoring differ, so this is not a precisely matched generalization-gap
+estimate; nevertheless, the learning curves indicate emerging overfitting as
+well as poor localization. Limited encoding capacity is a hypothesis for the
+next trial, not an established sole cause.
+
+After plotting completed, a separate truth-selected best-of-top-32 diagnostic
+reported mean animal-level normal error 27.754845 degrees. This is an oracle
+candidate-capture diagnostic, not achieved model accuracy, and it ignores other
+pose errors. Even that optimistic normal-only choice remains poor, so failure
+is not explained merely by the strict exact-cell recall metric. Its frozen
+`top32_capture_diagnostic.json` SHA-256 is
+`fe3f65859b87ae71f4d88acfa1c4c8d3df678af2106b8a5d3d12b4fbbe298821`.
+
 - All 10,000 trace rows have consecutive step IDs and applied optimizer steps;
   all recorded losses and gradient norms are finite. The checkpoint optimizer
   states independently record step 10,000.
@@ -51,8 +66,9 @@ evaluate a learned joint deformation model or electrode-site localization.
   experiment, synthetic-animal and section IDs.
 
 The audit touched only completed baseline artifacts. It did not access the
-active capacity experiment, invoke the GPU, or inspect concurrently generated
-plots. Existing baseline files were not changed.
+active capacity experiment or invoke the GPU. The additional top-32 diagnostic
+was read only after the plotting process completed. Existing baseline files
+were not changed.
 
 ## Artifact receipts
 
