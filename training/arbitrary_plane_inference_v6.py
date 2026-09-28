@@ -450,6 +450,7 @@ def _run_model_input(
     refined = output["refined_output"]
     return {
         "schema_version": INFERENCE_V6_SCHEMA,
+        "evaluation_stage": "joint",
         "probabilities_calibrated": False,
         "probability_status": "raw_uncalibrated",
         "input_receipt": {**input_payload, "receipt_sha256": _sha256_json(input_payload)},

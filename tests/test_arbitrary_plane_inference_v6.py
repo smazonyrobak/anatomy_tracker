@@ -150,6 +150,28 @@ def test_truth_free_imperfect_mask_inference_and_receipts(monkeypatch):
         "synthetic_animal_id": None,
     }
     assert len(result["input_receipt"]["receipt_sha256"]) == 64
+    channels = np.stack((
+        image * brush_mask,
+        inference_v6._outline_from_mask(brush_mask),
+        np.ones_like(image),
+    ), axis=-1).astype(np.float32)
+    prepared = inference_v6.run_arbitrary_plane_prepared_inference_v6(
+        loaded, channels,
+        expected_model_input_receipt=inference_v6.frozen_array_receipt(channels),
+        prepared_source_receipt_sha256="b" * 64,
+        input_mode="imperfect-mask",
+        physical_fov_y_x_um=(40.0, 80.0),
+        pixel_size_y_x_um=(40.0 / 6.0, 80.0 / 6.0),
+        nominal_cut_thickness_um=80.0,
+        axial_offsets_um=offsets,
+        axial_weights=weights,
+        case_ids={"animal_id": "animal-1", "section_id": "section-4"},
+    )
+    prepared_args = loaded["model"].call[0]
+    assert all(torch.equal(before, after) for before, after in zip(args[:3], prepared_args[:3]))
+    assert prepared["input_receipt"]["model_image"] == result["input_receipt"]["model_image"]
+    assert prepared["input_receipt"]["model_outline"] == result["input_receipt"]["model_outline"]
+    assert prepared["input_receipt"]["prepared_source_receipt_sha256"] == "b" * 64
 
 
 def test_raw_mode_is_unmodified_and_assisted_contract_is_explicit(monkeypatch):
