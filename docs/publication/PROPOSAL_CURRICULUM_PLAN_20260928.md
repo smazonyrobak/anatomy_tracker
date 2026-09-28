@@ -1,11 +1,14 @@
-# Complete-catalogue mixed curriculum: prepared, not launched
+# Complete-catalogue mixed curriculum
 
-`training/run_joint_v6_proposal_curriculum.py` is a flat experiment draft, not a
-trained deliverable. Priority remains the same-row precision-recovery run, which
-isolates the corrected FP32, centered proposal head before changing the data.
-The curriculum must not run concurrently with that experiment. Only source
-parsing/static review has been performed; GPU behavior and learning remain
-unverified. The root agent owns the launch decision and any small GPU check.
+`training/run_joint_v6_proposal_curriculum.py` is a flat experiment, not a
+trained deliverable. It was launched on 2026-09-28 after precision recovery 004
+exited successfully. The controlled recovery restored stable optimization but
+still had 47.64-degree mean normal error at cumulative step 10,000. That result
+motivates testing data coverage rather than extending the same frozen rows.
+The curriculum uses source commit `37c15a2`, a fresh complete joint model and
+the planned learning rate 0.001. It did not overlap recovery 004. Initial GPU
+execution and the first 1,000 optimizer updates succeeded; the full outcome
+is pending. Its output tree is not inspected or modified while active.
 
 ## Planned intervention
 
@@ -13,8 +16,8 @@ unverified. The root agent owns the launch decision and any small GPU check.
   dependencies. Only its proposal branch is optimized at this stage. Capacity is
   F64/H128, proposal embedding 16/eight mixtures, spatial bins 8×8, native 96×96.
 - 20,000 updates, batch 16: eight new rendered observations plus eight authenticated
-  frozen complex training rows. AdamW starts at 0.001; this is provisional until
-  the precision-recovery evidence informs the next experiment.
+  frozen complex training rows. AdamW starts at 0.001; the rate was retained
+  after the controlled precision recovery.
 - Shuffled permutations of all 98,304 catalogue cells cover every one of 384 RP2
   normals, 16 offsets and 16 rolls. The 160,000 planned renders are **observations**,
   not 160,000 distinct planes: all 98,304 canonical cells appear at least once, with
