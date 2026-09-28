@@ -10,12 +10,13 @@ os.environ["TMP"] = os.environ["TEMP"]
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import json
 import numpy as np
 import torch
 
 from training import arbitrary_plane_allen_atlas_binding_v6 as allen
 from training import arbitrary_plane_finite_row_binding_v6 as rows
-from training.arbitrary_plane_full_frame_primitives import render_finite_thickness_plane
+from training.arbitrary_plane_full_frame_primitives import render_finite_thickness_plane, full_frame_state_to_components
 
 run = Path(r"I:\AnatomyTracker\runs\joint_v6_proposal_substantive_001")
 cache = Path(r"I:\AnatomyTracker\runs\arbitrary_plane_finite_v6_substantive_data_001\internal_development_cache")
@@ -64,3 +65,39 @@ fig.tight_layout(rect=(0, 0, 1, 0.98))
 path = run / f"development_fixed_panel_step_{step:05d}.png"
 fig.savefig(path, dpi=140)
 print(path)
+
+trace = [json.loads(line) for line in (run / "training_trace.jsonl").read_text().splitlines()]
+evaluations = [json.loads(path.read_text()) for path in sorted(run.glob("development_metrics_step_*.json"))]
+fig, axes = plt.subplots(1, 3, figsize=(12, 3.5))
+training_loss = np.array([row["weighted_nll"] for row in trace])
+axes[0].plot(np.arange(100, len(trace) + 1, 100), training_loss[:len(trace) // 100 * 100].reshape(-1, 100).mean(1), label="Training")
+axes[0].plot([r["step"] for r in evaluations], [r["by_support"]["identifiable"]["animal_macro"]["nll"] for r in evaluations], label="Held-out animals")
+axes[0].set_ylabel("Nearest-cell NLL")
+axes[0].legend()
+for k in (8, 32, 128):
+    axes[1].plot([r["step"] for r in evaluations], [r["by_support"]["identifiable"]["animal_macro"][f"hit_at_{k}"] for r in evaluations], label=f"Top {k}")
+axes[1].set_ylabel("Held-out nearest-cell recall")
+axes[1].legend()
+axes[2].plot([r["step"] for r in evaluations], [r["by_support"]["identifiable"]["animal_macro"]["plane_angle_deg"] for r in evaluations])
+axes[2].set_ylabel("Held-out MAP normal error (degrees)")
+for ax in axes:
+    ax.set_xlabel("Optimization step")
+fig.tight_layout()
+fig.savefig(run / "learning_curves.png", dpi=160)
+
+log_probability = np.load(run / f"development_log_probability_step_{step:05d}.npy", mmap_mode="r")
+top = np.argpartition(log_probability, -32, axis=1)[:, -32:]
+_, frames, _ = full_frame_state_to_components(states[top])
+_, truth_frames, _ = full_frame_state_to_components(prepared["truth_state"])
+normal_error = torch.rad2deg(torch.acos((frames[..., :, 2] * truth_frames[:, None, :, 2]).sum(-1).abs().clamp(0, 1)))
+best_normal = normal_error.min(1).values.numpy()
+animals = np.array([row["animal_id"] for row in prepared["records"]])
+valid = prepared["weight"].numpy() > 0
+summary = {
+    "scope": "descriptive best-of-top32 capture diagnostic; truth-selected, not achieved model accuracy",
+    "step": step,
+    "animal_macro_best_normal_error_deg": float(np.mean([best_normal[valid & (animals == animal)].mean() for animal in np.unique(animals[valid])])),
+    "best_normal_error_deg_by_row": best_normal.tolist(),
+}
+(run / "top32_capture_diagnostic.json").write_text(json.dumps(summary, indent=2))
+print({key: value for key, value in summary.items() if not key.endswith("by_row")})
