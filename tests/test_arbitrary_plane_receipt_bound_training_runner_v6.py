@@ -532,6 +532,92 @@ def test_one_step_then_verified_resume_preserves_ids_and_selection_receipts(monk
     assert second["run_state"]["latest_checkpoint"]["relative_path"] == "checkpoints/resume_slot_0.pt"
 
 
+def test_warm_multistep_verification_replays_only_the_appended_transaction(
+    monkeypatch, i_root
+):
+    run, initialized, _ = _initialize(monkeypatch, i_root)
+    calls = []
+    original = runner._verify_step_artifacts
+
+    def record_verification(*args, **kwargs):
+        records = kwargs.get("records")
+        calls.append(
+            (
+                kwargs.get("start_step", 0),
+                None if records is None else len(records),
+            )
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "_verify_step_artifacts", record_verification)
+    result = runner.run_receipt_bound_training_steps_v6(
+        run,
+        step_count=5,
+        expected_run_manifest_receipt_sha256=initialized["manifest"][
+            "receipt_sha256"
+        ],
+    )
+    assert result["run_state"]["global_step"] == 5
+    assert calls == [
+        (0, None),
+        (0, 1),
+        (1, 1),
+        (2, 1),
+        (3, 1),
+        (4, 1),
+        (0, None),
+    ]
+
+
+def test_warm_append_is_verified_before_run_state_publication(monkeypatch, i_root):
+    run, initialized, _ = _initialize(monkeypatch, i_root)
+    original_replace = runner.os.replace
+    tampered = False
+
+    def tamper_new_transaction_after_atomic_rename(source, destination):
+        nonlocal tampered
+        original_replace(source, destination)
+        destination = Path(destination)
+        if (
+            not tampered
+            and destination == run / "transactions" / "step_00000000"
+        ):
+            tampered = True
+            report = destination / "report.json"
+            report.write_bytes(report.read_bytes() + b"tampered")
+
+    monkeypatch.setattr(runner.os, "replace", tamper_new_transaction_after_atomic_rename)
+    with pytest.raises(ValueError, match="artifact file changed"):
+        runner.run_receipt_bound_training_steps_v6(
+            run,
+            expected_run_manifest_receipt_sha256=initialized["manifest"][
+                "receipt_sha256"
+            ],
+        )
+    persisted = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    assert tampered is True
+    assert persisted["global_step"] == 0
+    assert persisted["committed_steps"] == []
+
+
+def test_cold_load_still_replays_and_rejects_a_tampered_prior_step(
+    monkeypatch, i_root
+):
+    run, initialized, _ = _initialize(monkeypatch, i_root)
+    result = runner.run_receipt_bound_training_steps_v6(
+        run,
+        step_count=3,
+        expected_run_manifest_receipt_sha256=initialized["manifest"][
+            "receipt_sha256"
+        ],
+    )
+    first = result["run_state"]["committed_steps"][0]
+    raw_path = run / first["raw_output"]["relative_path"]
+    raw_path.write_bytes(raw_path.read_bytes() + b"tampered prior step")
+    with pytest.raises(ValueError, match="artifact file changed"):
+        runner.load_receipt_bound_training_run_v6(run)
+
+
 def test_complete_pre_state_transaction_is_adopted_without_cuda_style_replay(monkeypatch, i_root):
     run, initialized, _ = _initialize(monkeypatch, i_root)
     receipt = initialized["manifest"]["receipt_sha256"]

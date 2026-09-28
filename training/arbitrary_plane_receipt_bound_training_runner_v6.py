@@ -1063,9 +1063,37 @@ def _verify_step_artifacts(
     manifest: Mapping[str, object],
     run_state: Mapping[str, object],
     checkpoint: Mapping[str, object],
+    *,
+    start_step: int = 0,
+    records: list[Mapping[str, object]] | None = None,
+    previous_report_receipt_sha256: str | None = None,
+    previous_transaction_receipt_sha256: str | None = None,
+    previous_run_state_receipt_sha256: str | None = None,
 ) -> list[dict[str, object]]:
-    previous = manifest["receipt_sha256"]
-    previous_transaction = manifest["receipt_sha256"]
+    if (
+        not isinstance(start_step, int)
+        or isinstance(start_step, bool)
+        or start_step < 0
+    ):
+        raise ValueError("v6 step-artifact verification start is invalid")
+    if records is None:
+        records = run_state["committed_steps"]
+        if start_step != 0:
+            raise ValueError("full v6 step replay must begin at step zero")
+    else:
+        records = list(records)
+    if start_step + len(records) > run_state["global_step"]:
+        raise ValueError("v6 step-artifact verification range exceeds run state")
+    previous = (
+        manifest["receipt_sha256"]
+        if previous_report_receipt_sha256 is None
+        else previous_report_receipt_sha256
+    )
+    previous_transaction = (
+        manifest["receipt_sha256"]
+        if previous_transaction_receipt_sha256 is None
+        else previous_transaction_receipt_sha256
+    )
     table = manifest["training_data"]["ordered_row_identities"]
     all_identities = []
     ledger = checkpoint.get("training_step_ledger")
@@ -1074,7 +1102,8 @@ def _verify_step_artifacts(
     archive_by_step = {
         item["global_step"]: item for item in run_state["immutable_archives"]
     }
-    for step, record in enumerate(run_state["committed_steps"]):
+    for offset, record in enumerate(records):
+        step = start_step + offset
         transaction_record = record.get("transaction")
         if not isinstance(transaction_record, Mapping):
             raise ValueError("a committed v6 step lacks its atomic transaction")
@@ -1132,8 +1161,16 @@ def _verify_step_artifacts(
             or transaction.get("step") != step
             or transaction.get("previous_transaction_receipt_sha256")
             != previous_transaction
-            or not _is_sha256(
-                transaction.get("previous_run_state_receipt_sha256")
+            or (
+                previous_run_state_receipt_sha256 is None
+                and not _is_sha256(
+                    transaction.get("previous_run_state_receipt_sha256")
+                )
+            )
+            or (
+                previous_run_state_receipt_sha256 is not None
+                and transaction.get("previous_run_state_receipt_sha256")
+                != previous_run_state_receipt_sha256
             )
             or transaction.get("committed_step")
             != committed_without_transaction
@@ -1298,6 +1335,111 @@ def _verify_run_state(
         range(interval, run_state["global_step"] + 1, interval)
     ):
         raise ValueError("immutable v6 checkpoint archive schedule is incomplete")
+    return checkpoint
+
+
+def _verify_incremental_run_state_extension(
+    run_root: Path,
+    manifest: Mapping[str, object],
+    old_state: Mapping[str, object],
+    new_state: Mapping[str, object],
+) -> dict[str, object]:
+    """Verify exactly one warm append without replaying trusted history.
+
+    ``old_state`` must be the result of a cold verification or the immediately
+    preceding successful call to this function.  ``new_state`` is produced by
+    :func:`_state_after_transaction`; its receipt is therefore created from the
+    complete state before this verifier receives it.  The persisted cold-load
+    path deliberately remains the full replay authority.
+    """
+    step = int(old_state["global_step"])
+    committed = new_state.get("committed_steps", [])
+    old_committed = old_state["committed_steps"]
+    interval = int(manifest["runner_config"]["archive_checkpoint_interval_steps"])
+    expected_old_archive_count = step // interval
+    expected_new_archive_count = (step + 1) // interval
+    archives = new_state.get("immutable_archives", [])
+    old_archives = old_state["immutable_archives"]
+    if (
+        set(new_state) != _RUN_STATE_KEYS
+        or new_state.get("schema_version")
+        != RECEIPT_BOUND_TRAINING_STATE_V6_SCHEMA
+        or not _is_sha256(new_state.get("receipt_sha256"))
+        or new_state.get("run_id") != manifest["run_id"]
+        or new_state.get("run_manifest_receipt_sha256")
+        != manifest["receipt_sha256"]
+        or new_state.get("global_step") != step + 1
+        or len(committed) != step + 1
+        or len(old_committed) != step
+        or (
+            step > 0
+            and committed[-2] != old_committed[-1]
+        )
+        or len(old_archives) != expected_old_archive_count
+        or len(archives) != expected_new_archive_count
+        or (
+            expected_old_archive_count > 0
+            and archives[expected_old_archive_count - 1]
+            != old_archives[-1]
+        )
+        or new_state.get("probabilities_calibrated") is not False
+        or new_state.get("probability_status") != RAW_UNCALIBRATED
+        or new_state.get("release_qualifying") is not False
+        or new_state.get("latest_checkpoint", {}).get("relative_path")
+        != _next_resume_slot(old_state)
+    ):
+        raise ValueError("receipt-bound v6 warm state extension is invalid")
+
+    checkpoint = _verify_trainer_checkpoint(
+        run_root, new_state["latest_checkpoint"], manifest
+    )
+    if checkpoint["global_step"] != step + 1:
+        raise ValueError("v6 warm state and rolling checkpoint steps differ")
+    previous_report = (
+        old_committed[-1]["report"]["receipt_sha256"]
+        if old_committed
+        else manifest["receipt_sha256"]
+    )
+    identities = _verify_step_artifacts(
+        run_root,
+        manifest,
+        new_state,
+        checkpoint,
+        start_step=step,
+        records=[committed[-1]],
+        previous_report_receipt_sha256=previous_report,
+        previous_transaction_receipt_sha256=_previous_transaction_receipt(
+            manifest, old_state
+        ),
+        previous_run_state_receipt_sha256=old_state["receipt_sha256"],
+    )
+    provenance = checkpoint.get("provenance_records")
+    expected_provenance_count = (step + 1) * int(
+        manifest["runner_config"]["batch_size"]
+    )
+    if (
+        not isinstance(provenance, list)
+        or len(provenance) != expected_provenance_count
+        or len(identities) > len(provenance)
+        or any(
+            any(observed.get(key) != expected[key] for key in _FIVE_IDS)
+            or observed.get("training_row_id") != expected["training_row_id"]
+            or observed.get("training_row_receipt_sha256")
+            != expected["training_row_receipt_sha256"]
+            for observed, expected in zip(provenance[-len(identities) :], identities)
+        )
+    ):
+        raise ValueError(
+            "v6 warm checkpoint provenance differs from its appended row identities"
+        )
+
+    if expected_new_archive_count > expected_old_archive_count:
+        archive = _verify_trainer_checkpoint(run_root, archives[-1], manifest)
+        if (
+            archive["global_step"] != step + 1
+            or archive["receipt_sha256"] != checkpoint["receipt_sha256"]
+        ):
+            raise ValueError("new immutable v6 checkpoint archive differs")
     return checkpoint
 
 
@@ -1477,7 +1619,9 @@ def _adopt_completed_transaction(context: dict[str, object]) -> bool:
     new_state = _state_after_transaction(
         manifest, old_state, transaction, transaction_record
     )
-    checkpoint = _verify_run_state(run_root, manifest, new_state)
+    checkpoint = _verify_incremental_run_state_extension(
+        run_root, manifest, old_state, new_state
+    )
     _atomic_json(run_root / "run_state.json", new_state)
     context["run_state"] = new_state
     context["trainer_state"] = staged_trainer_v6.restore_staged_trainer_v6(
@@ -1700,7 +1844,9 @@ def _apply_one_step(context: dict[str, object]) -> None:
         new_state = _state_after_transaction(
             manifest, old_state, transaction, transaction_record
         )
-        _verify_run_state(run_root, manifest, new_state)
+        _verify_incremental_run_state_extension(
+            run_root, manifest, old_state, new_state
+        )
         _atomic_json(run_root / "run_state.json", new_state)
         context["run_state"] = new_state
     except BaseException:

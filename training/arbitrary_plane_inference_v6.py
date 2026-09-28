@@ -13,6 +13,7 @@ import torch
 
 from training import arbitrary_plane_receipt_bound_training_runner_v6 as runner_v6
 from training import arbitrary_plane_staged_trainer_v6 as trainer_v6
+from training.arbitrary_plane_finite_row_binding_v6 import _array_receipt as frozen_array_receipt
 
 
 INFERENCE_V6_SCHEMA = "anatomy-tracker-arbitrary-plane-inference-v6"
@@ -26,6 +27,7 @@ CASE_ID_KEYS_V6 = (
 )
 _SOURCE_FILES = (
     "training/arbitrary_plane_inference_v6.py",
+    "training/arbitrary_plane_finite_row_binding_v6.py",
     "training/arbitrary_plane_receipt_bound_training_runner_v6.py",
     "training/arbitrary_plane_staged_trainer_v6.py",
     "training/arbitrary_plane_joint_model_v6.py",
@@ -278,8 +280,84 @@ def run_arbitrary_plane_inference_v6(
     raw, brush, model_outline, model_image = _prepare_input(
         image, input_mode, brush_mask, brush_available
     )
+    return _run_model_input(
+        loaded, model_image, model_outline, brush_available,
+        physical_fov_y_x_um=physical_fov_y_x_um,
+        pixel_size_y_x_um=pixel_size_y_x_um,
+        nominal_cut_thickness_um=nominal_cut_thickness_um,
+        axial_offsets_um=axial_offsets_um, axial_weights=axial_weights,
+        case_ids=case_ids,
+        input_payload={
+            "input_mode": input_mode,
+            "brush_available": brush_available,
+            "raw_image": _array_receipt(raw),
+            "brush_mask": None if brush_mask is None else _array_receipt(brush),
+            "model_outline": _array_receipt(model_outline),
+            "model_image": _array_receipt(model_image),
+        },
+    )
+
+
+def run_arbitrary_plane_prepared_inference_v6(
+    loaded, model_input_channels_float32, *, expected_model_input_receipt,
+    prepared_source_receipt_sha256, input_mode, physical_fov_y_x_um,
+    pixel_size_y_x_um, nominal_cut_thickness_um, axial_offsets_um, axial_weights,
+    case_ids=None, proposal_only=False,
+):
+    """Evaluate frozen image/boundary/availability channels without reconstructing a mask.
+
+    The loader authenticates the model once; callers must not mutate it during
+    evaluation. Only the small input receipt is checked for each frozen row.
+    """
+    channels = np.asarray(model_input_channels_float32)
+    if (
+        loaded.get("schema_version") != INFERENCE_V6_SCHEMA
+        or channels.ndim != 3 or channels.shape[-1] != 3
+        or channels.dtype != np.float32
+        or frozen_array_receipt(channels) != expected_model_input_receipt
+        or not _is_sha256(prepared_source_receipt_sha256)
+    ):
+        raise ValueError("prepared channels must match the authenticated frozen row")
+    model_image = _scalar_image(channels[..., 0])
+    outline = np.ascontiguousarray(channels[..., 1])
+    available = channels[..., 2]
+    if (
+        input_mode not in INPUT_MODES_V6
+        or not np.isin(outline, (0.0, 1.0)).all()
+        or not np.isin(available, (0.0, 1.0)).all()
+        or not np.all(available == available[0, 0])
+        or bool(available[0, 0]) != (input_mode != "raw")
+        or (input_mode == "raw" and np.any(outline))
+    ):
+        raise ValueError("prepared boundary/availability channels contradict input mode")
+    return _run_model_input(
+        loaded, model_image, outline, bool(available[0, 0]),
+        physical_fov_y_x_um=physical_fov_y_x_um,
+        pixel_size_y_x_um=pixel_size_y_x_um,
+        nominal_cut_thickness_um=nominal_cut_thickness_um,
+        axial_offsets_um=axial_offsets_um, axial_weights=axial_weights,
+        case_ids=case_ids, proposal_only=proposal_only,
+        input_payload={
+            "input_mode": input_mode,
+            "brush_available": bool(available[0, 0]),
+            "input_source": "authenticated_frozen_prepared_channels",
+            "prepared_source_receipt_sha256": prepared_source_receipt_sha256,
+            "model_input_channels_receipt": dict(expected_model_input_receipt),
+            "model_outline": _array_receipt(outline),
+            "model_image": _array_receipt(model_image),
+        },
+    )
+
+
+def _run_model_input(
+    loaded, model_image, model_outline, brush_available, *,
+    physical_fov_y_x_um, pixel_size_y_x_um, nominal_cut_thickness_um,
+    axial_offsets_um, axial_weights, case_ids, input_payload, proposal_only=False,
+):
+    context = loaded["context"]
+    model = loaded["model"]
     geometry = context["catalogue"]["support_geometry"]
-    output_shape = tuple(raw.shape)
+    output_shape = tuple(model_image.shape)
     fov = tuple(float(item) for item in physical_fov_y_x_um)
     pixels = tuple(float(item) for item in pixel_size_y_x_um)
     expected_fov = tuple(float(item) for item in geometry["raster_physical_span_y_x_um"])
@@ -306,12 +384,7 @@ def run_arbitrary_plane_inference_v6(
 
     ids = _case_ids(case_ids)
     input_payload = {
-        "input_mode": input_mode,
-        "brush_available": brush_available,
-        "raw_image": _array_receipt(raw),
-        "brush_mask": None if brush_mask is None else _array_receipt(brush),
-        "model_outline": _array_receipt(model_outline),
-        "model_image": _array_receipt(model_image),
+        **input_payload,
         "physical_fov_y_x_um": list(fov),
         "pixel_size_y_x_um": list(pixels),
         "nominal_cut_thickness_um": thickness,
@@ -322,6 +395,39 @@ def run_arbitrary_plane_inference_v6(
     model.eval()
     device = next(model.parameters()).device
     config = context["manifest"]["training_config"]
+    run_binding = {
+        "run_manifest_receipt_sha256": loaded["run_manifest_receipt_sha256"],
+        "run_state_receipt_sha256": loaded["run_state_receipt_sha256"],
+        "checkpoint_receipt_sha256": loaded["checkpoint_receipt_sha256"],
+        "checkpoint_model_state_sha256": loaded["checkpoint_model_state_sha256"],
+        "catalogue_receipt_sha256": context["catalogue"]["receipt_sha256"],
+    }
+    if proposal_only:
+        with torch.no_grad():
+            proposal = model.pose_model.forward_proposal_only(
+                torch.from_numpy(model_image)[None, None].to(device),
+                torch.from_numpy(model_outline)[None, None].to(device),
+                torch.tensor([brush_available], dtype=torch.bool, device=device),
+                context["catalogue_runtime"].expand(1),
+                tuple(config["retrieval_shape_h_w"]),
+            )
+        return {
+            "schema_version": INFERENCE_V6_SCHEMA,
+            "evaluation_stage": "proposal",
+            "probabilities_calibrated": False,
+            "probability_status": "raw_uncalibrated",
+            "input_receipt": {**input_payload, "receipt_sha256": _sha256_json(input_payload)},
+            "run_binding": run_binding,
+            "trusted_inference_source_sha256": dict(loaded["trusted_inference_source_sha256"]),
+            "posterior": {
+                "raw_full_catalogue_proposal_log_probability": proposal[
+                    "raw_full_catalogue_cell_log_probability"
+                ].detach().cpu(),
+                "honest_hybrid_posterior": None,
+            },
+            "k_poses": None, "recurrent_output": None, "deformation": None,
+            "abstention": None,
+        }
     with torch.no_grad():
         output = model(
             torch.from_numpy(model_image)[None, None].to(device),
@@ -342,13 +448,6 @@ def run_arbitrary_plane_inference_v6(
     output = _detach_cpu(output)
     cascade = output["cascade"]
     refined = output["refined_output"]
-    run_binding = {
-        "run_manifest_receipt_sha256": loaded["run_manifest_receipt_sha256"],
-        "run_state_receipt_sha256": loaded["run_state_receipt_sha256"],
-        "checkpoint_receipt_sha256": loaded["checkpoint_receipt_sha256"],
-        "checkpoint_model_state_sha256": loaded["checkpoint_model_state_sha256"],
-        "catalogue_receipt_sha256": context["catalogue"]["receipt_sha256"],
-    }
     return {
         "schema_version": INFERENCE_V6_SCHEMA,
         "probabilities_calibrated": False,
@@ -391,4 +490,5 @@ __all__ = [
     "INPUT_MODES_V6",
     "load_arbitrary_plane_inference_v6",
     "run_arbitrary_plane_inference_v6",
+    "run_arbitrary_plane_prepared_inference_v6",
 ]
