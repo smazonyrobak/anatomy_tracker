@@ -106,7 +106,7 @@ MIND_TILT_PRIOR_WEIGHT = 0.0005
 MIND_SURFACE_WEIGHT = 0.05
 MIND_PROBE_GEOMETRY_WEIGHT = 1.0
 SESSION_ARCHIVE_FORMAT = "Proprietary Anatomy Tracker session"
-SESSION_ARCHIVE_VERSION = 1
+SESSION_ARCHIVE_VERSION = 2
 SESSION_STATE_FIELDS = (
     "rotation_deg",
     "flip_horizontal",
@@ -116,6 +116,8 @@ SESSION_STATE_FIELDS = (
     "atlas_index",
     "atlas_tilt_ml_deg",
     "atlas_tilt_dv_deg",
+    "atlas_ouv_ap_dv_ml_um",
+    "atlas_raster_shape_h_w",
     "atlas_landmarks",
     "slice_landmarks",
     "brain_outline_points",
@@ -3153,6 +3155,60 @@ def section_plane_corners(
     )
 
 
+def session_points_to_volume(
+    session: SliceSession,
+    points_xy: np.ndarray,
+    volume_shape: tuple[int, int, int],
+    *,
+    plane: str | None = None,
+    atlas_index: int | None = None,
+    tilt_ml: float | None = None,
+    tilt_dv: float | None = None,
+) -> np.ndarray:
+    """Lift fixed-raster x/y to Allen AP/DV/ML voxels, preserving full O/U/V.
+
+    O/U/V are absolute CCF physical micrometres, not QuickNII RAS coordinates.
+    Pixel (x,y) maps to O+(x/W)U+(y/H)V, matching the joint renderer. The
+    installed tracker atlas has 25-um isotropic voxels and physical origin zero.
+    Explicit legacy pose arguments are used only when no full-plane state exists.
+    """
+    points = np.asarray(points_xy, dtype=np.float64).reshape(-1, 2)
+    if session.atlas_ouv_ap_dv_ml_um is not None:
+        origin, edge_u, edge_v = np.asarray(session.atlas_ouv_ap_dv_ml_um, dtype=np.float64).reshape(3, 3)
+        height, width = session.atlas_raster_shape_h_w
+        return (origin + points[:, :1] * edge_u / width + points[:, 1:] * edge_v / height) / VOXEL_UM
+    return np.asarray(
+        [point_to_volume(
+            point,
+            session.atlas_plane if plane is None else plane,
+            session.atlas_index if atlas_index is None else atlas_index,
+            volume_shape,
+            session.atlas_tilt_ml_deg if tilt_ml is None else tilt_ml,
+            session.atlas_tilt_dv_deg if tilt_dv is None else tilt_dv,
+        ) for point in points],
+        dtype=np.float64,
+    ).reshape(-1, 3)
+
+
+def session_atlas_slice(volume: np.ndarray, session: SliceSession, *, order: int = 1) -> np.ndarray:
+    """Sample the session's full physical plane or its unchanged legacy chart."""
+    if session.atlas_ouv_ap_dv_ml_um is not None:
+        height, width = session.atlas_raster_shape_h_w
+        yy, xx = np.mgrid[:height, :width]
+        coordinates = session_points_to_volume(session, np.column_stack((xx.ravel(), yy.ravel())), volume.shape)
+        return map_coordinates(volume, coordinates.T, order=order, mode="constant", cval=0, prefilter=False).reshape(height, width)
+    if session.atlas_plane == "coronal" and (session.atlas_tilt_ml_deg != 0.0 or session.atlas_tilt_dv_deg != 0.0):
+        return coronal_oblique_slice(volume, session.atlas_index, session.atlas_tilt_ml_deg, session.atlas_tilt_dv_deg, order=order)
+    return atlas_slice(volume, session.atlas_plane, session.atlas_index)
+
+
+def session_plane_corners(session: SliceSession, volume_shape: tuple[int, int, int]) -> np.ndarray:
+    if session.atlas_ouv_ap_dv_ml_um is not None:
+        height, width = session.atlas_raster_shape_h_w
+        return session_points_to_volume(session, np.asarray([[0, 0], [width, 0], [width, height], [0, height]]), volume_shape)
+    return section_plane_corners(volume_shape, session.atlas_plane, session.atlas_index, session.atlas_tilt_ml_deg, session.atlas_tilt_dv_deg)
+
+
 def volume_to_gl(points: np.ndarray) -> np.ndarray:
     points = np.asarray(points, dtype=np.float32)
     mesh_ap = ALLEN_CCF_25_SHAPE_AP_DV_ML[0] - points[:, 0]
@@ -3226,6 +3282,9 @@ class SliceSession:
     atlas_index: int = 0
     atlas_tilt_ml_deg: float = 0.0
     atlas_tilt_dv_deg: float = 0.0
+    # Optional joint-model plane: absolute physical Allen AP/DV/ML O/U/V and its raster.
+    atlas_ouv_ap_dv_ml_um: list[float] | None = None
+    atlas_raster_shape_h_w: tuple[int, int] | None = None
     atlas_landmarks: list[tuple[float, float]] = field(default_factory=list)
     slice_landmarks: list[tuple[float, float]] = field(default_factory=list)
     brain_outline_points: list[tuple[float, float]] = field(default_factory=list)
@@ -5528,7 +5587,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
         state = {
             "format": SESSION_ARCHIVE_FORMAT,
-            "version": SESSION_ARCHIVE_VERSION,
+            "version": SESSION_ARCHIVE_VERSION if any(session.atlas_ouv_ap_dv_ml_um is not None for session in self.sessions) else 1,
             "saved_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
             "atlas_folder": str(self.atlas_folder),
             "atlas_file_hashes": self.atlas_file_hashes,
@@ -5626,7 +5685,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         try:
             with zipfile.ZipFile(source, "r") as archive:
                 state = json.loads(archive.read("session.json"))
-                if state.get("format") != SESSION_ARCHIVE_FORMAT or state.get("version") != SESSION_ARCHIVE_VERSION:
+                if state.get("format") != SESSION_ARCHIVE_FORMAT or state.get("version") not in (1, SESSION_ARCHIVE_VERSION):
                     raise ValueError("Unsupported or invalid Anatomy Tracker session file")
                 saved_hashes = state.get("atlas_file_hashes", {})
                 if saved_hashes and self.atlas_file_hashes and saved_hashes != self.atlas_file_hashes:
@@ -5650,6 +5709,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     for name, value in record["fields"].items():
                         if name in SESSION_STATE_FIELDS:
                             setattr(session, name, value)
+                    if session.atlas_raster_shape_h_w is not None:
+                        session.atlas_raster_shape_h_w = tuple(session.atlas_raster_shape_h_w)
                     session.point_history = list(record.get("point_history", []))
                     session.probe_traces = {
                         name: ProbeTrace(**trace)
@@ -5679,7 +5740,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                             raise ValueError(
                                 f"Stored transform for {session.name} does not match its displayed slice shape"
                             )
-                    elif min(len(session.atlas_landmarks), len(session.slice_landmarks)) >= 3:
+                    elif min(len(session.atlas_landmarks), len(session.slice_landmarks)) >= 3 and (
+                        session.atlas_ouv_ap_dv_ml_um is None
+                        or self._coordinate_registration(session).get("status") == "applied"
+                    ):
                         pair_count = min(len(session.atlas_landmarks), len(session.slice_landmarks))
                         atlas_points = np.asarray(session.atlas_landmarks[:pair_count], dtype=np.float64)
                         slice_points = np.asarray(
@@ -5706,7 +5770,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 transform = session.slice_atlas_transform
                 if transform is None:
                     continue
-                expected_atlas_shape = tuple(atlas_slice(self.atlas_volume, session.atlas_plane, 0).shape)
+                expected_atlas_shape = (
+                    tuple(session.atlas_raster_shape_h_w)
+                    if session.atlas_ouv_ap_dv_ml_um is not None
+                    else tuple(atlas_slice(self.atlas_volume, session.atlas_plane, 0).shape)
+                )
                 if transform.atlas_shape != expected_atlas_shape:
                     cache.cleanup()
                     raise ValueError(
@@ -5833,6 +5901,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             for session in self.sessions
             if session.slice_atlas_transform is not None
             or session.slice_to_atlas_tps is not None
+            or session.atlas_ouv_ap_dv_ml_um is not None
             or any(trace.volume_points for trace in session.probe_traces.values())
         ]
         if atlas_changed and affected_sessions:
@@ -5984,13 +6053,21 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         return self.atlas_tilt_ml.value() / 10.0, self.atlas_tilt_dv.value() / 10.0
 
     def _update_tilt_controls(self) -> None:
-        enabled = self.plane_box.currentText() == "coronal"
+        session = self.current_session()
+        full_plane = session is not None and session.atlas_ouv_ap_dv_ml_um is not None
+        self.plane_box.setEnabled(not full_plane)
+        self.section_scroll.setEnabled(not full_plane)
+        self.axis_position_um.setEnabled(not full_plane)
+        enabled = self.plane_box.currentText() == "coronal" and not full_plane
         self.atlas_tilt_ml.setEnabled(enabled)
         self.atlas_tilt_dv.setEnabled(enabled)
         self.atlas_tilt_ml_value.setEnabled(enabled)
         self.atlas_tilt_dv_value.setEnabled(enabled)
 
     def _atlas_tilt_changed(self) -> None:
+        session = self.current_session()
+        if session is not None and session.atlas_ouv_ap_dv_ml_um is not None:
+            return
         tilt_ml, tilt_dv = self._current_atlas_tilts()
         self.atlas_tilt_ml_value.setText(f"{self.atlas_tilt_ml.value() / 10.0:+.1f}°")
         self.atlas_tilt_dv_value.setText(f"{self.atlas_tilt_dv.value() / 10.0:+.1f}°")
@@ -6054,6 +6131,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _update_axis_control(self, index: int) -> None:
         if self.atlas_volume is None:
             return
+        session = self.current_session()
+        if session is not None and session.atlas_ouv_ap_dv_ml_um is not None:
+            self.axis_label.setText("Full physical atlas plane (O/U/V)")
+            return
         plane = self.plane_box.currentText()
         axis = plane_axis(plane)
         min_um = self._index_to_um(0)
@@ -6070,6 +6151,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.axis_position_um.blockSignals(False)
 
     def _plane_changed(self) -> None:
+        session = self.current_session()
+        if session is not None and session.atlas_ouv_ap_dv_ml_um is not None:
+            return
         self._set_plane_limits()
         session = self.current_session()
         if session is not None:
@@ -6095,6 +6179,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_point_counts()
 
     def _section_changed(self, value: int) -> None:
+        session = self.current_session()
+        if session is not None and session.atlas_ouv_ap_dv_ml_um is not None:
+            return
         self.section_scroll.blockSignals(True)
         self.section_scroll.setValue(value)
         self.section_scroll.blockSignals(False)
@@ -6129,21 +6216,24 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _refresh_atlas(self) -> None:
         if self.atlas_volume is None or self.annotation_volume is None:
             return
+        session = self.current_session()
+        full_plane = session is not None and session.atlas_ouv_ap_dv_ml_um is not None
+        self._update_tilt_controls()
         plane = self.plane_box.currentText()
         index = self.section_scroll.value()
         tilt_ml, tilt_dv = self._current_atlas_tilts()
-        if plane == "coronal" and (tilt_ml != 0.0 or tilt_dv != 0.0):
+        if full_plane:
+            self.current_atlas_image = normalize_u8(session_atlas_slice(self.atlas_volume, session))
+        elif plane == "coronal" and (tilt_ml != 0.0 or tilt_dv != 0.0):
             self.current_atlas_image = normalize_u8(
                 coronal_oblique_slice(self.atlas_volume, index, tilt_ml, tilt_dv, order=1)
             )
         else:
             self.current_atlas_image = normalize_u8(atlas_slice(self.atlas_volume, plane, index))
-        session = self.current_session()
         overlay_available = (
             session is not None
             and session.transformed_overlay is not None
-            and session.atlas_plane == plane
-            and session.atlas_index == index
+            and (full_plane or (session.atlas_plane == plane and session.atlas_index == index))
         )
         self.atlas_opacity.setEnabled(overlay_available)
         self.atlas_opacity_value.setEnabled(overlay_available)
@@ -6658,6 +6748,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ):
             return
         old_slice_atlas_transform = session.slice_atlas_transform
+        full_plane = session.atlas_ouv_ap_dv_ml_um is not None
         had_transform = (
             session.slice_atlas_transform is not None
             or session.slice_to_atlas_tps is not None
@@ -6668,7 +6759,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         horizontal_changed = session.flip_horizontal != bool(flip_horizontal)
         vertical_changed = session.flip_vertical != bool(flip_vertical)
         rotation_changed = abs(session.rotation_deg - float(rotation_deg)) >= 0.05
-        if session.auto_alignment_engine is not None:
+        if session.auto_alignment_engine is not None or full_plane:
             self._mark_alignment_run_stale(session, "contributor slice geometry changed")
         new_shape, new_transform = slice_geometry_matrix(
             session.raw_display.shape,
@@ -6686,7 +6777,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 borderMode=cv2.BORDER_CONSTANT,
                 borderValue=0,
             )
-        preserve_affine = old_slice_atlas_transform is not None and not rotation_changed
+        preserve_affine = old_slice_atlas_transform is not None and not rotation_changed and not full_plane
         session.rotation_deg = float(rotation_deg)
         session.flip_horizontal = bool(flip_horizontal)
         session.flip_vertical = bool(flip_vertical)
@@ -6701,6 +6792,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 replacement_affine_h=old_slice_atlas_transform.display_to_affine_atlas_h,
                 replacement_display_shape=new_shape,
             )
+        elif full_plane:
+            self._clear_coordinate_registration(session)
+            self._mark_coordinate_registration_pending(session, "Slice geometry changed; rerun joint alignment")
         elif had_transform:
             self._invalidate_coordinate_warp(
                 session,
@@ -6716,6 +6810,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._update_slice_image()
         if session.brain_brush_strokes:
             self._apply_smart_surface_selection(session, session.brain_brush_strokes)
+        if full_plane:
+            self._refresh_atlas()
+            self._refresh_points()
+            self._refresh_3d()
+            self.status.setText("Slice geometry changed; joint alignment is invalid. The full atlas plane remains a reference only.")
+            return
         if preserve_affine:
             session.transformed_overlay = None
             self._refresh_transformed_overlay(session)
@@ -6838,12 +6938,6 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     ) -> dict[str, tuple[list[tuple[float, float]], list[list[float]]]]:
         if self.atlas_volume is None:
             raise RuntimeError("Atlas is unavailable")
-        pose = (
-            plane or session.atlas_plane,
-            session.atlas_index if atlas_index is None else atlas_index,
-            session.atlas_tilt_ml_deg if tilt_ml is None else tilt_ml,
-            session.atlas_tilt_dv_deg if tilt_dv is None else tilt_dv,
-        )
         mapper = (
             transform.map_display_to_atlas
             if transform is not None
@@ -6860,10 +6954,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             if not np.isfinite(atlas_array).all():
                 raise RuntimeError(f"{probe_name} has an observation outside valid registered tissue")
             atlas_points = [tuple(map(float, point)) for point in atlas_array]
-            volume_points = [
-                point_to_volume(point, pose[0], pose[1], self.atlas_volume.shape, pose[2], pose[3]).tolist()
-                for point in atlas_points
-            ]
+            volume_points = session_points_to_volume(
+                session, atlas_array, self.atlas_volume.shape,
+                plane=plane, atlas_index=atlas_index, tilt_ml=tilt_ml, tilt_dv=tilt_dv,
+            ).tolist()
             if not np.isfinite(np.asarray(volume_points, dtype=np.float64)).all():
                 raise RuntimeError(f"{probe_name} produced a non-finite atlas-volume coordinate")
             updates[probe_name] = (atlas_points, volume_points)
@@ -6956,6 +7050,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _clear_slice_transform(self, session: SliceSession) -> None:
         self._clear_coordinate_registration(session)
         self._clear_auto_alignment_metadata(session)
+        # Retain the atlas reference chart, as for legacy plane/index: existing
+        # atlas landmarks must never be silently reinterpreted as coronal points.
 
     @staticmethod
     def _source_binding_error(session: SliceSession) -> str | None:
@@ -7000,11 +7096,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             for run_id in (session.auto_alignment_run_id, session.manual_refined_from_run_id)
             if run_id is not None
         }
-        if not linked_run_ids:
+        if not linked_run_ids and session.atlas_ouv_ap_dv_ml_um is None:
             return
         for member in self.sessions:
             member_run_ids = {member.auto_alignment_run_id, member.manual_refined_from_run_id}
-            if linked_run_ids.isdisjoint(member_run_ids):
+            if member is not session and linked_run_ids.isdisjoint(member_run_ids):
                 continue
             diagnostics = dict(member.auto_alignment_diagnostics or {})
             reasons = list(diagnostics.get("stale_reasons", []))
@@ -7096,7 +7192,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             or session.atlas_to_slice_tps is not None
             or session.transformed_overlay is not None
         ):
-            self._invalidate_coordinate_warp(session, reason, preserve_affine=True)
+            self._invalidate_coordinate_warp(session, reason, preserve_affine=session.atlas_ouv_ap_dv_ml_um is None)
         diagnostics = dict(session.auto_alignment_diagnostics or {})
         stale_reasons = [
             reason
@@ -7112,6 +7208,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             diagnostics,
             {"kind": "landmark", "status": "pending", "reason": reason},
         )
+        if session.atlas_ouv_ap_dv_ml_um is not None:
+            self._mark_alignment_run_stale(session, "joint coordinate mapping manually edited")
         self.atlas_panel.set_overlay(None)
         self._refresh_atlas()
         self._refresh_3d()
@@ -7120,7 +7218,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
     def _invalidate_auto_alignment_after_surface_edit(self, session: SliceSession) -> None:
         reason = "Trusted tissue mask changed; rerun section matching, then apply a coordinate registration"
         kind = self._coordinate_registration(session).get("kind", "unselected")
-        if session.auto_alignment_engine is not None:
+        if session.atlas_ouv_ap_dv_ml_um is not None:
+            reason = "Trusted tissue mask changed; rerun joint alignment"
+            self._mark_alignment_run_stale(session, "contributor trusted surface changed")
+            self._clear_coordinate_registration(session)
+        elif session.auto_alignment_engine is not None:
             self._mark_alignment_run_stale(session, "contributor trusted surface changed")
             self._clear_slice_transform(session)
         else:
@@ -7190,14 +7292,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         trace.slice_points.append(slice_raw_point)
         if self.atlas_volume is not None:
             trace.volume_points.append(
-                point_to_volume(
-                    atlas_point,
-                    session.atlas_plane,
-                    session.atlas_index,
-                    self.atlas_volume.shape,
-                    session.atlas_tilt_ml_deg,
-                    session.atlas_tilt_dv_deg,
-                ).tolist()
+                session_points_to_volume(session, [atlas_point], self.atlas_volume.shape)[0].tolist()
             )
         trace.signal_values.append(self._probe_point_signal(session, slice_raw_point))
         session.point_history.append(f"probe:{probe_name}")
@@ -7550,6 +7645,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 session_index is not None
                 and 0 <= int(session_index) < len(self.sessions)
                 and len(self.sessions[int(session_index)].brain_outline_points) >= 8
+                and self.sessions[int(session_index)].atlas_ouv_ap_dv_ml_um is None
             ):
                 outlined.append((int(session_index), self.sessions[int(session_index)]))
         return outlined
@@ -7689,6 +7785,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             (index, session)
             for index, session in enumerate(self.sessions)
             if session.atlas_plane == "coronal"
+            and session.atlas_ouv_ap_dv_ml_um is None
             and session.auto_alignment_run_id is not None
             and session.slice_atlas_transform is not None
             and not (session.auto_alignment_diagnostics or {}).get(
@@ -7748,6 +7845,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             and self.atlas_volume is not None
             and self.annotation_volume is not None
             and session.atlas_plane == "coronal"
+            and session.atlas_ouv_ap_dv_ml_um is None
             and not self.auto_alignment_busy
         )
         self.automatic_warp_all_btn.setEnabled(
@@ -7763,6 +7861,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             and self.atlas_volume is not None
             and self.annotation_volume is not None
             and self.plane_box.currentText() == "coronal"
+            and session.atlas_ouv_ap_dv_ml_um is None
             and not self.auto_alignment_busy
         )
         self._update_auto_order_labels()
@@ -7775,7 +7874,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         diagnostics = session.auto_alignment_diagnostics or {}
         registration = self._coordinate_registration(session)
-        if registration.get("status") == "applied" and registration.get("kind") == "automatic":
+        if registration.get("status") == "applied" and registration.get("kind") == "joint":
+            registration_text = " | joint alignment and deformation applied"
+        elif registration.get("status") == "applied" and registration.get("kind") == "automatic":
             registration_text = " | automatic anatomical warp applied"
         elif registration.get("status") == "applied":
             registration_text = (
@@ -7783,13 +7884,18 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             )
         elif registration.get("status") == "pending" and registration.get("kind") == "landmark":
             registration_text = " | landmark warp pending — apply it before mapping"
+        elif registration.get("status") == "pending" and session.atlas_ouv_ap_dv_ml_um is not None:
+            registration_text = " | joint registration pending — rerun joint alignment"
         elif registration.get("status") == "pending" and registration.get("kind") == "automatic":
             registration_text = " | automatic anatomical warp pending — apply it before mapping"
         elif registration.get("status") == "pending":
             registration_text = " | coordinate registration pending — choose landmark or automatic warp"
         else:
             registration_text = " | coordinate warp not applied"
-        if session.auto_alignment_engine is not None:
+        if session.atlas_ouv_ap_dv_ml_um is not None:
+            stale_text = " | joint result stale — rerun joint alignment" if diagnostics.get("alignment_run_stale") else ""
+            self.alignment_summary.setText(f"Full physical atlas plane{registration_text}{stale_text}")
+        elif session.auto_alignment_engine is not None:
             ap_um = int(round((session.atlas_index - float(self.bregma_voxel[0])) * VOXEL_UM * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]))
             scope = session.auto_alignment_scope or ("global" if session.auto_alignment_global else "single")
             disagreement = diagnostics.get("model_disagreement", {})
@@ -8218,6 +8324,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             or self.annotation_volume is None
         ):
             return
+        if session.atlas_ouv_ap_dv_ml_um is not None:
+            self.status.setText("Full-plane sessions use the joint model, not the legacy separate anatomical warp.")
+            return
         if session.atlas_plane != "coronal":
             QtWidgets.QMessageBox.warning(
                 self,
@@ -8463,6 +8572,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         tissue_mask_sha256: str,
         result: dict,
     ) -> dict:
+        if session.atlas_ouv_ap_dv_ml_um is not None:
+            raise RuntimeError("A legacy anatomical warp cannot replace a full-plane joint result")
         # Construct and validate every transform, overlay, and probe-coordinate update
         # without mutating sessions; batch results are committed only after all succeed.
         runtime_metadata = dict(result["metadata"])
@@ -8656,6 +8767,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _start_auto_alignment(self, session_indices: list[int], *, global_alignment: bool) -> None:
         if self.auto_alignment_busy or self.atlas_volume is None or self.annotation_volume is None or not session_indices:
+            return
+        if any(self.sessions[index].atlas_ouv_ap_dv_ml_um is not None for index in session_indices):
+            self.status.setText("Full-plane sessions use the joint model, not legacy coronal auto-alignment.")
             return
         if self.plane_box.currentText() != "coronal":
             QtWidgets.QMessageBox.warning(
@@ -8966,6 +9080,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             original_diagnostics,
         ) in prepared:
             session = self.sessions[session_index]
+            if session.atlas_ouv_ap_dv_ml_um is not None:
+                raise RuntimeError("A legacy coronal result cannot replace a full-plane joint result")
             diagnostics = dict(original_diagnostics)
             if transform.atlas_shape != tuple(self.atlas_volume.shape[1:]):
                 raise RuntimeError(f"{session.name} transform does not match the loaded atlas canvas")
@@ -9185,20 +9301,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             atlas_points = np.asarray(trace.atlas_points, dtype=np.float64).reshape(-1, 2)
             if not np.isfinite(atlas_points).all():
                 raise ValueError(f"{probe_name} contains a non-finite atlas coordinate")
-            volume_points = np.asarray(
-                [
-                    point_to_volume(
-                        point,
-                        session.atlas_plane,
-                        session.atlas_index,
-                        self.atlas_volume.shape,
-                        session.atlas_tilt_ml_deg,
-                        session.atlas_tilt_dv_deg,
-                    )
-                    for point in atlas_points
-                ],
-                dtype=np.float64,
-            ).reshape(-1, 3)
+            volume_points = session_points_to_volume(session, atlas_points, self.atlas_volume.shape)
             if not np.isfinite(volume_points).all():
                 raise ValueError(f"{probe_name} produced a non-finite atlas-volume coordinate")
             volume_updates[probe_name] = volume_points.tolist()
@@ -9345,7 +9448,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             aligned_sessions = [
                 (index, session)
                 for index, session in enumerate(self.sessions)
-                if session.brain_outline_points
+                if (session.brain_outline_points or session.atlas_ouv_ap_dv_ml_um is not None)
                 and (
                     session.slice_atlas_transform is not None
                     or (
@@ -9372,13 +9475,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 is_current = session_index == self.current_session_index
                 rgb = (0.15, 0.85, 1.0) if is_current else palette[session_index % len(palette)]
                 corners = volume_to_gl(
-                    section_plane_corners(
-                        self.atlas_volume.shape,
-                        session.atlas_plane,
-                        session.atlas_index,
-                        session.atlas_tilt_ml_deg,
-                        session.atlas_tilt_dv_deg,
-                    )
+                    session_plane_corners(session, self.atlas_volume.shape)
                 )
                 plane_item = gl.GLMeshItem(
                     vertexes=corners,
@@ -10032,6 +10129,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     "atlas_index": session.atlas_index,
                     "atlas_tilt_ml_deg": session.atlas_tilt_ml_deg,
                     "atlas_tilt_dv_deg": session.atlas_tilt_dv_deg,
+                    "atlas_ouv_ap_dv_ml_um": session.atlas_ouv_ap_dv_ml_um,
+                    "atlas_raster_shape_h_w": session.atlas_raster_shape_h_w,
                     "atlas_landmarks": session.atlas_landmarks,
                     "slice_landmarks": self._slice_raw_to_display_points(session, session.slice_landmarks),
                     "slice_landmarks_raw": session.slice_landmarks,
