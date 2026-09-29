@@ -4,6 +4,25 @@ The native goal is active. No heartbeat automation is used. This is an unfinishe
 model-development goal, not a shipped or benchmark-qualified system. All work,
 data, temporary files and runs belong on `I:`.
 
+## Latest handoff
+
+- Image-key001 is completed and independently audited: candidate-stage gate
+  passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%
+  remain inadequate. Whole step4,000 checkpoint is the next joint parent.
+- The raw Allen diagnostic, terminal52827 EXIT0 from `c9a94c6`, completed64
+  images from6 development donors. Donor-macro normal error45.05058deg,
+  normal-offset error4150.58um, top32/top128 plane capture9.09091%/21.36364%.
+  Synthetic improvement has not established raw-image transfer. These upstream
+  affine references are not expert anatomical ground truth or a final benchmark.
+- Native conditional pose+ribbon trainer/protocol are prepared at `afc4196`:
+  `training/run_joint_v6_ribbon_local.py`. Dataset completion is intentionally
+  unbound. No native learning has been launched yet.
+- CPU coherent-plan generation9774 is active; do not access its output tree.
+  After exit, authenticate all12 plans, bind the prepared cohort-section driver's
+  completion pin and generate the640 sections/1,920 observations. Then bind the
+  native trainer only after section-generation exit and audit.
+- No heartbeat or additional user prompt is needed for these native-goal steps.
+
 ## Current experiment decision
 
 - Local001 (`I:/AnatomyTracker/runs/joint_v6_local_refinement_001`) completed
@@ -26,7 +45,7 @@ data, temporary files and runs belong on `I:`.
   Landmarks improve6.58%, map error worsens1.73%, global normal remains42.33deg.
   No extension/promotion. [Result](JOINT_REHEARSAL_003_RESULT_20260929.md).
 - Whole parent: own-lineage `joint_v6_proposal_curriculum_003/step_20000`.
-  Source/shared encoder and global proposal are now trainable along with the
+  Source/shared encoder and global proposal were trainable along with the
   recurrent pose updater, atlas stem and SVF decoder. Each update accumulates
   local geometry loss and broad full-cell proposal NLL before one AdamW step.
   No weights from old models or independent encoder merging. This remains one
