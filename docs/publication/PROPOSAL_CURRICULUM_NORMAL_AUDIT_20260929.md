@@ -51,6 +51,51 @@ calibration, electrode-location probability, final benchmark or shipping claim
 follows from these diagnostics. Joint recurrent/deformation training is still
 not qualified by this coarse-capture result.
 
+## Narrow label and renderer audit, 2026-09-29
+
+No actual image/normal-label mismatch was found in the traced paths. This is a
+bounded source/coordinate audit, **not certification of the entire pipeline**.
+It does not exclude anatomical ambiguity or inadequate learned image features.
+
+The frozen 003 `experiment_source.py`, lines 105–106 and 201–204, renders the
+catalogue state indexed by the same scheduled cell ID used for supervision.
+Its finite nine-point symmetric PSF is explicit; subsequent intensity inversion,
+gamma/gain, backgrounds/noise and brush dilation/erosion do not rotate the frame.
+The sole generated spatial augmentation, line 248, flips all input channels
+horizontally together: the allowed raster-reflection nuisance, not a different
+physical plane. No unlabelled rotation/crop or segmentation step was found.
+All eight saved `first_generated_batch.pt` states equal their scheduled
+catalogue states exactly (IDs 71574, 23303, 65674, 38498, 45395, 19086, 47061,
+72699). Catalogue stored normals match decoded frame normals to 3.33e-16.
+
+Frozen-row preparation uses `canonical_effective_quicknii_ouv_float64`
+(`training/run_joint_v6_proposal_experiment.py:109`); image channels and truth
+come from the same authenticated row. The physical OUV conversion and coupled
+normal/offset/roll assignment are in
+`training/arbitrary_plane_training_data_v6.py:159,187`: normal distance is
+`acos(abs(n_truth dot n_cell))`, with the same sign used for the plane offset.
+The renderer (`training/arbitrary_plane_full_frame_primitives.py:275–287`)
+uses x/W, y/H raster coordinates and physical voxel-centre conversion before
+ML/DV/AP grid sampling. No inconsistent axis permutation was found.
+
+CPU-only arithmetic on the completed 001 catalogue/prepared development tensors
+compared those continuous physical truth normals with assigned cell normals,
+restricted to the 611 rows with positive pose weight. Assigned errors were
+median **3.004925°**, p90 **4.200981°**, maximum **5.653778°**; nearest-normal
+errors were median 2.997780°, p90 4.096249°, maximum 5.618861°.
+The catalogue cover radius is 5.896075°; coupled assignment adds median 0°,
+maximum 1.873536° over nearest-normal assignment. Thus the **43.726498° model
+error is not a roughly 3° label-quantization error**. These are row-level
+quantization statistics, not the group-macro model metrics above.
+
+Proposal preprocessing (`training/arbitrary_plane_recurrent_model_v6.py:112`
+and `training/arbitrary_plane_recurrent_model.py:317`) resizes to the configured
+96-pixel raster, then applies convolution/GroupNorm; it does not canonicalize
+orientation. The 8×8 spatial pool and 64-dimensional context compression
+(`training/arbitrary_plane_coarse_proposal_v6.py:199`) remain plausible capacity
+limitations, not a demonstrated label bug. This audit used no model inference,
+GPU, new experiment, active-005 artifacts or modification of frozen outputs.
+
 ## Next focused training decision
 
 Run the smallest controlled objective intervention first:
