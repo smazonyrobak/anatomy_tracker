@@ -69,6 +69,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         ),
         proposal_normal_readout_count: int | None = None,
         spatial_residual_blocks: int = 0,
+        frame_centre_offset_conditioning: bool = False,
     ):
         super().__init__()
         if (
@@ -96,6 +97,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             cascade_max_closure_rounds=cascade_max_closure_rounds,
             proposal_normal_readout_count=proposal_normal_readout_count,
             spatial_residual_blocks=spatial_residual_blocks,
+            frame_centre_offset_conditioning=frame_centre_offset_conditioning,
         )
         self.deformation_decoder = AffineFreeSVFDecoder(
             hidden_channels,
@@ -386,9 +388,12 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         refinement_steps: int,
         training_truth_catalogue_index: torch.Tensor | None = None,
         dense_deformation_supervision_weight: torch.Tensor | None = None,
+        frame_centre_offset_observation: torch.Tensor | None = None,
     ) -> dict[str, object]:
         if self.pose_only_steps > refinement_steps + 1:
             raise ValueError("fixed pose-only steps must be between zero and T")
+        if frame_centre_offset_observation is not None:
+            frame_centre_offset_observation = torch.as_tensor(frame_centre_offset_observation, device=image.device)
         truth_input = None
         if training_truth_catalogue_index is not None:
             truth_input = torch.as_tensor(
@@ -422,6 +427,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             proposal_top_m=proposal_top_m,
             top_k=top_k,
             training_truth_catalogue_index=truth_input,
+            frame_centre_offset_observation=frame_centre_offset_observation,
         )
         catalogue = verify_bound_complete_catalogue_batch_v6(
             catalogue_batch,
@@ -591,6 +597,10 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             deformation_decoder=self.deformation_decoder,
             pose_only_steps=self.pose_only_steps,
             dense_deformation_supervision_weight=dense_weight,
+            frame_centre_offset_observation=(
+                None if frame_centre_offset_observation is None
+                else frame_centre_offset_observation.index_select(0, source_row)
+            ),
         )
         compact_teacher = teacher_forced.index_select(0, source_row)
         full_log = torch.where(

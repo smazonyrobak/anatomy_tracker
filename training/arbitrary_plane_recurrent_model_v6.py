@@ -58,6 +58,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
         cascade_max_closure_rounds: int = 4,
         proposal_normal_readout_count: int | None = None,
         spatial_residual_blocks: int = 0,
+        frame_centre_offset_conditioning: bool = False,
     ):
         verify_complete_catalogue_runtime_v6(catalogue_runtime_v6)
         if spatial_residual_blocks < 0:
@@ -81,6 +82,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
             correlation_radius=correlation_radius,
             update_limits=update_limits,
             plane_tangent_scales=plane_tangent_scales,
+            frame_centre_offset_conditioning=frame_centre_offset_conditioning,
         )
         self.catalogue_runtime_v6 = catalogue_runtime_v6
         self.cascade_max_rendered_cells_per_sample = (
@@ -112,6 +114,11 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
                     nn.init.zeros_(block[-1].weight)
                     nn.init.zeros_(block[-1].bias)
                     self.spatial_residual_blocks.append(block)
+        if frame_centre_offset_conditioning:
+            with torch.random.fork_rng(devices=[]):
+                torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0x0FF5E8)
+                self.frame_centre_offset_proposal = nn.Linear(6, feature_channels, bias=False)
+                nn.init.zeros_(self.frame_centre_offset_proposal.weight)
 
     def encode_histology(self, image, outline, outline_available):
         features = super().encode_histology(image, outline, outline_available)
@@ -334,12 +341,21 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
         outline_available: torch.Tensor,
         catalogue_batch: BoundCompleteCatalogueBatchV6,
         retrieval_shape_h_w: tuple[int, int],
+        *,
+        frame_centre_offset_observation: torch.Tensor | None = None,
     ) -> dict[str, object]:
         """Score the bound complete catalogue without invoking an atlas renderer."""
         catalogue = self._catalogue(catalogue_batch, image)
         source_features = self._proposal_features(
             image, outline, outline_available, retrieval_shape_h_w
         )
+        offset_features = self._frame_centre_offset_features(
+            frame_centre_offset_observation, source_features, catalogue["support_origin_ap_dv_ml_um"]
+        )
+        with torch.autocast(device_type=source_features.device.type, enabled=False):
+            context_bias = None if offset_features is None else self.frame_centre_offset_proposal(
+                offset_features.to(self.frame_centre_offset_proposal.weight)
+            )
         proposal = self.proposal_head_v6(
             source_features,
             catalogue["cell_states"],
@@ -347,7 +363,10 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
             catalogue["support_origin_ap_dv_ml_um"],
             expected_catalogue_cell_count=self.catalogue_runtime_v6.cell_count,
             cell_id=catalogue["cell_id"],
+            source_context_bias=context_bias,
         )
+        if offset_features is not None:
+            proposal["frame_centre_offset_available"] = offset_features[:, 5].bool()
         return {
             **proposal,
             "cascade_schema_version": RECURRENT_CASCADE_V6_SCHEMA,
@@ -373,6 +392,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
         proposal_top_m: int,
         top_k: int,
         training_truth_catalogue_index: torch.Tensor | None = None,
+        frame_centre_offset_observation: torch.Tensor | None = None,
     ) -> dict[str, object]:
         """Propose globally and close honest top-K modes under a fixed render budget."""
         catalogue = self._catalogue(catalogue_batch, image)
@@ -395,6 +415,13 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
         source_features = self._proposal_features(
             image, outline, outline_available, retrieval_shape_h_w
         )
+        offset_features = self._frame_centre_offset_features(
+            frame_centre_offset_observation, source_features, catalogue["support_origin_ap_dv_ml_um"]
+        )
+        with torch.autocast(device_type=source_features.device.type, enabled=False):
+            context_bias = None if offset_features is None else self.frame_centre_offset_proposal(
+                offset_features.to(self.frame_centre_offset_proposal.weight)
+            )
         proposal = self.proposal_head_v6(
             source_features,
             catalogue["cell_states"],
@@ -402,7 +429,10 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
             catalogue["support_origin_ap_dv_ml_um"],
             expected_catalogue_cell_count=cells,
             cell_id=catalogue["cell_id"],
+            source_context_bias=context_bias,
         )
+        if offset_features is not None:
+            proposal["frame_centre_offset_available"] = offset_features[:, 5].bool()
         proposal_log_probability = proposal[
             "raw_full_catalogue_cell_log_probability"
         ]

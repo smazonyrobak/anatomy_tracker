@@ -238,6 +238,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             0.12,
         ),
         plane_tangent_scales: tuple[float, float, float] = (0.18, 0.18, 600.0),
+        frame_centre_offset_conditioning: bool = False,
     ):
         super().__init__()
         if atlas_channels < 1 or feature_channels < 1 or hidden_channels < 1:
@@ -313,6 +314,62 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         nn.init.normal_(self.recurrent_plane_cholesky.weight, std=1e-3)
         nn.init.zeros_(self.recurrent_plane_cholesky.bias)
         nn.init.constant_(self.recurrent_plane_cholesky.bias[:3], -2.0)
+        self.frame_centre_offset_conditioning = frame_centre_offset_conditioning
+        if frame_centre_offset_conditioning:
+            # Optional parameters must not shift any existing initialization draw.
+            with torch.random.fork_rng(devices=[]):
+                torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0x0FF5E7)
+                self.frame_centre_offset_evidence = nn.Linear(10, hidden_channels, bias=False)
+                nn.init.zeros_(self.frame_centre_offset_evidence.weight)
+
+    def _frame_centre_offset_features(self, observation, reference, support_origin):
+        """B x 9: axis AP/DV/ML, reference um, observed offset um, sigma um, available.
+
+        The observation concerns dot(unit_axis, frame_centre - reference), not
+        plane distance, electrode angle or a hard bound. Unavailable payloads
+        are ignored. Return six dimensionless conditioning features, or None.
+        """
+        if observation is None:
+            return None
+        if not self.frame_centre_offset_conditioning:
+            raise ValueError("frame-centre observations require the opt-in conditioning model")
+        dtype = torch.float32 if reference.dtype in (torch.float16, torch.bfloat16) else reference.dtype
+        with torch.autocast(device_type=reference.device.type, enabled=False):
+            observation = torch.as_tensor(observation, device=reference.device, dtype=dtype)
+            if observation.shape != (reference.shape[0], 9):
+                raise ValueError("frame-centre offset observation must have shape (B,9)")
+            if not bool(((observation[:, 8] == 0) | (observation[:, 8] == 1)).all()):
+                raise ValueError("frame-centre offset availability must be zero or one")
+            available = observation[:, 8:9]
+            measured = observation[available[:, 0].bool()]
+            if not bool(torch.isfinite(measured).all() and (measured[:, 7] > 0).all()
+                        and (torch.linalg.vector_norm(measured[:, :3], dim=-1) > 0).all()):
+                raise ValueError("available offsets require finite values, positive sigma and nonzero axis")
+            clean = torch.where(available.bool(), observation,
+                                observation.new_tensor((1., 0., 0., 0., 0., 0., 0., 1., 0.)))
+            axis = clean[:, :3] / torch.linalg.vector_norm(clean[:, :3], dim=-1, keepdim=True)
+            origin = torch.as_tensor(support_origin, device=reference.device, dtype=dtype)
+            offset = clean[:, 6] + ((clean[:, 3:6] - origin) * axis).sum(-1)
+            return torch.cat((axis, offset[:, None] / 10000.,
+                              (clean[:, 7:8] / 10000.).log(), available), dim=-1) * available
+
+    def _condition_frame_centre_evidence(self, evidence, state, features, support_origin, representations):
+        """Inject metadata and the current standardized residual into the shared GRU."""
+        if features is None:
+            return evidence
+        with torch.autocast(device_type=state.device.type, enabled=False):
+            center, frame, _ = full_frame_state_to_components(state.to(features))
+            origin = torch.as_tensor(support_origin, device=state.device, dtype=features.dtype)
+            axis = features[:, :3]
+            predicted = ((center - origin) * axis[:, None]).sum(-1)
+            residual = (features[:, 3:4] * 10000. - predicted) / (features[:, 4:5].exp() * 10000.)
+            local_axis = torch.einsum("bkij,bi->bkj", frame, axis)
+            metadata = torch.cat((features[:, None].expand(-1, state.shape[1], -1),
+                                  local_axis, residual[..., None]), dim=-1)
+            metadata = metadata * features[:, None, 5:6]
+            addition = self.frame_centre_offset_evidence(metadata.to(self.frame_centre_offset_evidence.weight))
+        addition = addition[:, :, None].expand(-1, -1, representations, -1).reshape(evidence.shape[0], -1)
+        return evidence + addition.to(evidence)[..., None, None]
 
     def encode_histology(
         self,
@@ -856,6 +913,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         deformation_decoder: nn.Module | None = None,
         pose_only_steps: int | None = None,
         dense_deformation_supervision_weight: torch.Tensor | None = None,
+        frame_centre_offset_observation: torch.Tensor | None = None,
     ) -> dict[str, object]:
         """Marginalize raster nuisance states before each shared recurrent update.
 
@@ -871,6 +929,9 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             raise ValueError("initial states must have shape (B,K,12)")
         batch, cells = initial_states.shape[:2]
         representations = representation_to_canonical_raster_affine.shape[2]
+        offset_features = self._frame_centre_offset_features(
+            frame_centre_offset_observation, source_features, support_origin_ap_dv_ml_um
+        )
         if initial_joint_log_probability.shape != (batch, cells, representations):
             raise ValueError("initial joint log probability must have shape (B,K,R)")
         if deformation_decoder is None:
@@ -995,6 +1056,9 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             )
             evidence = self.refinement_pair_encoder(
                 _pair_evidence(source, atlas_features, self.correlation_radius)
+            )
+            evidence = self._condition_frame_centre_evidence(
+                evidence, state, offset_features, support_origin_ap_dv_ml_um, representations
             )
             hidden = self.recurrent_cell(evidence, hidden)
             representation_contexts.append(
@@ -1153,6 +1217,9 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         final_evidence = self.refinement_pair_encoder(
             _pair_evidence(source, final_atlas_features, self.correlation_radius)
         )
+        final_evidence = self._condition_frame_centre_evidence(
+            final_evidence, state, offset_features, support_origin_ap_dv_ml_um, representations
+        )
         final_hidden = self.recurrent_cell(final_evidence, hidden)
         representation_contexts.append(
             final_hidden.reshape(
@@ -1230,6 +1297,8 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             "conditional_within_topk_cell_log_probability": conditional_cell_log_probability,
             "conditional_within_topk_cell_probability": conditional_cell_log_probability.exp(),
         }
+        if offset_features is not None:
+            result["frame_centre_offset_available"] = offset_features[:, 5].bool()
         if deformation_decoder is not None:
             result.update(
                 {

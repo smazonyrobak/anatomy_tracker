@@ -139,6 +139,7 @@ class AntipodalPlaneProposalV6(nn.Module):
         *,
         expected_catalogue_cell_count: int,
         cell_id: torch.Tensor | None = None,
+        source_context_bias: torch.Tensor | None = None,
     ) -> dict[str, object]:
         if source_features.ndim != 4 or source_features.shape[1] != self.feature_channels:
             raise ValueError("proposal source features must have shape (B,F,h,w)")
@@ -204,6 +205,8 @@ class AntipodalPlaneProposalV6(nn.Module):
                 source_features, self.spatial_bins_h_w
             ).flatten(1)
             context = self.source_context(pooled.to(self.source_context[0].weight))
+            if source_context_bias is not None:
+                context = context + source_context_bias.to(context)
             mixture_log_probability = F.log_softmax(
                 self.mixture_logit(context).to(probability_dtype), dim=1
             )
