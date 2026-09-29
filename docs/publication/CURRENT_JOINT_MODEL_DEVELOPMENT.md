@@ -91,8 +91,19 @@ are retained, with exact3D targets and no legacy total2D-SVF labels. Five plane
 draws are low-support censored in every mode;11 planes/33 observations are
 support-eligible. The eligible planes' canonical normal-residual RMS ranges
 22.49–45.25um. This is target geometry, not prediction error or animal validation.
-No curved-surface predictor or coherent-subject learning is claimed from these
-primitives. A flat [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
+The [curved-slab representation check](CURVED_SLAB_REPRESENTATION_CHECK_20260929.md)
+fits a centre surface plus local through-thickness director to all16 slabs:
+maximum coordinate error0.164um, on this one mild synthetic subject only.
+The [physical ribbon constructor](RIBBON_ACTUAL_COORDINATE_CHECK_20260929.md)
+reproduces those fitted targets to numerical precision and has a conservative
+physical derivative bound. These are representation/geometry checks, not model
+accuracy or biological validation. The [opt-in native recurrent ribbon path](NATIVE_CURVED_RIBBON_PATH_20260929.md)
+is now implemented in the same joint model: each reflection hypothesis keeps
+its own pose/field, re-renders the actual curved slab, and uses the shared updater.
+It remains untrained and runtime-unverified; existing forward and the live
+rehearsal driver are unchanged. No coherent-subject learning is claimed yet.
+
+A flat [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
 is now prepared in `training/run_joint_v6_imagekey_retrieval.py`, not launched.
 It starts one new whole random model, trains shared image descriptors against
 fresh reflected atlas keys, and compares its4,000-update endpoint against the
