@@ -2,7 +2,8 @@
 
 Session `6220` returned exit code zero before the output tree was accessed.
 All 4,000 optimizer updates applied in 1,647.84 seconds. The independent CPU
-audit `training/audit_joint_v6_local_refinement.py` then returned exit zero.
+audit `training/audit_joint_v6_local_refinement.py` (preserved at commit `4c3a6f0`)
+then returned exit zero.
 Audit success authenticates this **failed learning result**, not model quality.
 
 This is the predefined truth-near, known-PSF, one-atlas local experiment, not

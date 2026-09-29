@@ -12,9 +12,13 @@ data, temporary files and runs belong on `I:`.
   improve only 6.07%, map error worsens 4.08%, normals barely improve. Large
   CCF gains primarily resolve reflections; unreflected rows regress overall.
 - [Full result and receipts](LOCAL_JOINT_REFINEMENT_AUDIT_20260929.md).
-- The existing `training/run_joint_v6_local_refinement.py` is now prepared for
-  matched coordinate control002; no launch handle recorded yet. Confirm actual
-  process state before any launch. Never access a run's output tree while active.
+- Matched coordinate control002 is LIVE: terminal session `70095`, Python PID
+  `20152`, launched 2026-09-29 13:04:39 Warsaw from commit `866ee1e` via
+  `training/run_joint_v6_local_refinement.py`. Output:
+  `I:/AnatomyTracker/runs/joint_v6_local_coordinate_control_002`.
+  Initial full development evaluation and 100 applied updates are confirmed on
+  stdout. Recheck the same handle; do not restart on an observation timeout.
+  Never access this output tree while the process is active.
 - Whole parent: own-lineage `joint_v6_proposal_curriculum_003/step_20000`.
   Global proposal/source encoder frozen; native shared recurrent pose updater,
   atlas stem and SVF decoder learn together. No weights from old models or
@@ -52,7 +56,10 @@ The proper geometric proposal-loss control 008 is implemented and documented,
 but not launched or selected. An optional 896-parameter predicted-coordinate
 input to the shared recurrent updater is implemented and checked, but untrained.
 The proposed [matched local002 control](LOCAL_COORDINATE_CONTROL_002.md) is
-selected after local001's failed audit, not running yet.
+selected after local001's failed audit and now running. The existing independent
+audit script is prepared for its completed endpoint comparison but must not be
+executed before confirmed exit. Original local001 auditor is preserved at commit
+`4c3a6f0`.
 
 Soft frame-centre offset conditioning now has an opt-in native proposal/GRU
 path, disabled and untrained. It is not GUI capability or calibrated inference;

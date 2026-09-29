@@ -1,8 +1,10 @@
 # Matched local coordinate-evidence control 002
 
-Prepared 2026-09-29 while local001 is active; not launched or selected yet.
-Proceed only after its confirmed exit and independent endpoint audit. This is
-a targeted local-learning control, not global localization or benchmarking.
+Prepared 2026-09-29 while local001 was active; selected after its confirmed
+exit and independent failed endpoint audit. Launched from commit `866ee1e`
+at 13:04:39 Warsaw, session `70095`, PID `20152`. Initial evaluation and
+100 applied updates were observed through stdout only. This is a targeted
+local-learning control, not global localization or benchmarking.
 
 The existing flat driver `training/run_joint_v6_local_refinement.py` is configured
 for `I:/AnatomyTracker/runs/joint_v6_local_coordinate_control_002`. Local001's

@@ -1,4 +1,4 @@
-"""CPU audit of frozen local001 endpoints; execute only after confirmed exit."""
+"""CPU audit of coordinate002 versus local001; only after confirmed 002 exit."""
 
 import os
 from pathlib import Path
@@ -15,9 +15,10 @@ import torch
 
 torch.set_num_threads(4)
 root = Path(r"I:\AnatomyTracker")
-run = root / "runs/joint_v6_local_refinement_001"
+run = root / "runs/joint_v6_local_coordinate_control_002"
+baseline = root / "runs/joint_v6_local_refinement_001"
 pack_path = root / "data/joint_v6_local_refinement_frozen_001"
-output = root / "runs/joint_v6_local_refinement_audit_001"
+output = root / "runs/joint_v6_local_coordinate_audit_002"
 output.mkdir(exist_ok=False)
 config = json.loads((run / "experiment.json").read_text())
 completion = json.loads((run / "completed.json").read_text())
@@ -58,6 +59,7 @@ audit = {
     "baseline": "actual perturbed frame, identity pullback, identity reflection (uniform-prior argmax tie), not true reflection",
     "topology": "Jacobian of saved pullback BEFORE discrete reflection; horizontal representation reversal is not a deformation fold",
     "probabilities_calibrated": False, "endpoints": {},
+    "audit_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
 }
 initial_states, perturbations = {}, {}
 for step in (0, 4000):
@@ -146,7 +148,9 @@ zero = torch.load(run / "joint_model_step_00000.pt", map_location="cpu", weights
 final = torch.load(run / "joint_model_step_04000.pt", map_location="cpu", weights_only=False, mmap=True)
 prefixes = tuple(config["trainable_prefixes"])
 audit["parent_and_freezing"] = {
-    "zero_parameter_keys_equal_parent": zero["model_state"].keys() == parent["model_state"].keys(),
+    "zero_parameter_keys_equal_parent_plus_coordinate_input": set(zero["model_state"]) == set(parent["model_state"]) | {"pose_model.coordinate_evidence.weight"},
+    "new_coordinate_input_initially_zero": not bool(torch.count_nonzero(zero["model_state"]["pose_model.coordinate_evidence.weight"])),
+    "coordinate_input_weight_change_l2": float((final["model_state"]["pose_model.coordinate_evidence.weight"] - zero["model_state"]["pose_model.coordinate_evidence.weight"]).norm()),
     "zero_tensor_difference_names": [key for key in parent["model_state"] if not torch.equal(parent["model_state"][key], zero["model_state"][key])],
     "frozen_final_difference_names": [key for key in parent["model_state"] if not key.startswith(prefixes) and not torch.equal(parent["model_state"][key], final["model_state"][key])],
     "trained_changed_tensor_names": [key for key in parent["model_state"] if key.startswith(prefixes) and not torch.equal(parent["model_state"][key], final["model_state"][key])],
@@ -176,6 +180,20 @@ audit["receipts_match"] = {
     "pack_manifest": pack_manifest == config["pack_manifest"],
     **{partition: audit["artifact_sha256"][str(pack_path / f"{partition}.pt")] == record["sha256"] for partition, record in pack_manifest["partitions"].items()},
 }
+baseline_schedule = torch.load(baseline / "schedule.pt", map_location="cpu", weights_only=False)
+baseline_audit = json.loads((root / "runs/joint_v6_local_refinement_audit_001/audit.json").read_text())
+baseline_config = json.loads((baseline / "experiment.json").read_text())
+comparison_keys = ("seed", "steps", "batch_size", "learning_rate", "amp", "evaluation_interval", "refinement_steps", "pose_only_steps", "parent_sha256", "pack_manifest", "catalogue_receipt_sha256", "small_noise_first_500_steps", "large_noise_after_500_steps")
+audit["matched_local001_comparison"] = {
+    "same_numeric_schedule": schedule.keys() == baseline_schedule.keys() and all(torch.equal(value, baseline_schedule[key]) for key, value in schedule.items()),
+    "same_experiment_fields": {key: config[key] == baseline_config[key] for key in comparison_keys},
+    "final_group_macro_difference_002_minus_001": {
+        subset: {key: value - baseline_audit["endpoints"]["4000"]["aggregates"][subset]["group_macro"][key]
+                 for key, value in record["group_macro"].items() if value is not None}
+        for subset, record in audit["endpoints"]["4000"]["aggregates"].items()
+    },
+    "baseline_audit_sha256": hashlib.sha256((root / "runs/joint_v6_local_refinement_audit_001/audit.json").read_bytes()).hexdigest(),
+}
 audit["paired_continuation_criteria"] = {}
 for subset, record in audit["endpoints"]["4000"]["aggregates"].items():
     values = record["group_macro"]
@@ -202,7 +220,9 @@ print(json.dumps({"gate": gate, "valid_tissue_no_folds": audit["valid_tissue_no_
 assert all(audit["receipts_match"].values()) and not any(audit["identity_checks"]["overlap_counts"].values())
 assert audit["identity_checks"]["development_records_match"] and audit["identity_checks"]["training_records_match"]
 assert not audit["parent_and_freezing"]["zero_tensor_difference_names"] and not audit["parent_and_freezing"]["frozen_final_difference_names"]
-assert audit["parent_and_freezing"]["final_model_finite"] and audit["parent_and_freezing"]["zero_parameter_keys_equal_parent"]
+assert audit["parent_and_freezing"]["final_model_finite"] and audit["parent_and_freezing"]["zero_parameter_keys_equal_parent_plus_coordinate_input"]
+assert audit["parent_and_freezing"]["new_coordinate_input_initially_zero"]
+assert audit["matched_local001_comparison"]["same_numeric_schedule"] and all(audit["matched_local001_comparison"]["same_experiment_fields"].values())
 assert audit["parent_and_freezing"]["final_optimizer_step_values"] == [audit["training"]["applied_steps"]]
 assert audit["training"]["applied_steps"] == completion["optimizer_steps_applied"] and audit["training"]["trace_steps_exact"] and audit["training"]["trace_row_schedule_matches"]
 assert audit["training"]["all_objectives_losses_gradients_finite"] and audit["training"]["same_initial_states_and_perturbations_at_endpoints"]
