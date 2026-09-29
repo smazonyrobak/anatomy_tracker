@@ -1,6 +1,6 @@
 # Prepared control: signed native pose evidence
 
-Status: **implemented; one fixed training-batch preflight passed; matched training ready to launch, not trained or qualified**. All development stays on I:. The canonical-bridge comparison has exited and its audit is complete.
+Status: **implemented; one fixed training-batch preflight passed; matched training launched from `0e6dc0d`, terminal70497/PID7604; not completed or qualified**. All development stays on I:. The canonical-bridge comparison has exited and its audit is complete. Do not inspect this new live output tree until process exit.
 
 ## Completed compatibility preflight
 

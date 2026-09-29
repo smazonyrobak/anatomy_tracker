@@ -1,6 +1,6 @@
 # Prepared canonical rehearsal 001
 
-Source reviewed and ready for a committed launch; no completed training, qualification or benchmark. One flat driver: `training/run_joint_v6_canonical_rehearsal.py`; its launch guard is enabled following root and independent source review.
+Launched from committed source `0e6dc0d`, terminal91005/PID1724; no completed training, qualification or benchmark. One flat driver: `training/run_joint_v6_canonical_rehearsal.py`; its launch guard was enabled following root and independent source review. Do not inspect live outputs before process exit.
 
 ## Frozen lineage and purpose
 

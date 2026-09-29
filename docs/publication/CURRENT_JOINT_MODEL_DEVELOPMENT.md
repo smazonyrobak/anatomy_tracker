@@ -71,10 +71,16 @@ data, temporary files and runs belong on `I:`.
   `0e93978`; one fixed TRAIN-batch preflight27377 exited0. Zero-head outputs and
   all original parameters/RNG match exactly, gradients pass, no optimizer applied.
   Receipt SHA-256 `4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e`.
-  Both reviewed training drivers are ready for committed launch, not qualified.
+  Both reviewed training drivers launched from committed source `0e6dc0d`:
+  native signed-pose session70497/PID7604 and coarse canonical rehearsal
+  session91005/PID1724. Native is loading the frozen cohort; coarse has passed
+  its first100 applied updates. These are separate controlled experiments, not
+  assembled models. Operative sources and both live output trees stay untouched
+  until each process exits; only terminal/stdout and GPU telemetry are monitored.
   [Predeclared protocol](NATIVE_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
-- Both training outputs and audits are now frozen and readable. Concurrent run
-  timings are not hardware benchmarks. No independently trained encoders are
+- Earlier bridge and native-no-probe outputs/audits are frozen and readable;
+  the two new active output trees are not. Concurrent run timings are not
+  hardware benchmarks. No independently trained encoders are
   merged; a future successful real warm start needs sequential native training
   of that **whole model**, not splicing in a separately trained native control.
 - No heartbeat or additional user prompt is needed for these native-goal steps.
