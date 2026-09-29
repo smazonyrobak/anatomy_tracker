@@ -19,14 +19,19 @@ data, temporary files and runs belong on `I:`.
   unbound. No native learning has been launched yet.
 - CPU coherent-plan generation9774 exited0 with all12 maps. All71 inventory
   files authenticate; completion83fa8fc0ab19f15c8b64babdfe1e98251a972c6759dade08e5513e70c76a7c89.
-  The separate section generator is now bound for640 sections/1,920 observations.
-  Bind the native trainer only after section-generation exit and audit.
+  Section generator68817 is active fromac7cb17 for640 sections/1,920 observations;
+  its complete output tree is protected until exit. Bind the native trainer only
+  after section-generation exit and the prepared target-capacity screen.
 - Matched optional-outline-dropout comparison65125 is active from14aa9fa.
   Two whole-parent continuations apply2,000 updates each; only B drops optional
   boundary/availability on half the available training observations. Its entire
   output tree and operative sources remain protected until both arms exit.
   Fixed gates require both real-donor improvements and synthetic retention;
   no six-donor development fitting or public benchmarking.
+  `training/audit_joint_v6_imagekey_outline_dropout.py` is prepared and reviewed;
+  set its completion pin and run only after both arms exit. No result yet.
+- These two processes overlap modest CUDA coordinate mapping with training.
+  Timings are not isolated performance measurements or benchmark comparisons.
 - No heartbeat or additional user prompt is needed for these native-goal steps.
 
 ## Current experiment decision
@@ -135,11 +140,11 @@ the completed rehearsal driver are unchanged. No coherent-subject learning is
 claimed yet.
 
 The [12-subject coherent cohort](COHERENT_SUBJECT_COHORT_002_PROTOCOL_20260929.md)
-is now generating on CPU from committed source `673b8fc`, session `9774`.
-Output `I:/AnatomyTracker/data/joint_v6_coherent_subject_plans_002` is protected
-until process exit. Eight training and four development subject maps have
-preassigned identities; acceptance and completeness are not yet established.
-No sections or learning are performed by this plan-generation process.
+finished from committed source `673b8fc`, session `9774` EXIT0, with every
+predeclared plan accepted and its71-file completion inventory authenticated.
+Eight training and four development subject maps retain their preassigned IDs.
+Its separate section-generation stage is now active, session68817; do not access
+`I:/AnatomyTracker/data/joint_v6_coherent_subject_cohort_sections_002` until exit.
 
 The [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
 completed4,000 updates, terminal8803 EXIT0, from `edc99b8`. Its independent
