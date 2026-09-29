@@ -33,6 +33,10 @@ unobserved electrode in an image.
 
 ## Correct map adapter
 
+The following pullback/OUV adapter applies to the **legacy planar/SVF path only**.
+The later native curved-ribbon path needs the observed centre-surface adapter
+described below; reducing its geometry to a flat OUV would discard deformation.
+
 Use `output["refined_output"]["final_pullback_map_yx_px"]`: querying an observed
 source pixel returns its fixed atlas-raster coordinates. Apply the selected
 representation affine **after** this map, then the canonical physical frame with
@@ -124,3 +128,48 @@ cortical-surface entry and depth validity also require explicit ray hypotheses.
 This review authorizes no automatic constraint correction, probability claim,
 benchmark or deployment. Constraint calibration and biological-animal validation
 remain separate requirements.
+
+## GUI audit after the curved-ribbon extension
+
+Read-only inspection of `source/proprietary_trajectory_tool.py` and
+`source/probe_constraints.py` establishes these existing inputs:
+
+- Per-probe surgical AP/ML, entry-disk radius, attack angle/tolerance and optional
+  maximum depth. Radius, tolerance and maximum depth are **hard bounds**, not
+  Gaussian standard deviations. Entry DV comes from the dorsal Isocortex surface.
+- Attack angle is0deg horizontal/90deg vertical. No measured azimuth or physical
+  multi-shank roll is supplied. The displayed fitted horizontal bearing is not
+  a shank-orientation measurement.
+- Endpoint choices distinguish known surface-to-tip depth from deepest marked
+  dot as tip. Neither is interchangeable with maximum allowed insertion depth.
+- Marks in `ProbeTrace.slice_points` are downsampled, unrotated `raw_display`
+  xy pixels. Brightness weights are not calibrated localization uncertainty;
+  derived `atlas_points`/`volume_points` are not extra independent observations.
+- Batch AP bounds and checked anterior-to-posterior ordering exist, but not
+  cutting thickness, spacing or arbitrary stack-normal measurements. Legacy AP
+  bounds refer to plane AP at atlas-centre DV/ML, not finite-frame centre AP or
+  arbitrary-plane normal offset. Native controls need an explicitly labelled,
+  versioned anchor rather than silent reinterpretation.
+
+`session_points_to_volume` currently evaluates only flat
+`O+(x/W)U+(y/H)V`, then divides physical CCF micrometres by25 and subtracts0.5.
+Native marks must instead use recorded raw-display-to-model-raster coordinates
+and interpolate the **final observed centre CCF surface**. Reflection is already
+spatially applied in that observed surface: do not flip again or pass through
+the old2D warp plus flat plane. Canonical OUV remains a pose reference/legacy
+fallback, not the complete anatomical map.
+
+The verified stereotaxic conversion, for voxel-face physical origin0, is
+`p_CCF_um = 25*(bregma_voxel + 0.5) + S*p_stereotaxic_um`,
+`S=diag(-1,-1,+1)`. Directions use`S*d`, covariances`S*cov*S.T`.
+Bind the exact atlas/bregma convention and input-raster transform to predictions.
+The session archive does not yet expose explicit biological animal/specimen/
+experiment IDs; obtain those from actual metadata, not filename inventions.
+
+The delivery contract requires one shared directed ray and endpoint latent per
+animal/probe, coupled to section surface hypotheses through original marks.
+Count shared surgery once per probe and each independent mark once. Propagate
+joint section/ray/endpoint samples to sites without converting hard tolerances
+into uncertainty. The legacy coronal/outline-entry gate must not make brush
+segmentation mandatory for native inference. None of this GUI wiring is claimed
+implemented or calibrated by this source audit.

@@ -1,5 +1,12 @@
 # Opt-in native joint uncertainty — 2026-09-29
 
+**Scope after the curved-ribbon extension:** this historical35-coordinate head
+models the older planar/SVF branch. It has not been adapted to the new3D centre
+surface and through-thickness director, and is not enabled in the native ribbon
+learning control. Do not export it as ribbon or electrode-site confidence.
+Correlated ribbon/ray uncertainty and biological-animal calibration remain
+required before any90% region-probability claim.
+
 The joint v6 model now has an optional, randomly initialized covariance head on
 the shared recurrent updater's **final context for each selected cell and each
 raster representation**. Only spatial dimensions are pooled. Reflection modes
