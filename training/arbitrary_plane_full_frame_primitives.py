@@ -328,10 +328,13 @@ def render_finite_thickness_coordinate_grid(
     points = physical_um_to_allen_index_points(
         coordinates, origin_ap_dv_ml_um, voxel_size_ap_dv_ml_um
     )
-    size_xyz = volume.new_tensor(volume.shape[-3:][::-1])
-    grid = (points.flip(-1) / (size_xyz - 1) * 2.0 - 1.0).reshape(
-        batch * samples, 1, height, width, 3
-    )
+    depth, native_height, native_width = volume.shape[-3:]
+    # Match the planar renderer's FP32 scalar arithmetic at zero deformation.
+    grid = torch.stack((
+        points[..., 2] / (native_width - 1) * 2.0 - 1.0,
+        points[..., 1] / (native_height - 1) * 2.0 - 1.0,
+        points[..., 0] / (depth - 1) * 2.0 - 1.0,
+    ), dim=-1).reshape(batch * samples, 1, height, width, 3)
     sampled = F.grid_sample(
         volume[None].expand(batch * samples, -1, -1, -1, -1), grid,
         mode="bilinear", padding_mode="zeros", align_corners=True,

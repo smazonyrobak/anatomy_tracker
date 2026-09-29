@@ -54,3 +54,47 @@ confidence. The field head is untrained. This commit has AST/source inspection
 only: no model execution, GPU run, gradient check or accuracy claim. Independent
 source review found no blocker; root review precedes any experiment. NumPy target and active training
 drivers are unchanged.
+
+## Actual-data GPU execution, after rehearsal exit
+
+One fresh whole random model was exercised on the frozen eligible reflected
+section2, imperfect-brush observation, with two independent reflection branches
+and two recurrent updates. It used the fitted canonical frame as an oracle
+start, known PSF, and zero ribbon-head initialization. This is one graph check,
+not learning, global capture or point-estimate accuracy.
+
+The first check failed a strict1e-6 zero-deformation render-parity threshold.
+The diagnostic repeat preserved that failure: maximum intensity difference
+1.58548e-5, RMS3.14479e-7. On identical physical queries, tensor-vector division
+versus the older renderer's per-axis scalar division changed normalized FP32
+grid coordinates by2.38419e-7. Re-rendering with the scalar arithmetic matched
+the planar renderer exactly; no axis, reflection, PSF or physical-coordinate
+discrepancy was found. The second run still exited1 after recording its failed
+parity gate, although its backward checks passed.
+
+The coordinate-grid renderer now uses the same per-axis scalar normalization
+as the existing planar renderer. The third run exited0 with the original
+threshold unchanged: direct-grid rerender error0, zero-field planar-render
+error0, initial reflection-permutation error0. Physical coordinates and PSF
+weights are unchanged. Existing frozen data and failed diagnostics are retained;
+future rendering carries the revised source hash.
+
+Finite, nonzero gradients reach the ribbon and pose heads, slice/atlas/shared
+encoders, score head and coordinate input. Forward0.737s, backward0.122s and
+peak allocated1.887GB were observed on RTX2080Ti, excluding atlas loading.
+No optimizer step was applied. The two final branch states remain distinct.
+Nonzero trained fields, active bound clipping, learned accuracy and calibrated
+probabilities are not established by this zero-head execution.
+
+Outputs under `I:/AnatomyTracker/runs/`:
+
+- `joint_v6_native_ribbon_gpu_check_001`: original failed check, no completion.
+- `joint_v6_native_ribbon_gpu_check_002`: diagnosed parity failure and completed
+  backward; completion SHA256
+  `f84ee71bd7ac5d340e540440e4f10ee5d11b7a8a7935129630992aff8ba0aa47`.
+- `joint_v6_native_ribbon_gpu_check_003`: corrected arithmetic, full check pass;
+  completion SHA256
+  `04489d73591441e5a6634945e5ee79714885b45629c1347bcd8e7b6ad37f6a15`.
+
+Each retained diagnostic records its actual script/source, input identities and
+raw outputs. Run002's completion filename does not supersede its failed gate.

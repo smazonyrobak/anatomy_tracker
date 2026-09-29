@@ -103,8 +103,11 @@ physical derivative bound. These are representation/geometry checks, not model
 accuracy or biological validation. The [opt-in native recurrent ribbon path](NATIVE_CURVED_RIBBON_PATH_20260929.md)
 is now implemented in the same joint model: each reflection hypothesis keeps
 its own pose/field, re-renders the actual curved slab, and uses the shared updater.
-It remains untrained and runtime-unverified; existing forward and the live
-rehearsal driver are unchanged. No coherent-subject learning is claimed yet.
+It remains untrained. A bounded actual-data GPU forward/backward now passes;
+a tiny FP32 normalization-order mismatch was diagnosed and corrected without
+changing physical geometry or relaxing the parity gate. Existing forward and
+the completed rehearsal driver are unchanged. No coherent-subject learning is
+claimed yet.
 
 The [12-subject coherent cohort](COHERENT_SUBJECT_COHORT_002_PROTOCOL_20260929.md)
 is now generating on CPU from committed source `673b8fc`, session `9774`.
