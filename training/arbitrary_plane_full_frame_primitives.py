@@ -304,3 +304,40 @@ def render_finite_thickness_plane(
         align_corners=True,
     )[:, :, 0].reshape(batch, offsets.shape[1], volume.shape[0], height, width)
     return (sampled * normalized_weights[:, :, None, None, None]).sum(dim=1)
+
+
+def render_finite_thickness_coordinate_grid(
+    volume_c_ap_dv_ml: torch.Tensor,
+    coordinates_ap_dv_ml_um: torch.Tensor,
+    origin_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
+    voxel_size_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
+    axial_weights: torch.Tensor,
+) -> torch.Tensor:
+    """Render physical B,S,H,W,3 queries into B,C,H,W, including curved slabs.
+
+    Volume axes are C,AP,DV,ML; physical voxel centres are origin+(index+.5)*spacing.
+    Positive PSF weights S or B,S are normalized once per batch item, never per
+    pixel/tissue support. Trilinear sampling uses align_corners=True and zero
+    padding. Coordinates already include the complete subject/section mapping;
+    no plane, normal, reflection or deformation is inferred here. Gradients pass
+    through volume, physical coordinates and weights.
+    """
+    volume = volume_c_ap_dv_ml
+    coordinates = torch.as_tensor(coordinates_ap_dv_ml_um, device=volume.device, dtype=volume.dtype)
+    batch, samples, height, width = coordinates.shape[:4]
+    points = physical_um_to_allen_index_points(
+        coordinates, origin_ap_dv_ml_um, voxel_size_ap_dv_ml_um
+    )
+    size_xyz = volume.new_tensor(volume.shape[-3:][::-1])
+    grid = (points.flip(-1) / (size_xyz - 1) * 2.0 - 1.0).reshape(
+        batch * samples, 1, height, width, 3
+    )
+    sampled = F.grid_sample(
+        volume[None].expand(batch * samples, -1, -1, -1, -1), grid,
+        mode="bilinear", padding_mode="zeros", align_corners=True,
+    )[:, :, 0].reshape(batch, samples, volume.shape[0], height, width)
+    weights = torch.as_tensor(axial_weights, device=volume.device, dtype=volume.dtype)
+    if weights.ndim == 1:
+        weights = weights[None]
+    weights = weights / weights.sum(dim=-1, keepdim=True)
+    return (sampled * weights[:, :, None, None, None]).sum(dim=1)
