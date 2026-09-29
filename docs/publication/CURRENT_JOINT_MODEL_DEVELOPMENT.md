@@ -120,6 +120,20 @@ data, temporary files and runs belong on `I:`.
   show a finite-frame training gap. Coarse predicted R differs from best-frame R
   on46.72% of eligible real top1 rows; keep both reflected hypotheses.
   [TRAIN capture evidence](TRAIN_CAPTURE_RESIDUALS_001_RESULT_20260929.md).
+- Actual coherent TRAIN candidate cache97190 from `6a172de` and independent
+  CPU reconstruction75081 exited0. All1,920 observations/640 sections/eight
+  synthetic subjects are retained (1,149 eligible,771 censored), without DEV
+  section reads. Eligible top128 plane capture is only39.65–51.81%, top1
+  normal error48.40–53.27 degrees, and predicted-R frame RMS11.14–13.25mm.
+  Even oracle best beam/frame RMS is3.54–4.85mm. Coarse retained mass8.43–10.88%
+  is uncalibrated, not an exhausted posterior. Previous fixed12mm synthetic
+  capture cannot be presumed to transfer to coherent acquisition canvases;
+  broaden actual coarse training as well as native capture before qualification.
+  A saved-frame necessary-reach check finds78.78–79.33% of eligible base
+  coherent sections exceed the three-step log-span reach from12mm. None of
+  the acquisition frames exceeds that span bound; it is not a full diagnosis
+  of retrieval failure. Change future capture support, not current live settings.
+  [Audited TRAIN-only result](COHERENT_TRAIN_CANDIDATES_001_RESULT_20260929.md).
 - The independent native mark adapter is implemented as `raw_marks_to_ribbon_ccf`
   in `training/arbitrary_plane_ribbon_marks.py`, committed `f5cdf77`. It maps
   recorded raw-to-model coordinates onto each retained observed curved surface,
