@@ -20,13 +20,14 @@ from training.arbitrary_plane_catalogue_runtime_v6 import make_complete_catalogu
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 
-RUN = ROOT / "runs/joint_v6_eight_case_gpu_overfit_001"
+RUN = ROOT / "runs/eight_case_gpu_amp_overfit_001"
 PACK = ROOT / "data/joint_v6_local_refinement_frozen_001"
 BASELINE = ROOT / "runs/joint_v6_proposal_substantive_001"
 CURRICULUM = ROOT / "runs/joint_v6_proposal_curriculum_003"
 SEED = 2026092908
 STEPS = 1000
 DEVICE = "cuda"
+AMP = True
 RETRIEVAL_SHAPE = (96, 96)
 
 RUN.mkdir(parents=True, exist_ok=False)
@@ -62,6 +63,7 @@ model_kwargs["proposal_normal_readout_count"] = None
 torch.manual_seed(SEED)
 model = ArbitraryPlaneJointModelV6(runtime, **model_kwargs).to(DEVICE)
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.0001)
+scaler = torch.amp.GradScaler("cuda", enabled=AMP, init_scale=256.0)
 repository = Path(__file__).resolve().parents[1]
 source_files = (
     "training/run_joint_v6_eight_case_overfit.py",
@@ -75,6 +77,8 @@ experiment = {
     "concurrency": "authorized brief GPU overlap with existing005 training; no timing comparison or performance benchmark;005 outputs untouched",
     "initialization": "fresh complete joint model; no loaded model weights, features or pseudolabels",
     "seed": SEED, "model_kwargs": model_kwargs, "device": DEVICE, "threads": 4,
+    "encoder_autocast_float16": AMP, "probability_head": "corrected FP32 outside autocast",
+    "grad_scaler_initial_scale": 256.0,
     "optimizer": "AdamW", "learning_rate": 0.001, "weight_decay": 0.0001,
     "loss": "mean full98304-cell joint NLL; no auxiliary normal loss",
     "batch_size": 4, "schedule": "alternating fixed rows0:4 and4:8",
@@ -92,20 +96,30 @@ experiment = {
 print(json.dumps({"selected_pack_rows": selected, "labels": labels.tolist(), "foreground_pixels": foreground, "cpu_threads": 4}), flush=True)
 started = time.perf_counter()
 status = "completed1000"
+applied_steps = 0
+skipped_steps = []
 with (RUN / "metrics.jsonl").open("w", encoding="utf-8") as trace:
     for step in range(STEPS + 1):
         if step:
             batch = slice(0, 4) if step % 2 else slice(4, 8)
             model.train()
             optimizer.zero_grad(set_to_none=True)
-            output = model.pose_model.forward_proposal_only(inputs[batch, :1], inputs[batch, 1:2], inputs[batch, 2].mean((-2, -1)), runtime.expand(4), RETRIEVAL_SHAPE)
-            loss = F.nll_loss(output["raw_full_catalogue_cell_log_probability"], labels[batch])
-            loss.backward()
+            with torch.autocast("cuda", dtype=torch.float16, enabled=AMP):
+                output = model.pose_model.forward_proposal_only(inputs[batch, :1], inputs[batch, 1:2], inputs[batch, 2].mean((-2, -1)), runtime.expand(4), RETRIEVAL_SHAPE)
+                loss = F.nll_loss(output["raw_full_catalogue_cell_log_probability"], labels[batch])
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             gradient = torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-            optimizer.step()
+            previous_scale = scaler.get_scale()
+            scaler.step(optimizer)
+            scaler.update()
+            if scaler.get_scale() < previous_scale:
+                skipped_steps.append(step)
+            else:
+                applied_steps += 1
         if step % 100 == 0:
             model.eval()
-            with torch.no_grad():
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16, enabled=AMP):
                 raw = torch.cat([model.pose_model.forward_proposal_only(inputs[start:start + 4, :1], inputs[start:start + 4, 1:2], inputs[start:start + 4, 2].mean((-2, -1)), runtime.expand(4), RETRIEVAL_SHAPE)["raw_full_catalogue_cell_log_probability"] for start in (0, 4)])
                 nll = F.nll_loss(raw, labels, reduction="none")
                 predicted = raw.argmax(1)
@@ -114,6 +128,7 @@ with (RUN / "metrics.jsonl").open("w", encoding="utf-8") as trace:
                 normal_nll = F.nll_loss(normal_log, labels // 256)
             elapsed = time.perf_counter() - started
             metric = {"step": step, "seconds": elapsed, "mean_joint_nll": float(nll.mean()), "normal_nll": float(normal_nll), "mean_normal_error_deg": float(normal_error.mean()), "exact_cell_recall": float((predicted == labels).float().mean()), "per_row_nll": nll.tolist(), "per_row_normal_error_deg": normal_error.tolist(), "predicted_cell": predicted.tolist(), "rss_bytes": process.memory_info().rss, "peak_working_set_bytes": process.memory_info().peak_wset}
+            metric.update({"applied_steps": applied_steps, "scaler_skipped_steps": skipped_steps.copy(), "scaler_scale": scaler.get_scale()})
             if step:
                 metric["last_gradient_norm"] = float(gradient)
                 metric["projected1000_seconds"] = elapsed * STEPS / step
@@ -126,5 +141,5 @@ with (RUN / "metrics.jsonl").open("w", encoding="utf-8") as trace:
                 status = "stopped100_cpu_budget"
                 break
 np.save(RUN / "final_raw_log_probability.npy", raw.cpu().numpy())
-(RUN / "completed.json").write_text(json.dumps({"status": status, "steps": step, "seconds": time.perf_counter() - started, "final_metrics": metric}, indent=2), encoding="utf-8")
+(RUN / "completed.json").write_text(json.dumps({"status": status, "steps": step, "applied_steps": applied_steps, "scaler_skipped_steps": skipped_steps, "seconds": time.perf_counter() - started, "final_metrics": metric}, indent=2), encoding="utf-8")
 print(f"Eight-case {DEVICE} diagnostic finished: {status}", flush=True)
