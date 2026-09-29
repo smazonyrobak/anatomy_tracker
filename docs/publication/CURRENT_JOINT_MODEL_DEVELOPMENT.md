@@ -45,12 +45,16 @@ data, temporary files and runs belong on `I:`.
   positives, preserving source roll. Both arms share explicit weak-reference
   eligibility and physical-plane negative exclusion. Same wholeA6k parent,
   2,000 updates each, fixed endpoints; no public benchmark or encoder merging.
-  [Protocol](CANONICAL_CHART_BRIDGE_001_PROTOCOL_20260929.md). Now active in
-  session96952, launched from `ca1cb38`. Terminal confirms512 atlas chart images
-  and244 common-eligible/12 ineligible real rows; all256 remain in evaluation.
-  While active inspect only terminal/stdout and process/GPU telemetry, not its
-  output tree or operative sources. After exit, independently audit both frozen
-  endpoints and their fixed gates before selecting any continuation.
+  [Protocol](CANONICAL_CHART_BRIDGE_001_PROTOCOL_20260929.md). Runner96952 from
+  `ca1cb38` and independent audit41128 both exited0. Real development normal
+  error A38.42→B9.54deg and capture32 A19.85%→B92.12% show a large paired gain.
+  B nevertheless fails the whole gate: no-brush synthetic capture decreases
+  2.25points versus the parent, beyond the fixed2point allowance. No waiver.
+  [Audited result](CANONICAL_CHART_BRIDGE_001_RESULT_20260929.md).
+- Next coarse step is a separately declared whole-B experimental continuation
+  with lower learning rate and stronger broad synthetic rehearsal, preserving
+  the canonical real positives. B is an experimental warm start, not a promoted
+  model; the six development donors are not untouched final validation.
 - Native conditional pose+ribbon001 (89162, `dc32605`) and independent audit84435
   both exited0. Oracle centre error814.24→716.56um improves only about12%, below
   the fixed20% requirement; plane-normal error6.138→6.103deg barely changes.
@@ -58,6 +62,12 @@ data, temporary files and runs belong on `I:`.
   Do not promote this truth-near, known-PSF control to honest global inference.
   Revise local plane learning before a retrieved-beam qualification experiment.
   [Full result and independent coordinate attribution](NATIVE_RIBBON_LOCAL_001_RESULT_20260929.md).
+- The next matched native control adds six signed out-of-plane render-cost maps
+  to the existing shared updater. Original whole4k parent, losses, sampling and
+  training budget stay fixed; an explicit20% oracle-normal reduction is required
+  alongside the original dense-coordinate gate. Implementation and one fixed
+  training-batch compatibility preflight are in progress, not yet trained.
+  [Predeclared protocol](NATIVE_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
 - Both training outputs and audits are now frozen and readable. Concurrent run
   timings are not hardware benchmarks. No independently trained encoders are
   merged; a future successful real warm start needs sequential native training

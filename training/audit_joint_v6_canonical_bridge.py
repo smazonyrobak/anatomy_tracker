@@ -14,7 +14,7 @@ import torch
 
 RUN = ROOT / "runs/joint_v6_canonical_bridge_001"
 OUT = ROOT / "runs/joint_v6_canonical_bridge_001_independent_audit"
-COMPLETION_SHA256 = "UNSET_UNTIL_CONFIRMED_EXIT"
+COMPLETION_SHA256 = "81257a308b0d6e10c70a53de72cafa932fd546c0ec2a6cd13aa82f1edfac3d2f"
 PARENT_SHA256 = "280836b65fb6db22930c8ee268eb4a880997c7858fb91a1e31ad6c7c94937eb2"
 assert len(COMPLETION_SHA256) == 64, "Pin completion only after confirmed process exit"
 torch.set_num_threads(4)
@@ -98,7 +98,7 @@ assert np.array_equal(eligible, eligibility["common_eligible"]) and np.allclose(
 traces = {}; frozen_counts = {}; checkpoint_hash = {"parent": PARENT_SHA256}
 for arm in ("A", "B"):
     endpoint = torch.load(RUN / arm / "joint_model_step_08000.pt", map_location="cpu", weights_only=False, mmap=True)
-    assert endpoint["experiment"] == cfg and endpoint["arm"] == arm and (endpoint["step"], endpoint["optimizer_steps_applied"], endpoint["additional_optimizer_steps_applied"]) == (8000, 8000, 2000)
+    assert json.loads(json.dumps(endpoint["experiment"])) == cfg and endpoint["arm"] == arm and (endpoint["step"], endpoint["optimizer_steps_applied"], endpoint["additional_optimizer_steps_applied"]) == (8000, 8000, 2000)
     assert all(int(value["step"]) == 8000 for value in endpoint["optimizer_state"]["state"].values())
     assert set(endpoint["model_state"]) == set(parent["model_state"]) and all(torch.isfinite(value).all() for value in endpoint["model_state"].values())
     frozen = [name for name in endpoint["model_state"] if not name.startswith(tuple(cfg["trained_modules"]))]
