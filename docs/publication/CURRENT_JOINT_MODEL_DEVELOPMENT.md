@@ -185,7 +185,7 @@ the main integration checkout. Its output
 `I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_001` and operative
 model/runner source are protected until exit. Initial stdout confirms input
 loading; no training result is asserted. A guarded adapted post-exit auditor is
-being prepared, not run. Coarse session96942 continues in its separate frozen
+prepared, with completion pin unset and not run. Coarse session96942 continues in its separate frozen
 checkout, so neither run's source may be changed for the other.
 [Prospective protocol](NORMALIZED_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
 Do not infer multiaxis or learned-deformation success from the oracle diagnostic,
