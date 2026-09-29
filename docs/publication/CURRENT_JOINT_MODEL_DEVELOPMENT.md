@@ -32,12 +32,20 @@ data, temporary files and runs belong on `I:`.
   angle retention. Real normal38.59→42.99deg, capture32 .13939→.18333;
   low sampled NCE does not establish global fitting. Do not promote or extend.
   [Result and exact bindings](IMAGEKEY_REAL_SYNTHETIC_001_RESULT_20260929.md).
-- Next coarse-stage action is a fixed training-only comparison of exact affine
-  anchors versus the complete saved gallery on all256 training images/58 donors.
-  Preserve the11 zero-support and one low-support anchors rather than silently
-  filtering them. Distinguish anchor/gallery mismatch from donor generalization;
-  no extra six-donor tuning or public benchmark. This diagnostic is now active,
-  session84429 from `f57e399`; its output and operative sources are protected.
+- Training-only exact-anchor/gallery diagnosis84429 from `f57e399` exited0.
+  On all256 training images/58donors, failed8k achieves96.03% near-anchor hit1
+  but22.59% full-gallery plane capture32. No acquisition frame has a catalogue
+  candidate within1mm finite-frame/10deg tolerance. Tangent centre and span
+  contribute about80% of nearest-frame squared error. Empty references alone
+  do not explain the gap. This supports a chart-transfer problem, not a claim
+  that geometry conventions are broken or that unseen-donor overfit explains
+  everything. [Reconstructed result](REAL_TRAINING_RETRIEVAL_001_RESULT_20260929.md).
+- Next is a matched-budget continuous-plane chart bridge: matched affine
+  positives versus a50/50 mixture of matched and catalogue-centred12mm
+  positives, preserving source roll. Both arms share explicit weak-reference
+  eligibility and physical-plane negative exclusion. Same wholeA6k parent,
+  2,000 updates each, fixed endpoints; no public benchmark or encoder merging.
+  [Protocol](CANONICAL_CHART_BRIDGE_001_PROTOCOL_20260929.md). Not launched yet.
 - Native conditional pose+ribbon001 (89162, `dc32605`) and independent audit84435
   both exited0. Oracle centre error814.24→716.56um improves only about12%, below
   the fixed20% requirement; plane-normal error6.138→6.103deg barely changes.
