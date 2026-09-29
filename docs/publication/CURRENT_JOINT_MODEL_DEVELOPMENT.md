@@ -11,7 +11,7 @@ data, temporary files and runs belong on `I:`.
 - Unified terminal session `6220`, Python PID `4104`, launched from source
   commit `338c636`. Confirm live/terminal state before taking further action;
   these identifiers are a handoff, not proof of continued execution.
-- Full 256-section initial evaluation and 100 applied updates were observed on
+- Full 256-section initial evaluation and 2,700 applied updates were observed on
   stdout. The fixed endpoint is 4,000 steps. Read stdout/process/GPU telemetry
   while active; do not inspect or modify its output tree until confirmed exit.
 - Whole parent: own-lineage `joint_v6_proposal_curriculum_003/step_20000`.
@@ -46,10 +46,17 @@ learning meets its criteria, proceed to whole-model joint unfreezing with global
 proposal rehearsal; otherwise address the observed failure first. Do not start
 public benchmarking or uncertainty calibration while point learning is poor.
 
-The proper geometric proposal loss is a documented, **unimplemented** possible
-control, not a queued GPU run. Constraints are currently standalone factors,
-not integrated v6 capability; their exact missing wiring and conditioned-tail
-limits are documented in [constraint gaps](JOINT_CONSTRAINT_INTEGRATION_GAPS_20260929.md).
+The proper geometric proposal-loss control 008 is implemented and documented,
+but not launched or selected. An optional 896-parameter predicted-coordinate
+input to the shared recurrent updater is implemented and checked, but untrained.
+The proposed [matched local002 control](LOCAL_COORDINATE_CONTROL_002.md) is
+prepared for an evidence-led decision after local001's audit, not running yet.
+
+Soft frame-centre offset conditioning now has an opt-in native proposal/GRU
+path, disabled and untrained. It is not GUI capability or calibrated inference;
+hard slice bounds, surgical ray/entry/angle and coherent stack inference still
+need their correct native wiring. Exact limitations and conditioned-tail issues
+remain documented in [constraint gaps](JOINT_CONSTRAINT_INTEGRATION_GAPS_20260929.md).
 Use `final_pullback_map_yx_px` for observed mark → atlas-raster mapping, then
 reflection → physical OUV; the current forward-map field is only an alias.
 
