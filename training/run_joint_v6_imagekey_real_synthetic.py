@@ -1,4 +1,4 @@
-"""Prepared weak-affine real+synthetic continuation; no launch before A/B review."""
+"""Weak-affine real+synthetic continuation from independently audited whole A6000."""
 import os
 import sys
 from pathlib import Path
@@ -8,7 +8,7 @@ os.environ["TEMP"] = os.environ["TMP"] = str(ROOT / "tmp")
 os.environ["TORCH_HOME"] = str(ROOT / "cache/torch")
 os.environ["CUDA_CACHE_PATH"] = str(ROOT / "cache/cuda")
 sys.dont_write_bytecode = True
-READY_AFTER_A_B_REVIEW = False
+READY_AFTER_A_B_REVIEW = True
 assert READY_AFTER_A_B_REVIEW, "Prepared only: choose and pin the whole parent after both A/B arms exit and are audited"
 
 import copy
@@ -36,16 +36,16 @@ PREPARED = ROOT / "runs/joint_v6_proposal_substantive_001"
 REPLAY = ROOT / "runs/joint_v6_proposal_curriculum_003"
 REAL_TRAIN = ROOT / "data/allen_real_training_inputs_20260929"
 REAL_DEV = ROOT / "runs/joint_v6_imagekey_retrieval_001_allen_raw"
-# Provisional original parent. Any later A/B choice needs ALL parent pins replaced after exit/audit.
-PARENT_KIND = "original001"
-PARENT_CHECKPOINT = ORIGINAL / "joint_model_step_04000.pt"
-PARENT_SHA256 = "d4d706e8d80e53a3638a70e79ce8661ff4af41f7b846143aa1ec68372bfb2ae5"
-PARENT_AUDIT = ROOT / "runs/joint_v6_imagekey_retrieval_001_independent_audit/audit.json"
-PARENT_AUDIT_SHA256 = "f9eb9c6845e048e5fc3ca840a4c5effcf48c1d6ed98afef9daa65a3983e4ca9b"
-PARENT_SYNTHETIC_METRICS = ORIGINAL / "development_metrics_step_04000.json"
-PARENT_SYNTHETIC_SHA256 = "abfb7b6bfca60500e51293bf592eaef84d92938dfddb9bc6f29e24673859ec58"
-PARENT_REAL_METRICS = REAL_DEV / "summary.json"
-PARENT_REAL_SHA256 = "2394eae62ef6c64e04b41947e57ca94dd64a2c456e0bc04a58b8dc2997107b37"
+# Whole control A retained as a warm start, not a qualified model; B failed its gate.
+PARENT_KIND = "outline_dropout_A"
+PARENT_CHECKPOINT = ROOT / "runs/joint_v6_imagekey_outline_dropout_001/A/joint_model_step_06000.pt"
+PARENT_SHA256 = "280836b65fb6db22930c8ee268eb4a880997c7858fb91a1e31ad6c7c94937eb2"
+PARENT_AUDIT = ROOT / "runs/joint_v6_imagekey_outline_dropout_001_independent_audit/audit.json"
+PARENT_AUDIT_SHA256 = "2db902bdc6a2e502c911fa3ced308ed96d27219926356457efa0e063d53bd2e0"
+PARENT_SYNTHETIC_METRICS = PARENT_CHECKPOINT.parent / "synthetic/summary.json"
+PARENT_SYNTHETIC_SHA256 = "281fa539824103abed383e5a2c20401377527c53e2bfc2156cfec9d8fb211722"
+PARENT_REAL_METRICS = PARENT_CHECKPOINT.parent / "allen_raw/summary.json"
+PARENT_REAL_SHA256 = "465bc4c932b4164f14023c1983dc9a1531f151be21e72aed000e0193e7e04e0b"
 ORIGINAL_SHA256 = "d4d706e8d80e53a3638a70e79ce8661ff4af41f7b846143aa1ec68372bfb2ae5"
 REAL_TRAIN_SUMMARY_SHA256 = "4f8484bbd2ab5719971d9862f3f5ea87ea3d1c9de76468a936af67bcc65da9fd"
 REAL_DEV_SUMMARY_SHA256 = "2394eae62ef6c64e04b41947e57ca94dd64a2c456e0bc04a58b8dc2997107b37"

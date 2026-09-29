@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(r"I:\AnatomyTracker")
 DATA = ROOT / "data/joint_v6_coherent_subject_cohort_sections_002"
 OUTPUT = ROOT / "runs/joint_v6_coherent_ribbon_target_capacity_002"
-COMPLETION_SHA256 = "UNSET_AFTER_CONFIRMED_SECTION_EXIT"
+COMPLETION_SHA256 = "ba51982a5b03b61d4bcf7f37f2c139dd6c1caf7ff66a6124cb678ab5ee9dd1f2"
 if len(COMPLETION_SHA256) != 64:
     raise RuntimeError("No cohort output has been read; supply the completion hash only after confirmed section-generator EXIT")
 

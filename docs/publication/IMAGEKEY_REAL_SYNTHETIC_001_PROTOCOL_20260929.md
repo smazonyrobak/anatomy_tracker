@@ -1,6 +1,13 @@
-# Weak-affine real + synthetic retrieval continuation — prepared, not run
+# Weak-affine real + synthetic retrieval continuation — bound after A/B audit
 
-Driver: `training/run_joint_v6_imagekey_real_synthetic.py`; future output `I:/AnatomyTracker/runs/joint_v6_imagekey_real_synthetic_001`. `READY_AFTER_A_B_REVIEW=False` stops before input reads. Parent selection waits for both outline-dropout arms to exit and their independent audit; no automatic selection or launch. Original image-key 001 step 4,000 is provisionally pinned (`d4d706e8d80e53a3638a70e79ce8661ff4af41f7b846143aa1ec68372bfb2ae5`). An eventual A/B parent requires replacing the whole checkpoint, audit and both baseline-endpoint pins. Strict-load the whole selected model and independently deep-copy its AdamW state; no encoder merging or legacy weights/features/pseudolabels.
+Driver: `training/run_joint_v6_imagekey_real_synthetic.py`; output `I:/AnatomyTracker/runs/joint_v6_imagekey_real_synthetic_001`. Both outline-dropout arms and their independent audit have exited successfully; B fails the scientific improvement gate. Select the whole **A6,000 control** as a continuation warm start, not a qualified model. A improves synthetic orientation and capture overall and in every input mode relative to original4,000. Real donor-macro error improves to38.59deg, but one donor worsens and three retain zero top32 capture. This is inadequate alignment accuracy. The driver is now enabled with all four parent bindings:
+
+- Whole checkpoint: `280836b65fb6db22930c8ee268eb4a880997c7858fb91a1e31ad6c7c94937eb2`.
+- Independent A/B audit: `2db902bdc6a2e502c911fa3ced308ed96d27219926356457efa0e063d53bd2e0`.
+- A synthetic summary: `281fa539824103abed383e5a2c20401377527c53e2bfc2156cfec9d8fb211722`.
+- A real summary: `465bc4c932b4164f14023c1983dc9a1531f151be21e72aed000e0193e7e04e0b`.
+
+Strict-load the whole selected model and independently deep-copy its AdamW state; no encoder merging or legacy weights/features/pseudolabels. The separate native ribbon control retains its original4,000 parent. This experiment ends at cumulative step8,000.
 
 Use all frozen **256 real training images / 58 donors**, preserving their original pixels and complete IDs/provenance. Training-input summary SHA-256: `4f8484bbd2ab5719971d9862f3f5ea87ea3d1c9de76468a936af67bcc65da9fd`. The six development donors remain disjoint in animal/specimen/experiment/section IDs. A shuffled stream of complete donor permutations (seed **2026092916**) balances 16,000 real presentations; select a row uniformly within each donor using independent seed **2026092917**. No automatic masks, added photometry, outline channel, geometry input or donor embedding.
 

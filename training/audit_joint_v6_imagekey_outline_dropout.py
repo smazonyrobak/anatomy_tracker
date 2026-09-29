@@ -15,7 +15,7 @@ import torch
 
 RUN = ROOT / "runs/joint_v6_imagekey_outline_dropout_001"
 OUTPUT = ROOT / "runs/joint_v6_imagekey_outline_dropout_001_independent_audit"
-COMPLETION_SHA256 = "UNSET_UNTIL_BOTH_ARMS_EXIT"
+COMPLETION_SHA256 = "515d583cabd70ef54b7cde9a739165c44c5d407a2341947eea595e1abad8f0b1"
 assert len(COMPLETION_SHA256) == 64
 torch.set_num_threads(2)
 hashes = {}
