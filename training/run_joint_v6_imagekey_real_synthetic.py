@@ -1,0 +1,383 @@
+"""Prepared weak-affine real+synthetic continuation; no launch before A/B review."""
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(r"I:\AnatomyTracker")
+os.environ["TEMP"] = os.environ["TMP"] = str(ROOT / "tmp")
+os.environ["TORCH_HOME"] = str(ROOT / "cache/torch")
+os.environ["CUDA_CACHE_PATH"] = str(ROOT / "cache/cuda")
+sys.dont_write_bytecode = True
+READY_AFTER_A_B_REVIEW = False
+assert READY_AFTER_A_B_REVIEW, "Prepared only: choose and pin the whole parent after both A/B arms exit and are audited"
+
+import copy
+import hashlib
+import json
+import random
+import shutil
+import subprocess
+import time
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
+
+from training import arbitrary_plane_allen_atlas_binding_v6 as allen
+from training.arbitrary_plane_catalogue_runtime_v6 import make_complete_catalogue_runtime_v6
+from training.arbitrary_plane_full_frame_primitives import full_frame_state_from_components, full_frame_state_to_components, full_frame_state_to_physical_ouv, render_finite_thickness_plane
+from training.arbitrary_plane_geometry import physical_ouv_to_frame
+from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
+
+RUN = ROOT / "runs/joint_v6_imagekey_real_synthetic_001"
+ORIGINAL = ROOT / "runs/joint_v6_imagekey_retrieval_001"
+PREPARED = ROOT / "runs/joint_v6_proposal_substantive_001"
+REPLAY = ROOT / "runs/joint_v6_proposal_curriculum_003"
+REAL_TRAIN = ROOT / "data/allen_real_training_inputs_20260929"
+REAL_DEV = ROOT / "runs/joint_v6_imagekey_retrieval_001_allen_raw"
+# Provisional original parent. Any later A/B choice needs ALL parent pins replaced after exit/audit.
+PARENT_KIND = "original001"
+PARENT_CHECKPOINT = ORIGINAL / "joint_model_step_04000.pt"
+PARENT_SHA256 = "d4d706e8d80e53a3638a70e79ce8661ff4af41f7b846143aa1ec68372bfb2ae5"
+PARENT_AUDIT = ROOT / "runs/joint_v6_imagekey_retrieval_001_independent_audit/audit.json"
+PARENT_AUDIT_SHA256 = "f9eb9c6845e048e5fc3ca840a4c5effcf48c1d6ed98afef9daa65a3983e4ca9b"
+PARENT_SYNTHETIC_METRICS = ORIGINAL / "development_metrics_step_04000.json"
+PARENT_SYNTHETIC_SHA256 = "abfb7b6bfca60500e51293bf592eaef84d92938dfddb9bc6f29e24673859ec58"
+PARENT_REAL_METRICS = REAL_DEV / "summary.json"
+PARENT_REAL_SHA256 = "2394eae62ef6c64e04b41947e57ca94dd64a2c456e0bc04a58b8dc2997107b37"
+ORIGINAL_SHA256 = "d4d706e8d80e53a3638a70e79ce8661ff4af41f7b846143aa1ec68372bfb2ae5"
+REAL_TRAIN_SUMMARY_SHA256 = "4f8484bbd2ab5719971d9862f3f5ea87ea3d1c9de76468a936af67bcc65da9fd"
+REAL_DEV_SUMMARY_SHA256 = "2394eae62ef6c64e04b41947e57ca94dd64a2c456e0bc04a58b8dc2997107b37"
+STEPS, REAL_BATCH, SYNTHETIC_BATCH, GENERATED = 2000, 8, 8, 4
+DONOR_SEED, REAL_ROW_SEED, NEGATIVE_SEED = 2026092916, 2026092917, 2026092918
+SHAPE, DESCRIPTOR_DIM, KEY_CHUNK = (96, 96), 256, 16
+TEMPERATURE, KEY_THICKNESS_UM, SUPPORT_MASS_THRESHOLD = .1, 50., 64.
+TRAINABLE = ("pose_model.histology_stem.", "pose_model.atlas_stem.", "pose_model.shared_encoder.", "pose_model.image_key_descriptor.")
+repository = Path(__file__).resolve().parents[1]
+bindings = {}
+
+
+def sha(path):
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+for path, expected in ((PARENT_CHECKPOINT, PARENT_SHA256), (PARENT_AUDIT, PARENT_AUDIT_SHA256), (PARENT_SYNTHETIC_METRICS, PARENT_SYNTHETIC_SHA256), (PARENT_REAL_METRICS, PARENT_REAL_SHA256), (ORIGINAL / "joint_model_step_04000.pt", ORIGINAL_SHA256), (REAL_TRAIN / "summary.json", REAL_TRAIN_SUMMARY_SHA256), (REAL_DEV / "summary.json", REAL_DEV_SUMMARY_SHA256)):
+    if str(path) not in bindings:
+        assert sha(path) == expected
+        bindings[str(path)] = expected
+audit = json.loads(PARENT_AUDIT.read_text())
+assert audit["integrity_passed"]
+if PARENT_KIND == "original001":
+    assert audit["advance_to_joint_integration_pilot"] and audit["frozen_run_inventory_sha256"][PARENT_CHECKPOINT.name] == PARENT_SHA256
+else:
+    assert PARENT_KIND in ("outline_dropout_A", "outline_dropout_B") and audit["artifact_sha256"][str(PARENT_CHECKPOINT)] == PARENT_SHA256
+parent = torch.load(PARENT_CHECKPOINT, weights_only=False, map_location="cpu", mmap=True)
+original = parent if PARENT_KIND == "original001" else torch.load(ORIGINAL / "joint_model_step_04000.pt", weights_only=False, map_location="cpu", mmap=True)
+previous = original["experiment"]
+assert parent["phase"] == "experimental_image_key_proposal_only" and parent["step"] == parent["optimizer_steps_applied"]
+assert parent["experiment"]["model_kwargs"] == previous["model_kwargs"] and tuple(previous["trained_modules"]) == TRAINABLE
+if PARENT_KIND != "original001":
+    assert parent["step"] == 6000 and parent["arm"] == PARENT_KIND[-1] and parent["experiment"]["parent_sha256"] == ORIGINAL_SHA256
+else:
+    assert parent["step"] == 4000
+parent_synthetic = json.loads(PARENT_SYNTHETIC_METRICS.read_text())
+parent_real = json.loads(PARENT_REAL_METRICS.read_text())
+assert parent_synthetic["checkpoint_sha256"] == parent_real["checkpoint_sha256"] == PARENT_SHA256
+parent_real_macro = parent_real["animal_macro"] if PARENT_KIND == "original001" else parent_real["donor_macro"]
+START, FINAL = parent["step"], parent["step"] + STEPS
+for directory, expected_hashes in ((PREPARED, previous["prepared_source_sha256"]), (REPLAY, previous["replay_sha256"])):
+    for name, expected in expected_hashes.items():
+        assert sha(directory / name) == expected
+        bindings[str(directory / name)] = expected
+real_summary = json.loads((REAL_TRAIN / "summary.json").read_text())
+dev_summary = json.loads((REAL_DEV / "summary.json").read_text())
+for directory, summary in ((REAL_TRAIN, real_summary), (REAL_DEV, dev_summary)):
+    for name in ("raw_model_input.npy", "image_geometry.jsonl"):
+        assert sha(directory / name) == summary["output_sha256"][name]
+        bindings[str(directory / name)] = summary["output_sha256"][name]
+real_images = np.load(REAL_TRAIN / "raw_model_input.npy", allow_pickle=False)
+dev_images = np.load(REAL_DEV / "raw_model_input.npy", allow_pickle=False)
+real_records = [json.loads(line) for line in (REAL_TRAIN / "image_geometry.jsonl").read_text().splitlines()]
+real_dev_records = [json.loads(line) for line in (REAL_DEV / "image_geometry.jsonl").read_text().splitlines()]
+assert real_images.shape == (256, 1, 96, 96) and dev_images.shape == (64, 1, 96, 96)
+assert all(row["split"] == "development_train" and row["array_row_index"] == i for i, row in enumerate(real_records))
+assert all(row["split"] == "development_validation" for row in real_dev_records)
+donors = np.array([row["animal_id"] for row in real_records]); donor_ids = np.unique(donors)
+assert len(donor_ids) == 58 and len({row["animal_id"] for row in real_dev_records}) == 6
+for key in ("animal_id", "specimen_id", "experiment_id", "section_id"):
+    assert not {row[key] for row in real_records} & {row[key] for row in real_dev_records}
+catalogue = torch.load(PREPARED / "catalogue.pt", weights_only=False, map_location="cpu")
+train = torch.load(PREPARED / "training_prepared.pt", weights_only=False, map_location="cpu", mmap=True)
+dev = torch.load(PREPARED / "internal_development_prepared.pt", weights_only=False, map_location="cpu", mmap=True)
+with np.load(REPLAY / "generated_schedule.npz", allow_pickle=False) as saved:
+    schedule = {name: saved[name][32000:40000] for name in saved.files}
+frozen_schedule = np.load(REPLAY / "frozen_training_row_indices.npy", allow_pickle=False)[4000:6000, :4]
+for key in ("animal_id", "specimen_id", "experiment_id", "synthetic_animal_id", "section_id"):
+    assert not ({row[key] for row in train["records"]} | set(schedule[key])) & {row[key] for row in dev["records"]}
+donor_rng, row_rng = np.random.default_rng(DONOR_SEED), np.random.default_rng(REAL_ROW_SEED)
+donor_schedule = np.concatenate([donor_rng.permutation(donor_ids) for _ in range((STEPS * REAL_BATCH + len(donor_ids) - 1) // len(donor_ids))])[:STEPS * REAL_BATCH].reshape(STEPS, REAL_BATCH)
+real_row_schedule = np.empty_like(donor_schedule)
+for donor in donor_ids:
+    mask = donor_schedule == donor
+    real_row_schedule[mask] = row_rng.choice(np.flatnonzero(donors == donor), size=int(mask.sum()), replace=True)
+negative_rng = np.random.default_rng(NEGATIVE_SEED)
+global_schedule = negative_rng.integers(0, 98304, (STEPS, 32), dtype=np.int64)
+local_rank_schedule = negative_rng.integers(0, 8, (STEPS, SYNTHETIC_BATCH), dtype=np.int64)
+affines = torch.tensor([row["model_pixel_to_ap_dv_ml_um"] for row in real_records], dtype=torch.float64)
+real_ouv = torch.stack((affines[:, :, 2], 96 * affines[:, :, 0], 96 * affines[:, :, 1]), dim=1)
+real_states = full_frame_state_from_components(*physical_ouv_to_frame(real_ouv))
+assert torch.allclose(full_frame_state_to_physical_ouv(real_states).reshape(-1, 3, 3), real_ouv, rtol=0, atol=1e-8)
+
+RUN.mkdir(parents=True, exist_ok=False)
+source_names = sorted(set(previous["source"]["file_sha256"]) | {Path(__file__).relative_to(repository).as_posix()})
+source = {"git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip(), "file_sha256": {}}
+for name in source_names:
+    target = RUN / "source" / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(repository / name, target)
+    source["file_sha256"][name] = sha(target)
+    if not name.startswith("training/run_"):
+        assert source["file_sha256"][name] == previous["source"]["file_sha256"][name], name
+np.savez(RUN / "generated_schedule.npz", **schedule)
+np.savez(RUN / "sampling_schedule.npz", donor_id=donor_schedule, real_row_index=real_row_schedule, frozen_row_index=frozen_schedule, global_cell_index=global_schedule, local_pool_rank=local_rank_schedule)
+np.savez(RUN / "weak_affine_anchors.npz", physical_ouv_ap_dv_ml_um=real_ouv.numpy(), full_frame_state=real_states.numpy(), nominal_section_thickness_um=[row["section_thickness_um"] for row in real_records])
+for name, records in (("synthetic_training", train["records"]), ("synthetic_development", dev["records"]), ("real_training", real_records), ("real_development", real_dev_records)):
+    (RUN / f"{name}_identities.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
+for original_path, name in ((PREPARED / "catalogue.pt", "catalogue.pt"), (PARENT_AUDIT, "parent_independent_audit.json"), (PARENT_SYNTHETIC_METRICS, "parent_synthetic_metrics.json"), (PARENT_REAL_METRICS, "parent_real_metrics.json"), (REAL_TRAIN / "raw_model_input.npy", "real_training_model_input.npy"), (REAL_DEV / "raw_model_input.npy", "real_development_model_input.npy")):
+    shutil.copyfile(original_path, RUN / name)
+schedule_sha256 = {name: sha(RUN / name) for name in ("generated_schedule.npz", "sampling_schedule.npz", "weak_affine_anchors.npz")}
+config = {"source": source, "parent_kind": PARENT_KIND, "parent_checkpoint": str(PARENT_CHECKPOINT), "parent_sha256": PARENT_SHA256, "parent_audit_sha256": PARENT_AUDIT_SHA256, "parent_step": START, "additional_applied_updates": STEPS, "final_step": FINAL, "input_sha256": bindings, "schedule_sha256": schedule_sha256,
+    "model_kwargs": previous["model_kwargs"], "trained_modules": TRAINABLE, "initialization": "strict whole own-lineage parent plus deep-copied AdamW and restored parent RNG; no encoder merge", "optimizer": "AdamW", "learning_rate": .001, "weight_decay": 1e-4, "gradient_clip": 5., "precision": previous["precision"],
+    "real_batch": REAL_BATCH, "synthetic_batch": SYNTHETIC_BATCH, "generated_per_batch": GENERATED, "donor_seed": DONOR_SEED, "real_row_seed": REAL_ROW_SEED, "negative_seed": NEGATIVE_SEED, "real_sampling": "shuffled complete donor permutations then uniform row within donor with replacement", "synthetic_generated_slice": [32000, 40000], "synthetic_frozen_steps_slice": [4000, 6000], "synthetic_frozen_columns": [0, 1, 2, 3],
+    "synthetic_loss": previous["loss"], "synthetic_candidate_sampling": "same parent algorithm on8queries: deduplicated truths+32uniformcells+one of8nearest admissible perquery; at most48cells; no realanchors in synthetic denominator", "real_loss": "mean8paired sampled NCE;8continuous affine anchors plus same synthetic candidate keys; equal two-raster prior, no cell prior; own anchor retained, other near/equivalent keys ignored", "total_loss": ".5*eligible-weighted synthetic sampled NLL + .5*mean real paired NCE; deliberate equal domain weight, not pooled likelihood",
+    "near_key_exclusion": "normal<=10deg AND finite four-corner RMS<=1000um, min identity/horizontal correspondence; 95/96 finite edges; force own positive retained", "real_reference_role": "weak upstream-affine pairing only; no nearest-cell onehot, dense correspondence, ribbon, deformation or uncertainty truth", "real_anchor_psf": "fixed50um9-point normalized boxcar-trapezoid; unverified engineering rendering assumption, not measured opticalPSF; nominal section_thickness provenance only", "real_pixels": "frozen arrays unchanged, no mask, extra photometry or outline; geometry/IDs never enter query encoder", "synthetic_outline_dropout": False,
+    "temperature": TEMPERATURE, "gallery": previous["gallery"], "atlas_binding": previous["atlas_binding"], "catalogue_receipt_sha256": catalogue["receipt_sha256"], "prepared_source_directory": str(PREPARED), "prepared_source_sha256": previous["prepared_source_sha256"], "replay_directory": str(REPLAY), "replay_sha256": previous["replay_sha256"],
+    "evaluation": "new full98304x2gallery at final only; unchanged640synthetic and64real6development donors; no real training-donor predictions", "promotion_gate": {"real_donor_macro_normal_improvement_deg_min": 5., "real_top32_plane_capture_improvement_min": .10, "synthetic_normal_regression_deg_max": 2., "synthetic_top32_plane_capture_regression_max": .02, "reference": "chosen whole audited parent", "synthetic_subsets": "eligible overall and every populated eligible original mode"}, "scope": "weak-affine coarse retrieval adaptation; sampled loss not calibrated posterior, no joint/ribbon qualification or public benchmark; development donors are not untouched final validation", "probabilities_calibrated": False}
+(RUN / "experiment.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+torch.set_num_threads(8)
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+started = time.perf_counter()
+atlas_array, annotation = allen._decode_and_preprocess_allen_v6()
+atlas = torch.from_numpy(atlas_array).cuda()
+del atlas_array, annotation
+runtime = make_complete_catalogue_runtime_v6(catalogue, expected_catalogue_receipt_sha256=catalogue["receipt_sha256"], device="cuda", dtype=torch.float32)
+assert runtime.cell_count == 98304 and runtime.representation_count == 2
+model = ArbitraryPlaneJointModelV6(runtime, **previous["model_kwargs"]).cuda()
+model.load_state_dict(parent["model_state"], strict=True)
+assert all(torch.equal(value.cpu(), parent["model_state"][name]) for name, value in model.state_dict().items())
+for name, parameter in model.named_parameters():
+    parameter.requires_grad_(name.startswith(TRAINABLE))
+trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
+optimizer = torch.optim.AdamW(trainable, lr=.001, weight_decay=1e-4)
+optimizer.load_state_dict(copy.deepcopy(parent["optimizer_state"]))
+loaded = optimizer.state_dict()
+assert loaded["param_groups"] == parent["optimizer_state"]["param_groups"] and all(group["lr"] == .001 and group["weight_decay"] == 1e-4 for group in loaded["param_groups"])
+for key, state in parent["optimizer_state"]["state"].items():
+    assert all(torch.equal(loaded["state"][key][name].cpu(), value) if torch.is_tensor(value) else loaded["state"][key][name] == value for name, value in state.items())
+del loaded
+random.setstate(parent["python_rng"]); np.random.set_state(parent["numpy_rng"])
+torch.set_rng_state(parent["torch_rng"]); torch.cuda.set_rng_state_all(parent["cuda_rng"])
+(RUN / "initialization.json").write_text(json.dumps({"parent_sha256": PARENT_SHA256, "model_tensors_exact": True, "optimizer_state_exact": True, "restored_parent_rng": True, "initial_gallery_rebuilt": False}), encoding="utf-8")
+cell_states = torch.as_tensor(catalogue["arrays"]["cell_states_float64"])
+cell_center, cell_frame, _ = full_frame_state_to_components(cell_states)
+cell_normal = cell_frame[:, :, 2]
+cell_ouv = full_frame_state_to_physical_ouv(cell_states).reshape(-1, 3, 3)
+key_u, key_v = cell_ouv[:, 1] * (95 / 96), cell_ouv[:, 2] * (95 / 96)
+key_center = cell_ouv[:, 0] + .5 * (key_u + key_v)
+key_center, key_u, key_v, key_normal = [value.cuda().float() for value in (key_center, key_u, key_v, cell_normal)]
+_, real_frame, _ = full_frame_state_to_components(real_states)
+real_u, real_v = real_ouv[:, 1] * (95 / 96), real_ouv[:, 2] * (95 / 96)
+real_center = real_ouv[:, 0] + .5 * (real_u + real_v)
+real_center, real_u, real_v, real_normal = [value.cuda().float() for value in (real_center, real_u, real_v, real_frame[:, :, 2])]
+render_states, render_real_states = cell_states.cuda().float(), real_states.cuda().float()
+cell_log_mass = catalogue["tensors"]["cell_log_mass"][0].cuda().float()
+representation_log_weight = catalogue["tensors"]["representation_log_weight"][0].cuda().float()
+assert np.array_equal(np.asarray(catalogue["arrays"]["representation_to_canonical_raster_affine_float64"])[0], np.array([[[1., 0., 0.], [0., 1., 0.]], [[-1., 0., 0.], [0., 1., 0.]]]))
+psf_weights = torch.tensor([1, 2, 2, 2, 2, 2, 2, 2, 1], device="cuda", dtype=torch.float32) / 16
+psf_positions = torch.linspace(-.5, .5, 9, device="cuda")
+yy, xx = torch.meshgrid(torch.linspace(-1, 1, 96, device="cuda"), torch.linspace(-1, 1, 96, device="cuda"), indexing="ij")
+noise_generator = torch.Generator(device="cuda")
+origin, spacing = [catalogue["support_geometry"][key] for key in ("origin_ap_dv_ml_um", "voxel_size_ap_dv_ml_um")]
+support_origin = torch.as_tensor(catalogue["support_geometry"]["support_origin_ap_dv_ml_um"], dtype=torch.float64)
+real_channels = torch.cat((torch.from_numpy(real_images), torch.zeros(256, 2, 96, 96)), dim=1)
+real_dev_channels = torch.cat((torch.from_numpy(dev_images), torch.zeros(64, 2, 96, 96)), dim=1)
+
+
+def encode_keys(images):
+    return model.pose_model.descriptor_from_features(model.pose_model._encode_atlas(images))
+
+
+applied = 0
+with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
+    for step in range(STEPS):
+        model.train()
+        positions = np.arange(step * GENERATED, (step + 1) * GENERATED)
+        with torch.no_grad():
+            generated_labels = torch.as_tensor(schedule["cell_index"][positions], device="cuda")
+            thickness = torch.as_tensor(schedule["thickness_um"][positions], device="cuda")
+            rendered = render_finite_thickness_plane(atlas, render_states[generated_labels], SHAPE, origin, spacing, thickness[:, None] * psf_positions[None], psf_weights)
+            finite_support = rendered[:, 1].clamp(0, 1); tissue = finite_support > 0
+            generated_inputs = torch.empty((GENERATED, 3, 96, 96), device="cuda"); visible_mass = torch.empty(GENERATED, device="cuda")
+            for local, position in enumerate(positions):
+                noise_generator.manual_seed(int(schedule["sample_seed"][position]))
+                noise = torch.randn((96, 96), device="cuda", generator=noise_generator)
+                appearance = (rendered[local, 0] / finite_support[local].clamp_min(1e-6)).clamp(0, 1).pow(float(schedule["gamma"][position]))
+                if schedule["invert_tissue"][position]:
+                    appearance = 1.0 - appearance
+                appearance = (appearance * float(schedule["gain"][position])).clamp(0, 1)
+                slope = schedule["background_slope_yx"][position]
+                background = float(schedule["background_mean"][position]) + float(slope[0]) * yy + float(slope[1]) * xx
+                image = (appearance * finite_support[local] + background * (1.0 - finite_support[local]) + float(schedule["noise_std"][position]) * noise).clamp(0, 1)
+                mode = int(schedule["mode_index"][position]); mask = tissue[local].clone()
+                if mode == 2:
+                    radius = int(schedule["mask_radius_px"][position])
+                    if schedule["mask_dilate"][position]:
+                        mask = F.max_pool2d(mask[None, None].float(), 2 * radius + 1, 1, radius)[0, 0] > 0
+                    else:
+                        padded = F.pad(mask[None, None].float(), (radius,) * 4, value=0)
+                        mask = -F.max_pool2d(-padded, 2 * radius + 1, 1)[0, 0] > 0
+                visible_mass[local] = (finite_support[local] * mask).sum() if mode else finite_support[local].sum()
+                outline = torch.zeros_like(mask)
+                if mode:
+                    image = image * mask
+                    eroded = mask.clone(); eroded[1:] &= mask[:-1]; eroded[:-1] &= mask[1:]
+                    eroded[:, 1:] &= mask[:, :-1]; eroded[:, :-1] &= mask[:, 1:]
+                    eroded[[0, -1], :] = False; eroded[:, [0, -1]] = False
+                    outline = mask & ~eroded
+                generated_inputs[local] = torch.stack((image, outline.float(), torch.full_like(image, float(mode != 0))))
+                if schedule["horizontal_flip"][position]:
+                    generated_inputs[local] = generated_inputs[local].flip(-1)
+            support_mass = finite_support.sum((-2, -1))
+            generated_weight = ((support_mass >= SUPPORT_MASS_THRESHOLD) & (visible_mass >= SUPPORT_MASS_THRESHOLD)).float()
+            frozen_index, real_index = frozen_schedule[step], real_row_schedule[step]
+            real_index_gpu = torch.as_tensor(real_index, device="cuda")
+            synthetic_inputs = torch.cat((generated_inputs, train["channels"][frozen_index].cuda()))
+            label = torch.cat((generated_labels, train["label"][frozen_index].cuda()))
+            weight = torch.cat((generated_weight, train["weight"][frozen_index].cuda()))
+            inputs = torch.cat((real_channels[real_index].cuda(), synthetic_inputs))
+            distance2 = (key_center[label, None] - key_center[None]).square().sum(-1)
+            same_u = (key_u[label, None] - key_u[None]).square().sum(-1)
+            flip_u = (key_u[label, None] + key_u[None]).square().sum(-1)
+            distance2 += .25 * (torch.minimum(same_u, flip_u) + (key_v[label, None] - key_v[None]).square().sum(-1))
+            ignore = ((key_normal[label] @ key_normal.T).abs() >= np.cos(np.deg2rad(10.))) & (distance2 <= 1000.**2)
+            ignore.scatter_(1, label[:, None], True)
+            local_pool = distance2.masked_fill(ignore, torch.inf).topk(8, largest=False, sorted=True).indices
+            local_ids = local_pool[torch.arange(SYNTHETIC_BATCH, device="cuda"), torch.as_tensor(local_rank_schedule[step], device="cuda")]
+            candidate = torch.unique(torch.cat((label, torch.as_tensor(global_schedule[step], device="cuda"), local_ids)), sorted=True)
+            target = torch.searchsorted(candidate, label)
+            keep = ~ignore[:, candidate]; keep.scatter_(1, target[:, None], True)
+            real_key_images = render_finite_thickness_plane(atlas, render_real_states[real_index_gpu], SHAPE, origin, spacing, psf_positions * KEY_THICKNESS_UM, psf_weights)
+            real_support_mass = real_key_images[:, 1].clamp(0, 1).sum((-2, -1))
+            synthetic_key_images = render_finite_thickness_plane(atlas, render_states[candidate], SHAPE, origin, spacing, psf_positions * KEY_THICKNESS_UM, psf_weights)
+            key_images = torch.cat((real_key_images, synthetic_key_images))
+            key_images = torch.stack((key_images, key_images.flip(-1)), dim=1).flatten(0, 1)
+            centres, edges_u, edges_v, normals = [torch.cat((real_values[real_index_gpu], cell_values[candidate])) for real_values, cell_values in ((real_center, key_center), (real_u, key_u), (real_v, key_v), (real_normal, key_normal))]
+            real_distance2 = (centres[:REAL_BATCH, None] - centres[None]).square().sum(-1)
+            real_distance2 += .25 * (torch.minimum((edges_u[:REAL_BATCH, None] - edges_u[None]).square().sum(-1), (edges_u[:REAL_BATCH, None] + edges_u[None]).square().sum(-1)) + (edges_v[:REAL_BATCH, None] - edges_v[None]).square().sum(-1))
+            real_keep = ~(((normals[:REAL_BATCH] @ normals.T).abs() >= np.cos(np.deg2rad(10.))) & (real_distance2 <= 1000.**2))
+            real_keep[torch.arange(REAL_BATCH, device="cuda"), torch.arange(REAL_BATCH, device="cuda")] = True
+            del distance2, same_u, flip_u, ignore, local_pool, real_distance2
+        optimizer.zero_grad(set_to_none=True)
+        query = model.pose_model.descriptor_from_features(model.pose_model.encode_histology(inputs[:, :1], inputs[:, 1:2], inputs[:, 2].mean((-2, -1))))
+        keys = torch.cat([checkpoint(encode_keys, part, use_reentrant=False) for part in key_images.split(KEY_CHUNK)]).reshape(REAL_BATCH + len(candidate), 2, DESCRIPTOR_DIM)
+        synthetic_scores = model.pose_model.image_key_cosine_logits(query[REAL_BATCH:], keys[REAL_BATCH:], TEMPERATURE)
+        synthetic_scores = torch.logsumexp(synthetic_scores + representation_log_weight[candidate][None], dim=-1) + cell_log_mass[candidate][None]
+        synthetic_nll = torch.logsumexp(synthetic_scores.masked_fill(~keep, -torch.inf), dim=-1) - synthetic_scores.gather(1, target[:, None])[:, 0]
+        synthetic_loss = (synthetic_nll * weight).sum() / weight.sum().clamp_min(1.)
+        real_scores = torch.logsumexp(model.pose_model.image_key_cosine_logits(query[:REAL_BATCH], keys, TEMPERATURE) - np.log(2.), dim=-1)
+        real_nce = torch.logsumexp(real_scores.masked_fill(~real_keep, -torch.inf), dim=-1) - real_scores[:, :REAL_BATCH].diagonal()
+        real_loss = real_nce.mean()
+        loss = .5 * synthetic_loss + .5 * real_loss
+        assert bool(torch.isfinite(loss))
+        loss.backward()
+        gradient = torch.nn.utils.clip_grad_norm_(trainable, 5., error_if_nonfinite=True)
+        optimizer.step(); applied += 1
+        record = {"step": START + applied, "additional_optimizer_steps_applied": applied, "synthetic_nll": float(synthetic_loss.detach()), "real_paired_nce": float(real_loss.detach()), "loss": float(loss.detach()), "gradient_norm": float(gradient), "real_row_index": real_index.tolist(), "real_donor_id": donor_schedule[step].tolist(), "generated_indices": (positions + 32000).tolist(), "frozen_row_index": frozen_index.tolist(), "candidate_cell_index": candidate.cpu().tolist(), "local_negative_cell_index": local_ids.cpu().tolist(), "synthetic_ignored_counts": (~keep).sum(-1).cpu().tolist(), "real_ignored_counts": (~real_keep).sum(-1).cpu().tolist(), "synthetic_supervision_mass": float(weight.sum()), "generated_point_pose_weight": generated_weight.cpu().tolist(), "finite_support_mass_px": support_mass.cpu().tolist(), "visible_support_mass_px": visible_mass.cpu().tolist(), "real_anchor_finite_support_mass_px": real_support_mass.cpu().tolist(), "elapsed_seconds": time.perf_counter() - started}
+        trace.write(json.dumps(record) + "\n")
+        if applied % 100 == 0:
+            trace.flush(); print(json.dumps({key: record[key] for key in ("step", "loss", "synthetic_nll", "real_paired_nce", "gradient_norm", "elapsed_seconds")}), flush=True)
+        del keys, query, loss, real_loss, synthetic_loss, real_nce, synthetic_nll, real_scores, synthetic_scores, inputs, synthetic_inputs, key_images, real_key_images, synthetic_key_images, generated_inputs, rendered
+assert applied == STEPS and all(int(state["step"]) == FINAL for state in optimizer.state_dict()["state"].values())
+assert all(torch.isfinite(value).all() for value in model.state_dict().values())
+assert all(torch.equal(value.cpu(), parent["model_state"][name]) for name, value in model.state_dict().items() if not name.startswith(TRAINABLE))
+model.eval()
+checkpoint_path = RUN / f"joint_model_step_{FINAL:05d}.pt"
+torch.save({"experiment": config, "phase": "experimental_image_key_proposal_only", "step": FINAL, "optimizer_steps_applied": FINAL, "additional_optimizer_steps_applied": applied, "model_state": {name: value.detach().cpu() for name, value in model.state_dict().items()}, "optimizer_state": optimizer.state_dict(), "torch_rng": torch.get_rng_state(), "cuda_rng": torch.cuda.get_rng_state_all(), "numpy_rng": np.random.get_state(), "python_rng": random.getstate(), "probabilities_calibrated": False}, checkpoint_path)
+checkpoint_sha256 = sha(checkpoint_path)
+bank = torch.empty((runtime.cell_count, 2, DESCRIPTOR_DIM), device="cuda", dtype=torch.float16)
+with torch.no_grad():
+    for start in range(0, runtime.cell_count, 64):
+        images = render_finite_thickness_plane(atlas, render_states[start:start + 64], SHAPE, origin, spacing, psf_positions * KEY_THICKNESS_UM, psf_weights)
+        images = torch.stack((images, images.flip(-1)), dim=1).flatten(0, 1)
+        bank[start:start + 64] = torch.cat([encode_keys(part) for part in images.split(KEY_CHUNK)]).reshape(-1, 2, DESCRIPTOR_DIM).half()
+        if (start + 64) % 16384 == 0:
+            print(json.dumps({"gallery_cells": start + 64}), flush=True)
+bank_path = RUN / f"gallery_descriptors_step_{FINAL:05d}.npy"
+np.save(bank_path, bank.cpu().numpy()); bank_sha256 = sha(bank_path)
+dev_center, dev_frame, _ = full_frame_state_to_components(dev["truth_state"])
+real_dev_center = torch.tensor([row["truth_center_ap_dv_ml_um"] for row in real_dev_records], dtype=torch.float64)
+real_dev_normal = torch.tensor([row["truth_normal_ap_dv_ml"] for row in real_dev_records], dtype=torch.float64)
+results = {}
+for dataset, channels, records, truth_center, truth_normal in (("synthetic", dev["channels"], dev["records"], dev_center, dev_frame[:, :, 2]), ("allen_raw", real_dev_channels, real_dev_records, real_dev_center, real_dev_normal)):
+    directory = RUN / dataset; directory.mkdir()
+    raw = np.lib.format.open_memmap(directory / "raw_cell_log_probability.npy", mode="w+", dtype=np.float32, shape=(len(records), runtime.cell_count))
+    components = np.lib.format.open_memmap(directory / "raw_component_log_score.npy", mode="w+", dtype=np.float32, shape=(len(records), runtime.cell_count, 2))
+    query_bank, tops, top_rep = [], [], []
+    with torch.no_grad():
+        for start in range(0, len(records), 16):
+            inputs = channels[start:start + 16].cuda()
+            query = model.pose_model.descriptor_from_features(model.pose_model.encode_histology(inputs[:, :1], inputs[:, 1:2], inputs[:, 2].mean((-2, -1))))
+            representation_score = model.pose_model.image_key_cosine_logits(query, bank, TEMPERATURE) + representation_log_weight[None]
+            log_probability = (torch.logsumexp(representation_score, dim=-1) + cell_log_mass[None]).log_softmax(dim=-1)
+            assert bool(torch.isfinite(representation_score).all() and torch.isfinite(log_probability).all())
+            raw[start:start + len(inputs)] = log_probability.cpu().numpy()
+            components[start:start + len(inputs)] = (representation_score + cell_log_mass[None, :, None]).cpu().numpy()
+            top = torch.argsort(log_probability, dim=-1, descending=True, stable=True)[:, :128]
+            query_bank.append(query.cpu().numpy()); tops.append(top.cpu())
+            top_rep.append(representation_score[torch.arange(len(inputs), device="cuda")[:, None], top].softmax(-1).cpu().numpy())
+    raw.flush(); components.flush()
+    normalization_error = max(float(np.abs(np.logaddexp.reduce(np.asarray(raw[start:start + 16], dtype=np.float64), axis=1)).max()) for start in range(0, len(records), 16))
+    assert normalization_error < 2e-5
+    top = torch.cat(tops); normals = cell_normal[top]
+    dot = (normals * truth_normal[:, None]).sum(-1)
+    angles = torch.rad2deg(torch.atan2(torch.linalg.cross(normals, truth_normal[:, None]).norm(dim=-1), dot.abs()))
+    offsets = (((cell_center[top] - support_origin) * normals).sum(-1) - torch.where(dot < 0, -1., 1.) * ((truth_center - support_origin) * truth_normal).sum(-1)[:, None]).abs()
+    metrics = {"plane_angle_deg": angles[:, 0].numpy(), "normal_offset_error_um": offsets[:, 0].numpy(), **{f"physical_plane_capture_at_{k}": ((angles[:, :k] <= 10.) & (offsets[:, :k] <= 500.)).any(-1).double().numpy() for k in (32, 128)}}
+    group = np.array([row["animal_id"] for row in records]); subsets = {"all": np.ones(len(records), dtype=bool)}
+    row_arrays = {key: np.array([row[key] for row in records]) for key in ("animal_id", "specimen_id", "experiment_id", "section_id")}
+    if dataset == "synthetic":
+        labels = dev["label"].numpy(); truth_lp = np.asarray(raw[np.arange(len(labels)), labels])
+        rank = (raw > truth_lp[:, None]).sum(-1) + ((raw == truth_lp[:, None]) & (np.arange(runtime.cell_count)[None] < labels[:, None])).sum(-1) + 1
+        normal_lp = np.logaddexp.reduce(np.asarray(raw).reshape(len(labels), 384, 256), axis=-1)
+        marginal_normal = cell_normal[normal_lp.argmax(-1) * 256]
+        metrics.update({"nll": -truth_lp, "truth_rank": rank, "normal_marginal_nll": -normal_lp[np.arange(len(labels)), labels // 256], "normal_marginal_map_angle_deg": torch.rad2deg(torch.atan2(torch.linalg.cross(marginal_normal, truth_normal).norm(dim=-1), (marginal_normal * truth_normal).sum(-1).abs())).numpy(), **{f"hit_at_{k}": (rank <= k).astype(float) for k in (1, 8, 32, 128)}})
+        eligible = dev["weight"].numpy() > 0; modes = np.array([row["selected_mode"] for row in records])
+        subsets.update({"eligible": eligible, "censored": ~eligible, **{f"eligible_mode:{mode}": eligible & (modes == mode) for mode in np.unique(modes)}})
+        row_arrays.update(label=labels, pose_supervision_weight=dev["weight"].numpy(), selected_mode=modes)
+    summaries = {}
+    for name, selected in subsets.items():
+        by_group = {str(identity): {"rows": int((selected & (group == identity)).sum()), **{key: float(values[selected & (group == identity)].mean()) for key, values in metrics.items()}} for identity in np.unique(group[selected])}
+        summaries[name] = {"rows": int(selected.sum()), "groups": len(by_group), "by_group": by_group, "group_macro": {key: float(np.mean([row[key] for row in by_group.values()])) for key in metrics} if by_group else None}
+    np.savez(directory / "rows.npz", **row_arrays, top128_cell_index=top.numpy(), query_descriptor=np.concatenate(query_bank), top128_representation_probability=np.concatenate(top_rep), reference_center_ap_dv_ml_um=truth_center.numpy(), reference_normal_ap_dv_ml=truth_normal.numpy(), **metrics)
+    del raw, components
+    receipt = {"step": FINAL, "checkpoint_sha256": checkpoint_sha256, "gallery_sha256": bank_sha256, "subsets": summaries, "probabilities_calibrated": False, "raw_log_normalization_error": normalization_error, "output_sha256": {name: sha(directory / name) for name in ("raw_cell_log_probability.npy", "raw_component_log_score.npy", "rows.npz")}}
+    if dataset == "allen_raw":
+        receipt["donor_macro"] = summaries["all"]["group_macro"]
+    (directory / "summary.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8"); results[dataset] = receipt
+    print(json.dumps({"dataset": dataset, "macro": summaries["eligible" if dataset == "synthetic" else "all"]["group_macro"]}), flush=True)
+real_macro = results["allen_raw"]["donor_macro"]
+gates = {"real_normal_improvement_at_least_5deg": real_macro["plane_angle_deg"] <= parent_real_macro["plane_angle_deg"] - 5., "real_top32_plane_improvement_at_least_point10": real_macro["physical_plane_capture_at_32"] >= parent_real_macro["physical_plane_capture_at_32"] + .10}
+for name, candidate in results["synthetic"]["subsets"].items():
+    if (name == "eligible" or name.startswith("eligible_mode:")) and candidate["rows"]:
+        reference = parent_synthetic["subsets"][name]
+        assert candidate["rows"] == reference["rows"] and candidate["groups"] == reference["groups"]
+        b, a = candidate["group_macro"], reference["group_macro"]
+        gates[f"synthetic_normal_retention:{name}"] = b["plane_angle_deg"] <= a["plane_angle_deg"] + 2.
+        gates[f"synthetic_top32_retention:{name}"] = b["physical_plane_capture_at_32"] >= a["physical_plane_capture_at_32"] - .02
+for name, expected in source["file_sha256"].items():
+    assert sha(repository / name) == expected
+(RUN / "completed.json").write_text(json.dumps({"experiment": config, "source_unchanged": True, "additional_optimizer_steps_applied": applied, "optimizer_steps_applied": FINAL, "gates": gates, "weak_affine_adaptation_gate_passed": bool(all(gates.values())), "results": results, "elapsed_seconds": time.perf_counter() - started}, indent=2, allow_nan=False), encoding="utf-8")
+print(json.dumps({"gates": gates, "weak_affine_adaptation_gate_passed": bool(all(gates.values()))}), flush=True)

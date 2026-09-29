@@ -43,7 +43,7 @@ Every subject accepted candidate1 at62.5um after the fixed125um candidate failed
 the interpolation-halo gate (two also failed the speed bound). Every accepted
 candidate's stored failed-gate list is empty. Across accepted numerical audit
 grids, minimum composed Jacobian determinants range0.7830–0.8631; maximum local
-displacements range141.15–181.27um; maximum forward/inverse cycle discrepancies
+displacements range141.15–181.27um; maximum forward-then-inverse cycle discrepancies
 are approximately0.71–1.49e-9um. These are authenticated generator diagnostics,
 not an independent rerun of integration, model performance or biological evidence.
 

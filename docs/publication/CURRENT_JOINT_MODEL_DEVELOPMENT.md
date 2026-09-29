@@ -32,6 +32,12 @@ data, temporary files and runs belong on `I:`.
   set its completion pin and run only after both arms exit. No result yet.
 - These two processes overlap modest CUDA coordinate mapping with training.
   Timings are not isolated performance measurements or benchmark comparisons.
+- Next real-domain control is prepared, not launched:
+  `training/run_joint_v6_imagekey_real_synthetic.py` has a false launch guard.
+  It pairs256 unchanged real training images/58 donors with continuous upstream
+  affine atlas renders, plus arbitrary-plane synthetic replay. No dense real
+  warp labels or registration covariance are fabricated. Parent choice awaits
+  the A/B audit; the native conditional control remains a separate fixed experiment.
 - No heartbeat or additional user prompt is needed for these native-goal steps.
 
 ## Current experiment decision
