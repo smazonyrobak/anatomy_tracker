@@ -1,6 +1,6 @@
 # Prepared TRAIN-only oracle feature-cost direction diagnostic
 
-Status: guarded, **not executed**. Root may enable `training/diagnose_joint_v6_train_pose_cost_direction.py` only after the native signed-evidence experiment exits and its independent audit fails the scientific gate. Bind that completed audit path/hash before enabling; do not inspect live output or use its weights. No optimizer, development pixels, architecture-selection threshold or public benchmark is involved.
+Status: **completed, session30641 EXIT0**, after the independently verified failed native gate. The enabled `training/diagnose_joint_v6_train_pose_cost_direction.py` binds audit SHA256 `7acdc3ef87f85691b296f67fc828428aa090b1afed88a5ce05853a6e81853ad5`; its whole original4k weights are unchanged. Independent raw-map remeasurement confirms128/144 full-map and137/144 oracle-weighted correct directions. See the [result and scope limits](TRAIN_POSE_COST_DIRECTION_001_RESULT_20260929.md). No optimizer, development pixels, architecture-selection threshold or public benchmark was involved.
 
 Use the whole original image-key4,000 checkpoint (`d4d706e8d80e53a3638a70e79ce8661ff4af41f7b846143aa1ec68372bfb2ae5`) with its strict, complete state dictionary. Import authenticated code from the completed no-probe native run's source archive, not the live checkout. The frozen coherent002 completion is `ba51982a5b03b61d4bcf7f37f2c139dd6c1caf7ff66a6124cb678ab5ee9dd1f2`.
 

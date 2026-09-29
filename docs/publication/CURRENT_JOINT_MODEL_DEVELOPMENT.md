@@ -164,7 +164,10 @@ exact oracle fields/reflection and the original whole4k features: no optimizer,
 development data or learned-update qualification. Full-map cost directions chose
 geometry-improving probes128/144 times (oracle support weighting137/144), so
 these favorable oracle conditions do not support dismissing the frozen features
-as directionless. Next inspect signed evidence scale on one actual scheduled
+as directionless. Independent raw-map remeasurement confirms those counts and
+finds no≤1e-6 cost ties; median absolute full-map plus/minus difference.02503.
+[Result](TRAIN_POSE_COST_DIRECTION_001_RESULT_20260929.md).
+Next inspect signed evidence scale on one actual scheduled
 TRAIN batch before changing the update readout; do not infer multiaxis or
 learned-deformation success from the oracle diagnostic.
 The exact TRAIN-only acquisition-view extension in
