@@ -46,15 +46,17 @@ Protocol, paired geometric baselines and fixed continuation criteria:
 ## Next decisions, not completion claims
 
 The local001 audit is complete; its weak geometry prevents qualification.
-Run matched coordinate control002 next. Whole-model joint unfreezing with global
-proposal rehearsal remains needed; the frozen-source engineering gate must not
+Matched coordinate control002 is running. Whole-model joint unfreezing with global
+proposal rehearsal is prepared in `training/run_joint_v6_joint_rehearsal.py`;
+its [fixed protocol and retention gates](JOINT_GLOBAL_REHEARSAL_PROTOCOL_20260929.md)
+start from the same whole003 parent, not the local002 endpoint. The frozen-source engineering gate must not
 become a permanent prohibition on investigating feature adaptation if these
 controls fail. Do not start public benchmarking or uncertainty calibration while
 point learning is poor.
 
 The proper geometric proposal-loss control 008 is implemented and documented,
 but not launched or selected. An optional 896-parameter predicted-coordinate
-input to the shared recurrent updater is implemented and checked, but untrained.
+input to the shared recurrent updater is implemented and is being trained in002.
 The proposed [matched local002 control](LOCAL_COORDINATE_CONTROL_002.md) is
 selected after local001's failed audit and now running. The existing independent
 audit script is prepared for its completed endpoint comparison but must not be
@@ -68,6 +70,14 @@ need their correct native wiring. Exact limitations and conditioned-tail issues
 remain documented in [constraint gaps](JOINT_CONSTRAINT_INTEGRATION_GAPS_20260929.md).
 Use `final_pullback_map_yx_px` for observed mark → atlas-raster mapping, then
 reflection → physical OUV; the current forward-map field is only an alias.
+
+Coherent synthetic subjects require a representation extension: nonlinear3D
+anatomy maps a cut plane into a curved CCF surface, not just an in-plane2D warp.
+The [coordinate-grid PSF rendering prerequisite](COHERENT_SUBJECT_COORDINATE_RENDERING_20260929.md)
+and [conservative full-plane sampler](COHERENT_SUBJECT_PLANE_SAMPLING_20260929.md)
+are implemented separately from active training. The exact subject-coordinate
+adapter is in progress. No curved-surface predictor or coherent-subject learning
+is claimed from these primitives.
 
 Still required: convincing arbitrary-plane global and native joint accuracy,
 usable optional constraints, genuine animal-disjoint validation, calibrated
