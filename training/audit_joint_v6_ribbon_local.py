@@ -17,7 +17,7 @@ import torch
 RUN = ROOT / "runs/joint_v6_ribbon_local_001"
 DATA = ROOT / "data/joint_v6_coherent_subject_cohort_sections_002"
 OUTPUT = ROOT / "runs/joint_v6_ribbon_local_001_independent_audit"
-RUN_COMPLETION_SHA256 = "UNSET_UNTIL_CONFIRMED_RUN_EXIT"
+RUN_COMPLETION_SHA256 = "a2bee6dc1ffcaafcef3b4ad4a49223653f582f41ab071a3ca25928e7db7a83d7"
 PARENT_SHA256 = "d4d706e8d80e53a3638a70e79ce8661ff4af41f7b846143aa1ec68372bfb2ae5"
 PARENT_AUDIT_SHA256 = "f9eb9c6845e048e5fc3ca840a4c5effcf48c1d6ed98afef9daa65a3983e4ca9b"
 TRAINABLE = ("pose_model.refinement_pair_encoder.", "pose_model.recurrent_cell.", "pose_model.recurrent_update.", "pose_model.recurrent_log_likelihood.", "pose_model.coordinate_evidence.", "ribbon_field_head.")

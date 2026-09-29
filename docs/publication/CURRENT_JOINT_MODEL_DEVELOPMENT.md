@@ -36,18 +36,19 @@ data, temporary files and runs belong on `I:`.
   anchors versus the complete saved gallery on all256 training images/58 donors.
   Preserve the11 zero-support and one low-support anchors rather than silently
   filtering them. Distinguish anchor/gallery mismatch from donor generalization;
-  no extra six-donor tuning or public benchmark.
-- Native conditional pose+ribbon001 is **active**, session89162 from `dc32605`,
-  with the completed cohort bound and the original whole image-key4k parent.
-  It is a separate truth-near, known-PSF local control, not global inference.
-  No independently trained encoders are merged.
-- The native training output tree and operative sources are protected until
-  exit; inspect only live stdout/telemetry. Its independent endpoint audit follows
-  exit. Concurrent timings are not hardware benchmarks.
-- After native exits, audit the raw held-out curved coordinates
-  and geometry, then decide actual retrieved-beam initialization versus revised
-  learning. A successful real warm start needs subsequent native training of
-  that **whole model**, not splicing in this independently trained native control.
+  no extra six-donor tuning or public benchmark. This diagnostic is now active,
+  session84429 from `f57e399`; its output and operative sources are protected.
+- Native conditional pose+ribbon001 (89162, `dc32605`) and independent audit84435
+  both exited0. Oracle centre error814.24→716.56um improves only about12%, below
+  the fixed20% requirement; plane-normal error6.138→6.103deg barely changes.
+  Selected error2685.48→838.82um is helped strongly by reflection resolution.
+  Do not promote this truth-near, known-PSF control to honest global inference.
+  Revise local plane learning before a retrieved-beam qualification experiment.
+  [Full result and independent coordinate attribution](NATIVE_RIBBON_LOCAL_001_RESULT_20260929.md).
+- Both training outputs and audits are now frozen and readable. Concurrent run
+  timings are not hardware benchmarks. No independently trained encoders are
+  merged; a future successful real warm start needs sequential native training
+  of that **whole model**, not splicing in a separately trained native control.
 - No heartbeat or additional user prompt is needed for these native-goal steps.
 
 ## Completed planar/SVF experiment decisions
@@ -152,8 +153,8 @@ physical derivative bound. These are representation/geometry checks, not model
 accuracy or biological validation. The [opt-in native recurrent ribbon path](NATIVE_CURVED_RIBBON_PATH_20260929.md)
 is now implemented in the same joint model: each reflection hypothesis keeps
 its own pose/field, re-renders the actual curved slab, and uses the shared updater.
-Its first conditional learning control is now active, with no completed learning
-result yet. A bounded actual-data GPU forward/backward passes;
+Its first conditional learning control is completed and audited but fails the
+oracle coordinate-improvement gate. A bounded actual-data GPU forward/backward passes;
 a tiny FP32 normalization-order mismatch was diagnosed and corrected without
 changing physical geometry or relaxing the parity gate. Existing forward and
 the completed rehearsal driver are unchanged. No coherent-subject learning is
@@ -165,7 +166,7 @@ predeclared plan accepted and its71-file completion inventory authenticated.
 Eight training and four development subject maps retain their preassigned IDs.
 Its separate section-generation stage68817 exited0; the section cohort and
 target-capacity audit are frozen and readable. Every censored draw is retained.
-The native training run consuming these data remains protected while active.
+The first native training run consuming these data has also exited and is frozen.
 
 The [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
 completed4,000 updates, terminal8803 EXIT0, from `edc99b8`. Its independent
@@ -174,7 +175,7 @@ Eligible group-macro normal error47.50->40.36deg and top32 physical-plane
 capture10.59%->68.46% versus original003 at the matched4k budget. However,
 full-frame corner capture within1mm is only4.28% at top32; this is not usable
 alignment accuracy. [Full result, pins and limitations](IMAGEKEY_RETRIEVAL_001_RESULT_20260929.md).
-Its whole fresh4k checkpoint is now used by the active conditional native ribbon
+Its whole fresh4k checkpoint was used by the completed conditional native ribbon
 control, without encoder merging or imported old weights. The separate raw Allen
 diagnostic has already failed adequate transfer; the completed real+synthetic
 continuation from whole A6k also failed and is not promoted. Neither path
