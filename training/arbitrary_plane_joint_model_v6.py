@@ -17,12 +17,15 @@ from training.arbitrary_plane_deformation_primitives import (
     warp_tensor_with_map_yx,
 )
 from training.arbitrary_plane_recurrent_model import (
+    _pair_evidence,
     compose_antipodal_plane_frame_residual,
 )
 from training.arbitrary_plane_recurrent_model_v6 import (
     ArbitraryPlaneRetrievalRefinementModelV6,
 )
 from training.arbitrary_plane_joint_uncertainty import joint_lowrank_parameters
+from training.arbitrary_plane_full_frame_primitives import render_finite_thickness_coordinate_grid
+from training.arbitrary_plane_ribbon_v6 import compose_curved_ribbon_coordinates
 
 
 JOINT_MODEL_V6_SCHEMA = "anatomy-tracker.joint-model/v6"
@@ -72,6 +75,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         frame_centre_offset_conditioning: bool = False,
         coordinate_evidence_conditioning: bool = False,
         image_key_descriptor_dim: int | None = None,
+        ribbon_deformation: bool = False,
     ):
         super().__init__()
         if (
@@ -130,6 +134,149 @@ class ArbitraryPlaneJointModelV6(nn.Module):
                 self.joint_uncertainty_head.bias[:35].fill_(
                     torch.expm1(torch.tensor(1.0 - 1e-4)).log().item()
                 )
+        self.ribbon_deformation = ribbon_deformation
+        if ribbon_deformation:
+            with torch.random.fork_rng(devices=[]):
+                torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0x71BB06)
+                self.ribbon_field_head = nn.Conv2d(hidden_channels, 6, 3, padding=1, device="cpu")
+                nn.init.zeros_(self.ribbon_field_head.weight)
+                nn.init.zeros_(self.ribbon_field_head.bias)
+
+    def refine_ribbon(
+        self, image, outline, outline_available, atlas_volume,
+        initial_states, initial_component_log_mass, horizontal_reflection,
+        output_shape_h_w, origin_ap_dv_ml_um, voxel_size_ap_dv_ml_um,
+        support_origin_ap_dv_ml_um, axial_offsets_um, axial_weights, steps,
+    ):
+        """Conditional native 3D refinement of supplied B,K states and B,K,R masses.
+
+        Reflection flags R act only on the raster width axis. Hidden states,
+        poses and ribbon fields remain distinct for every (sample,cell,flag).
+        Known PSF schedules are S or B,S; section-processing maps are identity.
+        Each sample must have at least one finite supplied component log mass.
+        No global retrieval/tail, acquired constraints, SVF or covariance head
+        is used. Returned probabilities normalize ONLY the supplied components
+        using initial mass plus the final re-render score once; uncalibrated.
+        """
+        if not self.ribbon_deformation:
+            raise ValueError("ribbon refinement requires ribbon_deformation=True")
+        if initial_states.ndim != 3 or initial_states.shape[-1] != 12:
+            raise ValueError("initial ribbon states must have shape (B,K,12)")
+        batch, cells = initial_states.shape[:2]
+        flags = torch.as_tensor(horizontal_reflection, device=image.device, dtype=torch.bool)
+        if flags.ndim != 1 or initial_component_log_mass.shape != (batch, cells, flags.numel()):
+            raise ValueError("ribbon reflection flags R and initial masses B,K,R must agree")
+        if not isinstance(steps, int) or steps < 0:
+            raise ValueError("ribbon steps must be a nonnegative integer")
+        representations = flags.numel()
+        count = batch * cells * representations
+        height, width = output_shape_h_w
+        pose = self.pose_model
+        source_features = pose.encode_histology(
+            F.interpolate(image, output_shape_h_w, mode="bilinear", align_corners=False),
+            F.interpolate(outline, output_shape_h_w, mode="bilinear", align_corners=False),
+            outline_available,
+        )
+        source = source_features[:, None, None].expand(
+            batch, cells, representations, *source_features.shape[1:]
+        ).reshape(count, *source_features.shape[1:])
+        hidden = source.new_zeros(count, pose.recurrent_cell.candidate.out_channels, *source.shape[-2:])
+        geometry_dtype = torch.float64 if initial_states.dtype == torch.float64 else torch.float32
+        state = initial_states[:, :, None].expand(-1, -1, representations, -1).reshape(count, 12).to(dtype=geometry_dtype)
+        flip = flags[None, None].expand(batch, cells, -1).reshape(count)
+        offsets = pose._expanded_axial_schedule(
+            axial_offsets_um, batch, cells * representations, state.device, geometry_dtype,
+        )
+        weights = pose._expanded_axial_schedule(
+            axial_weights, batch, cells * representations, state.device, geometry_dtype,
+        )
+        states, residuals, directors, surfaces = [], [], [], []
+        derivative_bounds, rescale_factors, updates = [], [], []
+        for iteration in range(steps + 1):
+            raw_field = (
+                self.ribbon_field_head(hidden)
+                if iteration >= self.pose_only_steps
+                else hidden.new_zeros(count, 6, *hidden.shape[-2:])
+            )
+            with torch.autocast(device_type=state.device.type, enabled=False):
+                raw_field = F.interpolate(raw_field.to(state), output_shape_h_w, mode="bilinear", align_corners=False)
+                canonical_field = torch.where(flip[:, None, None, None], raw_field.flip(-1), raw_field)
+                ribbon = compose_curved_ribbon_coordinates(
+                    state, canonical_field[:, :3].tanh() * 200.,
+                    canonical_field[:, 3:].tanh() * .2, offsets, .35,
+                )
+                canonical_grid = ribbon["ccf_coordinates_ap_dv_ml_um"]
+                observed_grid = torch.where(
+                    flip[:, None, None, None, None], canonical_grid.flip(-2), canonical_grid,
+                )
+                canonical_surface = ribbon["centre_surface_ccf_ap_dv_ml_um"]
+                observed_surface = torch.where(
+                    flip[:, None, None, None], canonical_surface.flip(-2), canonical_surface,
+                )
+                rendered = render_finite_thickness_coordinate_grid(
+                    atlas_volume, observed_grid, origin_ap_dv_ml_um, voxel_size_ap_dv_ml_um, weights,
+                )
+            atlas_features = pose._encode_atlas(rendered)
+            evidence = pose.refinement_pair_encoder(_pair_evidence(source, atlas_features, pose.correlation_radius))
+            if pose.coordinate_evidence_conditioning:
+                with torch.autocast(device_type=state.device.type, enabled=False):
+                    h, w = evidence.shape[-2:]
+                    y, x = torch.meshgrid(
+                        torch.arange(h, device=state.device, dtype=state.dtype) * 4,
+                        torch.arange(w, device=state.device, dtype=state.dtype) * 4, indexing="ij",
+                    )
+                    raster_xy = 2 * (torch.stack((x, y)) + .5) / state.new_tensor((width, height))[:, None, None] - 1
+                    signs = torch.stack((1. - 2. * flip.to(state), torch.ones_like(flip, dtype=state.dtype)), dim=1)
+                    origin = torch.as_tensor(support_origin_ap_dv_ml_um, device=state.device, dtype=state.dtype)
+                    centre_ccf = observed_surface[:, ::4, ::4].permute(0, 3, 1, 2)
+                    coordinates = torch.cat((
+                        (centre_ccf - origin[None, :, None, None]) / 10000.,
+                        raster_xy[None].expand(count, -1, -1, -1),
+                        signs[..., None, None].expand(-1, -1, h, w),
+                    ), dim=1)
+                    addition = pose.coordinate_evidence(coordinates.to(pose.coordinate_evidence.weight))
+                evidence = evidence + addition.to(evidence)
+            hidden = pose.recurrent_cell(evidence, hidden)
+            states.append(state.reshape(batch, cells, representations, 12))
+            residuals.append(ribbon["residual_local_um"].reshape(batch, cells, representations, 3, height, width))
+            directors.append(ribbon["director_delta_local"].reshape(batch, cells, representations, 3, height, width))
+            surfaces.append(observed_surface.reshape(batch, cells, representations, height, width, 3))
+            derivative_bounds.append(ribbon["postlimit_derivative_frobenius_bound"].reshape(batch, cells, representations))
+            rescale_factors.append(ribbon["deformation_rescale"].reshape(batch, cells, representations))
+            if iteration < steps:
+                update = pose._bounded_update(pose.recurrent_update(hidden.mean(dim=(-2, -1)))).to(state)
+                with torch.autocast(device_type=state.device.type, enabled=False):
+                    state = compose_antipodal_plane_frame_residual(state, update, support_origin_ap_dv_ml_um)
+                updates.append(update.reshape(batch, cells, representations, 9))
+        with torch.autocast(device_type=state.device.type, enabled=False):
+            score = pose.recurrent_log_likelihood(hidden.mean(dim=(-2, -1)).to(pose.recurrent_log_likelihood.weight))
+            score = score.reshape(batch, cells, representations).to(dtype=geometry_dtype)
+            component_log_mass = initial_component_log_mass.to(score) + score
+            log_probability = F.log_softmax(component_log_mass.reshape(batch, -1), dim=-1).reshape_as(score)
+        return {
+            "component_state_sequence": torch.stack(states, dim=3),
+            "canonical_residual_local_um_sequence": torch.stack(residuals, dim=3),
+            "canonical_director_delta_local_sequence": torch.stack(directors, dim=3),
+            "observed_centre_ccf_ap_dv_ml_um_sequence": torch.stack(surfaces, dim=3),
+            "postlimit_derivative_frobenius_bound_sequence": torch.stack(derivative_bounds, dim=3),
+            "deformation_rescale_sequence": torch.stack(rescale_factors, dim=3),
+            "component_pose_update_sequence": torch.stack(updates, dim=3) if updates else state.new_empty(batch, cells, representations, 0, 9),
+            "deformation_active_sequence": torch.arange(steps + 1, device=state.device) >= self.pose_only_steps,
+            "final_component_state": states[-1],
+            "final_canonical_residual_local_um": residuals[-1],
+            "final_canonical_director_delta_local": directors[-1],
+            "final_observed_ccf_slab_ap_dv_ml_um": observed_grid.reshape(batch, cells, representations, *observed_grid.shape[1:]),
+            "final_observed_centre_ccf_ap_dv_ml_um": surfaces[-1],
+            "final_observed_render": rendered.reshape(batch, cells, representations, *rendered.shape[1:]),
+            "final_component_refinement_log_score": score,
+            "conditional_kept_component_log_probability": log_probability,
+            "conditional_kept_component_probability": log_probability.exp(),
+            "horizontal_reflection": flags,
+            "probabilities_calibrated": False,
+            "probability_scope": "conditional_within_supplied_kept_components_no_tail",
+            "processing_scope": "identity_section_processing_known_psf_no_acquired_constraints",
+            "field_semantics": "absolute_per_iteration_canonical_proper_frame_ribbon_not_2d_svf",
+        }
 
     @staticmethod
     def _row_schedule(
