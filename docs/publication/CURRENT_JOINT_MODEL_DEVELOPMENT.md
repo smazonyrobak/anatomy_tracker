@@ -27,19 +27,24 @@ data, temporary files and runs belong on `I:`.
   Integrity passes but the dropout improvement gate fails; do not promote B or
   tune on the six development donors. Whole control A6k is the next real-training
   warm start, not a qualified model. [Audited result](IMAGEKEY_OUTLINE_DROPOUT_001_RESULT_20260929.md).
-- Real+synthetic001 is **active**, session42210 from `3d37b71`, continuing whole
-  A6k. It pairs256 unchanged real training images/58 donors with continuous
-  upstream affine atlas renders and arbitrary-plane synthetic replay. No dense
-  real warp labels or registration covariance are fabricated.
+- Real+synthetic001 and independent audit11096 both exited0. Whole A6k→8k
+  continuation fails both real improvement gates and imperfect-brush synthetic
+  angle retention. Real normal38.59→42.99deg, capture32 .13939→.18333;
+  low sampled NCE does not establish global fitting. Do not promote or extend.
+  [Result and exact bindings](IMAGEKEY_REAL_SYNTHETIC_001_RESULT_20260929.md).
+- Next coarse-stage action is a fixed training-only comparison of exact affine
+  anchors versus the complete saved gallery on all256 training images/58 donors.
+  Preserve the11 zero-support and one low-support anchors rather than silently
+  filtering them. Distinguish anchor/gallery mismatch from donor generalization;
+  no extra six-donor tuning or public benchmark.
 - Native conditional pose+ribbon001 is **active**, session89162 from `dc32605`,
   with the completed cohort bound and the original whole image-key4k parent.
   It is a separate truth-near, known-PSF local control, not global inference.
   No independently trained encoders are merged.
-- Both active training output trees and operative sources are protected until
-  their respective exits; inspect only live stdout/telemetry. Independent endpoint
-  audits follow exit. Concurrent timings are not hardware benchmarks.
-- After real+synthetic exits, independently audit its endpoint and apply the
-  frozen gates. After native exits, audit the raw held-out curved coordinates
+- The native training output tree and operative sources are protected until
+  exit; inspect only live stdout/telemetry. Its independent endpoint audit follows
+  exit. Concurrent timings are not hardware benchmarks.
+- After native exits, audit the raw held-out curved coordinates
   and geometry, then decide actual retrieved-beam initialization versus revised
   learning. A successful real warm start needs subsequent native training of
   that **whole model**, not splicing in this independently trained native control.
@@ -171,8 +176,8 @@ full-frame corner capture within1mm is only4.28% at top32; this is not usable
 alignment accuracy. [Full result, pins and limitations](IMAGEKEY_RETRIEVAL_001_RESULT_20260929.md).
 Its whole fresh4k checkpoint is now used by the active conditional native ribbon
 control, without encoder merging or imported old weights. The separate raw Allen
-diagnostic has already failed adequate transfer; the active real+synthetic control
-instead continues whole A6k after the negative dropout comparison. Neither path
+diagnostic has already failed adequate transfer; the completed real+synthetic
+continuation from whole A6k also failed and is not promoted. Neither path
 substitutes for honest global capture or real final-test qualification.
 
 Still required: convincing arbitrary-plane global and native joint accuracy,
