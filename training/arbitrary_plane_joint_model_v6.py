@@ -68,6 +68,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             (0.1,) * 3 + (500.0,) * 3 + (0.1,) * 3 + (1.0,) * 26
         ),
         proposal_normal_readout_count: int | None = None,
+        spatial_residual_blocks: int = 0,
     ):
         super().__init__()
         if (
@@ -94,6 +95,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             ),
             cascade_max_closure_rounds=cascade_max_closure_rounds,
             proposal_normal_readout_count=proposal_normal_readout_count,
+            spatial_residual_blocks=spatial_residual_blocks,
         )
         self.deformation_decoder = AffineFreeSVFDecoder(
             hidden_channels,

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 import torch
 import torch.nn.functional as F
+from torch import nn
 
 from training.arbitrary_plane_catalogue_runtime_v6 import (
     BoundCompleteCatalogueBatchV6,
@@ -56,8 +57,11 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
         cascade_max_rendered_cells_per_sample: int = 64,
         cascade_max_closure_rounds: int = 4,
         proposal_normal_readout_count: int | None = None,
+        spatial_residual_blocks: int = 0,
     ):
         verify_complete_catalogue_runtime_v6(catalogue_runtime_v6)
+        if spatial_residual_blocks < 0:
+            raise ValueError("spatial residual block count must be nonnegative")
         if (
             not isinstance(cascade_max_rendered_cells_per_sample, int)
             or isinstance(cascade_max_rendered_cells_per_sample, bool)
@@ -91,6 +95,35 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
             offset_scale_um=proposal_offset_scale_um,
             normal_readout_count=proposal_normal_readout_count,
         )
+        # Shared between histology and freshly rendered atlas images. Keep the
+        # spatial grid for correlation, but learn whole-section spatial context.
+        self.spatial_residual_blocks = nn.ModuleList()
+        if spatial_residual_blocks:
+            with torch.random.fork_rng(devices=[]):
+                torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0x5A17C3)
+                for _ in range(spatial_residual_blocks):
+                    block = nn.Sequential(
+                        nn.GroupNorm(1, feature_channels), nn.GELU(),
+                        nn.Conv2d(feature_channels, feature_channels, 3, padding=1),
+                        nn.GroupNorm(1, feature_channels), nn.GELU(),
+                        nn.Conv2d(feature_channels, feature_channels, 3, padding=1),
+                    )
+                    # Identity at initialization, without changing any old draw.
+                    nn.init.zeros_(block[-1].weight)
+                    nn.init.zeros_(block[-1].bias)
+                    self.spatial_residual_blocks.append(block)
+
+    def encode_histology(self, image, outline, outline_available):
+        features = super().encode_histology(image, outline, outline_available)
+        for block in self.spatial_residual_blocks:
+            features = features + block(features)
+        return features
+
+    def _encode_atlas(self, image):
+        features = super()._encode_atlas(image)
+        for block in self.spatial_residual_blocks:
+            features = features + block(features)
+        return features
 
     @staticmethod
     def _validate_retrieval_shape(
