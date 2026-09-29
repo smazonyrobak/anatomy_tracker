@@ -173,3 +173,31 @@ joint section/ray/endpoint samples to sites without converting hard tolerances
 into uncertainty. The legacy coronal/outline-entry gate must not make brush
 segmentation mandatory for native inference. None of this GUI wiring is claimed
 implemented or calibrated by this source audit.
+
+### Native forward mark adapter implemented separately
+
+`training/arbitrary_plane_ribbon_marks.py::raw_marks_to_ribbon_ccf` now supplies
+the forward map from original raw-raster marks through an explicit recorded
+raw-to-model affine to each retained observed curved CCF surface. It preserves
+every cell/reflection hypothesis; it never averages their coordinates. Raw and
+model pixel-centre bounds, availability and finite coordinates determine validity.
+Invalid points return NaN, including the half-pixel fringe outside the tabulated
+surface-centre hull. No segmentation is required and no second reflection,
+legacy warp or flat OUV lift is applied.
+
+A single CPU numerical check used the completed TRAIN observation592 prediction
+`joint_v6_imagekey_ribbon_inference_preflight_001/prediction_chunk_1.pt`, SHA256
+`ac60e693d2efc496efb3d1a286c0f135d0807806e38eeebbcf8f012687b1d747`.
+Across all4 cells and2 reflections, 9,216 integer centres and9,025 half-centres
+per hypothesis agreed with direct indexing/four-corner interpolation: maximum
+FP64 errors4.184e-11um/1.819e-12um; FP32 integer error.000977um. Seven
+out-of-hull, nonfinite or unavailable queries were invalid/NaN. Adapter source
+SHA256 is `b4c7b39fdd146a92b1ed631b33ac3c92d6987e52ee02f385cb6668d1dc5531ea`.
+This checks interpolation on actual saved surfaces, not electrode annotations,
+registration accuracy or calibrated uncertainty.
+
+GUI wiring remains absent. Persist the exact `raw_display`-to-native-input affine
+with preprocessing provenance; `display_scale` alone is insufficient. The adapter
+does not provide atlas-click-to-raw inversion. A future native GUI branch must
+not silently reuse the legacy inverse, or the existing early return that requires
+a legacy transform before probe points can be recomputed.
