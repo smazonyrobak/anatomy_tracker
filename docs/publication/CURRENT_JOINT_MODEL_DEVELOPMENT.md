@@ -4,16 +4,17 @@ The native goal is active. No heartbeat automation is used. This is an unfinishe
 model-development goal, not a shipped or benchmark-qualified system. All work,
 data, temporary files and runs belong on `I:`.
 
-## Live experiment
+## Current experiment decision
 
-- Driver: `training/run_joint_v6_local_refinement.py`.
-- Output: `I:/AnatomyTracker/runs/joint_v6_local_refinement_001`.
-- Unified terminal session `6220`, Python PID `4104`, launched from source
-  commit `338c636`. Confirm live/terminal state before taking further action;
-  these identifiers are a handoff, not proof of continued execution.
-- Full 256-section initial evaluation and 2,700 applied updates were observed on
-  stdout. The fixed endpoint is 4,000 steps. Read stdout/process/GPU telemetry
-  while active; do not inspect or modify its output tree until confirmed exit.
+- Local001 (`I:/AnatomyTracker/runs/joint_v6_local_refinement_001`) completed
+  all 4,000 applied updates; session `6220` exited zero. The independent audit
+  exited zero and authenticated a **failed** local-learning gate: landmarks
+  improve only 6.07%, map error worsens 4.08%, normals barely improve. Large
+  CCF gains primarily resolve reflections; unreflected rows regress overall.
+- [Full result and receipts](LOCAL_JOINT_REFINEMENT_AUDIT_20260929.md).
+- The existing `training/run_joint_v6_local_refinement.py` is now prepared for
+  matched coordinate control002; no launch handle recorded yet. Confirm actual
+  process state before any launch. Never access a run's output tree while active.
 - Whole parent: own-lineage `joint_v6_proposal_curriculum_003/step_20000`.
   Global proposal/source encoder frozen; native shared recurrent pose updater,
   atlas stem and SVF decoder learn together. No weights from old models or
@@ -40,17 +41,18 @@ Protocol, paired geometric baselines and fixed continuation criteria:
 
 ## Next decisions, not completion claims
 
-After local training exits, audit raw paired pose/deformation/CCF errors,
-reflection and brush subsets, topology and frozen-parent equality. If local
-learning meets its criteria, proceed to whole-model joint unfreezing with global
-proposal rehearsal; otherwise address the observed failure first. Do not start
-public benchmarking or uncertainty calibration while point learning is poor.
+The local001 audit is complete; its weak geometry prevents qualification.
+Run matched coordinate control002 next. Whole-model joint unfreezing with global
+proposal rehearsal remains needed; the frozen-source engineering gate must not
+become a permanent prohibition on investigating feature adaptation if these
+controls fail. Do not start public benchmarking or uncertainty calibration while
+point learning is poor.
 
 The proper geometric proposal-loss control 008 is implemented and documented,
 but not launched or selected. An optional 896-parameter predicted-coordinate
 input to the shared recurrent updater is implemented and checked, but untrained.
 The proposed [matched local002 control](LOCAL_COORDINATE_CONTROL_002.md) is
-prepared for an evidence-led decision after local001's audit, not running yet.
+selected after local001's failed audit, not running yet.
 
 Soft frame-centre offset conditioning now has an opt-in native proposal/GRU
 path, disabled and untrained. It is not GUI capability or calibrated inference;
