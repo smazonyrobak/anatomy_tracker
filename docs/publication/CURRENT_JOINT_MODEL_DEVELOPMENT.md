@@ -76,7 +76,7 @@ data, temporary files and runs belong on `I:`.
   all original parameters/RNG match exactly, gradients pass, no optimizer applied.
   Receipt SHA-256 `4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e`.
   Native signed-pose session70497/PID7604 remains active from `0e6dc0d` and has
-  passed1,000 of2,000 updates. Its operative source and live output tree remain
+  passed1,900 of2,000 updates. Its operative source and live output tree remain
   untouched until exit; only terminal/stdout and GPU telemetry are monitored.
   It is a separate controlled experiment, not a refiner to splice into coarse C.
   [Predeclared protocol](NATIVE_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
@@ -94,10 +94,24 @@ data, temporary files and runs belong on `I:`.
   These reuse eight existing synthetic subjects, not new biological animals;
   target-capacity checks establish neither model performance nor generalization.
   [Result and exact audit bindings](COHERENT_ACQUISITION_VIEWS_001_RESULT_20260929.md).
-  Fixed1,024 additional TRAIN real-image acquisition91765 from `d807454` remains
-  live; its output tree and operative source are off-limits until exit.
+  Fixed1,024 additional TRAIN real-image acquisition91765 from `d807454` exited0.
+  Its independent audit passed the exact1,280-image union from58 TRAIN donors,
+  untouched original256 links, byte hashes and coordinate transforms, excluding
+  all six development donors. This expands sections, not biological animals.
+  [Audited real expansion](ALLEN_REAL_TRAINING_EXPANSION_20260929_RESULT.md).
+- The fixed full-coverage uniform-first experiment is now running as session96942/
+  PID22144 from `2935584` in the separate, existing
+  `I:/AnatomyTracker/agent_worktrees/coarse_retrieval_scaling` checkout.
+  Arm A has passed1,900 of12,576 additional updates from the whole C10k parent.
+  Fresh generated cells cover the remaining50,304 previously unattempted cells;
+  real training uses the audited1,280-image union. Conditional arm B uses the
+  same whole parent/budget/schedules with snapshot-hard negatives only if A
+  fails the predeclared endpoint gate. No interim development evaluation.
+  That checkout and the entire output tree remain frozen/protected until the
+  whole runner exits. A guarded independent auditor is prepared, not executed.
+  [Frozen protocol](COARSE_FULL_COVERAGE_RANKING_PROTOCOL_20260929.md).
 - Earlier bridge, native-no-probe and coarse-rehearsal outputs/audits are frozen
-  and readable; signed-pose outputs are not. Concurrent run timings are not
+  and readable; signed-pose and full-coverage outputs are not. Concurrent run timings are not
   hardware benchmarks. No independently trained encoders are
   merged; a future successful real warm start needs sequential native training
   of that **whole model**, not splicing in a separately trained native control.
