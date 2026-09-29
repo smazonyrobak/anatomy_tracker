@@ -1,4 +1,9 @@
-# Prepare-only raw Allen image-key diagnostic
+# Hash-bound raw Allen image-key diagnostic
+
+Status: executed once from `c9a94c65665135bd5bc0fba4ea86138efea111df`, exited0,
+and independently postchecked. The raw transfer diagnostic failed; see
+[the result](IMAGEKEY_RAW_ALLEN_001_RESULT_20260929.md). No training or parameter
+tuning on these six development donors was authorized or performed.
 
 `training/evaluate_joint_v6_imagekey_allen_raw.py` is deliberately locked by
 `CHECKPOINT_SHA256`, `GALLERY_SHA256` and `AUDIT_SHA256`. Any `UNSET` binding raises
@@ -43,6 +48,6 @@ These are uncalibrated coarse domain diagnostics, not blinded anatomical accurac
 dense-deformation truth, reflection accuracy, trajectory confidence, an untouched
 biological-generalization test or a DeepSlice benchmark. The cohort's historical
 exposure caveat and near-coronal fluorescence sampling remain material. The
-source is prepared and hash-bound only. Completed audit/configuration metadata
-were inspected after explicit exit confirmation; no checkpoint/gallery encoding
-or GPU execution has been performed for this preparation.
+original source preparation used no live-output access or GPU execution.
+The subsequent authorized run used only the frozen audited checkpoint/gallery;
+its raw outputs remain unchanged, and the postcheck is stored separately.
