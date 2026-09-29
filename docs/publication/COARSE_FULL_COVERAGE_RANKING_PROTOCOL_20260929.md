@@ -1,4 +1,10 @@
-# Full-coverage TRAIN ranking control — prepared, not launched
+# Full-coverage TRAIN ranking control — completed
+
+Status: runner96942 from `2935584` and independent CPUaudit86936 exited0.
+Arm A completed12,576 additional updates and passed all12 fixed gates. As
+declared below, B was not run; no mining-effect comparison exists. Selected
+alignment remains inadequate despite better beam capture. The original protocol
+below is unchanged. [Audited result](COARSE_FULL_COVERAGE_RANKING_001_RESULT_20260929.md).
 
 ## Hypothesis and parent
 

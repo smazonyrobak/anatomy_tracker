@@ -102,21 +102,30 @@ data, temporary files and runs belong on `I:`.
   untouched original256 links, byte hashes and coordinate transforms, excluding
   all six development donors. This expands sections, not biological animals.
   [Audited real expansion](ALLEN_REAL_TRAINING_EXPANSION_20260929_RESULT.md).
-- The fixed full-coverage uniform-first experiment is now running as session96942/
-  PID22144 from `2935584` in the separate, existing
-  `I:/AnatomyTracker/agent_worktrees/coarse_retrieval_scaling` checkout.
-  Arm A has passed11,500 of12,576 additional updates from the whole C10k parent.
-  Fresh generated cells cover the remaining50,304 previously unattempted cells;
-  real training uses the audited1,280-image union. Conditional arm B uses the
-  same whole parent/budget/schedules with snapshot-hard negatives only if A
-  fails the predeclared endpoint gate. No interim development evaluation.
-  That checkout and the entire output tree remain frozen/protected until the
-  whole runner exits. A guarded independent auditor is prepared, not executed.
-  [Frozen protocol](COARSE_FULL_COVERAGE_RANKING_PROTOCOL_20260929.md).
+- Full-coverage runner96942 from `2935584` and independent CPUaudit86936
+  exited0. Whole C10k→A22576 completed12,576 updates and passed all12 fixed
+  gates; conditional B was not run, so no mining-effect contrast exists.
+  Real-development plane capture32 rises90.61%→96.82%, normal12.43°→9.29°,
+  but the TRAIN-only image-free normal prior scores4.17° and selected finite-frame
+  error worsens3.353→3.460mm. Synthetic eligible normal remains37.46° with
+  capture32 77.88%; this is a candidate-stage pass, not usable joint alignment.
+  New generated attempts50,304/eligible50,035 complete98,304 attempted lineage
+  cells, not98,304 successfully supervised positives. Output is frozen/readable.
+  Audit SHA256 `c75c4ff817e7603eca31c8086080aafdb7f0953b3fec58c3f3f2f7842cf2afb3`.
+  [Audited result](COARSE_FULL_COVERAGE_RANKING_001_RESULT_20260929.md).
+  The next TRAIN-only saved-candidate analysis will measure actual finite-frame
+  residuals for a whole-A native capture curriculum; no DEV-selected starts.
+- The independent native mark adapter is implemented as `raw_marks_to_ribbon_ccf`
+  in `training/arbitrary_plane_ribbon_marks.py`, committed `f5cdf77`. It maps
+  recorded raw-to-model coordinates onto each retained observed curved surface,
+  preserves cell/reflection alternatives and invalidates out-of-FOV marks.
+  One completed TRAIN prediction passed direct CPU interpolation checks, but
+  there is no GUI wiring, electrode accuracy or probability-calibration claim.
+  [Remaining integration gaps](JOINT_CONSTRAINT_INTEGRATION_GAPS_20260929.md).
 - Earlier bridge, native-no-probe, signed-pose and coarse-rehearsal outputs/audits
   are frozen and readable. TRAIN-only pose-cost-direction diagnostic30641 also
-  exited0. Full-coverage and newly launched normalized signed-pose outputs,
-  and their respective operative checkouts/source, remain protected until exit.
+  exited0. Full-coverage outputs are now frozen/readable; only the live normalized
+  signed-pose output and its operative model/runner source remain protected.
   Concurrent run timings are not
   hardware benchmarks. No independently trained encoders are
   merged; a future successful real warm start needs sequential native training
@@ -183,10 +192,11 @@ with no optimizer update; receipt SHA256
 Matched training is now active as90795/PID21188 from committed `2a86507` in
 the main integration checkout. Its output
 `I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_001` and operative
-model/runner source are protected until exit. Initial stdout confirms input
-loading; no training result is asserted. A guarded adapted post-exit auditor is
-prepared, with completion pin unset and not run. Coarse session96942 continues in its separate frozen
-checkout, so neither run's source may be changed for the other.
+model/runner source are protected until exit. Initial evaluation completed and
+training reached step100 with finite loss/gradients; no endpoint result is asserted.
+A guarded adapted post-exit auditor is prepared, with completion pin unset and
+not run. Coarse session96942 has exited and its whole-A endpoint was audited;
+do not splice its encoder with this separately trained native control.
 [Prospective protocol](NORMALIZED_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
 Do not infer multiaxis or learned-deformation success from the oracle diagnostic,
 or infer that amplitude imbalance alone proves a scaling fix.
