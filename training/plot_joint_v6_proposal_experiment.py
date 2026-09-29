@@ -18,11 +18,14 @@ from training import arbitrary_plane_allen_atlas_binding_v6 as allen
 from training import arbitrary_plane_finite_row_binding_v6 as rows
 from training.arbitrary_plane_full_frame_primitives import render_finite_thickness_plane, full_frame_state_to_components
 
-run = Path(r"I:\AnatomyTracker\runs\joint_v6_proposal_capacity_002")
+run = Path(r"I:\AnatomyTracker\runs\joint_v6_proposal_curriculum_003")
+prepared_source = Path(r"I:\AnatomyTracker\runs\joint_v6_proposal_substantive_001")
+output = Path(r"I:\AnatomyTracker\runs\joint_v6_proposal_curriculum_003_figures")
+output.mkdir(parents=True, exist_ok=True)
 cache = Path(r"I:\AnatomyTracker\runs\arbitrary_plane_finite_v6_substantive_data_001\internal_development_cache")
-step = 10000
+step = 20000
 indices = [0, 53, 106, 159, 212, 265, 318, 371, 424, 477, 530, 583]
-prepared = torch.load(run / "internal_development_prepared.pt", map_location="cpu", weights_only=False)
+prepared = torch.load(prepared_source / "internal_development_prepared.pt", map_location="cpu", weights_only=False)
 catalogue = torch.load(run / "catalogue.pt", map_location="cpu", weights_only=False)
 metrics = np.load(run / f"development_rows_step_{step:05d}.npz")
 atlas, _ = allen._decode_and_preprocess_allen_v6()
@@ -62,7 +65,7 @@ fig.suptitle(
     fontsize=11,
 )
 fig.tight_layout(rect=(0, 0, 1, 0.98))
-path = run / f"development_fixed_panel_step_{step:05d}.png"
+path = output / f"development_fixed_panel_step_{step:05d}.png"
 fig.savefig(path, dpi=140)
 print(path)
 
@@ -71,7 +74,7 @@ evaluations = [json.loads(path.read_text()) for path in sorted(run.glob("develop
 fig, axes = plt.subplots(1, 3, figsize=(12, 3.5))
 training_loss = np.array([row["weighted_nll"] for row in trace])
 axes[0].plot(np.arange(100, len(trace) + 1, 100), training_loss[:len(trace) // 100 * 100].reshape(-1, 100).mean(1), label="Training")
-axes[0].plot([r["step"] for r in evaluations], [r["by_support"]["identifiable"]["animal_macro"]["nll"] for r in evaluations], label="Held-out animals")
+axes[0].plot([r["step"] for r in evaluations], [r["by_support"]["identifiable"]["animal_macro"]["nll"] for r in evaluations], label="Held-out synthetic groups")
 axes[0].set_ylabel("Nearest-cell NLL")
 axes[0].legend()
 for k in (8, 32, 128):
@@ -83,7 +86,7 @@ axes[2].set_ylabel("Held-out MAP normal error (degrees)")
 for ax in axes:
     ax.set_xlabel("Optimization step")
 fig.tight_layout()
-fig.savefig(run / "learning_curves.png", dpi=160)
+fig.savefig(output / "learning_curves.png", dpi=160)
 
 log_probability = np.load(run / f"development_log_probability_step_{step:05d}.npy", mmap_mode="r")
 top = np.argpartition(log_probability, -32, axis=1)[:, -32:]
@@ -96,8 +99,8 @@ valid = prepared["weight"].numpy() > 0
 summary = {
     "scope": "descriptive best-of-top32 capture diagnostic; truth-selected, not achieved model accuracy",
     "step": step,
-    "animal_macro_best_normal_error_deg": float(np.mean([best_normal[valid & (animals == animal)].mean() for animal in np.unique(animals[valid])])),
+    "synthetic_group_macro_best_normal_error_deg": float(np.mean([best_normal[valid & (animals == animal)].mean() for animal in np.unique(animals[valid])])),
     "best_normal_error_deg_by_row": best_normal.tolist(),
 }
-(run / "top32_capture_diagnostic.json").write_text(json.dumps(summary, indent=2))
+(output / "top32_capture_diagnostic.json").write_text(json.dumps(summary, indent=2))
 print({key: value for key, value in summary.items() if not key.endswith("by_row")})

@@ -34,7 +34,7 @@ from training.arbitrary_plane_full_frame_primitives import (
 )
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 
-RUN = ROOT / "runs" / "joint_v6_proposal_curriculum_003"
+RUN = ROOT / "runs" / "joint_v6_proposal_normal_objective_005"
 PREPARED = ROOT / "runs" / "joint_v6_proposal_substantive_001"
 SEED = 2026092805
 STEPS = 20_000
@@ -42,6 +42,7 @@ BATCH = 16
 GENERATED = 8
 EVALUATE_EVERY = 1_000
 LEARNING_RATE = 0.001
+NORMAL_MARGINAL_NLL_WEIGHT = 1.0
 RETRIEVAL_SHAPE = (96, 96)
 SUPPORT_MASS_THRESHOLD = 64.0
 MODES = ("raw", "exact_black", "imperfect_brush")
@@ -102,6 +103,8 @@ runtime = catalogue_runtime.make_complete_catalogue_runtime_v6(
     device="cuda", dtype=torch.float32,
 )
 assert runtime.cell_count == 384 * 16 * 16
+normal_count = catalogue["counts"]["normal_count"]
+cells_per_normal = catalogue["counts"]["offset_count_per_normal"] * catalogue["counts"]["roll_count"]
 cell_states = torch.as_tensor(catalogue["arrays"]["cell_states_float64"])
 render_states = cell_states.to(device="cuda", dtype=torch.float32)
 psf_weights = torch.tensor([1, 2, 2, 2, 2, 2, 2, 2, 1], device="cuda", dtype=torch.float32) / 16
@@ -151,6 +154,9 @@ config = {
     "catalogue_receipt_sha256": catalogue["receipt_sha256"],
     "initialization": "fresh_random_complete_joint_model", "resume_checkpoint": None,
     "training_phase": "proposal_only", "external_or_legacy_learned_dependencies": [], "probabilities_calibrated": False,
+    "objective": "weighted joint-cell NLL + normal_marginal_nll_weight * weighted normal-marginal NLL",
+    "normal_marginal_nll_weight": NORMAL_MARGINAL_NLL_WEIGHT,
+    "comparison": "same fresh initialization seed, generated appearance/cell schedules, frozen row order and optimizer as curriculum003; extra normal-marginal objective only; organizational ID namespace differs",
     "generated_schedule_sha256": schedule_sha256,
     "generator": {
         "cell_sampling": "shuffled complete 98304-cell permutations; no support rejection; exact cell frames, no subcell jitter",
@@ -185,6 +191,7 @@ truth_normal = truth_frame[:, :, 2]
 support_origin = torch.as_tensor(catalogue["support_geometry"]["support_origin_ap_dv_ml_um"], dtype=torch.float64)
 training_seconds = 0.0
 recent_losses = []
+recent_normal_losses = []
 applied_steps = 0
 generated_supervised = 0
 generated_censored = 0
@@ -263,8 +270,13 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
                     inputs[:, :1], inputs[:, 1:2], inputs[:, 2].mean((-2, -1)),
                     runtime.expand(BATCH), RETRIEVAL_SHAPE,
                 )
-                losses = F.nll_loss(output["raw_full_catalogue_cell_log_probability"], label, reduction="none")
-                loss = (losses * weight).sum() / weight.sum().clamp_min(1.0)
+                log_probability = output["raw_full_catalogue_cell_log_probability"]
+                losses = F.nll_loss(log_probability, label, reduction="none")
+                normal_log_probability = torch.logsumexp(log_probability.reshape(BATCH, normal_count, cells_per_normal), dim=-1)
+                normal_losses = F.nll_loss(normal_log_probability, label // cells_per_normal, reduction="none")
+                joint_loss = (losses * weight).sum() / weight.sum().clamp_min(1.0)
+                normal_loss = (normal_losses * weight).sum() / weight.sum().clamp_min(1.0)
+                loss = joint_loss + NORMAL_MARGINAL_NLL_WEIGHT * normal_loss
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             gradient = torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -275,13 +287,17 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
             applied_steps += int(applied)
             generated_supervised += int(sum(weight_values))
             generated_censored += GENERATED - int(sum(weight_values))
-            loss_value = float(loss.detach())
+            loss_value = float(joint_loss.detach())
+            normal_loss_value = float(normal_loss.detach())
             subset_nll = [(losses[part] * weight[part]).sum() / weight[part].sum().clamp_min(1.0) for part in (slice(None, GENERATED), slice(GENERATED, None))]
             training_seconds += time.perf_counter() - tick
             recent_losses.append(loss_value)
+            recent_normal_losses.append(normal_loss_value)
             trace.write(json.dumps({
                 "step": step, "weighted_nll": loss_value,
-                "generated_weighted_nll": float(subset_nll[0]), "frozen_weighted_nll": float(subset_nll[1]),
+                "weighted_normal_marginal_nll": normal_loss_value,
+                "weighted_objective": float(loss.detach()),
+                "generated_weighted_nll": float(subset_nll[0].detach()), "frozen_weighted_nll": float(subset_nll[1].detach()),
                 "gradient_norm": float(gradient) if torch.isfinite(gradient) else None,
                 "optimizer_step_applied": applied, "generated_sample_indices": positions.tolist(),
                 "finite_slab_support_mass_px": support_values, "visible_support_mass_px": visible_values,
@@ -289,9 +305,10 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
             }) + "\n")
             if step % 100 == 0:
                 trace.flush()
-                print(json.dumps({"step": step, "mean_last100_nll": float(np.mean(recent_losses)), "training_seconds": training_seconds, "generated_censored": generated_censored, "applied_steps": applied_steps}), flush=True)
+                print(json.dumps({"step": step, "mean_last100_nll": float(np.mean(recent_losses)), "mean_last100_normal_nll": float(np.mean(recent_normal_losses)), "training_seconds": training_seconds, "generated_censored": generated_censored, "applied_steps": applied_steps}), flush=True)
                 recent_losses.clear()
-            del output, inputs, losses, loss, subset_nll, rendered, generated_inputs
+                recent_normal_losses.clear()
+            del output, inputs, losses, loss, subset_nll, rendered, generated_inputs, log_probability, normal_log_probability, normal_losses, joint_loss, normal_loss
 
         if step % EVALUATE_EVERY == 0 or step == STEPS:
             model.eval()
@@ -307,6 +324,10 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
             truth_log = raw[np.arange(len(labels)), labels]
             ranks = (raw > truth_log[:, None]).sum(axis=1) + ((raw == truth_log[:, None]) & (np.arange(runtime.cell_count)[None] < labels[:, None])).sum(axis=1) + 1
             predicted = np.asarray(raw.argmax(axis=1))
+            normal_lp = np.logaddexp.reduce(np.asarray(raw).reshape(len(labels), normal_count, cells_per_normal), axis=-1)
+            normal_prediction = normal_lp.argmax(axis=-1)
+            _, normal_frames, _ = full_frame_state_to_components(cell_states[normal_prediction * cells_per_normal])
+            marginal_normal_error = torch.rad2deg(torch.acos((normal_frames[:, :, 2] * truth_normal).sum(-1).abs().clamp(0, 1))).numpy()
             center, frame, _ = full_frame_state_to_components(cell_states[predicted])
             normal = frame[:, :, 2]
             dot = (normal * truth_normal).sum(-1)
@@ -316,6 +337,8 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
             antipodal_cosine = ((frame * torch.tensor([-1.0, 1.0, -1.0]) * truth_frame).sum((-2, -1)) - 1.0) / 2.0
             metrics = {
                 "nll": -np.asarray(truth_log), "truth_rank": ranks,
+                "normal_marginal_nll": -normal_lp[np.arange(len(labels)), labels // cells_per_normal],
+                "normal_marginal_map_angle_deg": marginal_normal_error,
                 "plane_angle_deg": torch.rad2deg(torch.acos(dot.abs().clamp(0, 1))).numpy(),
                 "antipodal_frame_angle_deg": torch.rad2deg(torch.acos(torch.maximum(frame_cosine, antipodal_cosine).clamp(-1, 1))).numpy(),
                 "representation_sensitive_frame_angle_deg": torch.rad2deg(torch.acos(frame_cosine.clamp(-1, 1))).numpy(),
