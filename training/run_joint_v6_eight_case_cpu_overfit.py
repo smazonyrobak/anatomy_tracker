@@ -21,7 +21,7 @@ from training.arbitrary_plane_catalogue_runtime_v6 import make_complete_catalogu
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 
-RUN = ROOT / "runs/joint_v6_eight_case_cpu_overfit_001"
+RUN = ROOT / "runs/joint_v6_eight_case_cpu_overfit_002"
 PACK = ROOT / "data/joint_v6_local_refinement_frozen_001"
 BASELINE = ROOT / "runs/joint_v6_proposal_substantive_001"
 CURRICULUM = ROOT / "runs/joint_v6_proposal_curriculum_003"
