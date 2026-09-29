@@ -34,7 +34,7 @@ from training.arbitrary_plane_full_frame_primitives import (
 )
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 
-RUN = ROOT / "runs" / "joint_v6_spatial_depth_control_007"
+RUN = ROOT / "runs" / "joint_v6_geometry_kernel_control_008"
 PREPARED = ROOT / "runs" / "joint_v6_proposal_substantive_001"
 SEED = 2026092805
 STEPS = 4_000
@@ -43,7 +43,8 @@ BATCH = 16
 GENERATED = 8
 EVALUATE_EVERY = 1_000
 LEARNING_RATE = 0.001
-NORMAL_MARGINAL_NLL_WEIGHT = 1.0
+NORMAL_MARGINAL_NLL_WEIGHT = 0.0
+NORMAL_KERNEL_SIGMA_DEG = 3.0
 RETRIEVAL_SHAPE = (96, 96)
 SUPPORT_MASS_THRESHOLD = 64.0
 MODES = ("raw", "exact_black", "imperfect_brush")
@@ -53,7 +54,7 @@ MODEL_KWARGS = {
     "proposal_mixture_components": 8, "proposal_spatial_bins_h_w": (8, 8),
     "cascade_max_rendered_cells_per_sample": 32, "cascade_max_closure_rounds": 4,
     "pose_only_steps": 1, "deformation_integration_steps": 3,
-    "proposal_normal_readout_count": None, "spatial_residual_blocks": 6,
+    "proposal_normal_readout_count": None, "spatial_residual_blocks": 0,
 }
 PREPARED_SHA256 = {
     "catalogue.pt": "9b49d203cc73ce3a66e648bbe5228231eb5cc9c17d5db4669eefe0f08ae22c71",
@@ -107,6 +108,17 @@ runtime = catalogue_runtime.make_complete_catalogue_runtime_v6(
 assert runtime.cell_count == 384 * 16 * 16
 normal_count = catalogue["counts"]["normal_count"]
 cells_per_normal = catalogue["counts"]["offset_count_per_normal"] * catalogue["counts"]["roll_count"]
+normal_axes = F.normalize(torch.as_tensor(catalogue["arrays"]["cell_normal_ap_dv_ml_float64"][::cells_per_normal], dtype=torch.float64), dim=-1)
+normal_kernel = torch.exp(-(1 - (normal_axes @ normal_axes.T).square()).clamp_min(0) / (2 * np.deg2rad(NORMAL_KERNEL_SIGMA_DEG) ** 2))
+normal_kernel.fill_diagonal_(1)
+uniform_kernel_mean = normal_kernel.mean(-1)
+uniform_true_logit_gradient_ratios = (normal_count - 1) / (2 * (1 + uniform_kernel_mean.mean() - 2 * uniform_kernel_mean))
+normal_kernel_weight = float(torch.quantile(uniform_true_logit_gradient_ratios, .5))
+torch.save({"kernel_float64": normal_kernel, "normal_axes_float64": normal_axes, "sigma_deg": NORMAL_KERNEL_SIGMA_DEG,
+            "global_weight": normal_kernel_weight, "uniform_true_logit_gradient_ratios": uniform_true_logit_gradient_ratios}, RUN / "normal_kernel.pt")
+with (RUN / "normal_kernel.pt").open("rb") as stream:
+    normal_kernel_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+normal_kernel = normal_kernel.to(device="cuda", dtype=torch.float32)
 cell_states = torch.as_tensor(catalogue["arrays"]["cell_states_float64"])
 render_states = cell_states.to(device="cuda", dtype=torch.float32)
 psf_weights = torch.tensor([1, 2, 2, 2, 2, 2, 2, 2, 1], device="cuda", dtype=torch.float32) / 16
@@ -156,9 +168,14 @@ config = {
     "catalogue_receipt_sha256": catalogue["receipt_sha256"],
     "initialization": "fresh_random_complete_joint_model", "resume_checkpoint": None,
     "training_phase": "proposal_only", "external_or_legacy_learned_dependencies": [], "probabilities_calibrated": False,
-    "objective": "weighted joint-cell NLL + normal_marginal_nll_weight * weighted normal-marginal NLL",
+    "objective": "weighted joint-cell NLL + fixed global scale * proper antipodal normal-projector Gaussian kernel score; normal-marginal NLL recorded only",
     "normal_marginal_nll_weight": NORMAL_MARGINAL_NLL_WEIGHT,
-    "comparison": "first4000 updates of the exact005 20000-step schedule; same existing initial parameters and RNG; add six shared two-convolution spatial residual blocks with zero final convolution and isolated CPU seed stream; keep original smooth head(no directnormalreadout), objective and optimizer; organizational ID namespace differs",
+    "normal_kernel": {"sigma_deg": NORMAL_KERNEL_SIGMA_DEG, "weight": normal_kernel_weight,
+                      "score": "(p_normal-one_hot_target)^T K (p_normal-one_hot_target)",
+                      "geometry": "K_ij=exp(-(1-(n_i dot n_j)^2)/(2*sigma_radians^2)); unit axes, symmetric, diagonal1, not row-normalized",
+                      "scaling": "one global median over all384 uniform-target true-logit NLL/kernel gradient ratios; catalogue geometry only, no development fit",
+                      "artifact_sha256": normal_kernel_sha256, "arithmetic": "FP32 kernel score outside encoder autocast; construction/scaling CPU FP64"},
+    "comparison": "first4000 updates of exact005 20000-step schedule; same existing initial parameters and RNG, original shallow encoder and smooth head, optimizer unchanged; replace auxiliary normal NLL with globally scaled proper kernel score; organizational ID namespace differs",
     "generated_schedule_sha256": schedule_sha256,
     "generator": {
         "cell_sampling": "shuffled complete 98304-cell permutations; no support rejection; exact cell frames, no subcell jitter",
@@ -279,7 +296,11 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
                 normal_losses = F.nll_loss(normal_log_probability, label // cells_per_normal, reduction="none")
                 joint_loss = (losses * weight).sum() / weight.sum().clamp_min(1.0)
                 normal_loss = (normal_losses * weight).sum() / weight.sum().clamp_min(1.0)
-                loss = joint_loss + NORMAL_MARGINAL_NLL_WEIGHT * normal_loss
+                with torch.autocast("cuda", enabled=False):
+                    normal_residual = normal_log_probability.float().exp() - F.one_hot(label // cells_per_normal, normal_count).float()
+                    kernel_scores = (normal_residual * (normal_residual @ normal_kernel)).sum(-1)
+                    kernel_loss = (kernel_scores * weight).sum() / weight.sum().clamp_min(1.0)
+                    loss = joint_loss.float() + normal_kernel_weight * kernel_loss
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             gradient = torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -299,6 +320,7 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
             trace.write(json.dumps({
                 "step": step, "weighted_nll": loss_value,
                 "weighted_normal_marginal_nll": normal_loss_value,
+                "weighted_normal_kernel_score": float(kernel_loss.detach()),
                 "weighted_objective": float(loss.detach()),
                 "generated_weighted_nll": float(subset_nll[0].detach()), "frozen_weighted_nll": float(subset_nll[1].detach()),
                 "gradient_norm": float(gradient) if torch.isfinite(gradient) else None,
@@ -311,7 +333,7 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
                 print(json.dumps({"step": step, "mean_last100_nll": float(np.mean(recent_losses)), "mean_last100_normal_nll": float(np.mean(recent_normal_losses)), "training_seconds": training_seconds, "generated_censored": generated_censored, "applied_steps": applied_steps}), flush=True)
                 recent_losses.clear()
                 recent_normal_losses.clear()
-            del output, inputs, losses, loss, subset_nll, rendered, generated_inputs, log_probability, normal_log_probability, normal_losses, joint_loss, normal_loss
+            del output, inputs, losses, loss, subset_nll, rendered, generated_inputs, log_probability, normal_log_probability, normal_losses, joint_loss, normal_loss, normal_residual, kernel_scores, kernel_loss
 
         if step % EVALUATE_EVERY == 0 or step == STEPS:
             model.eval()
