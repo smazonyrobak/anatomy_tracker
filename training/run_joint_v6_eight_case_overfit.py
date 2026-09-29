@@ -1,4 +1,4 @@
-"""Eight fixed real synthetic observations: CPU memorization diagnostic only."""
+"""Eight fixed synthetic observations: memorization diagnostic only."""
 
 import hashlib
 import json
@@ -10,7 +10,6 @@ from pathlib import Path
 ROOT = Path(r"I:\AnatomyTracker")
 os.environ["TEMP"] = str(ROOT / "tmp")
 os.environ["TMP"] = str(ROOT / "tmp")
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 import numpy as np
 import psutil
@@ -21,12 +20,13 @@ from training.arbitrary_plane_catalogue_runtime_v6 import make_complete_catalogu
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 
-RUN = ROOT / "runs/joint_v6_eight_case_cpu_overfit_002"
+RUN = ROOT / "runs/joint_v6_eight_case_gpu_overfit_001"
 PACK = ROOT / "data/joint_v6_local_refinement_frozen_001"
 BASELINE = ROOT / "runs/joint_v6_proposal_substantive_001"
 CURRICULUM = ROOT / "runs/joint_v6_proposal_curriculum_003"
 SEED = 2026092908
 STEPS = 1000
+DEVICE = "cuda"
 RETRIEVAL_SHAPE = (96, 96)
 
 RUN.mkdir(parents=True, exist_ok=False)
@@ -45,26 +45,26 @@ for index in range(8):
     row = next(row for row in range(len(modes)) if eligible[row] and modes[row] == mode and int(prepared["truth_catalogue_index"][row]) not in selected_labels)
     selected.append(row)
     selected_labels.add(int(prepared["truth_catalogue_index"][row]))
-inputs = prepared["channels"][selected].clone()
-labels = prepared["truth_catalogue_index"][selected].clone()
+inputs = prepared["channels"][selected].clone().to(DEVICE)
+labels = prepared["truth_catalogue_index"][selected].clone().to(DEVICE)
 truth = prepared["truth_state"][selected].clone()
 records = [prepared["records"][row] for row in selected]
 foreground = foreground[selected].tolist()
 original_indices = prepared["prepared_row_index"][selected].tolist()
 del prepared
 catalogue = torch.load(BASELINE / "catalogue.pt", map_location="cpu", weights_only=False)
-runtime = make_complete_catalogue_runtime_v6(catalogue, expected_catalogue_receipt_sha256=catalogue["receipt_sha256"], device="cpu", dtype=torch.float32)
-cell_normals = torch.as_tensor(catalogue["arrays"]["cell_normal_ap_dv_ml_float64"])
+runtime = make_complete_catalogue_runtime_v6(catalogue, expected_catalogue_receipt_sha256=catalogue["receipt_sha256"], device=DEVICE, dtype=torch.float32)
+cell_normals = torch.as_tensor(catalogue["arrays"]["cell_normal_ap_dv_ml_float64"], device=DEVICE)
 _, truth_frames, _ = full_frame_state_to_components(truth)
-truth_normals = truth_frames[:, :, 2]
+truth_normals = truth_frames[:, :, 2].to(DEVICE)
 model_kwargs = json.loads((CURRICULUM / "experiment.json").read_text())["model_kwargs"]
 model_kwargs["proposal_normal_readout_count"] = None
 torch.manual_seed(SEED)
-model = ArbitraryPlaneJointModelV6(runtime, **model_kwargs)
+model = ArbitraryPlaneJointModelV6(runtime, **model_kwargs).to(DEVICE)
 optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.0001)
 repository = Path(__file__).resolve().parents[1]
 source_files = (
-    "training/run_joint_v6_eight_case_cpu_overfit.py",
+    "training/run_joint_v6_eight_case_overfit.py",
     "training/arbitrary_plane_joint_model_v6.py",
     "training/arbitrary_plane_coarse_proposal_v6.py",
     "training/arbitrary_plane_recurrent_model.py",
@@ -72,12 +72,12 @@ source_files = (
 experiment = {
     "scope": "eight fixed training observations; memorization diagnostic, no generalization or calibration claim",
     "initialization": "fresh complete joint model; no loaded model weights, features or pseudolabels",
-    "seed": SEED, "model_kwargs": model_kwargs, "device": "cpu", "threads": 4,
+    "seed": SEED, "model_kwargs": model_kwargs, "device": DEVICE, "threads": 4,
     "optimizer": "AdamW", "learning_rate": 0.001, "weight_decay": 0.0001,
     "loss": "mean full98304-cell joint NLL; no auxiliary normal loss",
     "batch_size": 4, "schedule": "alternating fixed rows0:4 and4:8",
     "retrieval_shape_h_w": RETRIEVAL_SHAPE, "maximum_steps": STEPS,
-    "budget_guard": "at100 stop if elapsed experiment time predicts >300seconds at1000",
+    "budget_guard": "CPU only: at100 stop if elapsed experiment time predicts >300seconds at1000; GPU runs the complete1000",
     "selection": "first eligible rows cycling three input modes; unique catalogue labels; pose=dense=1,tissue>1000pixels",
     "pack_row_indices": selected, "prepared_row_indices": original_indices,
     "labels": labels.tolist(), "foreground_pixels": foreground, "records": records,
@@ -118,9 +118,9 @@ with (RUN / "metrics.jsonl").open("w", encoding="utf-8") as trace:
             trace.write(json.dumps(metric) + "\n")
             trace.flush()
             print(json.dumps(metric), flush=True)
-            if step == 100 and elapsed * 10 > 300:
+            if DEVICE == "cpu" and step == 100 and elapsed * 10 > 300:
                 status = "stopped100_cpu_budget"
                 break
-np.save(RUN / "final_raw_log_probability.npy", raw.numpy())
+np.save(RUN / "final_raw_log_probability.npy", raw.cpu().numpy())
 (RUN / "completed.json").write_text(json.dumps({"status": status, "steps": step, "seconds": time.perf_counter() - started, "final_metrics": metric}, indent=2), encoding="utf-8")
-print(f"Eight-case CPU diagnostic finished: {status}", flush=True)
+print(f"Eight-case {DEVICE} diagnostic finished: {status}", flush=True)
