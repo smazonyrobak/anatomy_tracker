@@ -45,7 +45,12 @@ data, temporary files and runs belong on `I:`.
   positives, preserving source roll. Both arms share explicit weak-reference
   eligibility and physical-plane negative exclusion. Same wholeA6k parent,
   2,000 updates each, fixed endpoints; no public benchmark or encoder merging.
-  [Protocol](CANONICAL_CHART_BRIDGE_001_PROTOCOL_20260929.md). Not launched yet.
+  [Protocol](CANONICAL_CHART_BRIDGE_001_PROTOCOL_20260929.md). Now active in
+  session96952, launched from `ca1cb38`. Terminal confirms512 atlas chart images
+  and244 common-eligible/12 ineligible real rows; all256 remain in evaluation.
+  While active inspect only terminal/stdout and process/GPU telemetry, not its
+  output tree or operative sources. After exit, independently audit both frozen
+  endpoints and their fixed gates before selecting any continuation.
 - Native conditional pose+ribbon001 (89162, `dc32605`) and independent audit84435
   both exited0. Oracle centre error814.24→716.56um improves only about12%, below
   the fixed20% requirement; plane-normal error6.138→6.103deg barely changes.
