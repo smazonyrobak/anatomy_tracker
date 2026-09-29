@@ -59,6 +59,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
         proposal_normal_readout_count: int | None = None,
         spatial_residual_blocks: int = 0,
         frame_centre_offset_conditioning: bool = False,
+        coordinate_evidence_conditioning: bool = False,
     ):
         verify_complete_catalogue_runtime_v6(catalogue_runtime_v6)
         if spatial_residual_blocks < 0:
@@ -83,6 +84,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
             update_limits=update_limits,
             plane_tangent_scales=plane_tangent_scales,
             frame_centre_offset_conditioning=frame_centre_offset_conditioning,
+            coordinate_evidence_conditioning=coordinate_evidence_conditioning,
         )
         self.catalogue_runtime_v6 = catalogue_runtime_v6
         self.cascade_max_rendered_cells_per_sample = (

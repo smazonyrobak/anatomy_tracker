@@ -70,6 +70,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         proposal_normal_readout_count: int | None = None,
         spatial_residual_blocks: int = 0,
         frame_centre_offset_conditioning: bool = False,
+        coordinate_evidence_conditioning: bool = False,
     ):
         super().__init__()
         if (
@@ -98,6 +99,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             proposal_normal_readout_count=proposal_normal_readout_count,
             spatial_residual_blocks=spatial_residual_blocks,
             frame_centre_offset_conditioning=frame_centre_offset_conditioning,
+            coordinate_evidence_conditioning=coordinate_evidence_conditioning,
         )
         self.deformation_decoder = AffineFreeSVFDecoder(
             hidden_channels,

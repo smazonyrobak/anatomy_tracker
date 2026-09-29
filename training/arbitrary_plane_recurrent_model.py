@@ -21,6 +21,7 @@ from training.arbitrary_plane_full_frame_primitives import (
     compose_full_frame_state,
     full_frame_state_from_components,
     full_frame_state_to_components,
+    full_frame_state_to_physical_ouv,
     render_finite_thickness_plane,
     so3_exp_map,
 )
@@ -239,6 +240,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         ),
         plane_tangent_scales: tuple[float, float, float] = (0.18, 0.18, 600.0),
         frame_centre_offset_conditioning: bool = False,
+        coordinate_evidence_conditioning: bool = False,
     ):
         super().__init__()
         if atlas_channels < 1 or feature_channels < 1 or hidden_channels < 1:
@@ -321,6 +323,65 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0x0FF5E7)
                 self.frame_centre_offset_evidence = nn.Linear(10, hidden_channels, bias=False)
                 nn.init.zeros_(self.frame_centre_offset_evidence.weight)
+        self.coordinate_evidence_conditioning = coordinate_evidence_conditioning
+        if coordinate_evidence_conditioning:
+            with torch.random.fork_rng(devices=[]):
+                torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0xCCF007)
+                self.coordinate_evidence = nn.Conv2d(7, hidden_channels, 1, bias=False)
+                nn.init.zeros_(self.coordinate_evidence.weight)
+
+    def _condition_coordinate_evidence(
+        self, evidence, state, raster_affine, feedback_map, output_shape_h_w, support_origin,
+    ):
+        """Inject predicted geometry at exact stride-four encoder centres.
+
+        Channels: (CCF AP/DV/ML - fixed support origin)/10000 um, observed
+        raster x/y in align_corners=False coordinates, and reflection x/y signs.
+        Compose observed pixel -> current renderer sampling map -> reflection
+        -> O+x/W U+y/H V. This is the symmetric PSF's midplane, not a new render.
+        Out-of-canvas queries retain their geometric coordinates; rendering
+        still zero-pads. No truth, support mask or acquired metadata is consumed.
+        """
+        if not self.coordinate_evidence_conditioning:
+            return evidence
+        dtype = torch.float32 if state.dtype in (torch.float16, torch.bfloat16) else state.dtype
+        with torch.autocast(device_type=evidence.device.type, enabled=False):
+            batch, cells = state.shape[:2]
+            representations = raster_affine.shape[2]
+            height, width = output_shape_h_w
+            h, w = evidence.shape[-2:]
+            y, x = torch.meshgrid(
+                torch.arange(h, device=evidence.device, dtype=dtype) * 4,
+                torch.arange(w, device=evidence.device, dtype=dtype) * 4,
+                indexing="ij",
+            )
+            observed_xy = torch.stack((x, y))
+            mapped_xy = (
+                observed_xy[None, None].expand(batch, cells, -1, -1, -1)
+                if feedback_map is None
+                else feedback_map.to(dtype=dtype)[..., ::4, ::4].flip(-3)
+            )
+            signs = torch.diagonal(raster_affine[..., :2], dim1=-2, dim2=-1).to(dtype=dtype)
+            size_xy = state.new_tensor((width, height), dtype=dtype)
+            canonical_xy = (
+                signs[..., None, None] * mapped_xy[:, :, None]
+                + (1 - signs[..., None, None]) * ((size_xy - 1) / 2)[None, None, None, :, None, None]
+            )
+            ouv = full_frame_state_to_physical_ouv(state.to(dtype=dtype)).reshape(batch, cells, 3, 3)
+            points = (
+                ouv[:, :, None, 0, :, None, None]
+                + ouv[:, :, None, 1, :, None, None] * (canonical_xy[..., 0:1, :, :] / width)
+                + ouv[:, :, None, 2, :, None, None] * (canonical_xy[..., 1:2, :, :] / height)
+            )
+            origin = torch.as_tensor(support_origin, device=evidence.device, dtype=dtype)
+            raster_xy = 2 * (observed_xy + .5) / size_xy[:, None, None] - 1
+            features = torch.cat((
+                (points - origin[None, None, None, :, None, None]) / 10000.,
+                raster_xy[None, None, None].expand(batch, cells, representations, -1, -1, -1),
+                signs[..., None, None].expand(-1, -1, -1, -1, h, w),
+            ), dim=-3).reshape(batch * cells * representations, 7, h, w)
+            addition = self.coordinate_evidence(features.to(self.coordinate_evidence.weight))
+        return evidence + addition.to(evidence)
 
     def _frame_centre_offset_features(self, observation, reference, support_origin):
         """B x 9: axis AP/DV/ML, reference um, observed offset um, sigma um, available.
@@ -1060,6 +1121,10 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
             evidence = self._condition_frame_centre_evidence(
                 evidence, state, offset_features, support_origin_ap_dv_ml_um, representations
             )
+            evidence = self._condition_coordinate_evidence(
+                evidence, state, representation_to_canonical_raster_affine, feedback_map,
+                output_shape_h_w, support_origin_ap_dv_ml_um,
+            )
             hidden = self.recurrent_cell(evidence, hidden)
             representation_contexts.append(
                 hidden.reshape(
@@ -1219,6 +1284,10 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         )
         final_evidence = self._condition_frame_centre_evidence(
             final_evidence, state, offset_features, support_origin_ap_dv_ml_um, representations
+        )
+        final_evidence = self._condition_coordinate_evidence(
+            final_evidence, state, representation_to_canonical_raster_affine, feedback_map,
+            output_shape_h_w, support_origin_ap_dv_ml_um,
         )
         final_hidden = self.recurrent_cell(final_evidence, hidden)
         representation_contexts.append(
