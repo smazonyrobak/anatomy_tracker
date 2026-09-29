@@ -116,20 +116,18 @@ until process exit. Eight training and four development subject maps have
 preassigned identities; acceptance and completeness are not yet established.
 No sections or learning are performed by this plan-generation process.
 
-A flat [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
-is now LIVE via `training/run_joint_v6_imagekey_retrieval.py`, session `8803`,
-launched from committed source `edc99b8` after rehearsal003 exit/audit and the
-bounded native-ribbon/GPU-mapping checks. Output
-`I:/AnatomyTracker/runs/joint_v6_imagekey_retrieval_001` is protected until exit.
-Use stdout/GPU telemetry only; do not alter its driver or model dependencies.
-It starts one new whole random model, trains shared image descriptors against
-fresh reflected atlas keys, and compares its4,000-update endpoint against the
-frozen [original003 step4,000 baseline](IMAGEKEY_BASELINE_003_STEP4000_20260929.md).
-Full-gallery evaluation and exact advancement gates are fixed before training.
-No old weights are imported; this does not merge encoders or train the recurrent
-joint updater. Rehearsal003's completed audit is documented above. After this
-new run exits, independently audit its full-gallery raw endpoint and fixed
-advancement gates before any continuation or model selection.
+The [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
+completed4,000 updates, terminal8803 EXIT0, from `edc99b8`. Its independent
+audit45886 EXIT0 passes integrity and every fixed candidate-stage gate.
+Eligible group-macro normal error47.50->40.36deg and top32 physical-plane
+capture10.59%->68.46% versus original003 at the matched4k budget. However,
+full-frame corner capture within1mm is only4.28% at top32; this is not usable
+alignment accuracy. [Full result, pins and limitations](IMAGEKEY_RETRIEVAL_001_RESULT_20260929.md).
+Select its whole fresh checkpoint for conditional native ribbon learning,
+without encoder merging or imported old weights. First run a truth-near
+coherent-subject control and a separate raw Allen development transfer diagnostic;
+neither substitutes for honest global capture or real final-test qualification.
+The coherent plan-generation session9774 remains active and its tree protected.
 
 Still required: convincing arbitrary-plane global and native joint accuracy,
 usable optional constraints, genuine animal-disjoint validation, calibrated

@@ -2,8 +2,9 @@
 
 Launched after rehearsal003's failed local-gate audit, from committed source
 `edc99b8`, terminal8803. Driver: `training/run_joint_v6_imagekey_retrieval.py`.
-The protocol below was fixed before launch. Outcome remains unmeasured; do not
-access its output tree or alter its operative source while the process is active.
+The protocol below was fixed before launch. Terminal8803 has now exited0 and the
+independent audit passes its integrity and candidate-stage advancement gates.
+See the [result and limitations](IMAGEKEY_RETRIEVAL_001_RESULT_20260929.md).
 Launch only after joint-rehearsal003 exits and its independent result is audited.
 Output: `I:/AnatomyTracker/runs/joint_v6_imagekey_retrieval_001`.
 
