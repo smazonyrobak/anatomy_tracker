@@ -105,7 +105,7 @@ data, temporary files and runs belong on `I:`.
 - The fixed full-coverage uniform-first experiment is now running as session96942/
   PID22144 from `2935584` in the separate, existing
   `I:/AnatomyTracker/agent_worktrees/coarse_retrieval_scaling` checkout.
-  Arm A has passed7,600 of12,576 additional updates from the whole C10k parent.
+  Arm A has passed11,500 of12,576 additional updates from the whole C10k parent.
   Fresh generated cells cover the remaining50,304 previously unattempted cells;
   real training uses the audited1,280-image union. Conditional arm B uses the
   same whole parent/budget/schedules with snapshot-hard negatives only if A
@@ -115,7 +115,8 @@ data, temporary files and runs belong on `I:`.
   [Frozen protocol](COARSE_FULL_COVERAGE_RANKING_PROTOCOL_20260929.md).
 - Earlier bridge, native-no-probe, signed-pose and coarse-rehearsal outputs/audits
   are frozen and readable. TRAIN-only pose-cost-direction diagnostic30641 also
-  exited0; only the full-coverage run's output remains protected until its exit.
+  exited0. Full-coverage and newly launched normalized signed-pose outputs,
+  and their respective operative checkouts/source, remain protected until exit.
   Concurrent run timings are not
   hardware benchmarks. No independently trained encoders are
   merged; a future successful real warm start needs sequential native training
@@ -175,8 +176,17 @@ model change was used for that measurement.
 The next fixed control divides the existing signed maps by those TRAIN-only
 axis RMS values; no new architecture/features/loss or scale sweep. The optional
 three-value constructor argument is implemented with no parameter/RNG changes
-and an unchanged `None` path. Matched driver and one TRAIN compatibility
-preflight are being prepared, **not yet launched**.
+and an unchanged `None` path. Compatibility preflight17128 from `e6c97e6`
+passed exact zero-head outputs/common parameters/RNG and finite backward,
+with no optimizer update; receipt SHA256
+`1d87df5a33bd2da6df570a84108b9e9a5b0fec888ef10f4c52578b8f7f4d68c4`.
+Matched training is now active as90795/PID21188 from committed `2a86507` in
+the main integration checkout. Its output
+`I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_001` and operative
+model/runner source are protected until exit. Initial stdout confirms input
+loading; no training result is asserted. A guarded adapted post-exit auditor is
+being prepared, not run. Coarse session96942 continues in its separate frozen
+checkout, so neither run's source may be changed for the other.
 [Prospective protocol](NORMALIZED_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
 Do not infer multiaxis or learned-deformation success from the oracle diagnostic,
 or infer that amplitude imbalance alone proves a scaling fix.

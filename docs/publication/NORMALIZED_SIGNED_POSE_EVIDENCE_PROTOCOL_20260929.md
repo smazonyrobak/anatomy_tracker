@@ -1,6 +1,9 @@
 # Fixed TRAIN RMS scaling of signed pose evidence
 
-Prepared matched control; **compatibility preflight passed; not launched**. This changes one input scaling, not
+Matched control **launched from `2a86507`, session90795/PID21188**, after its
+compatibility preflight passed. Output `I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_001`
+and operative main-checkout model/runner source are protected until exit.
+This changes one input scaling, not
 the architecture, feature encoder, optimizer, loss, rendering or topology limits.
 All work stays on I:. The separate full-coverage coarse run remains protected.
 
