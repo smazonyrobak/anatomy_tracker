@@ -22,6 +22,7 @@ def make_coherent_subject_section_v6(
     voxel_size_ap_dv_ml_um,
     *,
     mapping_batch_size=8192,
+    subject_to_ccf_mapper=None,
 ):
     """Map one section through a caller-frozen, accepted v2 animal plan.
 
@@ -39,6 +40,9 @@ def make_coherent_subject_section_v6(
     an already-rasterized image. Pullback-domain validity is exported separately.
     Separate full-canvas fits describe unprocessed/unreflected canonical anatomy
     and the total observed map. Neither residual is a 2D stationary velocity.
+    An optional caller-bound mapper receives the identical concatenated physical
+    queries and returns NumPy CCF coordinates; record its source/device in
+    source_identifiers. Default mapping remains the accepted-plan NumPy flow.
     """
     for key, expected in (
         ("animal_id", subject_plan["provenance"]["animal_id"]),
@@ -67,10 +71,12 @@ def make_coherent_subject_section_v6(
     subject_grid = centre_subject[None] + offsets[:, None, None, None] * normal
     y, x = np.meshgrid(np.arange(height) / height, np.arange(width) / width, indexing="ij")
     canonical_subject = ouv[0] + x[..., None] * ouv[1] + y[..., None] * ouv[2]
-    mapped = np.ascontiguousarray(_subject_to_ccf_points_from_verified_plan_v2(
-        np.concatenate((canonical_subject[None], subject_grid)), subject_plan,
-        batch_size=mapping_batch_size,
-    ), dtype=np.float64)
+    queries = np.concatenate((canonical_subject[None], subject_grid))
+    mapped = np.ascontiguousarray(
+        _subject_to_ccf_points_from_verified_plan_v2(queries, subject_plan, batch_size=mapping_batch_size)
+        if subject_to_ccf_mapper is None else subject_to_ccf_mapper(queries),
+        dtype=np.float64,
+    )
     canonical_ccf, ccf_grid = mapped[0], mapped[1:]
     centre_ccf = ccf_grid[centre_index].copy()
     canonical_fit = fit_subject_centre_plane_and_residual_v2(canonical_ccf)
@@ -90,6 +96,7 @@ def make_coherent_subject_section_v6(
             "subject_root_seed_uint64": subject_plan["provenance"]["root_seed_uint64"],
             "animal_index": subject_plan["provenance"]["animal_index"],
             "mapping_direction": "subject physical AP/DV/ML um to CCF physical AP/DV/ML um",
+            "mapping_evaluator": "verified_plan_numpy_v2" if subject_to_ccf_mapper is None else "caller_bound_see_source_identifiers",
         },
         "subject_ouv_ap_dv_ml_um_float64": ouv.copy(),
         "section_processing_observed_pullback_yx_px_float64": pullback.copy(),
