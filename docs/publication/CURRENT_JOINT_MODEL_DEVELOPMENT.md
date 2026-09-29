@@ -76,7 +76,7 @@ data, temporary files and runs belong on `I:`.
   all original parameters/RNG match exactly, gradients pass, no optimizer applied.
   Receipt SHA-256 `4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e`.
   Native signed-pose session70497/PID7604 remains active from `0e6dc0d` and has
-  passed700 of2,000 updates. Its operative source and live output tree remain
+  passed1,000 of2,000 updates. Its operative source and live output tree remain
   untouched until exit; only terminal/stdout and GPU telemetry are monitored.
   It is a separate controlled experiment, not a refiner to splice into coarse C.
   [Predeclared protocol](NATIVE_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
@@ -88,9 +88,12 @@ data, temporary files and runs belong on `I:`.
   the whole failed native control, not a qualified global model or merged
   refiner. No accuracy evaluation was performed.
   [Result and frozen bindings](IMAGEKEY_RIBBON_INFERENCE_PREFLIGHT_001_RESULT_20260929.md).
-- Acquisition-view generator13699 from `4e89e3c` has reported all128 planned
-  TRAIN physical views generated; the frozen-corpus audit is pending. These
-  reuse eight existing synthetic subjects, not new biological animals.
+- Acquisition-view generator13699 from `4e89e3c` exited0; the independent CPU
+  audit passed all128 TRAIN physical views/384 paired observations. Eligible
+  raw/black/brush counts are76/76/75, totaling227/384; all censored rows remain.
+  These reuse eight existing synthetic subjects, not new biological animals;
+  target-capacity checks establish neither model performance nor generalization.
+  [Result and exact audit bindings](COHERENT_ACQUISITION_VIEWS_001_RESULT_20260929.md).
   Fixed1,024 additional TRAIN real-image acquisition91765 from `d807454` remains
   live; its output tree and operative source are off-limits until exit.
 - Earlier bridge, native-no-probe and coarse-rehearsal outputs/audits are frozen
@@ -136,9 +139,10 @@ and changing the update readout. Do not infer that choice from unfinished runs
 or start full-gallery native training blindly. The coarse-rehearsal auditor has
 completed; the signed-pose auditor remains prepared with its completion pin unset.
 The exact TRAIN-only acquisition-view extension in
-[this protocol](COHERENT_ACQUISITION_VIEWS_001_PROTOCOL_20260929.md) has reported
-all128 planned views generated and awaits its frozen-corpus audit. Do not use
-unaudited new targets or turn synthetic group IDs into biological animals.
+[this protocol](COHERENT_ACQUISITION_VIEWS_001_PROTOCOL_20260929.md) has completed
+all128 planned views and passed its frozen-corpus audit:227/384 paired
+observations are support-eligible and all exact target representatives fit the
+current geometric caps. These reused synthetic groups are not new animals.
 
 ## Completed planar/SVF experiment decisions
 
