@@ -80,7 +80,7 @@ assert config["comparator"]["archived_source_sha256"] == comparator_completion["
 assert sha(RUN / "preflight.json") == config["preflight_sha256"]
 preflight = json.loads((RUN / "preflight.json").read_text())
 assert preflight["passed"] and preflight["optimizer_steps_applied"] == 0 and preflight["all_zero_projection_outputs_exact"]
-for name in ("training/arbitrary_plane_joint_model_v6.py", "training/arbitrary_plane_recurrent_model_v6.py", "training/arbitrary_plane_full_frame_primitives.py"):
+for name in ("training/arbitrary_plane_joint_model_v6.py", "training/arbitrary_plane_recurrent_model_v6.py", "training/arbitrary_plane_recurrent_model.py", "training/arbitrary_plane_ribbon_v6.py", "training/arbitrary_plane_full_frame_primitives.py"):
     assert preflight["source"]["file_sha256"][name] == config["source"]["file_sha256"][name]
 assert config["promotion_gate"]["oracle_normal_reduction_min"] == .20 and config["promotion_gate"]["oracle_normal_nonregression_each_mode_and_subject"]
 assert (config["seed"], config["steps"], config["batch_size"], config["refinement_updates"], config["pose_prefix"]) == (2026092913, 2000, 4, 3, 1)

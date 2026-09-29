@@ -1,6 +1,6 @@
 # Prepared canonical rehearsal 001
 
-Launched from committed source `0e6dc0d`, terminal91005/PID1724; no completed training, qualification or benchmark. One flat driver: `training/run_joint_v6_canonical_rehearsal.py`; its launch guard was enabled following root and independent source review. Do not inspect live outputs before process exit.
+Completed from committed source `0e6dc0d`, terminal91005 EXIT0; CPUaudit43867 EXIT0. Integrity passed, scientific recovery gate failed. The original protocol below is unchanged; see [the frozen result](CANONICAL_REHEARSAL_001_RESULT_20260929.md). One flat driver: `training/run_joint_v6_canonical_rehearsal.py`. No qualification or benchmark follows from completion.
 
 ## Frozen lineage and purpose
 

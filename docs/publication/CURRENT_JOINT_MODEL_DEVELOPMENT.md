@@ -57,6 +57,10 @@ data, temporary files and runs belong on `I:`.
   model; the six development donors are not untouched final validation.
   The reviewed [rehearsal protocol](CANONICAL_REHEARSAL_001_PROTOCOL_20260929.md)
   fixes2,000 updates,LR.00025 and2/3 synthetic loss, with original retention gates.
+  Rehearsal91005 and CPUaudit43867 exited0. Integrity passes, whole gate fails:
+  eligible synthetic capture32 improves72.52%→78.14%, but real normal error
+  worsens9.54°→12.43°, exceeding the fixed+2° retention limit. Do not promote or
+  start a scalar LR/replay sweep. [Audited result](CANONICAL_REHEARSAL_001_RESULT_20260929.md).
 - Native conditional pose+ribbon001 (89162, `dc32605`) and independent audit84435
   both exited0. Oracle centre error814.24→716.56um improves only about12%, below
   the fixed20% requirement; plane-normal error6.138→6.103deg barely changes.
@@ -71,15 +75,13 @@ data, temporary files and runs belong on `I:`.
   `0e93978`; one fixed TRAIN-batch preflight27377 exited0. Zero-head outputs and
   all original parameters/RNG match exactly, gradients pass, no optimizer applied.
   Receipt SHA-256 `4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e`.
-  Both reviewed training drivers launched from committed source `0e6dc0d`:
-  native signed-pose session70497/PID7604 and coarse canonical rehearsal
-  session91005/PID1724. Native is loading the frozen cohort; coarse has passed
-  its first100 applied updates. These are separate controlled experiments, not
-  assembled models. Operative sources and both live output trees stay untouched
-  until each process exits; only terminal/stdout and GPU telemetry are monitored.
+  Native signed-pose session70497/PID7604 remains active from `0e6dc0d` and has
+  passed300 of2,000 updates. Its operative source and live output tree remain
+  untouched until exit; only terminal/stdout and GPU telemetry are monitored.
+  It is a separate controlled experiment, not a refiner to splice into coarse C.
   [Predeclared protocol](NATIVE_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
-- Earlier bridge and native-no-probe outputs/audits are frozen and readable;
-  the two new active output trees are not. Concurrent run timings are not
+- Earlier bridge, native-no-probe and coarse-rehearsal outputs/audits are frozen
+  and readable; signed-pose outputs are not. Concurrent run timings are not
   hardware benchmarks. No independently trained encoders are
   merged; a future successful real warm start needs sequential native training
   of that **whole model**, not splicing in a separately trained native control.
@@ -115,8 +117,11 @@ refit the curved surface's canonical pose gauge after changing its canvas.
 If signed evidence fails, use a bounded TRAIN-only probe-direction diagnostic
 to decide between adapting the existing shared features with retrieval rehearsal
 and changing the update readout. Do not infer that choice from unfinished runs
-or start full-gallery native training blindly. Both new post-exit CPU auditors
-are prepared separately; completion pins remain unset until confirmed EXIT.
+or start full-gallery native training blindly. The coarse-rehearsal auditor has
+completed; the signed-pose auditor remains prepared with its completion pin unset.
+An exact TRAIN-only acquisition-view extension is declared in
+[this protocol](COHERENT_ACQUISITION_VIEWS_001_PROTOCOL_20260929.md); it is not
+generated yet and does not turn synthetic group IDs into biological animals.
 
 ## Completed planar/SVF experiment decisions
 

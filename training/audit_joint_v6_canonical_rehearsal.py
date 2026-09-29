@@ -14,7 +14,7 @@ import torch
 
 RUN = ROOT / "runs/joint_v6_canonical_rehearsal_001"
 OUT = ROOT / "runs/joint_v6_canonical_rehearsal_001_independent_audit"
-COMPLETION_SHA256 = "UNSET"
+COMPLETION_SHA256 = "be86f269a97fb99275710fd80a95e41d9a742925c8b4d16ae6371d67a8f1cdeb"
 PARENT_SHA256 = "c6aab521d86eee312f12327965b71c6da1d88f184b7e3427dd7ba2782c88c9f8"
 REFERENCE_SHA256 = "280836b65fb6db22930c8ee268eb4a880997c7858fb91a1e31ad6c7c94937eb2"
 assert len(COMPLETION_SHA256) == 64, "Pin completion only after confirmed process exit"
