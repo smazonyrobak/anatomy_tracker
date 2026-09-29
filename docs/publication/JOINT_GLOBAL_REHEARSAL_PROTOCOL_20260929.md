@@ -72,29 +72,29 @@ Use the fixed 4,000-step endpoint, not the best intermediate checkpoint. First
 audit provenance, unchanged local perturbations/eligibility, finite raw outputs,
 and normalized full-catalogue probabilities. Invalid evidence is not a pass.
 
-The **local gate is unchanged from001/002**: organizational-group macro
-landmark and dense CCF errors must each decrease at least20% from their paired
-geometric starting errors; pullback endpoint error must decrease at least10%
+The **local gate is unchanged from 001/002**: organizational-group macro
+landmark and dense CCF errors must each decrease at least 20% from their paired
+geometric starting errors; pullback endpoint error must decrease at least 10%
 from identity; plane-normal error must not increase. Require zero nonpositive
 pullback Jacobians on the original valid-tissue mask, before discrete reflection
 (a horizontal reflection is not a deformation fold). Use the original pose and
 dense eligibility masks. Repeat readouts by brush mode and true reflection;
 unresolved mode regressions preclude expansion. These baselines are the paired
-perturbed frame/identity map, not the network's step0 local predictions.
+perturbed frame/identity map, not the network's step 0 local predictions.
 
-The **global retention gate** compares this run's FP32 step4000 with its own
-FP32 step0, on identical640 proposal development rows. Restrict point metrics
+The **global retention gate** compares this run's FP32 step 4000 with its own
+FP32 step 0, on identical 640 proposal development rows. Restrict point metrics
 to the original positive proposal-supervision weights, average eligible rows
 within each organizational group, then weight contributing groups equally.
 Require every overall bound and every populated input-mode bound below:
 
 | Readout | Overall allowed endpoint change | Each input mode |
 | --- | --- | --- |
-| Full-cell NLL | at most+0.10 nat | at most+0.20 nat |
-| MAP-cell plane-normal error | at most+1 degree | at most+2 degrees |
-| Exact-cell top128 recall | no more than0.02 absolute loss | no more than0.04 absolute loss |
-| Antipodal full-frame angle | at most1.05 times step0 | at most1.10 times step0 |
-| Normal-offset error | at most1.05 times step0 | at most1.10 times step0 |
+| Full-cell NLL | at most +0.10 nat | at most +0.20 nat |
+| MAP-cell plane-normal error | at most +1 degree | at most +2 degrees |
+| Exact-cell top128 recall | no more than 0.02 absolute loss | no more than 0.04 absolute loss |
+| Antipodal full-frame angle | at most 1.05 times step 0 | at most 1.10 times step 0 |
+| Normal-offset error | at most 1.05 times step 0 | at most 1.10 times step 0 |
 
 The driver already stores all required raw probabilities, cell predictions,
 weights, row identities/modes, and catalogue geometry. Recompute **mode AND
@@ -102,21 +102,22 @@ positive-weight intersections from those saved rows**: its existing by-mode
 summary includes censored rows and is not the mode gate. Also report all-row
 and censored strata, full-frame representation-sensitive angles and other topK
 readouts without using impossible censored point labels to decide retention.
-Intermediate checkpoints carry the latest proposal evaluation, tagged step0;
+Intermediate checkpoints carry the latest proposal evaluation, tagged step 0;
 they do not contain fresh intermediate global-retention measurements.
 
 These are deliberately bounded, arbitrary **engineering tolerances**, not
-confidence-interval thresholds or a statistical superiority test. A0.10-nat
-NLL increase corresponds to about9.5% loss of group-weighted geometric-mean
+confidence-interval thresholds or a statistical superiority test. A 0.10-nat
+NLL increase corresponds to about 9.5% loss of group-weighted geometric-mean
 truth probability; angular, topK and frame/offset bounds additionally guard
 against confident coarse mislocalization or losing one brush mode. They do
 not make the already weak parent globally adequate or calibrated.
 
-Only passing both gates permits consideration of a subsequent internal
-experiment; neither constitutes model promotion, benchmarking permission, or
-shipping qualification. Local improvement with failed retention does not
+Passing both gates makes this endpoint eligible for consideration as a starting
+point for the next internal stage; it does not constitute model promotion,
+benchmarking permission, or shipping qualification. Failure does not prohibit
+further diagnostic experiments. Local improvement with failed retention does not
 justify replacing the parent whole model. Failure of the full local gate,
-even with materially better readouts than002, may motivate a new explicitly
+even with materially better readouts than 002, may motivate a new explicitly
 specified experiment, **not automatic promotion or budget extension**. Record
 every failed component and retain the endpoint; do not select a favorable
 checkpoint or change these bounds after seeing results. This intervention
