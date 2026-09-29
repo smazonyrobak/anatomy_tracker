@@ -83,17 +83,23 @@ The [coordinate-grid PSF rendering prerequisite](COHERENT_SUBJECT_COORDINATE_REN
 and [conservative full-plane sampler](COHERENT_SUBJECT_PLANE_SAMPLING_20260929.md)
 are implemented separately from active training. The exact subject-coordinate
 adapter and first accepted subject are complete; one inspected section has27um
-RMS normal residual. Sixteen-section paired-brush CPU preparation is LIVE:
-session `29655`, Python PID `22044`, source `3d48a91`, launched2026-09-29
-13:36:23 Warsaw. Driver `training/prepare_joint_v6_coherent_subject_sections.py`;
-output `I:/AnatomyTracker/data/joint_v6_coherent_subject_sections_001`.
-Preserve this active output tree untouched; use stdout until confirmed exit.
-It retains all16 arbitrary-plane draws and48 paired observations from one
-shared subject, with new exact3D targets and no legacy total2D-SVF labels.
+RMS normal residual. Sixteen-section paired-brush CPU preparation completed:
+session `29655` exited0 after331.21 seconds, source `3d48a91`.
+Output `I:/AnatomyTracker/data/joint_v6_coherent_subject_sections_001` is frozen.
+All16 arbitrary-plane draws and48 paired observations from one shared subject
+are retained, with exact3D targets and no legacy total2D-SVF labels. Five plane
+draws are low-support censored in every mode;11 planes/33 observations are
+support-eligible. The eligible planes' canonical normal-residual RMS ranges
+22.49–45.25um. This is target geometry, not prediction error or animal validation.
 No curved-surface predictor or coherent-subject learning is claimed from these
-primitives. Opt-in atlas-image descriptor primitives are also prepared for a
-[fresh coarse retrieval alternative](ATLAS_IMAGE_RETRIEVAL_PLAN_20260929.md),
-not enabled in current training or yet learned.
+primitives. A flat [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
+is now prepared in `training/run_joint_v6_imagekey_retrieval.py`, not launched.
+It starts one new whole random model, trains shared image descriptors against
+fresh reflected atlas keys, and compares its4,000-update endpoint against the
+frozen [original003 step4,000 baseline](IMAGEKEY_BASELINE_003_STEP4000_20260929.md).
+Full-gallery evaluation and exact advancement gates are fixed before training.
+No old weights are imported; this does not merge encoders or train the recurrent
+joint updater. Audit current rehearsal003 after exit before launching it.
 
 Still required: convincing arbitrary-plane global and native joint accuracy,
 usable optional constraints, genuine animal-disjoint validation, calibrated

@@ -1,8 +1,11 @@
 # Opt-in rendered-atlas image retrieval
 
-Status: untrained primitive only. No training driver, experiment, GPU execution,
-or global-capture/calibration claim accompanies this change. Existing forwards
-and default model construction are unchanged.
+Status: untrained primitive with a prepared, not-yet-launched flat experiment
+driver. The exact sampled-cell loss, endpoint comparison and fixed decision gates
+are now specified in `IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md`; that protocol
+supersedes the preliminary experiment sketch below. No GPU execution or
+global-capture/calibration claim accompanies this change. Existing forwards and
+default model construction are unchanged.
 
 ## Implemented boundary
 
@@ -35,8 +38,9 @@ from anatomical ML reflection; opposite electrode locations must not be averaged
   step 4,000, including actual applied updates, presentations and compute cost.
   This compares proposal mechanisms, not a single-cause capacity ablation.
 - Encode positive atlas renders and bounded globally sampled/nearby negatives
-  using the same current shared encoder. Train a multi-positive contrastive
-  objective; do not make neighboring/equivalent poses hard false negatives.
+  using the same current shared encoder. Train a sampled-cell discrimination
+  objective with latent reflection marginalization; ignore specified nearby
+  cells instead of assigning false-negative or smoothed-positive labels.
   Keep low-support censoring, full brain-intersecting-plane sampling and exact
   original/synthetic provenance. No automatic segmentation is required.
 - Use 96x96 nine-sample finite-thickness atlas renders and fresh differentiable
