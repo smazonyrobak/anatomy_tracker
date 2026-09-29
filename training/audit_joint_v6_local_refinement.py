@@ -128,6 +128,7 @@ for step in (0, 4000):
     for name, mask in (("entire_canvas", np.ones_like(valid_tissue)), ("valid_tissue", valid_tissue), ("dense_supervised_pixels", (pixel_weight > 0) & dense_eligible[:, None, None, None])):
         topology[name] = {"pixel_count": int(mask.sum()), "nonpositive_count": int(((determinant <= 0) & mask).sum()), "minimum_jacobian": float(determinant[mask].min()) if mask.any() else None}
     record = {
+        "saved_metrics_step_matches": saved["step"] == step,
         "row_indices_exact_0_to255": np.array_equal(raw["pack_row_index"].numpy(), np.arange(256)),
         "prepared_row_indices_match": torch.equal(raw["prepared_row_index"], pack["prepared_row_index"]),
         "perturbations_match_schedule": torch.equal(raw["perturbation"], schedule["development_perturbation"]),
@@ -149,6 +150,12 @@ parent = torch.load(parent_path, map_location="cpu", weights_only=False, mmap=Tr
 zero = torch.load(run / "joint_model_step_00000.pt", map_location="cpu", weights_only=False, mmap=True)
 final = torch.load(run / "joint_model_step_04000.pt", map_location="cpu", weights_only=False, mmap=True)
 prefixes = tuple(config["trainable_prefixes"])
+audit["experiment_bindings"] = {
+    "checkpoint_experiments_match": all(json.loads(json.dumps(checkpoint["experiment"])) == config for checkpoint in (zero, final)),
+    "endpoint_steps_match": zero["step"] == 0 and final["step"] == config["steps"] == completion["steps"] == 4000,
+    "endpoint_phases_match": all(checkpoint["phase"] == "conditional_local_joint_with_global_rehearsal" for checkpoint in (zero, final)),
+    "checkpoint_applied_steps_match": zero["optimizer_steps_applied"] == 0 and final["optimizer_steps_applied"] == completion["optimizer_steps_applied"],
+}
 audit["parent_and_freezing"] = {
     "zero_parameter_keys_equal_parent_plus_coordinate_input": set(zero["model_state"]) == set(parent["model_state"]) | {"pose_model.coordinate_evidence.weight"},
     "new_coordinate_input_initially_zero": not bool(torch.count_nonzero(zero["model_state"]["pose_model.coordinate_evidence.weight"])),
@@ -181,6 +188,7 @@ for path in (parent_path, pack_path / "pack.json", pack_path / "training.pt", pa
         audit["artifact_sha256"][str(path)] = hashlib.file_digest(stream, "sha256").hexdigest()
 audit["receipts_match"] = {
     "parent": audit["artifact_sha256"][str(parent_path)] == config["parent_sha256"],
+    "archived_driver": audit["artifact_sha256"][str(run / "experiment_source.py")] == config["source"]["file_sha256"]["training/run_joint_v6_joint_rehearsal.py"],
     "schedule": audit["artifact_sha256"][str(run / "schedule.pt")] == config["schedule_sha256"],
     "pack_manifest": pack_manifest == config["pack_manifest"],
     **{partition: audit["artifact_sha256"][str(pack_path / f"{partition}.pt")] == record["sha256"] for partition, record in pack_manifest["partitions"].items()},
@@ -296,6 +304,7 @@ for step in (0, 4000):
         differences = {key: float(np.abs(values - saved_rows[key]).max()) for key, values in metrics.items() if key in saved_rows.files}
     audit["proposal"]["endpoints"][str(step)] = {
         "aggregates": aggregates, "raw_all_finite": finite, "raw_log_normalization_error": norm_error,
+        "saved_metrics_step_matches": saved["step"] == step,
         "saved_row_identity_match": row_identity_match, "maximum_row_difference_from_saved": differences,
         "saved_macro_difference": {key: aggregates["all"]["group_macro"][key] - value for key, value in saved["animal_macro"].items()},
         "checkpoint_metrics_step_matches": (zero if step == 0 else final)["proposal_development"]["step"] == step,
@@ -385,8 +394,7 @@ audit["local_mode_regressions"] = {
     for mode in np.unique(modes)
 }
 audit["scope_warning"] = "Engineering tolerances, not statistical superiority. Both numerical gates passing still does not qualify global capture, calibration or shipping; unresolved local mode regressions preclude expansion."
-(output / "audit.json").write_text(json.dumps(audit, indent=2), encoding="utf-8")
-print(json.dumps({"gate": gate, "valid_tissue_no_folds": audit["valid_tissue_no_folds"], "overall_numerical_continuation_gate": audit["overall_numerical_continuation_gate"], "global_retention_gate": audit["global_retention_gate"], "combined_local_and_retention_gate": audit["combined_local_and_retention_gate"], "local_mode_regressions": audit["local_mode_regressions"], "parent_and_freezing": audit["parent_and_freezing"]}, indent=2), flush=True)
+assert all(audit["experiment_bindings"].values())
 assert all(audit["receipts_match"].values()) and not any(audit["identity_checks"]["overlap_counts"].values())
 assert audit["identity_checks"]["development_records_match"] and audit["identity_checks"]["training_records_match"]
 assert not audit["parent_and_freezing"]["zero_tensor_difference_names"] and not audit["parent_and_freezing"]["frozen_final_difference_names"]
@@ -404,9 +412,13 @@ assert all(audit["replay_checks"].values()) and not any(audit["proposal_identity
 assert audit["proposal_identity_checks"]["development_records_match"] and audit["proposal_identity_checks"]["training_records_match"]
 assert audit["proposal"]["catalogue_receipt_matches"] and audit["proposal"]["catalogue_normal_geometry_max_difference"] < 1e-10 and audit["proposal"]["normal_major_order_max_difference"] < 1e-10
 for record in audit["proposal"]["endpoints"].values():
-    assert record["raw_all_finite"] and record["raw_log_normalization_error"] < 2e-5 and record["saved_row_identity_match"] and record["checkpoint_metrics_step_matches"]
+    assert record["raw_all_finite"] and record["raw_log_normalization_error"] < 2e-5 and record["saved_row_identity_match"] and record["checkpoint_metrics_step_matches"] and record["saved_metrics_step_matches"]
     assert max(record["maximum_row_difference_from_saved"].values()) < 0.05 and max(abs(value) for value in record["saved_macro_difference"].values()) < 0.05
 for record in audit["endpoints"].values():
-    assert record["row_indices_exact_0_to255"] and record["prepared_row_indices_match"] and record["perturbations_match_schedule"] and record["row_eligibility_matches_pack"]
+    assert record["row_indices_exact_0_to255"] and record["prepared_row_indices_match"] and record["perturbations_match_schedule"] and record["row_eligibility_matches_pack"] and record["saved_metrics_step_matches"]
     assert all(record["raw_finite"].values()) and record["reflection_log_normalization_error"] < 2e-5
     assert max(record["maximum_row_difference_from_saved_metrics"].values()) < 0.05
+audit["integrity_valid"] = True
+audit["expansion_eligible"] = audit["combined_local_and_retention_gate"] and not any(audit["local_mode_regressions"].values())
+(output / "audit.json").write_text(json.dumps(audit, indent=2), encoding="utf-8")
+print(json.dumps({"integrity_valid": audit["integrity_valid"], "gate": gate, "valid_tissue_no_folds": audit["valid_tissue_no_folds"], "overall_numerical_continuation_gate": audit["overall_numerical_continuation_gate"], "global_retention_gate": audit["global_retention_gate"], "combined_local_and_retention_gate": audit["combined_local_and_retention_gate"], "local_mode_regressions": audit["local_mode_regressions"], "expansion_eligible": audit["expansion_eligible"], "parent_and_freezing": audit["parent_and_freezing"]}, indent=2), flush=True)

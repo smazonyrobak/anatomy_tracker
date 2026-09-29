@@ -14,6 +14,10 @@ initial tensors and archived `local_pass` source with coordinate002. Extra
 source/shared/proposal trainable prefixes are the declared intervention, not
 an expected equality failure. Check replay losses, one applied update per row
 schedule step, copied original replay receipts/IDs and checkpoint metadata.
+The archived driver hash must equal its declared source hash. Both checkpoint
+experiment dictionaries must equal the complete saved configuration after JSON
+normalization (tuple/list serialization only); checkpoint phase, endpoint/applied
+steps and both local/proposal evaluation-step tags must agree.
 
 New proposal readout uses only saved step0/4000 raw probabilities and original
 prepared truth. Sixteen-row float64 blocks independently recompute normalization,
@@ -33,6 +37,12 @@ and at most 1.05 times initial frame/offset errors; per-mode bounds are +0.20,
 Local criteria remain 20% landmark/CCF reduction, 10% pullback reduction,
 non-worsening normal and no valid-tissue folds, relative to paired geometric
 starts. Both gates and any local mode regressions are reported independently.
+`combined_local_and_retention_gate` remains the numerical conjunction;
+`expansion_eligible` additionally requires no local input-mode regression and is
+emitted only after every integrity assertion passes. The final `audit.json` and
+decision stdout are written after those assertions, with `integrity_valid=true`.
+An integrity failure can leave intermediate recomputed row files but no final
+audit report; such partial output is not a valid decision.
 An integrity-valid negative experiment may exit0: failed scientific gates do
 not throw away its evidence. Neither a pass nor this prepared source establishes
 global adequacy, calibrated uncertainty, biological generalization or shipping.
