@@ -45,8 +45,13 @@ reflection centers were checked; neither was fitted to prediction errors.
 
 | Reflection center | Intensity MAE within support union | Support Dice | Same integer annotation within support union |
 | --- | ---: | ---: | ---: |
-| 5687.5µm, voxel-extent midpoint (`ML index -> 455-index`) | 0.0145103 | 0.9976491 | 96.2054% |
-| 5700µm, catalogue support-origin ML (`ML index -> 456-index`, zero outside) | 0.0104365 | 0.9965905 | 94.3955% |
+| 5700µm, voxel-center extent midpoint and catalogue support-origin ML (`ML index -> 455-index`) | 0.0145103 | 0.9976491 | 96.2054% |
+| 5712.5µm, half-voxel shifted center (`ML index -> 456-index`, zero outside) | 0.0104365 | 0.9965905 | 94.3955% |
+
+Coordinate-label correction, 2026-09-29: physical voxel centers follow
+`origin + (index + 0.5) * spacing`. The initial note mislabeled the two measured
+array-reflection centers as 5687.5/5700µm. The correct labels are 5700/5712.5µm;
+all measured voxel differences and all normal-angle results are unchanged.
 
 The atlas is approximately, not exactly, symmetric. Same integer region labels
 can occur in both hemispheres; this agreement does **not** preserve laterality.
@@ -74,5 +79,5 @@ saved as `joint_v6_proposal_{curriculum_003,precision_recovery_004}_ml_reflectio
 | --- | --- |
 | `proposal_ml_reflection_diagnostic_20260929.py` | `1951d3fcd317358fd83cf83fca181e54d71a336868bb60f46ca708921ca40e1a` |
 | `proposal_ml_reflection_diagnostic_20260929.json` | `f39003c824c4a2be3a24cd847e21c323c890c3adcc821487c2807ec7f58c8f32` |
-| `allen_ml_symmetry_diagnostic_20260929.py` | `6b2e8a090ecbaab2765215a6e73baf57e97327ede2356d28e614d330c32c6b47` |
-| `allen_ml_symmetry_diagnostic_20260929.json` | `c38baa79eb5f0368855a2119b2750525d8ee0e882be056b4d37995fc61560ade` |
+| `allen_ml_symmetry_diagnostic_20260929.py` | `016c4a43cd21b16ad6f773331fdc366bbea5b6b9d5ae391f0fb09de6e431fe71` |
+| `allen_ml_symmetry_diagnostic_20260929.json` | `aa169f97678ac0a11fda5ef957e7c161f10f9b1b546f3ec44fb04198b9266291` |
