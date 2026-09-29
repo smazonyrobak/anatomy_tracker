@@ -177,3 +177,118 @@ def sample_joint_frame_velocity(
         "inside_local_rotation_chart": torch.linalg.vector_norm(frame_residual[..., :3], dim=-1) < math.pi,
         "probabilities_calibrated": False,
     }
+
+
+def joint_uncertainty_nll(
+    distribution, target_frame_state, target_velocity_yx_px, basis, observed,
+    *, detach_mean=True,
+):
+    """Exact local 35D objective for explicit (B,K,R,35) observed coordinates.
+
+    Targets must use the selected component's canonical frame and source-raster
+    velocity gauge. Mark ONLY truth-compatible cell/representation components
+    observed; do not label every reflection or distant plane with one target.
+    Missing frame/velocity targets can be None. A partially observed frame still
+    needs a valid complete target frame; missing entries of ``observed`` are not
+    interpreted as zero residuals. All-missing components are excluded by caller.
+
+    SVFs must be identifiable, fully observed synthetic fields in the same
+    uniform-canvas gauge. Dense-censored/pose-only rows never supervise SVF here.
+    Return out-of-basis energy rather than pretending 26 coefficients cover every
+    deformation. Stop-gradient means protect the deterministic loss from this
+    likelihood; gradients through the covariance's shared context remain live.
+    """
+    mean_frame = distribution["mean_frame_state"].float()
+    mean_velocity = distribution["mean_stationary_velocity_yx_px"].float()
+    if detach_mean:
+        mean_frame, mean_velocity = mean_frame.detach(), mean_velocity.detach()
+    observed = observed.bool().clone()
+    observed[..., 9:] &= distribution["velocity_supervision_eligible"][:, None, None, None]
+    if target_frame_state is None:
+        observed[..., :9] = False
+        target_frame_state = mean_frame
+    if target_velocity_yx_px is None:
+        observed[..., 9:] = False
+        target_velocity_yx_px = mean_velocity
+    with torch.autocast(device_type=mean_frame.device.type, enabled=False):
+        frame_target = torch.where(
+            observed[..., :9].any(-1)[..., None], target_frame_state.float(), mean_frame
+        )
+        frame_residual = full_frame_residual(mean_frame, frame_target)
+        velocity_observed = observed[..., 9:].any(-1)
+        velocity_residual = torch.where(
+            velocity_observed[..., None, None, None],
+            target_velocity_yx_px.float() - mean_velocity, 0,
+        )
+        coefficients, omitted_energy = velocity_residual_coefficients(
+            velocity_residual, basis.to(mean_velocity)
+        )
+        residual = torch.cat((frame_residual, coefficients), dim=-1)
+        coordinate_scale = distribution["coordinate_scale"].to(residual)
+        normalized_nll = lowrank_gaussian_nll(
+            residual / coordinate_scale, distribution["diagonal_scale"],
+            distribution["factor"], observed,
+        )
+        native_nll = normalized_nll + torch.where(observed, coordinate_scale.log(), 0).sum(-1)
+    return {
+        "normalized_coordinate_nll": normalized_nll,
+        "native_coordinate_nll": native_nll,
+        "observed_coordinate_count": observed.sum(-1),
+        "joint_residual": residual.masked_fill(~observed, torch.nan),
+        "omitted_velocity_energy_px2": omitted_energy.masked_fill(~velocity_observed, torch.nan),
+        "mean_detached": detach_mean,
+        "probabilities_calibrated": False,
+    }
+
+
+def sample_joint_uncertainty(distribution, basis, sample_count, *, generator=None):
+    """Sample cell (including unresolved tail), representation, then local 35D.
+
+    Outputs use leading (draw,B) dimensions. One representation is retained for
+    all marks in a section: apply its exact affine AFTER the sampled SVF warp.
+    Tail draws carry cell/representation -1 and NaN geometry, never a fabricated
+    refined mode. Teacher-forced selection is training-only and cannot be drawn
+    as an inference posterior. This returns SVF states before integration; no
+    topology clipping/rejection or calibration is hidden in sampling.
+    """
+    if bool(distribution["teacher_forced_mask"].any()):
+        raise ValueError("teacher-forced selected cells do not define an inference posterior")
+    cell_probability = distribution["conditional_cell_log_probability"].exp()
+    cells = cell_probability.shape[1]
+    cell_mass = torch.cat((
+        cell_probability * distribution["retained_probability"][:, None],
+        distribution["omitted_probability"][:, None],
+    ), dim=-1)
+    selected_cell = torch.multinomial(cell_mass, sample_count, replacement=True, generator=generator).T
+    unresolved = selected_cell == cells
+    cell = selected_cell.clamp_max(cells - 1)
+    row = torch.arange(cell.shape[1], device=cell.device)[None].expand_as(cell)
+    representation_probability = distribution["representation_log_conditional_within_cell"][row, cell].exp()
+    representation = torch.multinomial(
+        representation_probability.reshape(-1, representation_probability.shape[-1]),
+        1, generator=generator,
+    ).reshape_as(cell)
+    component = (row, cell, representation)
+    drawn = sample_joint_frame_velocity(
+        distribution["mean_frame_state"][component],
+        distribution["diagonal_scale"][component], distribution["factor"][component],
+        basis, 1, coordinate_scale=distribution["coordinate_scale"], generator=generator,
+    )
+    output = {key: value.squeeze(0) for key, value in drawn.items() if isinstance(value, torch.Tensor)}
+    output["stationary_velocity_yx_px"] = (
+        distribution["mean_stationary_velocity_yx_px"][component]
+        + output["velocity_perturbation_yx_px"]
+    )
+    output["representation_to_canonical_raster_affine"] = distribution["representation_to_canonical_raster_affine"][component]
+    for key, value in output.items():
+        mask = unresolved.reshape(*unresolved.shape, *((1,) * (value.ndim - 2)))
+        output[key] = value.masked_fill(mask, False if value.dtype == torch.bool else torch.nan)
+    output.update({
+        "selected_cell_index": cell.masked_fill(unresolved, -1),
+        "cell_id": distribution["cell_id"][row, cell].masked_fill(unresolved, -1),
+        "representation_index": representation.masked_fill(unresolved, -1),
+        "unresolved_tail": unresolved,
+        "velocity_supervision_eligible": distribution["velocity_supervision_eligible"][row] & ~unresolved,
+        "probabilities_calibrated": False,
+    })
+    return output

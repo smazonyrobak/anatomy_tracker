@@ -22,6 +22,7 @@ from training.arbitrary_plane_recurrent_model import (
 from training.arbitrary_plane_recurrent_model_v6 import (
     ArbitraryPlaneRetrievalRefinementModelV6,
 )
+from training.arbitrary_plane_joint_uncertainty import joint_lowrank_parameters
 
 
 JOINT_MODEL_V6_SCHEMA = "anatomy-tracker.joint-model/v6"
@@ -62,6 +63,10 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         deformation_integration_steps: int = 7,
         deformation_support_floor: float = 1e-4,
         deformation_maximum_velocity_gradient: float = 0.35,
+        joint_uncertainty_rank: int | None = None,
+        joint_uncertainty_coordinate_scale: tuple[float, ...] = (
+            (0.1,) * 3 + (500.0,) * 3 + (0.1,) * 3 + (1.0,) * 26
+        ),
     ):
         super().__init__()
         if (
@@ -95,6 +100,26 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             support_floor=deformation_support_floor,
             maximum_velocity_gradient=deformation_maximum_velocity_gradient,
         )
+        # Opt-in only: old initialization, RNG state and state_dict stay exact.
+        self.joint_uncertainty_rank = joint_uncertainty_rank
+        if joint_uncertainty_rank is not None:
+            if joint_uncertainty_rank < 1:
+                raise ValueError("joint uncertainty rank must be positive")
+            coordinate_scale = torch.tensor(joint_uncertainty_coordinate_scale)
+            if coordinate_scale.shape != (35,) or not bool(
+                torch.isfinite(coordinate_scale).all() and (coordinate_scale > 0).all()
+            ):
+                raise ValueError("joint uncertainty requires 35 positive physical coordinate scales")
+            self.register_buffer("joint_uncertainty_coordinate_scale", coordinate_scale)
+            self.joint_uncertainty_head = nn.Linear(
+                hidden_channels, 35 * (1 + joint_uncertainty_rank)
+            )
+            nn.init.normal_(self.joint_uncertainty_head.weight, std=1e-3)
+            nn.init.zeros_(self.joint_uncertainty_head.bias)
+            with torch.no_grad():
+                self.joint_uncertainty_head.bias[:35].fill_(
+                    torch.expm1(torch.tensor(1.0 - 1e-4)).log().item()
+                )
 
     @staticmethod
     def _row_schedule(
@@ -301,6 +326,41 @@ class ArbitraryPlaneJointModelV6(nn.Module):
                 * feedback_render
             ).sum(dim=2),
             "final_deformed_canonical_render": deformed_render,
+        }
+
+    def _joint_uncertainty_output(
+        self, refined_output, top_affine, retained, omitted, cell_id, teacher_forced,
+    ):
+        """Decode covariance from each final (cell, reflection) recurrent context."""
+        pose = refined_output["pose"]
+        context = pose["refinement_representation_context_sequence"][:, :, :, -1]
+        with torch.autocast(device_type=context.device.type, enabled=False):
+            raw = self.joint_uncertainty_head(context.float().mean(dim=(-2, -1)))
+            diagonal_scale, factor = joint_lowrank_parameters(raw, self.joint_uncertainty_rank)
+        representations = diagonal_scale.shape[2]
+        dense_enabled = refined_output["deformation_feedback_enabled_mask"]
+        mean_velocity = torch.where(
+            dense_enabled[:, None, None, None, None],
+            refined_output["final_stationary_velocity_yx_px"],
+            torch.zeros_like(refined_output["final_stationary_velocity_yx_px"]),
+        )
+        return {
+            "diagonal_scale": diagonal_scale,
+            "factor": factor,
+            "coordinate_scale": self.joint_uncertainty_coordinate_scale,
+            "mean_frame_state": pose["final_cell_state"][:, :, None].expand(-1, -1, representations, -1),
+            "mean_stationary_velocity_yx_px": mean_velocity[:, :, None].expand(-1, -1, representations, -1, -1, -1),
+            "representation_to_canonical_raster_affine": top_affine,
+            "conditional_cell_log_probability": pose["conditional_within_topk_cell_log_probability"],
+            "representation_log_conditional_within_cell": pose["final_representation_log_conditional_within_cell"],
+            "retained_probability": retained,
+            "omitted_probability": omitted,
+            "cell_id": cell_id,
+            "teacher_forced_mask": teacher_forced,
+            "velocity_supervision_eligible": dense_enabled & refined_output["deformation_active_sequence"][-1],
+            "affine_projection_gauge": "uniform_canvas",
+            "mean_scope": "cell_shared_frame_and_velocity_representation_specific_covariance",
+            "probabilities_calibrated": False,
         }
 
     def forward(
@@ -572,6 +632,11 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             refined_partition.exp().sum(dim=1), retained, atol=3e-6, rtol=0.0
         ):
             raise RuntimeError("refinement changed retained full-catalogue mass")
+        if self.joint_uncertainty_rank is not None:
+            refined_output["joint_uncertainty"] = self._joint_uncertainty_output(
+                refined_output, top_affine, retained, omitted, canonical_id,
+                teacher_forced.index_select(0, source_row),
+            )
         return {
             "schema_version": JOINT_MODEL_V6_SCHEMA,
             "probabilities_calibrated": False,
