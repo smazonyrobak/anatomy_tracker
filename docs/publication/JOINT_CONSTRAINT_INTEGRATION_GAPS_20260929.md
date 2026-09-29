@@ -201,3 +201,63 @@ with preprocessing provenance; `display_scale` alone is insufficient. The adapte
 does not provide atlas-click-to-raw inversion. A future native GUI branch must
 not silently reuse the legacy inverse, or the existing early return that requires
 a legacy transform before probe points can be recomputed.
+
+### Exact GUI input-affine contract: source findings, not implemented
+
+There is currently **no GUI native96x96 preparation/inference branch**.
+In `source/proprietary_trajectory_tool.py`, `_load_session_image` (6377)
+downsamples the source, then makes percentile-normalized grayscale
+`raw_display` (6390–6394). Probe marks remain in this raster;
+`_slice_raw_to_display_points`/`_slice_display_to_raw_point` (7127/7130)
+apply/invert `session.slice_transform`. `slice_geometry_matrix` (1156)
+constructs rotation about pixel centres, bounding-canvas translation and flips;
+`transform_slice_image` (1186) returns that same raw-to-oriented matrix.
+
+The smallest future attachment is a native-preparation sibling beside
+`prepare_pose_inputs` (419), using the orientation/explicit-mask snapshot at
+`_automatic_alignment_image_job` (8710). Capture the matrix from the actual
+image-transform call rather than discarding it as the legacy call does (453).
+Do not route native inputs unchanged through the legacy preparation: its
+`registration_brain_mask` (363) falls back to automatic segmentation, and
+its crop (465–477) depends on that mask. With no explicit mask/crop, retain
+the full oriented image and zero outline/availability; do not invent a mask.
+
+For oriented crop bounds `(x0,y0,x1,y1)`, width `w=x1-x0`, height `h=y1-y0`,
+and a96x96 half-pixel-centred resize, record the column-vector affine:
+
+```text
+T = raw_display -> oriented_display, from the actual image transform
+C = [[1,0,-x0], [0,1,-y0], [0,0,1]]
+sx = 96/w; sy = 96/h
+D = [[sx,0,(sx-1)/2], [0,sy,(sy-1)/2], [0,0,1]]
+raw_to_model_xy = D @ C @ T
+```
+
+Do not multiply by `display_scale`: marks are already downsampled, and that
+nominal factor alone also omits resize rounding. The recorded crop/resize must
+be the one that produced the input, not a later reconstruction from GUI state.
+Smart-brush selection masks are already **oriented-display** arrays, produced
+from `session.rotated` in `_compute_smart_surface_selection` (7513) and
+transformed old-to-new when geometry changes (6771–6781). Crop/resize them once;
+do not reapply `T`. Use centre-consistent nearest-exact mask sampling on the same
+resize grid, derive the binary boundary at96x96, and impose exact black exteriors
+after image resampling. Raw outline points/strokes, unlike the mask, require `T`.
+
+Persist the matrix with raw-display/oriented/model shapes, actual crop, input
+mode, explicit-mask and image hashes in each native-input record. The existing
+`auto_alignment_diagnostics["native_input"]` can retain that record without a
+new session field: diagnostics are already in `SESSION_STATE_FIELDS` (135),
+saved at5646 and restored at5711. Existing full-plane geometry/mask invalidation
+(6796/7222) must also invalidate the corresponding prediction/input binding.
+Pass the recorded matrix to `raw_marks_to_ribbon_ccf`; its observed surfaces
+already include reflection and must not be flipped again.
+
+**Photometry remains unresolved.** `_update_slice_image` (6854) makes
+`weight_image` from normalized `raw_display`, whereas `session.rotated` also
+contains the user's brightness LUT. Neither is equivalent to the current real
+Allen training contract: red/255, acquisition-centred physical sampling,
+antialiasing and border-median padding (`prepare_joint_v6_allen_training_inputs.py`
+58,145–146). Avoid accidentally feeding display-LUT pixels, but do not call
+`weight_image` training-matched. This note fixes coordinate bookkeeping only;
+it neither selects a validated GUI photometric policy nor implements native
+inference, constraints, confidence calibration or deployment.
