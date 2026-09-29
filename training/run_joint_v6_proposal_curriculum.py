@@ -34,7 +34,7 @@ from training.arbitrary_plane_full_frame_primitives import (
 )
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 
-RUN = ROOT / "runs" / "joint_v6_normal_readout_control_006"
+RUN = ROOT / "runs" / "joint_v6_spatial_depth_control_007"
 PREPARED = ROOT / "runs" / "joint_v6_proposal_substantive_001"
 SEED = 2026092805
 STEPS = 4_000
@@ -53,7 +53,7 @@ MODEL_KWARGS = {
     "proposal_mixture_components": 8, "proposal_spatial_bins_h_w": (8, 8),
     "cascade_max_rendered_cells_per_sample": 32, "cascade_max_closure_rounds": 4,
     "pose_only_steps": 1, "deformation_integration_steps": 3,
-    "proposal_normal_readout_count": 384,
+    "proposal_normal_readout_count": None, "spatial_residual_blocks": 6,
 }
 PREPARED_SHA256 = {
     "catalogue.pt": "9b49d203cc73ce3a66e648bbe5228231eb5cc9c17d5db4669eefe0f08ae22c71",
@@ -158,7 +158,7 @@ config = {
     "training_phase": "proposal_only", "external_or_legacy_learned_dependencies": [], "probabilities_calibrated": False,
     "objective": "weighted joint-cell NLL + normal_marginal_nll_weight * weighted normal-marginal NLL",
     "normal_marginal_nll_weight": NORMAL_MARGINAL_NLL_WEIGHT,
-    "comparison": "first4000 updates of the exact005 20000-step schedule; same existing initial parameters and RNG; add zero-initialized384-normal final-mixture tilt preserving offset/roll conditionals; same joint+normal objective; organizational ID namespace differs; enabled zero tilt may introduce FP32 normalization roundoff",
+    "comparison": "first4000 updates of the exact005 20000-step schedule; same existing initial parameters and RNG; add six shared two-convolution spatial residual blocks with zero final convolution and isolated CPU seed stream; keep original smooth head(no directnormalreadout), objective and optimizer; organizational ID namespace differs",
     "generated_schedule_sha256": schedule_sha256,
     "generator": {
         "cell_sampling": "shuffled complete 98304-cell permutations; no support rejection; exact cell frames, no subcell jitter",
