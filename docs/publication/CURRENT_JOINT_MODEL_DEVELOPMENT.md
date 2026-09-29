@@ -85,6 +85,39 @@ data, temporary files and runs belong on `I:`.
   of that **whole model**, not splicing in a separately trained native control.
 - No heartbeat or additional user prompt is needed for these native-goal steps.
 
+## Next whole-model integration decision
+
+The existing public `forward()` still uses the older parametric proposal path;
+the trained image-key retrieval and conditional `refine_ribbon()` are not yet
+one native inference entry point. A successful pair of experiments is therefore
+not an integrated deliverable. Add complete image-key scoring, retained cells
+with separate reflection masses, chunked ribbon refinement and image-based
+selection inside one whole model. Keep omitted coarse mass separate: normalized
+retained-component scores are not calibrated global probabilities.
+
+Continue one whole coarse checkpoint through native training; do not import
+the signed-control refiner trained against its different4k encoder. If the
+signed mechanism succeeds, first bootstrap that whole model's native components
+with retrieval frozen, then introduce actual predicted TRAIN catalogue starts
+and competing-cell selection. Truth-near warm starts or teacher-injected training
+states must never leak into the reported inference evaluation. Derive the
+capture curriculum from TRAIN residuals, not development-case selection.
+
+The real bridge's roughly3.09mm MAP finite-frame error remains much larger than
+the roughly.81mm native initializer error. Existing finite rasters can only
+support interpolation-consistent acquisition crops within their observed FOV;
+padding is unknown, not measured black tissue exterior. For larger shifted FOVs,
+re-render existing frozen TRAIN subject plans through the exact subject map and
+PSF. This creates new acquisition views, not independent animals. Transform all
+coordinate/visibility fields consistently, apply raster reflection once, and
+refit the curved surface's canonical pose gauge after changing its canvas.
+
+If signed evidence fails, use a bounded TRAIN-only probe-direction diagnostic
+to decide between adapting the existing shared features with retrieval rehearsal
+and changing the update readout. Do not infer that choice from unfinished runs
+or start full-gallery native training blindly. Both new post-exit CPU auditors
+are prepared separately; completion pins remain unset until confirmed EXIT.
+
 ## Completed planar/SVF experiment decisions
 
 - Local001 (`I:/AnatomyTracker/runs/joint_v6_local_refinement_001`) completed
