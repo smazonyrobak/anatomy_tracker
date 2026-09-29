@@ -1,6 +1,9 @@
-# Coherent-subject plan cohort 002 — prepared, not executed
+# Coherent-subject plan cohort 002 — frozen protocol and completed result
 
 `training/prepare_joint_v6_coherent_subject_plans.py` prepares **8 training and 4 development** independently seeded, accepted 3D subject maps. Root seed is **2026092911**; future output is `I:/AnatomyTracker/data/joint_v6_coherent_subject_plans_002`. This source-only protocol does not establish that any of these plans has been generated or accepted.
+
+The preparation-time protocol below is preserved. Execution subsequently completed;
+the result and exact completion binding are recorded at the end.
 
 ## Subject identity and split
 
@@ -27,3 +30,23 @@ Future command from the repository (not run during preparation):
 ```powershell
 & 'I:\AtlasJointProject\envs\npixel_analysis\python.exe' -m training.prepare_joint_v6_coherent_subject_plans
 ```
+
+## Completed result — 2026-09-29
+
+Terminal9774 exited0 after3117.55s, source `673b8fcae0a06fd549b9d238b8789e04f68f2bcc`.
+All12 predeclared subjects completed, with12 unique animal, specimen, experiment
+IDs and content-bound plan receipts. After confirmed exit, all71 files in the
+root completion inventory were independently rehashed and matched. Completion
+SHA-256: `83fa8fc0ab19f15c8b64babdfe1e98251a972c6759dade08e5513e70c76a7c89`.
+
+Every subject accepted candidate1 at62.5um after the fixed125um candidate failed
+the interpolation-halo gate (two also failed the speed bound). Every accepted
+candidate's stored failed-gate list is empty. Across accepted numerical audit
+grids, minimum composed Jacobian determinants range0.7830–0.8631; maximum local
+displacements range141.15–181.27um; maximum forward/inverse cycle discrepancies
+are approximately0.71–1.49e-9um. These are authenticated generator diagnostics,
+not an independent rerun of integration, model performance or biological evidence.
+
+The separate section generator is now bound to this exact completion. Its
+predeclared512 training+128 development planes and three paired appearance modes
+are unchanged. This plan stage generated no sections or trained weights.

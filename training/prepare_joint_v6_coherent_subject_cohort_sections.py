@@ -37,7 +37,7 @@ from training.subject_deformed_slab_multiresolution_bundle_v2 import _read_raw_a
 
 PLAN_ROOT = ROOT / "data/joint_v6_coherent_subject_plans_002"
 OUTPUT = ROOT / "data/joint_v6_coherent_subject_cohort_sections_002"
-PLAN_COMPLETION_SHA256 = "UNSET_AFTER_CONFIRMED_PLAN_EXIT"
+PLAN_COMPLETION_SHA256 = "83fa8fc0ab19f15c8b64babdfe1e98251a972c6759dade08e5513e70c76a7c89"
 GPU_EQUIVALENCE_RECEIPT_SHA256 = "a5b71a0483c027499059160399ab742e914b3c9163145d0b4a895a3dc9646546"
 GPU_EQUIVALENCE_RECEIPT = ROOT / "runs/joint_v6_subject_torch_gpu_check_001/completed.json"
 CONTEXT_SHA256 = "c3bd31cc81af2788437cfd064f4cbf44d1d9f111919031c4c691552e796d94a8"

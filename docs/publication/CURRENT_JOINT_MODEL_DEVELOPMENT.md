@@ -17,10 +17,16 @@ data, temporary files and runs belong on `I:`.
 - Native conditional pose+ribbon trainer/protocol are prepared at `afc4196`:
   `training/run_joint_v6_ribbon_local.py`. Dataset completion is intentionally
   unbound. No native learning has been launched yet.
-- CPU coherent-plan generation9774 is active; do not access its output tree.
-  After exit, authenticate all12 plans, bind the prepared cohort-section driver's
-  completion pin and generate the640 sections/1,920 observations. Then bind the
-  native trainer only after section-generation exit and audit.
+- CPU coherent-plan generation9774 exited0 with all12 maps. All71 inventory
+  files authenticate; completion83fa8fc0ab19f15c8b64babdfe1e98251a972c6759dade08e5513e70c76a7c89.
+  The separate section generator is now bound for640 sections/1,920 observations.
+  Bind the native trainer only after section-generation exit and audit.
+- Matched optional-outline-dropout comparison65125 is active from14aa9fa.
+  Two whole-parent continuations apply2,000 updates each; only B drops optional
+  boundary/availability on half the available training observations. Its entire
+  output tree and operative sources remain protected until both arms exit.
+  Fixed gates require both real-donor improvements and synthetic retention;
+  no six-donor development fitting or public benchmarking.
 - No heartbeat or additional user prompt is needed for these native-goal steps.
 
 ## Current experiment decision
