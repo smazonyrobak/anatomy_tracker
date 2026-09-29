@@ -17,12 +17,14 @@ data, temporary files and runs belong on `I:`.
   landmark reduction6.48%, map error1.36% worse than identity, negligible normal
   improvement. Coordinate input alone provides only5.52um extra landmark gain
   over001. [Full result](LOCAL_COORDINATE_CONTROL_002_RESULT_20260929.md).
-- Joint adaptation plus broad proposal rehearsal003 is LIVE: session `38572`,
-  Python PID `22020`, launched2026-09-29 13:35:33 Warsaw from `8b4d58f` with
+- Joint adaptation plus broad proposal rehearsal003 completed: session `38572`
+  exited0 after4,000 updates,2153.03s. Launched from `8b4d58f` with
   `training/run_joint_v6_joint_rehearsal.py`. Output:
   `I:/AnatomyTracker/runs/joint_v6_joint_rehearsal_003`.
-  Full640-row global and256-row local step0 evaluations are confirmed on stdout.
-  Never open/hash/load/change this output tree before confirmed process exit.
+  Full640-row global and256-row local endpoints were independently audited
+  after exit. Integrity and global retention pass; local/combined gates fail.
+  Landmarks improve6.58%, map error worsens1.73%, global normal remains42.33deg.
+  No extension/promotion. [Result](JOINT_REHEARSAL_003_RESULT_20260929.md).
 - Whole parent: own-lineage `joint_v6_proposal_curriculum_003/step_20000`.
   Source/shared encoder and global proposal are now trainable along with the
   recurrent pose updater, atlas stem and SVF decoder. Each update accumulates
@@ -52,8 +54,9 @@ Protocol, paired geometric baselines and fixed continuation criteria:
 ## Next decisions, not completion claims
 
 The local001 audit is complete; its weak geometry prevents qualification.
-Matched coordinate control002 is finished. Whole-model joint unfreezing with global
-proposal rehearsal is running via `training/run_joint_v6_joint_rehearsal.py`;
+Matched coordinate control002 and whole-model joint unfreezing with global
+proposal rehearsal003 are finished and audited; neither passes the local gate.
+The latter ran via `training/run_joint_v6_joint_rehearsal.py`;
 its [fixed protocol and retention gates](JOINT_GLOBAL_REHEARSAL_PROTOCOL_20260929.md)
 start from the same whole003 parent, not the local002 endpoint. The frozen-source engineering gate must not
 become a permanent prohibition on investigating feature adaptation if these
