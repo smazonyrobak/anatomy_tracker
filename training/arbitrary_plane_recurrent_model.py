@@ -241,6 +241,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         plane_tangent_scales: tuple[float, float, float] = (0.18, 0.18, 600.0),
         frame_centre_offset_conditioning: bool = False,
         coordinate_evidence_conditioning: bool = False,
+        signed_pose_evidence: bool = False,
     ):
         super().__init__()
         if atlas_channels < 1 or feature_channels < 1 or hidden_channels < 1:
@@ -329,6 +330,12 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0xCCF007)
                 self.coordinate_evidence = nn.Conv2d(7, hidden_channels, 1, bias=False)
                 nn.init.zeros_(self.coordinate_evidence.weight)
+        self.signed_pose_evidence_enabled = signed_pose_evidence
+        if signed_pose_evidence:
+            with torch.random.fork_rng(devices=[]):
+                torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0x51C05E)
+                self.signed_pose_evidence = nn.Conv2d(6, hidden_channels, 1, bias=False, device="cpu")
+                nn.init.zeros_(self.signed_pose_evidence.weight)
 
     def _condition_coordinate_evidence(
         self, evidence, state, raster_affine, feedback_map, output_shape_h_w, support_origin,

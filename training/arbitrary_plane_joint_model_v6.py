@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from training.arbitrary_plane_catalogue_runtime_v6 import (
     BoundCompleteCatalogueBatchV6,
@@ -24,7 +25,11 @@ from training.arbitrary_plane_recurrent_model_v6 import (
     ArbitraryPlaneRetrievalRefinementModelV6,
 )
 from training.arbitrary_plane_joint_uncertainty import joint_lowrank_parameters
-from training.arbitrary_plane_full_frame_primitives import render_finite_thickness_coordinate_grid
+from training.arbitrary_plane_full_frame_primitives import (
+    full_frame_state_to_components,
+    render_finite_thickness_coordinate_grid,
+)
+from training.arbitrary_plane_geometry import normalized_raster_to_ccf
 from training.arbitrary_plane_ribbon_v6 import compose_curved_ribbon_coordinates
 
 
@@ -76,6 +81,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         coordinate_evidence_conditioning: bool = False,
         image_key_descriptor_dim: int | None = None,
         ribbon_deformation: bool = False,
+        signed_pose_evidence: bool = False,
     ):
         super().__init__()
         if (
@@ -106,6 +112,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             frame_centre_offset_conditioning=frame_centre_offset_conditioning,
             coordinate_evidence_conditioning=coordinate_evidence_conditioning,
             image_key_descriptor_dim=image_key_descriptor_dim,
+            signed_pose_evidence=signed_pose_evidence,
         )
         self.deformation_decoder = AffineFreeSVFDecoder(
             hidden_channels,
@@ -190,6 +197,36 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         weights = pose._expanded_axial_schedule(
             axial_weights, batch, cells * representations, state.device, geometry_dtype,
         )
+        if pose.signed_pose_evidence_enabled:
+            cost_dtype = torch.float32 if source.dtype in (torch.float16, torch.bfloat16) else source.dtype
+            source_unit = F.normalize(source.to(dtype=cost_dtype), dim=1, eps=1e-6)
+            y, x = torch.meshgrid(
+                torch.arange(height, device=state.device, dtype=state.dtype) / height,
+                torch.arange(width, device=state.device, dtype=state.dtype) / width, indexing="ij",
+            )
+            st = torch.stack((x, y), dim=-1)[None].expand(count, -1, -1, -1)
+
+            def probe_cost(current_state, residual, director_delta, delta, normalized_source):
+                # Hold the central post-limit coefficients exactly: no second
+                # field prediction, affine projection, rescaling or detach.
+                with torch.autocast(device_type=current_state.device.type, enabled=False):
+                    probe_state = compose_antipodal_plane_frame_residual(
+                        current_state, delta, support_origin_ap_dv_ml_um,
+                    )
+                    center, frame, basis = full_frame_state_to_components(probe_state)
+                    plane = normalized_raster_to_ccf(
+                        center[:, None, None], frame[:, None, None], basis[:, None, None], st,
+                    )
+                    surface = plane + torch.einsum("bij,bjhw->bhwi", frame, residual)
+                    director = frame[:, None, None, :, 2] + torch.einsum("bij,bjhw->bhwi", frame, director_delta)
+                    grid = surface[:, None] + offsets[:, :, None, None, None] * director[:, None]
+                    grid = torch.where(flip[:, None, None, None, None], grid.flip(-2), grid)
+                    probe_render = render_finite_thickness_coordinate_grid(
+                        atlas_volume, grid, origin_ap_dv_ml_um, voxel_size_ap_dv_ml_um, weights,
+                    )
+                feature = pose._encode_atlas(probe_render)
+                return 1 - (normalized_source * F.normalize(feature.to(dtype=cost_dtype), dim=1, eps=1e-6)).sum(1, keepdim=True)
+
         states, residuals, directors, surfaces = [], [], [], []
         derivative_bounds, rescale_factors, updates = [], [], []
         for iteration in range(steps + 1):
@@ -235,6 +272,19 @@ class ArbitraryPlaneJointModelV6(nn.Module):
                         signs[..., None, None].expand(-1, -1, h, w),
                     ), dim=1)
                     addition = pose.coordinate_evidence(coordinates.to(pose.coordinate_evidence.weight))
+                evidence = evidence + addition.to(evidence)
+            if pose.signed_pose_evidence_enabled and iteration < steps:
+                central_cost = 1 - (source_unit * F.normalize(atlas_features.to(dtype=cost_dtype), dim=1, eps=1e-6)).sum(1, keepdim=True)
+                differences = []
+                # Fixed order: tangent-u +/-, tangent-v +/-, normal-offset +/-.
+                for axis, magnitude in enumerate((torch.pi / 60., torch.pi / 60., 150.)):
+                    for sign in (1., -1.):
+                        delta = state.new_zeros(count, 9)
+                        delta[:, axis] = sign * magnitude
+                        arguments = (state, ribbon["residual_local_um"], ribbon["director_delta_local"], delta, source_unit)
+                        cost = checkpoint(probe_cost, *arguments, use_reentrant=False) if torch.is_grad_enabled() else probe_cost(*arguments)
+                        differences.append(cost - central_cost)
+                addition = pose.signed_pose_evidence(torch.cat(differences, dim=1).to(pose.signed_pose_evidence.weight))
                 evidence = evidence + addition.to(evidence)
             hidden = pose.recurrent_cell(evidence, hidden)
             states.append(state.reshape(batch, cells, representations, 12))
