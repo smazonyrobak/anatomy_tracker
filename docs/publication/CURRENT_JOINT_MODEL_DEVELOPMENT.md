@@ -103,6 +103,13 @@ its own pose/field, re-renders the actual curved slab, and uses the shared updat
 It remains untrained and runtime-unverified; existing forward and the live
 rehearsal driver are unchanged. No coherent-subject learning is claimed yet.
 
+The [12-subject coherent cohort](COHERENT_SUBJECT_COHORT_002_PROTOCOL_20260929.md)
+is now generating on CPU from committed source `673b8fc`, session `9774`.
+Output `I:/AnatomyTracker/data/joint_v6_coherent_subject_plans_002` is protected
+until process exit. Eight training and four development subject maps have
+preassigned identities; acceptance and completeness are not yet established.
+No sections or learning are performed by this plan-generation process.
+
 A flat [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
 is now prepared in `training/run_joint_v6_imagekey_retrieval.py`, not launched.
 It starts one new whole random model, trains shared image descriptors against
