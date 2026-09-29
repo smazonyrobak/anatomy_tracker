@@ -61,3 +61,24 @@ processing map cannot supervise total anatomical deformation as zero.
 This is coherent synthetic training-data preparation from one atlas and one
 subject realization, not independent biological animals, held-out validation,
 model performance, a benchmark, calibrated uncertainty or a shipping result.
+
+## Completed CPU preparation
+
+Source commit `3d48a91aa5900aada4aa8e60f575994e79f34281`; session 29655 / PID
+22044 exited 0. Output access waited until exit. Completion took 331.21 seconds
+and produced all 16 unique section IDs / 48 observations, one shared animal ID,
+all split `train`, with zero rejected draws. Five planes are support-censored
+in each mode; eleven planes / 33 observations pass the recorded support test.
+Section artifacts total 115,252,066 bytes.
+
+The completed manifest is
+`I:/AnatomyTracker/data/joint_v6_coherent_subject_sections_001/completed.json`,
+SHA-256 `dbe7a8222a58ae7de517f1a998b55ef7794f24d88cad31965fa757814497bed1`.
+It records each section's JSON/NPZ paths and hashes. Existing
+`_read_raw_artifact(output_directory, section_record["artifacts"])` restores the
+exact arrays without regenerating the plan or assuming legacy SVF labels.
+
+For the eleven support-eligible planes, full-canvas canonical anatomy-fit
+out-of-plane RMS ranges 22.49–45.25 um (mean 29.62 um). This describes stored
+3D target geometry, not registration error, tissue-only deformation statistics
+or accuracy of a trained model. No development/held-out cohort was created.
