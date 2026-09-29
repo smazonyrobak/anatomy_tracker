@@ -1,0 +1,704 @@
+{
+  "scope": "CPU audit of confirmed-exited frozen003/005 at20000 attempted steps; organizational single-atlas groups, not biological animals; no new inference or public benchmark",
+  "metrics_scope": "absolute physical normal endpoints, not ML-reflection quotient; raw probabilities uncalibrated; exact-cell recall is not landmark accuracy",
+  "results": {
+    "curriculum_003": {
+      "completion": {
+        "steps": 20000,
+        "optimizer_steps_applied": 19996,
+        "new_rendered_observations": 160000,
+        "unique_catalogue_cells_sampled": 98304,
+        "generated_supervised": 159071,
+        "generated_censored": 929,
+        "elapsed_seconds": 1971.5782486000007
+      },
+      "step": 20000,
+      "aggregates": {
+        "all": {
+          "row_count": 640,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.096766863763332,
+            "normal_marginal_nll": 5.184132495438815,
+            "normal_marginal_map_angle_deg": 43.46087121112098,
+            "plane_angle_deg": 43.726497834772466,
+            "normal_offset_error_um": 2082.021567424063,
+            "truth_rank": 1812.903125,
+            "joint_map_within_10deg": 0.1125,
+            "normal_marginal_map_within_10deg": 0.1140625,
+            "normal_probability_mass_within_10deg": 0.07071818183635377,
+            "hit_at_1": 0.0015625,
+            "hit_at_8": 0.0265625,
+            "hit_at_32": 0.103125,
+            "hit_at_128": 0.2734375
+          }
+        },
+        "identifiable": {
+          "row_count": 611,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.097217733275432,
+            "normal_marginal_nll": 5.171804388059284,
+            "normal_marginal_map_angle_deg": 43.35026200472058,
+            "plane_angle_deg": 43.51219900151996,
+            "normal_offset_error_um": 2058.940086038652,
+            "truth_rank": 1763.2817170329668,
+            "joint_map_within_10deg": 0.11400526556776555,
+            "normal_marginal_map_within_10deg": 0.11726762820512819,
+            "normal_probability_mass_within_10deg": 0.0720748267356736,
+            "hit_at_1": 0.0015625,
+            "hit_at_8": 0.026152701465201468,
+            "hit_at_32": 0.1015533424908425,
+            "hit_at_128": 0.27022435897435904
+          }
+        },
+        "censored_low_support": {
+          "row_count": 29,
+          "organizational_group_count": 17,
+          "synthetic_group_macro": {
+            "nll": 8.581241710513245,
+            "normal_marginal_nll": 5.72388667389977,
+            "normal_marginal_map_angle_deg": 52.17063918311906,
+            "plane_angle_deg": 52.12719157441575,
+            "normal_offset_error_um": 2947.0799347055126,
+            "truth_rank": 2887.3333333333335,
+            "joint_map_within_10deg": 0.04901960784313725,
+            "normal_marginal_map_within_10deg": 0.029411764705882353,
+            "normal_probability_mass_within_10deg": 0.033363970642031004,
+            "hit_at_1": 0.0,
+            "hit_at_8": 0.0196078431372549,
+            "hit_at_32": 0.12745098039215685,
+            "hit_at_128": 0.28431372549019607
+          }
+        },
+        "smart-brush-absent": {
+          "row_count": 213,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.450964388052622,
+            "normal_marginal_nll": 5.367690705126515,
+            "normal_marginal_map_angle_deg": 46.622551550817114,
+            "plane_angle_deg": 46.54740978750216,
+            "normal_offset_error_um": 2341.4599527098253,
+            "truth_rank": 2302.2891666666665,
+            "joint_map_within_10deg": 0.10916666666666668,
+            "normal_marginal_map_within_10deg": 0.10333333333333332,
+            "normal_probability_mass_within_10deg": 0.05521477735251652,
+            "hit_at_1": 0.0,
+            "hit_at_8": 0.027500000000000004,
+            "hit_at_32": 0.08333333333333333,
+            "hit_at_128": 0.21416666666666667
+          }
+        },
+        "smart-brush-accurate": {
+          "row_count": 214,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 7.597377078135809,
+            "normal_marginal_nll": 4.9433058671894825,
+            "normal_marginal_map_angle_deg": 40.953809491289135,
+            "plane_angle_deg": 42.24490681870803,
+            "normal_offset_error_um": 2082.3304025275115,
+            "truth_rank": 1127.59,
+            "joint_map_within_10deg": 0.12083333333333332,
+            "normal_marginal_map_within_10deg": 0.10916666666666668,
+            "normal_probability_mass_within_10deg": 0.08346876185533907,
+            "hit_at_1": 0.004166666666666667,
+            "hit_at_8": 0.028333333333333332,
+            "hit_at_32": 0.12,
+            "hit_at_128": 0.3441666666666666
+          }
+        },
+        "smart-brush-imperfect": {
+          "row_count": 213,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.21389098127683,
+            "normal_marginal_nll": 5.225787638616426,
+            "normal_marginal_map_angle_deg": 42.982312516660826,
+            "plane_angle_deg": 42.57498843726387,
+            "normal_offset_error_um": 1839.8835970050307,
+            "truth_rank": 1966.395,
+            "joint_map_within_10deg": 0.11000000000000001,
+            "normal_marginal_map_within_10deg": 0.1325,
+            "normal_probability_mass_within_10deg": 0.07471899867928913,
+            "hit_at_1": 0.0,
+            "hit_at_8": 0.025,
+            "hit_at_32": 0.11333333333333336,
+            "hit_at_128": 0.27
+          }
+        },
+        "smart-brush-absent_identifiable": {
+          "row_count": 207,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.441372778216998,
+            "normal_marginal_nll": 5.368453984987516,
+            "normal_marginal_map_angle_deg": 46.7138793247626,
+            "plane_angle_deg": 46.4579402707635,
+            "normal_offset_error_um": 2343.3727033155146,
+            "truth_rank": 2181.5845833333333,
+            "joint_map_within_10deg": 0.10874999999999999,
+            "normal_marginal_map_within_10deg": 0.10083333333333333,
+            "normal_probability_mass_within_10deg": 0.05525559218218007,
+            "hit_at_1": 0.0,
+            "hit_at_8": 0.0225,
+            "hit_at_32": 0.08249999999999999,
+            "hit_at_128": 0.21208333333333332
+          }
+        },
+        "smart-brush-accurate_identifiable": {
+          "row_count": 204,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 7.605808589657147,
+            "normal_marginal_nll": 4.946758052575268,
+            "normal_marginal_map_angle_deg": 41.380291095565234,
+            "plane_angle_deg": 42.399849015095754,
+            "normal_offset_error_um": 2086.3230244951565,
+            "truth_rank": 1088.2800000000002,
+            "joint_map_within_10deg": 0.125,
+            "normal_marginal_map_within_10deg": 0.1125,
+            "normal_probability_mass_within_10deg": 0.08445646736441342,
+            "hit_at_1": 0.004166666666666667,
+            "hit_at_8": 0.029583333333333333,
+            "hit_at_32": 0.11625,
+            "hit_at_128": 0.33916666666666667
+          }
+        },
+        "smart-brush-imperfect_identifiable": {
+          "row_count": 200,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.261255247592924,
+            "normal_marginal_nll": 5.213908859298771,
+            "normal_marginal_map_angle_deg": 42.37435285008553,
+            "plane_angle_deg": 41.79090952472983,
+            "normal_offset_error_um": 1786.953964724471,
+            "truth_rank": 2035.4341666666667,
+            "joint_map_within_10deg": 0.11166666666666666,
+            "normal_marginal_map_within_10deg": 0.14250000000000002,
+            "normal_probability_mass_within_10deg": 0.07667959975278678,
+            "hit_at_1": 0.0,
+            "hit_at_8": 0.026250000000000002,
+            "hit_at_32": 0.10916666666666666,
+            "hit_at_128": 0.2645833333333333
+          }
+        }
+      },
+      "raw_shape": [
+        640,
+        98304
+      ],
+      "all_raw_log_probabilities_finite": true,
+      "maximum_absolute_log_normalization_error": 4.6877415593726823e-07,
+      "saved_labels_predictions_weights_match": true,
+      "saved_per_row_maximum_absolute_difference": {
+        "nll": 0.0,
+        "plane_angle_deg": 6.139533326177116e-13,
+        "normal_offset_error_um": 3.637978807091713e-12,
+        "truth_rank": 0.0,
+        "hit_at_1": 0.0,
+        "hit_at_8": 0.0,
+        "hit_at_32": 0.0,
+        "hit_at_128": 0.0
+      },
+      "saved_macro_difference": {
+        "nll": -1.3411046495548362e-08,
+        "plane_angle_deg": 1.4210854715202004e-14,
+        "normal_offset_error_um": 0.0,
+        "truth_rank": 0.0,
+        "hit_at_1": 0.0,
+        "hit_at_8": 0.0,
+        "hit_at_32": 0.0,
+        "hit_at_128": 0.0
+      },
+      "development_identities_unchanged": true,
+      "id_overlap_counts": {
+        "animal_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        },
+        "specimen_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        },
+        "experiment_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        },
+        "synthetic_animal_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        },
+        "section_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        }
+      },
+      "trace_consecutive_1_to_20000": true,
+      "attempted_steps": 20000,
+      "applied_steps": 19996,
+      "skipped_step_ids": [
+        14209,
+        16266,
+        18718,
+        19155
+      ],
+      "all_training_losses_finite": true,
+      "last100_weighted_joint_nll": 6.789916434288025,
+      "generated_trace_indices_exact": true,
+      "generated_schedule_count": 160000,
+      "generated_distinct_cells": 98304,
+      "first_cycle_complete": true,
+      "support_censoring_matches": true,
+      "generated_supervised": 159071,
+      "generated_censored": 929,
+      "all_final_model_tensors_finite": true,
+      "final_optimizer_step_values": [
+        19996
+      ],
+      "changed_model_tensor_names": [
+        "pose_model.histology_stem.0.weight",
+        "pose_model.histology_stem.0.bias",
+        "pose_model.histology_stem.1.weight",
+        "pose_model.histology_stem.1.bias",
+        "pose_model.shared_encoder.0.weight",
+        "pose_model.shared_encoder.0.bias",
+        "pose_model.shared_encoder.1.weight",
+        "pose_model.shared_encoder.1.bias",
+        "pose_model.shared_encoder.3.weight",
+        "pose_model.shared_encoder.3.bias",
+        "pose_model.shared_encoder.4.weight",
+        "pose_model.shared_encoder.4.bias",
+        "pose_model.proposal_head_v6.source_context.0.weight",
+        "pose_model.proposal_head_v6.source_context.0.bias",
+        "pose_model.proposal_head_v6.mixture_logit.weight",
+        "pose_model.proposal_head_v6.mixture_logit.bias",
+        "pose_model.proposal_head_v6.normal_query.weight",
+        "pose_model.proposal_head_v6.normal_query.bias",
+        "pose_model.proposal_head_v6.offset_query.weight",
+        "pose_model.proposal_head_v6.offset_query.bias",
+        "pose_model.proposal_head_v6.roll_query.weight",
+        "pose_model.proposal_head_v6.roll_query.bias",
+        "pose_model.proposal_head_v6.normal_embedding.0.weight",
+        "pose_model.proposal_head_v6.normal_embedding.0.bias",
+        "pose_model.proposal_head_v6.normal_embedding.2.weight",
+        "pose_model.proposal_head_v6.normal_embedding.2.bias",
+        "pose_model.proposal_head_v6.offset_embedding.0.weight",
+        "pose_model.proposal_head_v6.offset_embedding.0.bias",
+        "pose_model.proposal_head_v6.offset_embedding.2.weight",
+        "pose_model.proposal_head_v6.offset_embedding.2.bias",
+        "pose_model.proposal_head_v6.roll_embedding.0.weight",
+        "pose_model.proposal_head_v6.roll_embedding.0.bias",
+        "pose_model.proposal_head_v6.roll_embedding.2.weight",
+        "pose_model.proposal_head_v6.roll_embedding.2.bias"
+      ],
+      "only_proposal_path_changed": true,
+      "schedule_receipts_match": true,
+      "source_archive_receipt_matches": true
+    },
+    "normal_objective_005": {
+      "completion": {
+        "steps": 20000,
+        "optimizer_steps_applied": 19996,
+        "new_rendered_observations": 160000,
+        "unique_catalogue_cells_sampled": 98304,
+        "generated_supervised": 159071,
+        "generated_censored": 929,
+        "elapsed_seconds": 2118.8786311000003
+      },
+      "step": 20000,
+      "aggregates": {
+        "all": {
+          "row_count": 640,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.107565627992154,
+            "normal_marginal_nll": 5.062496485781582,
+            "normal_marginal_map_angle_deg": 41.17150832903776,
+            "plane_angle_deg": 42.13557417709399,
+            "normal_offset_error_um": 2261.6830050331564,
+            "truth_rank": 1802.875,
+            "joint_map_within_10deg": 0.121875,
+            "normal_marginal_map_within_10deg": 0.1296875,
+            "normal_probability_mass_within_10deg": 0.07897546384728649,
+            "hit_at_1": 0.0046875,
+            "hit_at_8": 0.03125,
+            "hit_at_32": 0.1078125,
+            "hit_at_128": 0.2890625
+          }
+        },
+        "identifiable": {
+          "row_count": 611,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.059260857928914,
+            "normal_marginal_nll": 5.009230539439564,
+            "normal_marginal_map_angle_deg": 40.860627971183035,
+            "plane_angle_deg": 41.61737931225434,
+            "normal_offset_error_um": 2215.3380888562233,
+            "truth_rank": 1705.541053113553,
+            "joint_map_within_10deg": 0.12303800366300366,
+            "normal_marginal_map_within_10deg": 0.13140453296703297,
+            "normal_probability_mass_within_10deg": 0.08156376391074281,
+            "hit_at_1": 0.0046875,
+            "hit_at_8": 0.03236950549450549,
+            "hit_at_32": 0.11079441391941391,
+            "hit_at_128": 0.29131410256410256
+          }
+        },
+        "censored_low_support": {
+          "row_count": 29,
+          "organizational_group_count": 17,
+          "synthetic_group_macro": {
+            "nll": 8.920205555710137,
+            "normal_marginal_nll": 6.035063924358546,
+            "normal_marginal_map_angle_deg": 43.82603581555229,
+            "plane_angle_deg": 48.32237798799063,
+            "normal_offset_error_um": 3021.7697935772467,
+            "truth_rank": 3257.6274509803916,
+            "joint_map_within_10deg": 0.08823529411764706,
+            "normal_marginal_map_within_10deg": 0.08823529411764706,
+            "normal_probability_mass_within_10deg": 0.027082876037832826,
+            "hit_at_1": 0.0,
+            "hit_at_8": 0.0,
+            "hit_at_32": 0.058823529411764705,
+            "hit_at_128": 0.2549019607843137
+          }
+        },
+        "smart-brush-absent": {
+          "row_count": 213,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.14299674709638,
+            "normal_marginal_nll": 5.180939608116921,
+            "normal_marginal_map_angle_deg": 42.85160068577474,
+            "plane_angle_deg": 43.179734990132395,
+            "normal_offset_error_um": 2391.4282412080056,
+            "truth_rank": 1917.5566666666666,
+            "joint_map_within_10deg": 0.1025,
+            "normal_marginal_map_within_10deg": 0.12083333333333335,
+            "normal_probability_mass_within_10deg": 0.07235577491895392,
+            "hit_at_1": 0.0,
+            "hit_at_8": 0.028333333333333332,
+            "hit_at_32": 0.0975,
+            "hit_at_128": 0.2833333333333333
+          }
+        },
+        "smart-brush-accurate": {
+          "row_count": 214,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 7.531869143247604,
+            "normal_marginal_nll": 4.774953570994345,
+            "normal_marginal_map_angle_deg": 40.056311131626344,
+            "plane_angle_deg": 41.781543441349335,
+            "normal_offset_error_um": 2259.166792322818,
+            "truth_rank": 1250.6633333333334,
+            "joint_map_within_10deg": 0.12,
+            "normal_marginal_map_within_10deg": 0.12916666666666668,
+            "normal_probability_mass_within_10deg": 0.08674198749947955,
+            "hit_at_1": 0.009166666666666667,
+            "hit_at_8": 0.03333333333333334,
+            "hit_at_32": 0.13083333333333333,
+            "hit_at_128": 0.35916666666666663
+          }
+        },
+        "smart-brush-imperfect": {
+          "row_count": 213,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.646959722836812,
+            "normal_marginal_nll": 5.228121003063244,
+            "normal_marginal_map_angle_deg": 40.91382810722412,
+            "plane_angle_deg": 41.48377550463535,
+            "normal_offset_error_um": 2148.8832438121563,
+            "truth_rank": 2215.45,
+            "joint_map_within_10deg": 0.14166666666666666,
+            "normal_marginal_map_within_10deg": 0.13416666666666668,
+            "normal_probability_mass_within_10deg": 0.07820538926594729,
+            "hit_at_1": 0.005,
+            "hit_at_8": 0.0325,
+            "hit_at_32": 0.09333333333333334,
+            "hit_at_128": 0.22333333333333333
+          }
+        },
+        "smart-brush-absent_identifiable": {
+          "row_count": 207,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.073490995367369,
+            "normal_marginal_nll": 5.1263663933355215,
+            "normal_marginal_map_angle_deg": 42.78292341448759,
+            "plane_angle_deg": 42.15331675778158,
+            "normal_offset_error_um": 2333.463065589822,
+            "truth_rank": 1711.4295833333333,
+            "joint_map_within_10deg": 0.10625,
+            "normal_marginal_map_within_10deg": 0.125,
+            "normal_probability_mass_within_10deg": 0.07418404191658952,
+            "hit_at_1": 0.0,
+            "hit_at_8": 0.029583333333333333,
+            "hit_at_32": 0.09958333333333333,
+            "hit_at_128": 0.28833333333333333
+          }
+        },
+        "smart-brush-accurate_identifiable": {
+          "row_count": 204,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 7.539297473231952,
+            "normal_marginal_nll": 4.749856109707858,
+            "normal_marginal_map_angle_deg": 40.21434943329684,
+            "plane_angle_deg": 42.124260758047896,
+            "normal_offset_error_um": 2314.2319906368025,
+            "truth_rank": 1285.605,
+            "joint_map_within_10deg": 0.12041666666666666,
+            "normal_marginal_map_within_10deg": 0.13041666666666665,
+            "normal_probability_mass_within_10deg": 0.08867895401389296,
+            "hit_at_1": 0.009166666666666667,
+            "hit_at_8": 0.034583333333333334,
+            "hit_at_32": 0.13458333333333333,
+            "hit_at_128": 0.3583333333333333
+          }
+        },
+        "smart-brush-imperfect_identifiable": {
+          "row_count": 200,
+          "organizational_group_count": 40,
+          "synthetic_group_macro": {
+            "nll": 8.614972847501438,
+            "normal_marginal_nll": 5.151025446504843,
+            "normal_marginal_map_angle_deg": 40.33789461131788,
+            "plane_angle_deg": 41.09412495671254,
+            "normal_offset_error_um": 2079.8955355568905,
+            "truth_rank": 2180.6154166666665,
+            "joint_map_within_10deg": 0.14166666666666666,
+            "normal_marginal_map_within_10deg": 0.13416666666666666,
+            "normal_probability_mass_within_10deg": 0.08110632291330569,
+            "hit_at_1": 0.005,
+            "hit_at_8": 0.03375,
+            "hit_at_32": 0.09166666666666666,
+            "hit_at_128": 0.22333333333333333
+          }
+        }
+      },
+      "raw_shape": [
+        640,
+        98304
+      ],
+      "all_raw_log_probabilities_finite": true,
+      "maximum_absolute_log_normalization_error": 5.457293554833598e-07,
+      "saved_labels_predictions_weights_match": true,
+      "saved_per_row_maximum_absolute_difference": {
+        "nll": 0.0,
+        "normal_marginal_nll": 6.072633016884765e-06,
+        "normal_marginal_map_angle_deg": 2.509104035652854e-13,
+        "plane_angle_deg": 4.4919623576333834e-13,
+        "normal_offset_error_um": 3.637978807091713e-12,
+        "truth_rank": 0.0,
+        "hit_at_1": 0.0,
+        "hit_at_8": 0.0,
+        "hit_at_32": 0.0,
+        "hit_at_128": 0.0
+      },
+      "saved_macro_difference": {
+        "nll": 1.0430813546236095e-08,
+        "normal_marginal_nll": -7.485628996661831e-07,
+        "normal_marginal_map_angle_deg": 0.0,
+        "plane_angle_deg": 1.4210854715202004e-14,
+        "normal_offset_error_um": 0.0,
+        "truth_rank": 0.0,
+        "hit_at_1": 0.0,
+        "hit_at_8": 0.0,
+        "hit_at_32": 0.0,
+        "hit_at_128": 0.0
+      },
+      "development_identities_unchanged": true,
+      "id_overlap_counts": {
+        "animal_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        },
+        "specimen_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        },
+        "experiment_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        },
+        "synthetic_animal_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        },
+        "section_id": {
+          "frozen_train_development": 0,
+          "generated_development": 0,
+          "generated_unique": 160000
+        }
+      },
+      "trace_consecutive_1_to_20000": true,
+      "attempted_steps": 20000,
+      "applied_steps": 19996,
+      "skipped_step_ids": [
+        10374,
+        14991,
+        17375,
+        19835
+      ],
+      "all_training_losses_finite": true,
+      "last100_weighted_joint_nll": 6.755833554267883,
+      "generated_trace_indices_exact": true,
+      "generated_schedule_count": 160000,
+      "generated_distinct_cells": 98304,
+      "first_cycle_complete": true,
+      "support_censoring_matches": true,
+      "generated_supervised": 159071,
+      "generated_censored": 929,
+      "all_final_model_tensors_finite": true,
+      "final_optimizer_step_values": [
+        19996
+      ],
+      "changed_model_tensor_names": [
+        "pose_model.histology_stem.0.weight",
+        "pose_model.histology_stem.0.bias",
+        "pose_model.histology_stem.1.weight",
+        "pose_model.histology_stem.1.bias",
+        "pose_model.shared_encoder.0.weight",
+        "pose_model.shared_encoder.0.bias",
+        "pose_model.shared_encoder.1.weight",
+        "pose_model.shared_encoder.1.bias",
+        "pose_model.shared_encoder.3.weight",
+        "pose_model.shared_encoder.3.bias",
+        "pose_model.shared_encoder.4.weight",
+        "pose_model.shared_encoder.4.bias",
+        "pose_model.proposal_head_v6.source_context.0.weight",
+        "pose_model.proposal_head_v6.source_context.0.bias",
+        "pose_model.proposal_head_v6.mixture_logit.weight",
+        "pose_model.proposal_head_v6.mixture_logit.bias",
+        "pose_model.proposal_head_v6.normal_query.weight",
+        "pose_model.proposal_head_v6.normal_query.bias",
+        "pose_model.proposal_head_v6.offset_query.weight",
+        "pose_model.proposal_head_v6.offset_query.bias",
+        "pose_model.proposal_head_v6.roll_query.weight",
+        "pose_model.proposal_head_v6.roll_query.bias",
+        "pose_model.proposal_head_v6.normal_embedding.0.weight",
+        "pose_model.proposal_head_v6.normal_embedding.0.bias",
+        "pose_model.proposal_head_v6.normal_embedding.2.weight",
+        "pose_model.proposal_head_v6.normal_embedding.2.bias",
+        "pose_model.proposal_head_v6.offset_embedding.0.weight",
+        "pose_model.proposal_head_v6.offset_embedding.0.bias",
+        "pose_model.proposal_head_v6.offset_embedding.2.weight",
+        "pose_model.proposal_head_v6.offset_embedding.2.bias",
+        "pose_model.proposal_head_v6.roll_embedding.0.weight",
+        "pose_model.proposal_head_v6.roll_embedding.0.bias",
+        "pose_model.proposal_head_v6.roll_embedding.2.weight",
+        "pose_model.proposal_head_v6.roll_embedding.2.bias"
+      ],
+      "only_proposal_path_changed": true,
+      "schedule_receipts_match": true,
+      "source_archive_receipt_matches": true
+    }
+  },
+  "initial_checkpoint_difference_paths": [],
+  "common_configuration_fields_equal": {
+    "seed": true,
+    "steps": true,
+    "batch_size": true,
+    "generated_per_batch": true,
+    "learning_rate": true,
+    "optimizer": true,
+    "weight_decay": true,
+    "evaluation_interval": true,
+    "model_kwargs": true,
+    "retrieval_shape_h_w": true,
+    "prepared_source_directory": true,
+    "prepared_source_sha256": true,
+    "cache_manifests": true,
+    "atlas_binding": true,
+    "catalogue_receipt_sha256": true,
+    "generator": true
+  },
+  "numeric_schedule_fields_equal": {
+    "cell_index": true,
+    "sample_seed": true,
+    "mode_index": true,
+    "horizontal_flip": true,
+    "thickness_um": true,
+    "gain": true,
+    "gamma": true,
+    "invert_tissue": true,
+    "noise_std": true,
+    "background_mean": true,
+    "background_slope_yx": true,
+    "mask_dilate": true,
+    "mask_radius_px": true
+  },
+  "organizational_id_values_differ_only_run_namespace": {
+    "animal_id": true,
+    "specimen_id": true,
+    "experiment_id": true,
+    "synthetic_animal_id": true,
+    "section_id": true
+  },
+  "frozen_training_schedule_equal": true,
+  "training_development_identities_equal": true,
+  "changed_common_source_receipts": {
+    "training/arbitrary_plane_joint_model_v6.py": [
+      "27d12c8020730524a77ee3cdb83d97ca7870a94a1c6d5c1f43adb0ff5b41ae96",
+      "2a6afc41b8cf13fa1f297b9a1fa30eb8703e81dae28917624bca5d5665d70aae"
+    ],
+    "training/run_joint_v6_proposal_curriculum.py": [
+      "550bb4660fbfbc10752f23442c02c78e3bb6f0282667a24a597ff572e4461705",
+      "ad5dee20d061354e9d4d5b41bc933d9fd8904f2ebe6d9dab3e48079465c73aac"
+    ]
+  },
+  "objective_005": "weighted joint-cell NLL + normal_marginal_nll_weight * weighted normal-marginal NLL",
+  "normal_objective_weight_005": 1.0,
+  "artifact_sha256": {
+    "curriculum_003": {
+      "experiment.json": "43f78e82b3d550cabd3f3a974d47d5d5256d9a9126a309cedb15b223eec70b07",
+      "experiment_source.py": "550bb4660fbfbc10752f23442c02c78e3bb6f0282667a24a597ff572e4461705",
+      "source_diff.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "completed.json": "e0998299a2cd7ca02ebf0e2c344b2684ad396ef8901e1f31724aaa533fd53733",
+      "generated_schedule.npz": "5f88b717d022026cc386f337e8979cfba11a25f4c491dfe05d49b53113678712",
+      "frozen_training_row_indices.npy": "ebef1776a96c83678c8d3e0c5b96590d40969ffed1cd392a3f65b488fb37ee66",
+      "training_trace.jsonl": "6db67cc3f7944ac9930c72b8a32ee86e42799514b3a47c49720d70d07d4e5bb8",
+      "training_identities.json": "177342e2c96dc3980366aa722be7b3a36492e5334c0e0bff97edaa56db306832",
+      "internal_development_identities.json": "346a4b7220fe3fa1ec4a152bb6334b4264f57f5176839aa7a027346082c95c2c",
+      "catalogue.pt": "9b49d203cc73ce3a66e648bbe5228231eb5cc9c17d5db4669eefe0f08ae22c71",
+      "joint_model_step_00000.pt": "4e5c043ce972d02e95602eefb762e8050378b93c4ddcebc3a4f0d5b15fd3559a",
+      "joint_model_step_20000.pt": "a011063fc44d2f9c331fe63c743797492ab40f4a72e1e8f72d5dd1b035c297a2",
+      "development_log_probability_step_20000.npy": "1f7aa72e7e0d564c6024d2b9f8ce0e37ffffe106329eaf130e6ee147868f2dbe",
+      "development_rows_step_20000.npz": "da976905e2a75d3cac22ef60e661701fa492f38dc50440c0fc2ead9feff96ec8",
+      "development_metrics_step_20000.json": "f50e2980994e6a839f5489164e8204858c6fe938f6cc596185516495ca9584c5"
+    },
+    "normal_objective_005": {
+      "experiment.json": "3b85dc22322214d9478a1fe8abb4a1f441a8b357633d70d68fb63189ff80171a",
+      "experiment_source.py": "ad5dee20d061354e9d4d5b41bc933d9fd8904f2ebe6d9dab3e48079465c73aac",
+      "source_diff.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "completed.json": "b16e480ee672c351361f1200d984f9f632bc38a34444aead5d8405251e85aeb9",
+      "generated_schedule.npz": "9685c7074284cd9a31aede25a9b03cbbe47c28623bf2f24e08f69704663c0e69",
+      "frozen_training_row_indices.npy": "ebef1776a96c83678c8d3e0c5b96590d40969ffed1cd392a3f65b488fb37ee66",
+      "training_trace.jsonl": "291c7a6d1045d3896691bf413404cfec903a85cf0ef89488b2824043831b7922",
+      "training_identities.json": "177342e2c96dc3980366aa722be7b3a36492e5334c0e0bff97edaa56db306832",
+      "internal_development_identities.json": "346a4b7220fe3fa1ec4a152bb6334b4264f57f5176839aa7a027346082c95c2c",
+      "catalogue.pt": "9b49d203cc73ce3a66e648bbe5228231eb5cc9c17d5db4669eefe0f08ae22c71",
+      "joint_model_step_00000.pt": "76292b0578e955800bcda897afd8b914aa2dfed0010d06e805d04bb05f995daa",
+      "joint_model_step_20000.pt": "edbd96a8eefbe5b2ae004a557a249af9196a5f1deea3ae2bed720dedec84eb19",
+      "development_log_probability_step_20000.npy": "b2e9f03d293c1e1c871bd153db50f506b7260a209ceb5aa57a9095285e921133",
+      "development_rows_step_20000.npz": "6815547ddc3b9d4ba6e4c50f9969a21e24343aa89107f4128e6b0f7fac3858bb",
+      "development_metrics_step_20000.json": "f0938e28c3839ed60f47479dcfd040c93f3e2dd8de755d04e250d8afa9402cca"
+    }
+  },
+  "probabilities_calibrated": false
+}
