@@ -8,7 +8,10 @@ or a claim that the complete system works. No training has been launched by the
 script's author; the parent checkpoint constant is provisional pending review.
 
 The complete own-lineage `joint_v6_proposal_curriculum_003/step_20000` checkpoint
-initializes this stage. Proposal parameters, the histology stem, and the shared
+is the current provisional driver constant, not a final parent selection. The
+next local run must continue the selected **whole** global-model checkpoint;
+independently trained global/local encoders will not be merged. Proposal
+parameters, the histology stem, and the shared
 encoder stay frozen; otherwise a locally updated image encoder would silently
 change the trained global proposal. Trainable modules are the atlas stem,
 refinement pair encoder, GRU, nine-coordinate update, representation likelihood,
@@ -69,3 +72,37 @@ only. Later honest global evaluation must use image-selected starts, no truth
 catalogue index or truth deformation gate, and only observable acquisition
 metadata. The remaining common deterministic frame/warp across representations,
 calibration, constraint/ray inference and desktop delivery are not solved here.
+
+## Completed convention review — 2026-09-29
+
+The driver, packed targets, native `refine()` and v6 losses were reviewed with
+no launch-blocking convention bug found and no driver change required:
+
+- Full-frame loss uses local SO(3), translation and basis/shear coordinates;
+  initialization correctly uses the distinct plane-tangent perturbation order.
+- Three pose updates yield four deformation states, with activity
+  `[false, true, true, true]`. The identity prefix is excluded from dense loss.
+  Pose states, recurrent hidden states and SVF feedback maps retain gradients
+  across re-rendering. Only representation-mixture probabilities entering the
+  deformation context are detached, not the context or deformation itself.
+- Dense supervision uses pose eligibility times dense eligibility, including
+  correct exclusion of the one training row with pose weight zero but dense
+  weight one. Support BCE targets the original `deformation_weight`, matching
+  the native loss rather than substituting a tissue-segmentation target.
+- Source SVFs and pullbacks are already conjugated into the observed reflected
+  raster. Dense CCF composition correctly applies the selected raster reflection
+  **after** the pullback, then physical OUV with `x/96` and `y/96`; no additional
+  half-pixel shift or second SVF conjugation belongs here.
+
+One bounded CPU-only recomposition of packed truth on all 231 eligible development
+rows confirmed the last point: mean row-weighted CCF discrepancy was
+`0.000664765 µm`, maximum row-weighted discrepancy `0.001327075 µm`, and maximum
+supported-pixel discrepancy `0.003300348 µm`. Identity/horizontal mean discrepancies
+were `0.000676986 / 0.000651552 µm`. This verifies coordinate agreement, not learned
+accuracy. No GPU training was launched for this review and active global-training
+outputs were not accessed.
+
+The first stage is a frozen-source-encoder proof of conditional truth-near local
+learning with known PSF, not global-capture or uncertainty qualification. A later
+joint-unfreezing stage must retain proposal rehearsal within the same whole-model
+lineage; it is not implemented or qualified by this review.
