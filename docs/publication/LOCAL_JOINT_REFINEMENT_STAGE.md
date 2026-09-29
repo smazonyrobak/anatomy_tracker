@@ -4,13 +4,14 @@
 shared recurrent pose updater and affine-free SVF decoder directly. It bypasses
 the coarse cascade **only for explicitly truth-near, teacher-initialized local
 learning**. This is not a substitute for global capture, an end-to-end benchmark,
-or a claim that the complete system works. No training has been launched by the
-script's author; the parent checkpoint constant is provisional pending review.
+or a claim that the complete system works.
 
 The complete own-lineage `joint_v6_proposal_curriculum_003/step_20000` checkpoint
-is the current provisional driver constant, not a final parent selection. The
-next local run must continue the selected **whole** global-model checkpoint;
-independently trained global/local encoders will not be merged. Proposal
+is selected for the first launch. Completed 005 improved normal error slightly
+but worsened joint NLL, offset error and imperfect-brush capture; head control
+006 and depth control 007 both failed their matched 4k continuation criteria.
+003 is therefore retained as the combined global baseline, not certified as
+adequate global localization. No trained encoders or heads are merged. Proposal
 parameters, the histology stem, and the shared
 encoder stay frozen; otherwise a locally updated image encoder would silently
 change the trained global proposal. Trainable modules are the atlas stem,
@@ -122,7 +123,8 @@ were `0.000676986 / 0.000651552 µm`. This verifies coordinate agreement, not le
 accuracy. No GPU training was launched for this review and active global-training
 outputs were not accessed.
 
-The first stage is a frozen-source-encoder proof of conditional truth-near local
-learning with known PSF, not global-capture or uncertainty qualification. A later
+The first stage seeks a frozen-source-encoder demonstration of conditional
+truth-near local learning with known PSF, not global-capture or uncertainty
+qualification. A later
 joint-unfreezing stage must retain proposal rehearsal within the same whole-model
 lineage; it is not implemented or qualified by this review.
