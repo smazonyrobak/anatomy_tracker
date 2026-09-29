@@ -1,0 +1,56 @@
+{
+  "scope": "Numerical voxel-grid symmetry of the pinned Allen template/support only; not bilateral equivalence of real brains or a license to reverse hemisphere labels",
+  "shape_ap_dv_ml": [
+    528,
+    320,
+    456
+  ],
+  "origin_ap_dv_ml_um": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "voxel_size_ap_dv_ml_um": [
+    25.0,
+    25.0,
+    25.0
+  ],
+  "coordinate_convention": "Physical voxel center = origin + (array_index + 0.5) * spacing",
+  "intensity_receipt": {
+    "shape": [
+      528,
+      320,
+      456
+    ],
+    "dtype": "<f4",
+    "sha256": "2f9100e628e7d7e77faa3173104e2b140188b96c8607f0fb73c922628bdaee2e"
+  },
+  "annotation_raw_sha256": "c620cbcc562183e4dcd40250d440130501781f74b41de35b1c1bdabace290c42",
+  "template_raw_sha256": "e4a2b483e842b4c8c1b5452d940ea59e14bc1ebaa38fe6a9c3bacac6db2a8f4b",
+  "comparisons": {
+    "voxel_center_extent_midpoint_and_catalogue_support_origin_ML": {
+      "midline_ML_um": 5700.0,
+      "intensity_MAE_whole_array": 0.0061139747732286125,
+      "intensity_RMSE_whole_array": 0.02180580500961169,
+      "intensity_MAE_support_union": 0.014510311111764273,
+      "intensity_RMSE_support_union": 0.03359299034185945,
+      "intensity_max_absolute_difference": 1.0,
+      "support_dice": 0.9976491155429807,
+      "support_disagreement_fraction_union": 0.004690741522700992,
+      "annotation_label_agreement_fraction_union": 0.962053842337018,
+      "annotation_semantics": "Same integer region labels may occur in both hemispheres; label agreement does not preserve laterality"
+    },
+    "half_voxel_shifted_ML": {
+      "midline_ML_um": 5712.5,
+      "intensity_MAE_whole_array": 0.004402093265963733,
+      "intensity_RMSE_whole_array": 0.01864161069757712,
+      "intensity_MAE_support_union": 0.010436476541143372,
+      "intensity_RMSE_support_union": 0.02870322959922345,
+      "intensity_max_absolute_difference": 1.0,
+      "support_dice": 0.9965905243662,
+      "support_disagreement_fraction_union": 0.006795781217127539,
+      "annotation_label_agreement_fraction_union": 0.943954683221875,
+      "annotation_semantics": "Same integer region labels may occur in both hemispheres; label agreement does not preserve laterality"
+    }
+  }
+}

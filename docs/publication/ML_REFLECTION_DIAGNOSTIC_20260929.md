@@ -29,6 +29,14 @@ diagnostics, not model-achieved alignment. Probabilities are uncalibrated and
 marginalized over all offsets/rolls. The table uses the unchanged 640 sections
 and 40 organizational synthetic groups, not independent biological animals.
 
+The 27.4893° result takes the better reflection **separately for each section**.
+In contrast, one globally fixed ML reflection for all curriculum003 predictions
+gives 42.6957°, versus the original 43.7265°. The independent fixed-convention
+audit is documented in
+[`PROPOSAL_FRAME_METRIC_AUDIT_20260929.md`](PROPOSAL_FRAME_METRIC_AUDIT_20260929.md).
+These are different diagnostics; the per-case minimum cannot repair a supposed
+single global axis-convention error.
+
 Allowing a second target improves even unrelated predictions. A fixed-seed
 100-shuffle descriptive control gives curriculum003 MAP errors 57.51°→46.27°
 and recovery004 57.44°→46.25°. Thus approximately 11° of reduction occurs under
@@ -70,7 +78,18 @@ opposite anatomical locations or treat reflection as acceptable for surgery.
 
 ## Reproducibility
 
-All files below are under `I:/AnatomyTracker/tmp/`. Original frozen arrays were
+Exact CPU scripts are archived in
+[`training/diagnose_proposal_ml_reflection_v6.py`](../../training/diagnose_proposal_ml_reflection_v6.py)
+and [`training/diagnose_allen_ml_symmetry_v6.py`](../../training/diagnose_allen_ml_symmetry_v6.py).
+Their exact JSON results are archived under [`results/`](results/), retaining
+the filenames below. Original copies remain under `I:/AnatomyTracker/tmp/`.
+The scripts are byte-identical; JSON copies normalize line endings to LF with
+unchanged result content. Archived JSON SHA-256 values are
+`bb30183e45c6979c57fad3f51e8731dee25072db1a492af7e1a89cbe89ee729f`
+(proposal reflection) and
+`4f6eacc8276d4dcf63f8c20938f0393c5ca7cc12a4fac53d0cd6a1c8af89b577`
+(atlas symmetry). The receipts below identify the original copies.
+Original frozen arrays were
 read-only. The normal-diagnostic JSON records their hashes, all mode/support
 subsets, severe-error row indices and the shuffle control. Per-row results are
 saved as `joint_v6_proposal_{curriculum_003,precision_recovery_004}_ml_reflection_diagnostic_rows.npz`.

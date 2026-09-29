@@ -31,7 +31,12 @@ coordinate replay was repeated.
 The one-sided search applies one fixed transform to every prediction, not a
 truth-selected transform per row. Its best result is an ML reflection (or its
 antipodal equivalent); no axis permutation/sign convention produces near-zero
-error. The independent signed-direction mean is instead 52.0638°, demonstrating that
+error. In particular, **42.6957° using one globally fixed ML reflection** is not
+the **27.4893° per-case truth-selected minimum** in the separate reflection
+diagnostic. The latter can choose a different anatomical reflection for every
+section and is not a valid global convention correction. Unrelated shuffled
+predictions also improve from 57.5065° to 46.2682° under that per-case minimum.
+The independent signed-direction mean is instead 52.0638°, demonstrating that
 the 43.7° endpoint already correctly allows the plane normal's `n/-n` ambiguity.
 Prediction-shuffle controls are descriptive, not biological significance tests.
 
@@ -79,7 +84,14 @@ optimization diagnostic, not validation or evidence of a deployable model.
 
 ## Receipts
 
-CPU script and result are under `I:/AnatomyTracker/tmp/`:
+The exact CPU script is archived in
+[`training/diagnose_proposal_frame_metric_v6.py`](../../training/diagnose_proposal_frame_metric_v6.py)
+and its result in
+[`results/proposal_frame_metric_audit_20260929.json`](results/proposal_frame_metric_audit_20260929.json).
+The archived script is byte-identical. JSON line endings are normalized to LF;
+all result content is unchanged. Archived JSON SHA-256 is
+`96ec9ca3f960f275a3486fba72b292f5f39ae4e4ea13cc6dcbe1c86fcc18583f`.
+The original files under `I:/AnatomyTracker/tmp/` have these receipts:
 
 - `proposal_frame_metric_audit_20260929.py`: SHA-256
   `970242a8fd65417a91d69826718885698aaf598225c3e885d80bce889979e10c`.

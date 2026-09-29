@@ -1,0 +1,414 @@
+{
+  "scope": "Normal-only post-hoc ML-reflection diagnostic; original endpoints unchanged; mirror is not interchangeable for hemisphere, anatomical-site localization or surgery",
+  "reflection_ap_dv_ml": [
+    [
+      1,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      0
+    ],
+    [
+      0,
+      0,
+      -1
+    ]
+  ],
+  "angular_formula": "degrees(acos(max(abs(n_truth dot n_pred),abs(n_truth dot S_ML n_pred))))",
+  "top32_scope": "Truth-selected best normal among32 highest-probability cells; optimistic normal-only candidate capture, not achieved registration",
+  "probability_scope": "Raw uncalibrated full-catalogue probability marginal over offset/roll; union cones avoid double counting; no coordinate/hemisphere correctness claim",
+  "offsets_checked": false,
+  "catalogue_support_origin_ap_dv_ml_um": [
+    6600.0,
+    3862.5,
+    5700.0
+  ],
+  "results": {
+    "joint_v6_proposal_curriculum_003": {
+      "step": 20000,
+      "raw_sha256": "1f7aa72e7e0d564c6024d2b9f8ce0e37ffffe106329eaf130e6ee147868f2dbe",
+      "aggregates": {
+        "all": {
+          "row_count": 640,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 43.726497834772466,
+            "map_reflection_minimum_angle_deg": 27.489302710459366,
+            "top32_best_absolute_angle_deg": 17.065811858255223,
+            "top32_best_reflection_minimum_angle_deg": 14.309112302422687,
+            "top32_unique_normal_count": 16.9875,
+            "normal_mass_within_5deg_true": 0.01856406628335221,
+            "normal_mass_within_5deg_reflected": 0.01917909856333395,
+            "normal_mass_within_5deg_union": 0.036781201341870004,
+            "normal_mass_within_10deg_true": 0.07071818183635378,
+            "normal_mass_within_10deg_reflected": 0.06939124667520158,
+            "normal_mass_within_10deg_union": 0.13007003055736466,
+            "normal_mass_within_15deg_true": 0.1393207711493588,
+            "normal_mass_within_15deg_reflected": 0.13786466439477943,
+            "normal_mass_within_15deg_union": 0.2516024190592243
+          }
+        },
+        "identifiable": {
+          "row_count": 611,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 43.51219900151996,
+            "map_reflection_minimum_angle_deg": 27.234990854490498,
+            "top32_best_absolute_angle_deg": 16.94722628777443,
+            "top32_best_reflection_minimum_angle_deg": 14.188490109552404,
+            "top32_unique_normal_count": 16.746937957875456,
+            "normal_mass_within_5deg_true": 0.018822062582189842,
+            "normal_mass_within_5deg_reflected": 0.019543939573158066,
+            "normal_mass_within_5deg_union": 0.03736927884723838,
+            "normal_mass_within_10deg_true": 0.07207482673567363,
+            "normal_mass_within_10deg_reflected": 0.07067069948517066,
+            "normal_mass_within_10deg_union": 0.1323657370516555,
+            "normal_mass_within_15deg_true": 0.1421748165873609,
+            "normal_mass_within_15deg_reflected": 0.1405394956864135,
+            "normal_mass_within_15deg_union": 0.2563337871189216
+          }
+        },
+        "smart-brush-absent": {
+          "row_count": 213,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 46.54740978750216,
+            "map_reflection_minimum_angle_deg": 30.08925978949585,
+            "top32_best_absolute_angle_deg": 19.464066525373777,
+            "top32_best_reflection_minimum_angle_deg": 16.323567362559896,
+            "top32_unique_normal_count": 16.925833333333333,
+            "normal_mass_within_5deg_true": 0.015472710740978498,
+            "normal_mass_within_5deg_reflected": 0.015869849174213767,
+            "normal_mass_within_5deg_union": 0.031238884637537333,
+            "normal_mass_within_10deg_true": 0.05521477735251654,
+            "normal_mass_within_10deg_reflected": 0.05706588741423198,
+            "normal_mass_within_10deg_union": 0.10758967232920616,
+            "normal_mass_within_15deg_true": 0.11112463122738594,
+            "normal_mass_within_15deg_reflected": 0.11633643732698648,
+            "normal_mass_within_15deg_union": 0.21267915352240951
+          }
+        },
+        "smart-brush-accurate": {
+          "row_count": 214,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 42.24490681870803,
+            "map_reflection_minimum_angle_deg": 25.373507067842553,
+            "top32_best_absolute_angle_deg": 15.290534693546117,
+            "top32_best_reflection_minimum_angle_deg": 12.887559387676408,
+            "top32_unique_normal_count": 16.74583333333333,
+            "normal_mass_within_5deg_true": 0.02113165995579846,
+            "normal_mass_within_5deg_reflected": 0.022437194124712605,
+            "normal_mass_within_5deg_union": 0.04188542979495893,
+            "normal_mass_within_10deg_true": 0.0834687618553391,
+            "normal_mass_within_10deg_reflected": 0.08423900752898238,
+            "normal_mass_within_10deg_union": 0.15087410975713683,
+            "normal_mass_within_15deg_true": 0.1615871610878055,
+            "normal_mass_within_15deg_reflected": 0.16404055432876774,
+            "normal_mass_within_15deg_union": 0.2834439823985887
+          }
+        },
+        "smart-brush-imperfect": {
+          "row_count": 213,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 42.57498843726387,
+            "map_reflection_minimum_angle_deg": 26.67835622964692,
+            "top32_best_absolute_angle_deg": 16.161436142125417,
+            "top32_best_reflection_minimum_angle_deg": 13.52712024474312,
+            "top32_unique_normal_count": 17.27583333333333,
+            "normal_mass_within_5deg_true": 0.01946763932524127,
+            "normal_mass_within_5deg_reflected": 0.019706860642353503,
+            "normal_mass_within_5deg_union": 0.03808385282676478,
+            "normal_mass_within_10deg_true": 0.07471899867928916,
+            "normal_mass_within_10deg_reflected": 0.0678650985092856,
+            "normal_mass_within_10deg_union": 0.13414826220960543,
+            "normal_mass_within_15deg_true": 0.1470547057568711,
+            "normal_mass_within_15deg_reflected": 0.13514053852641267,
+            "normal_mass_within_15deg_union": 0.2623846875210281
+          }
+        }
+      },
+      "severe_error_rescue": {
+        "map": {
+          "original_over30_count": 388,
+          "over30_to_under10_count": 49,
+          "fraction_of_original_over30": 0.12628865979381443,
+          "fraction_of_all_rows": 0.0765625,
+          "row_indices": [
+            12,
+            21,
+            48,
+            53,
+            61,
+            63,
+            88,
+            94,
+            105,
+            132,
+            146,
+            155,
+            176,
+            196,
+            199,
+            210,
+            211,
+            213,
+            250,
+            251,
+            260,
+            264,
+            266,
+            295,
+            305,
+            306,
+            322,
+            328,
+            338,
+            372,
+            380,
+            385,
+            405,
+            458,
+            468,
+            480,
+            484,
+            521,
+            522,
+            530,
+            542,
+            553,
+            565,
+            588,
+            610,
+            626,
+            633,
+            634,
+            635
+          ],
+          "original_under10_count": 72,
+          "reflection_minimum_under10_count": 130
+        },
+        "top32_best": {
+          "original_over30_count": 125,
+          "over30_to_under10_count": 10,
+          "fraction_of_original_over30": 0.08,
+          "fraction_of_all_rows": 0.015625,
+          "row_indices": [
+            156,
+            212,
+            219,
+            275,
+            297,
+            385,
+            475,
+            502,
+            523,
+            566
+          ],
+          "original_under10_count": 314,
+          "reflection_minimum_under10_count": 359
+        }
+      },
+      "prediction_shuffle_control": {
+        "scope": "100 deterministic cross-section shuffles of the same predictions; descriptive geometric control, not a biological significance test",
+        "mean": {
+          "map_absolute_angle_deg": 57.50650236804658,
+          "map_reflection_minimum_angle_deg": 46.26819324476835,
+          "top32_best_absolute_angle_deg": 35.3266986007546,
+          "top32_best_reflection_minimum_angle_deg": 32.49123018899505
+        }
+      },
+      "maximum_probability_mass_normalization_error": 4.687740458031442e-07
+    },
+    "joint_v6_proposal_precision_recovery_004": {
+      "step": 10000,
+      "raw_sha256": "eebc70438f28d189b9345ba027e9fb865b4dcab71f45bc57b451fabf3b84759a",
+      "aggregates": {
+        "all": {
+          "row_count": 640,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 47.64165924547517,
+            "map_reflection_minimum_angle_deg": 35.185013342170194,
+            "top32_best_absolute_angle_deg": 27.770637816286875,
+            "top32_best_reflection_minimum_angle_deg": 20.459892009572933,
+            "top32_unique_normal_count": 16.0765625,
+            "normal_mass_within_5deg_true": 0.010226067498759376,
+            "normal_mass_within_5deg_reflected": 0.01013860809474201,
+            "normal_mass_within_5deg_union": 0.01987623893142673,
+            "normal_mass_within_10deg_true": 0.038412499069632,
+            "normal_mass_within_10deg_reflected": 0.03844636649367833,
+            "normal_mass_within_10deg_union": 0.07278632636276677,
+            "normal_mass_within_15deg_true": 0.08193292229725167,
+            "normal_mass_within_15deg_reflected": 0.08334428177152439,
+            "normal_mass_within_15deg_union": 0.15187156168610044
+          }
+        },
+        "identifiable": {
+          "row_count": 611,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 47.37256456304973,
+            "map_reflection_minimum_angle_deg": 34.958670888371536,
+            "top32_best_absolute_angle_deg": 27.58647451179691,
+            "top32_best_reflection_minimum_angle_deg": 20.325102215656738,
+            "top32_unique_normal_count": 15.892201236263736,
+            "normal_mass_within_5deg_true": 0.010453970961402432,
+            "normal_mass_within_5deg_reflected": 0.010269775769137167,
+            "normal_mass_within_5deg_union": 0.020224198080227674,
+            "normal_mass_within_10deg_true": 0.03935034083951542,
+            "normal_mass_within_10deg_reflected": 0.038901997791158306,
+            "normal_mass_within_10deg_union": 0.0740097950642853,
+            "normal_mass_within_15deg_true": 0.08366684375121673,
+            "normal_mass_within_15deg_reflected": 0.08422558984341831,
+            "normal_mass_within_15deg_union": 0.15388899740711823
+          }
+        },
+        "smart-brush-absent": {
+          "row_count": 213,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 49.624972682562294,
+            "map_reflection_minimum_angle_deg": 39.40153342229957,
+            "top32_best_absolute_angle_deg": 30.91363213786537,
+            "top32_best_reflection_minimum_angle_deg": 24.517555124442136,
+            "top32_unique_normal_count": 16.018333333333334,
+            "normal_mass_within_5deg_true": 0.007263427410330617,
+            "normal_mass_within_5deg_reflected": 0.00718245567751655,
+            "normal_mass_within_5deg_union": 0.014195117863961071,
+            "normal_mass_within_10deg_true": 0.0295705844446306,
+            "normal_mass_within_10deg_reflected": 0.027710960650785037,
+            "normal_mass_within_10deg_union": 0.0536344551957366,
+            "normal_mass_within_15deg_true": 0.06340402593808672,
+            "normal_mass_within_15deg_reflected": 0.06102971627669229,
+            "normal_mass_within_15deg_union": 0.11313554275681317
+          }
+        },
+        "smart-brush-accurate": {
+          "row_count": 214,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 44.80048368638033,
+            "map_reflection_minimum_angle_deg": 31.9996219784853,
+            "top32_best_absolute_angle_deg": 24.659742689871916,
+            "top32_best_reflection_minimum_angle_deg": 16.71405207817161,
+            "top32_unique_normal_count": 16.631666666666668,
+            "normal_mass_within_5deg_true": 0.0140442303377036,
+            "normal_mass_within_5deg_reflected": 0.012274609528432246,
+            "normal_mass_within_5deg_union": 0.025517493969643874,
+            "normal_mass_within_10deg_true": 0.048128992982234664,
+            "normal_mass_within_10deg_reflected": 0.048881025153445695,
+            "normal_mass_within_10deg_union": 0.09065434116469737,
+            "normal_mass_within_15deg_true": 0.09977610698335145,
+            "normal_mass_within_15deg_reflected": 0.1052154391046797,
+            "normal_mass_within_15deg_union": 0.1848573264682698
+          }
+        },
+        "smart-brush-imperfect": {
+          "row_count": 213,
+          "synthetic_group_macro": {
+            "map_absolute_angle_deg": 48.39023090853373,
+            "map_reflection_minimum_angle_deg": 34.08671131907911,
+            "top32_best_absolute_angle_deg": 27.52595049397114,
+            "top32_best_reflection_minimum_angle_deg": 19.841733911726333,
+            "top32_unique_normal_count": 15.569166666666666,
+            "normal_mass_within_5deg_true": 0.009453700580705623,
+            "normal_mass_within_5deg_reflected": 0.0109953535687068,
+            "normal_mass_within_5deg_union": 0.02003873751845773,
+            "normal_mass_within_10deg_true": 0.03814445862260593,
+            "normal_mass_within_10deg_reflected": 0.03889909938828875,
+            "normal_mass_within_10deg_union": 0.07463798784796986,
+            "normal_mass_within_15deg_true": 0.08363184635412127,
+            "normal_mass_within_15deg_reflected": 0.08421231756675249,
+            "normal_mass_within_15deg_union": 0.158638733861457
+          }
+        }
+      },
+      "severe_error_rescue": {
+        "map": {
+          "original_over30_count": 444,
+          "over30_to_under10_count": 18,
+          "fraction_of_original_over30": 0.04054054054054054,
+          "fraction_of_all_rows": 0.028125,
+          "row_indices": [
+            49,
+            63,
+            82,
+            90,
+            96,
+            164,
+            202,
+            240,
+            244,
+            330,
+            343,
+            354,
+            380,
+            543,
+            547,
+            549,
+            553,
+            580
+          ],
+          "original_under10_count": 33,
+          "reflection_minimum_under10_count": 54
+        },
+        "top32_best": {
+          "original_over30_count": 254,
+          "over30_to_under10_count": 40,
+          "fraction_of_original_over30": 0.15748031496062992,
+          "fraction_of_all_rows": 0.0625,
+          "row_indices": [
+            31,
+            46,
+            63,
+            75,
+            76,
+            77,
+            105,
+            148,
+            156,
+            181,
+            185,
+            196,
+            203,
+            219,
+            220,
+            222,
+            225,
+            260,
+            295,
+            342,
+            378,
+            381,
+            390,
+            400,
+            409,
+            413,
+            427,
+            462,
+            465,
+            472,
+            484,
+            495,
+            500,
+            529,
+            533,
+            547,
+            564,
+            565,
+            621,
+            626
+          ],
+          "original_under10_count": 173,
+          "reflection_minimum_under10_count": 259
+        }
+      },
+      "prediction_shuffle_control": {
+        "scope": "100 deterministic cross-section shuffles of the same predictions; descriptive geometric control, not a biological significance test",
+        "mean": {
+          "map_absolute_angle_deg": 57.437504819761635,
+          "map_reflection_minimum_angle_deg": 46.253476075120176,
+          "top32_best_absolute_angle_deg": 38.934002804633636,
+          "top32_best_reflection_minimum_angle_deg": 32.03665157804801
+        }
+      },
+      "maximum_probability_mass_normalization_error": 6.227318946061544e-07
+    }
+  }
+}

@@ -1,0 +1,800 @@
+{
+  "scope": "Targeted CPU NumPy OUV/cross-product convention audit of frozen003; no model inference, no GPU, no active005 access",
+  "rows": 640,
+  "helpers_used": "None: full_frame_state_to_components and all geometry helpers deliberately not imported",
+  "independent_group_macro_normal_error_deg": 43.72649783477247,
+  "independent_mean_normal_error_rad": 0.7631713575829511,
+  "signed_direction_mean_error_deg": 52.06380254051178,
+  "signed_angle_folded_to_plane_max_difference_rad": 4.440892098500626e-16,
+  "acos_vs_independent_atan2_max_difference_deg": 5.777600620149315e-13,
+  "maximum_error_from_saved_per_row_metric_deg": 6.090683513093609e-13,
+  "maximum_error_using_direct_quicknii_vectors_deg": 2.1049828546892968e-13,
+  "quicknii_geometry_row_receipts_match": true,
+  "quicknii_normal_vs_state_normal_max_vector_difference": 4.440892098500626e-16,
+  "predicted_ouv_normal_vs_stored_catalogue_normal_max_vector_difference": 2.220446049250313e-16,
+  "unit_normal_max_norm_error": 2.220446049250313e-16,
+  "all_48_shared_signed_axis_conventions_max_angle_difference_deg": 4.36206626375224e-13,
+  "one_sided_fixed_axis_conventions": [
+    {
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        -1,
+        -1,
+        1
+      ],
+      "mean_deg": 42.6956835368759,
+      "median_deg": 39.658635160805034,
+      "under5_count": 21,
+      "under10_count": 72
+    },
+    {
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        1,
+        1,
+        -1
+      ],
+      "mean_deg": 42.6956835368759,
+      "median_deg": 39.658635160805034,
+      "under5_count": 21,
+      "under10_count": 72
+    },
+    {
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        -1,
+        -1,
+        -1
+      ],
+      "mean_deg": 43.72649783477247,
+      "median_deg": 42.100232683860476,
+      "under5_count": 21,
+      "under10_count": 72
+    },
+    {
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        1,
+        1,
+        1
+      ],
+      "mean_deg": 43.72649783477247,
+      "median_deg": 42.100232683860476,
+      "under5_count": 21,
+      "under10_count": 72
+    },
+    {
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        -1,
+        1,
+        1
+      ],
+      "mean_deg": 50.869537759289,
+      "median_deg": 53.50367579061722,
+      "under5_count": 12,
+      "under10_count": 36
+    },
+    {
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        1,
+        -1,
+        -1
+      ],
+      "mean_deg": 50.869537759289,
+      "median_deg": 53.50367579061722,
+      "under5_count": 12,
+      "under10_count": 36
+    },
+    {
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        -1,
+        1,
+        -1
+      ],
+      "mean_deg": 51.2078290064527,
+      "median_deg": 51.742341530136386,
+      "under5_count": 6,
+      "under10_count": 26
+    },
+    {
+      "permutation": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        1,
+        -1,
+        1
+      ],
+      "mean_deg": 51.2078290064527,
+      "median_deg": 51.742341530136386,
+      "under5_count": 6,
+      "under10_count": 26
+    },
+    {
+      "permutation": [
+        1,
+        0,
+        2
+      ],
+      "signs": [
+        -1,
+        -1,
+        1
+      ],
+      "mean_deg": 52.166662358309964,
+      "median_deg": 55.18399618069105,
+      "under5_count": 7,
+      "under10_count": 26
+    },
+    {
+      "permutation": [
+        1,
+        0,
+        2
+      ],
+      "signs": [
+        1,
+        1,
+        -1
+      ],
+      "mean_deg": 52.166662358309964,
+      "median_deg": 55.18399618069105,
+      "under5_count": 7,
+      "under10_count": 26
+    },
+    {
+      "permutation": [
+        1,
+        0,
+        2
+      ],
+      "signs": [
+        -1,
+        -1,
+        -1
+      ],
+      "mean_deg": 53.87037493542749,
+      "median_deg": 57.65060816764242,
+      "under5_count": 6,
+      "under10_count": 25
+    },
+    {
+      "permutation": [
+        1,
+        0,
+        2
+      ],
+      "signs": [
+        1,
+        1,
+        1
+      ],
+      "mean_deg": 53.87037493542749,
+      "median_deg": 57.65060816764242,
+      "under5_count": 6,
+      "under10_count": 25
+    },
+    {
+      "permutation": [
+        2,
+        1,
+        0
+      ],
+      "signs": [
+        -1,
+        -1,
+        1
+      ],
+      "mean_deg": 55.87456444515017,
+      "median_deg": 60.00577128696962,
+      "under5_count": 3,
+      "under10_count": 20
+    },
+    {
+      "permutation": [
+        2,
+        1,
+        0
+      ],
+      "signs": [
+        1,
+        1,
+        -1
+      ],
+      "mean_deg": 55.87456444515017,
+      "median_deg": 60.00577128696962,
+      "under5_count": 3,
+      "under10_count": 20
+    },
+    {
+      "permutation": [
+        0,
+        2,
+        1
+      ],
+      "signs": [
+        -1,
+        -1,
+        1
+      ],
+      "mean_deg": 57.02960485788069,
+      "median_deg": 61.3486308635989,
+      "under5_count": 2,
+      "under10_count": 10
+    },
+    {
+      "permutation": [
+        0,
+        2,
+        1
+      ],
+      "signs": [
+        1,
+        1,
+        -1
+      ],
+      "mean_deg": 57.02960485788069,
+      "median_deg": 61.3486308635989,
+      "under5_count": 2,
+      "under10_count": 10
+    },
+    {
+      "permutation": [
+        0,
+        2,
+        1
+      ],
+      "signs": [
+        -1,
+        -1,
+        -1
+      ],
+      "mean_deg": 57.51345746220265,
+      "median_deg": 61.469067329804275,
+      "under5_count": 5,
+      "under10_count": 12
+    },
+    {
+      "permutation": [
+        0,
+        2,
+        1
+      ],
+      "signs": [
+        1,
+        1,
+        1
+      ],
+      "mean_deg": 57.51345746220265,
+      "median_deg": 61.469067329804275,
+      "under5_count": 5,
+      "under10_count": 12
+    },
+    {
+      "permutation": [
+        2,
+        1,
+        0
+      ],
+      "signs": [
+        -1,
+        -1,
+        -1
+      ],
+      "mean_deg": 57.60170723419445,
+      "median_deg": 62.35336865581647,
+      "under5_count": 4,
+      "under10_count": 8
+    },
+    {
+      "permutation": [
+        2,
+        1,
+        0
+      ],
+      "signs": [
+        1,
+        1,
+        1
+      ],
+      "mean_deg": 57.60170723419445,
+      "median_deg": 62.35336865581647,
+      "under5_count": 4,
+      "under10_count": 8
+    },
+    {
+      "permutation": [
+        0,
+        2,
+        1
+      ],
+      "signs": [
+        -1,
+        1,
+        -1
+      ],
+      "mean_deg": 57.91507585559602,
+      "median_deg": 61.34268852344333,
+      "under5_count": 5,
+      "under10_count": 12
+    },
+    {
+      "permutation": [
+        0,
+        2,
+        1
+      ],
+      "signs": [
+        1,
+        -1,
+        1
+      ],
+      "mean_deg": 57.91507585559602,
+      "median_deg": 61.34268852344333,
+      "under5_count": 5,
+      "under10_count": 12
+    },
+    {
+      "permutation": [
+        0,
+        2,
+        1
+      ],
+      "signs": [
+        -1,
+        1,
+        1
+      ],
+      "mean_deg": 58.214815459132545,
+      "median_deg": 61.90467190601137,
+      "under5_count": 6,
+      "under10_count": 17
+    },
+    {
+      "permutation": [
+        0,
+        2,
+        1
+      ],
+      "signs": [
+        1,
+        -1,
+        -1
+      ],
+      "mean_deg": 58.214815459132545,
+      "median_deg": 61.90467190601137,
+      "under5_count": 6,
+      "under10_count": 17
+    },
+    {
+      "permutation": [
+        2,
+        1,
+        0
+      ],
+      "signs": [
+        -1,
+        1,
+        -1
+      ],
+      "mean_deg": 58.68984072219628,
+      "median_deg": 61.83824950922402,
+      "under5_count": 4,
+      "under10_count": 9
+    },
+    {
+      "permutation": [
+        2,
+        1,
+        0
+      ],
+      "signs": [
+        1,
+        -1,
+        1
+      ],
+      "mean_deg": 58.68984072219628,
+      "median_deg": 61.83824950922402,
+      "under5_count": 4,
+      "under10_count": 9
+    },
+    {
+      "permutation": [
+        2,
+        1,
+        0
+      ],
+      "signs": [
+        -1,
+        1,
+        1
+      ],
+      "mean_deg": 58.97415274282431,
+      "median_deg": 62.37860825938971,
+      "under5_count": 1,
+      "under10_count": 10
+    },
+    {
+      "permutation": [
+        2,
+        1,
+        0
+      ],
+      "signs": [
+        1,
+        -1,
+        -1
+      ],
+      "mean_deg": 58.97415274282431,
+      "median_deg": 62.37860825938971,
+      "under5_count": 1,
+      "under10_count": 10
+    },
+    {
+      "permutation": [
+        1,
+        2,
+        0
+      ],
+      "signs": [
+        -1,
+        -1,
+        1
+      ],
+      "mean_deg": 60.550168669633045,
+      "median_deg": 63.202446965480945,
+      "under5_count": 1,
+      "under10_count": 3
+    },
+    {
+      "permutation": [
+        1,
+        2,
+        0
+      ],
+      "signs": [
+        1,
+        1,
+        -1
+      ],
+      "mean_deg": 60.550168669633045,
+      "median_deg": 63.202446965480945,
+      "under5_count": 1,
+      "under10_count": 3
+    },
+    {
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "signs": [
+        -1,
+        -1,
+        1
+      ],
+      "mean_deg": 60.7114227611886,
+      "median_deg": 64.48435332970817,
+      "under5_count": 2,
+      "under10_count": 7
+    },
+    {
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "signs": [
+        1,
+        1,
+        -1
+      ],
+      "mean_deg": 60.7114227611886,
+      "median_deg": 64.48435332970817,
+      "under5_count": 2,
+      "under10_count": 7
+    },
+    {
+      "permutation": [
+        1,
+        0,
+        2
+      ],
+      "signs": [
+        -1,
+        1,
+        1
+      ],
+      "mean_deg": 60.77517906715791,
+      "median_deg": 64.38272000116203,
+      "under5_count": 1,
+      "under10_count": 10
+    },
+    {
+      "permutation": [
+        1,
+        0,
+        2
+      ],
+      "signs": [
+        1,
+        -1,
+        -1
+      ],
+      "mean_deg": 60.77517906715791,
+      "median_deg": 64.38272000116203,
+      "under5_count": 1,
+      "under10_count": 10
+    },
+    {
+      "permutation": [
+        1,
+        0,
+        2
+      ],
+      "signs": [
+        -1,
+        1,
+        -1
+      ],
+      "mean_deg": 60.81709818809789,
+      "median_deg": 65.22747781272021,
+      "under5_count": 2,
+      "under10_count": 6
+    },
+    {
+      "permutation": [
+        1,
+        0,
+        2
+      ],
+      "signs": [
+        1,
+        -1,
+        1
+      ],
+      "mean_deg": 60.81709818809789,
+      "median_deg": 65.22747781272021,
+      "under5_count": 2,
+      "under10_count": 6
+    },
+    {
+      "permutation": [
+        1,
+        2,
+        0
+      ],
+      "signs": [
+        -1,
+        -1,
+        -1
+      ],
+      "mean_deg": 61.58014640543506,
+      "median_deg": 64.68872209829112,
+      "under5_count": 4,
+      "under10_count": 10
+    },
+    {
+      "permutation": [
+        1,
+        2,
+        0
+      ],
+      "signs": [
+        1,
+        1,
+        1
+      ],
+      "mean_deg": 61.58014640543506,
+      "median_deg": 64.68872209829112,
+      "under5_count": 4,
+      "under10_count": 10
+    },
+    {
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "signs": [
+        -1,
+        1,
+        -1
+      ],
+      "mean_deg": 62.37446846366051,
+      "median_deg": 65.79321642842837,
+      "under5_count": 2,
+      "under10_count": 6
+    },
+    {
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "signs": [
+        1,
+        -1,
+        1
+      ],
+      "mean_deg": 62.37446846366051,
+      "median_deg": 65.79321642842837,
+      "under5_count": 2,
+      "under10_count": 6
+    },
+    {
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "signs": [
+        -1,
+        1,
+        1
+      ],
+      "mean_deg": 62.53810487220464,
+      "median_deg": 66.05240460363429,
+      "under5_count": 2,
+      "under10_count": 4
+    },
+    {
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "signs": [
+        1,
+        -1,
+        -1
+      ],
+      "mean_deg": 62.53810487220464,
+      "median_deg": 66.05240460363429,
+      "under5_count": 2,
+      "under10_count": 4
+    },
+    {
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "signs": [
+        -1,
+        -1,
+        -1
+      ],
+      "mean_deg": 62.60966566028752,
+      "median_deg": 65.89532221379449,
+      "under5_count": 2,
+      "under10_count": 7
+    },
+    {
+      "permutation": [
+        2,
+        0,
+        1
+      ],
+      "signs": [
+        1,
+        1,
+        1
+      ],
+      "mean_deg": 62.60966566028752,
+      "median_deg": 65.89532221379449,
+      "under5_count": 2,
+      "under10_count": 7
+    },
+    {
+      "permutation": [
+        1,
+        2,
+        0
+      ],
+      "signs": [
+        -1,
+        1,
+        -1
+      ],
+      "mean_deg": 62.780239933737775,
+      "median_deg": 65.41959185356797,
+      "under5_count": 0,
+      "under10_count": 7
+    },
+    {
+      "permutation": [
+        1,
+        2,
+        0
+      ],
+      "signs": [
+        1,
+        -1,
+        1
+      ],
+      "mean_deg": 62.780239933737775,
+      "median_deg": 65.41959185356797,
+      "under5_count": 0,
+      "under10_count": 7
+    },
+    {
+      "permutation": [
+        1,
+        2,
+        0
+      ],
+      "signs": [
+        -1,
+        1,
+        1
+      ],
+      "mean_deg": 63.34614892487347,
+      "median_deg": 66.41932558177814,
+      "under5_count": 0,
+      "under10_count": 4
+    },
+    {
+      "permutation": [
+        1,
+        2,
+        0
+      ],
+      "signs": [
+        1,
+        -1,
+        -1
+      ],
+      "mean_deg": 63.34614892487347,
+      "median_deg": 66.41932558177814,
+      "under5_count": 0,
+      "under10_count": 4
+    }
+  ],
+  "permutation_search_scope": "A single fixed convention applied to every predicted normal; diagnostic only, never used to replace endpoints; 48 includes antipodally redundant transforms",
+  "row_shuffle_100_mean_deg": 57.506502368046576,
+  "row_shuffle_100_mean_range_deg": [
+    55.220703923135574,
+    59.039531122645506
+  ],
+  "row_shift_1_mean_deg": 59.08516144182539,
+  "conclusion": "No angle-unit, antipodal folding, cross-product, constant axis/sign convention, or saved-truth conversion discrepancy found. This does not prove the whole learning pipeline is bug-free.",
+  "next_discriminating_experiment": "A fixed tiny eight-identifiable-case full encoder+98304-cell proposal-head overfit, preserving actual images, labels, objective and corrected FP32 head; first establish memorization/quantization-limited geometry before another large run.",
+  "final_rows_sha256": "da976905e2a75d3cac22ef60e661701fa492f38dc50440c0fc2ead9feff96ec8",
+  "dev_prepared_sha256": "89e078582aaa365299d9823deb2a005308f360ab8909db7125a4534556d622c4",
+  "catalogue_sha256": "9b49d203cc73ce3a66e648bbe5228231eb5cc9c17d5db4669eefe0f08ae22c71",
+  "manifest_sha256": "6dafbe151bc083a3701e2aa1add5eafa862997ecf56cd6fcd474cc3f79cd63af"
+}
