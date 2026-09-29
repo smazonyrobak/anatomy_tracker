@@ -1,7 +1,8 @@
-# Coherent acquisition views 001 — draft protocol only
+# Coherent acquisition views 001 — frozen generation protocol
 
-Prepared without generation, model execution, or access to the live signed-pose
-or canonical-rehearsal runs. Proposed output:
+The flat generator `training/prepare_joint_v6_coherent_acquisition_views.py`
+passed root and independent source review; ready for committed generation.
+No model execution or live signed-pose output access is involved. Output:
 `I:/AnatomyTracker/data/joint_v6_coherent_acquisition_views_001`.
 Generate **128 new physical sections, 16 per existing TRAIN subject, and three
 paired presentations per section: 384 observations**. Reuse the eight accepted
@@ -29,6 +30,9 @@ not replace them or authorize a training launch.
   substitute the array origin, bregma, tissue centroid, or full-volume box centre.
   The existing plan context SHA256 is
   `c3bd31cc81af2788437cfd064f4cbf44d1d9f111919031c4c691552e796d94a8`.
+  Exact S is `[6600.0,3862.5,5700.0]` micrometres; catalogue
+  `I:/AnatomyTracker/runs/joint_v6_proposal_substantive_001/catalogue.pt`
+  SHA256 `9b49d203cc73ce3a66e648bbe5228231eb5cc9c17d5db4669eefe0f08ae22c71`.
 
 For each recorded 3x3 affine A mapping model pixel (x,y,1) to physical AP/DV/ML,
 set O=A[:,2], U=96*A[:,0], V=96*A[:,1]. The stored half-voxel conversion is already
