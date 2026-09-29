@@ -8,39 +8,44 @@ data, temporary files and runs belong on `I:`.
 
 - Image-key001 is completed and independently audited: candidate-stage gate
   passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%
-  remain inadequate. Whole step4,000 checkpoint is the next joint parent.
+  remain inadequate. Its whole step4,000 checkpoint is the native ribbon parent.
 - The raw Allen diagnostic, terminal52827 EXIT0 from `c9a94c6`, completed64
   images from6 development donors. Donor-macro normal error45.05058deg,
   normal-offset error4150.58um, top32/top128 plane capture9.09091%/21.36364%.
   Synthetic improvement has not established raw-image transfer. These upstream
   affine references are not expert anatomical ground truth or a final benchmark.
-- Native conditional pose+ribbon trainer/protocol are prepared at `afc4196`:
-  `training/run_joint_v6_ribbon_local.py`. Dataset completion is intentionally
-  unbound. No native learning has been launched yet.
-- CPU coherent-plan generation9774 exited0 with all12 maps. All71 inventory
-  files authenticate; completion83fa8fc0ab19f15c8b64babdfe1e98251a972c6759dade08e5513e70c76a7c89.
-  Section generator68817 is active fromac7cb17 for640 sections/1,920 observations;
-  its complete output tree is protected until exit. Bind the native trainer only
-  after section-generation exit and the prepared target-capacity screen.
-- Matched optional-outline-dropout comparison65125 is active from14aa9fa.
-  Two whole-parent continuations apply2,000 updates each; only B drops optional
-  boundary/availability on half the available training observations. Its entire
-  output tree and operative sources remain protected until both arms exit.
-  Fixed gates require both real-donor improvements and synthetic retention;
-  no six-donor development fitting or public benchmarking.
-  `training/audit_joint_v6_imagekey_outline_dropout.py` is prepared and reviewed;
-  set its completion pin and run only after both arms exit. No result yet.
-- These two processes overlap modest CUDA coordinate mapping with training.
-  Timings are not isolated performance measurements or benchmark comparisons.
-- Next real-domain control is prepared, not launched:
-  `training/run_joint_v6_imagekey_real_synthetic.py` has a false launch guard.
-  It pairs256 unchanged real training images/58 donors with continuous upstream
-  affine atlas renders, plus arbitrary-plane synthetic replay. No dense real
-  warp labels or registration covariance are fabricated. Parent choice awaits
-  the A/B audit; the native conditional control remains a separate fixed experiment.
+- Coherent-plan generation9774 and section generation68817 both exited0.
+  The frozen cohort retains640 sections/1,920 observations:512 train sections
+  from8 synthetic subjects and128 development sections from4 separate subjects,
+  with zero rejected draws. Section generation took1343.483s.
+- Target-capacity audit36825 exited0 and authenticated all640 section artifacts.
+  Surface/director maxima150.933um/.148847 and derivative bound.178064 remain
+  below native200um/.2/.35 limits; no cap or rescaling activates. Maximum
+  through-slab linear-fit point error is.257013um. This is target geometry,
+  not decoder learnability or biological validation. [Capacity result](COHERENT_RIBBON_TARGET_CAPACITY_002_RESULT_20260929.md).
+- Optional-outline-dropout comparison65125 and its independent audit completed.
+  Integrity passes but the dropout improvement gate fails; do not promote B or
+  tune on the six development donors. Whole control A6k is the next real-training
+  warm start, not a qualified model. [Audited result](IMAGEKEY_OUTLINE_DROPOUT_001_RESULT_20260929.md).
+- Real+synthetic001 is **active**, session42210 from `3d37b71`, continuing whole
+  A6k. It pairs256 unchanged real training images/58 donors with continuous
+  upstream affine atlas renders and arbitrary-plane synthetic replay. No dense
+  real warp labels or registration covariance are fabricated.
+- Native conditional pose+ribbon001 is **active**, session89162 from `dc32605`,
+  with the completed cohort bound and the original whole image-key4k parent.
+  It is a separate truth-near, known-PSF local control, not global inference.
+  No independently trained encoders are merged.
+- Both active training output trees and operative sources are protected until
+  their respective exits; inspect only live stdout/telemetry. Independent endpoint
+  audits follow exit. Concurrent timings are not hardware benchmarks.
+- After real+synthetic exits, independently audit its endpoint and apply the
+  frozen gates. After native exits, audit the raw held-out curved coordinates
+  and geometry, then decide actual retrieved-beam initialization versus revised
+  learning. A successful real warm start needs subsequent native training of
+  that **whole model**, not splicing in this independently trained native control.
 - No heartbeat or additional user prompt is needed for these native-goal steps.
 
-## Current experiment decision
+## Completed planar/SVF experiment decisions
 
 - Local001 (`I:/AnatomyTracker/runs/joint_v6_local_refinement_001`) completed
   all 4,000 applied updates; session `6220` exited zero. The independent audit
@@ -113,8 +118,11 @@ path, disabled and untrained. It is not GUI capability or calibrated inference;
 hard slice bounds, surgical ray/entry/angle and coherent stack inference still
 need their correct native wiring. Exact limitations and conditioned-tail issues
 remain documented in [constraint gaps](JOINT_CONSTRAINT_INTEGRATION_GAPS_20260929.md).
-Use `final_pullback_map_yx_px` for observed mark → atlas-raster mapping, then
-reflection → physical OUV; the current forward-map field is only an alias.
+For native ribbon inference, map raw-display marks through the recorded
+raw-to-model raster transform, then interpolate the **final observed centre CCF
+surface**. Its raster reflection is already applied: do not flip again or reduce
+the surface to a flat OUV. The pullback→reflection→OUV adapter applies only to
+the legacy planar/SVF path. Neither adapter is yet a calibrated GUI integration.
 
 Coherent synthetic subjects require a representation extension: nonlinear3D
 anatomy maps a cut plane into a curved CCF surface, not just an in-plane2D warp.
@@ -139,7 +147,8 @@ physical derivative bound. These are representation/geometry checks, not model
 accuracy or biological validation. The [opt-in native recurrent ribbon path](NATIVE_CURVED_RIBBON_PATH_20260929.md)
 is now implemented in the same joint model: each reflection hypothesis keeps
 its own pose/field, re-renders the actual curved slab, and uses the shared updater.
-It remains untrained. A bounded actual-data GPU forward/backward now passes;
+Its first conditional learning control is now active, with no completed learning
+result yet. A bounded actual-data GPU forward/backward passes;
 a tiny FP32 normalization-order mismatch was diagnosed and corrected without
 changing physical geometry or relaxing the parity gate. Existing forward and
 the completed rehearsal driver are unchanged. No coherent-subject learning is
@@ -149,8 +158,9 @@ The [12-subject coherent cohort](COHERENT_SUBJECT_COHORT_002_PROTOCOL_20260929.m
 finished from committed source `673b8fc`, session `9774` EXIT0, with every
 predeclared plan accepted and its71-file completion inventory authenticated.
 Eight training and four development subject maps retain their preassigned IDs.
-Its separate section-generation stage is now active, session68817; do not access
-`I:/AnatomyTracker/data/joint_v6_coherent_subject_cohort_sections_002` until exit.
+Its separate section-generation stage68817 exited0; the section cohort and
+target-capacity audit are frozen and readable. Every censored draw is retained.
+The native training run consuming these data remains protected while active.
 
 The [fresh image-key retrieval experiment](IMAGEKEY_RETRIEVAL_PROTOCOL_20260929.md)
 completed4,000 updates, terminal8803 EXIT0, from `edc99b8`. Its independent
@@ -159,11 +169,11 @@ Eligible group-macro normal error47.50->40.36deg and top32 physical-plane
 capture10.59%->68.46% versus original003 at the matched4k budget. However,
 full-frame corner capture within1mm is only4.28% at top32; this is not usable
 alignment accuracy. [Full result, pins and limitations](IMAGEKEY_RETRIEVAL_001_RESULT_20260929.md).
-Select its whole fresh checkpoint for conditional native ribbon learning,
-without encoder merging or imported old weights. First run a truth-near
-coherent-subject control and a separate raw Allen development transfer diagnostic;
-neither substitutes for honest global capture or real final-test qualification.
-The coherent plan-generation session9774 remains active and its tree protected.
+Its whole fresh4k checkpoint is now used by the active conditional native ribbon
+control, without encoder merging or imported old weights. The separate raw Allen
+diagnostic has already failed adequate transfer; the active real+synthetic control
+instead continues whole A6k after the negative dropout comparison. Neither path
+substitutes for honest global capture or real final-test qualification.
 
 Still required: convincing arbitrary-plane global and native joint accuracy,
 usable optional constraints, genuine animal-disjoint validation, calibrated
