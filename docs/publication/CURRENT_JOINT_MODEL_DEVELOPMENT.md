@@ -211,12 +211,20 @@ with no optimizer update; receipt SHA256
 Matched training is now active as90795/PID21188 from committed `2a86507` in
 the main integration checkout. Its output
 `I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_001` and operative
-model/runner source are protected until exit. Initial evaluation completed and
-training reached step500 with finite loss/gradients; no endpoint result is asserted.
+model/runner source are protected until exit. Terminal-only observation at
+16:35UTC reached step1600/2000 with finite loss/gradients; no endpoint result is asserted.
 A guarded adapted post-exit auditor is prepared, with completion pin unset and
 not run. Coarse session96942 has exited and its whole-A endpoint was audited;
 do not splice its encoder with this separately trained native control.
 [Prospective protocol](NORMALIZED_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
+After this endpoint is independently audited, a failed normal-learning gate
+can trigger the prepared, guarded TRAIN-only feature-Jacobian/readout comparison
+in `training/diagnose_joint_v6_train_pose_jacobian_readout.py` (`634b27c`). It
+uses one completed whole signed checkpoint, exact24 prior TRAIN observations,
+fixed oracle fields/reflection/PSF and three paired learned-versus-damped-solve
+updates; no optimizer or hyperparameter sweep. Root and independent source
+review found no correctness blocker, but it is unlaunched and off-policy,
+not qualification. [Fixed protocol and interpretation limits](TRAIN_POSE_JACOBIAN_READOUT_DISCRIMINATOR_20260929.md).
 Do not infer multiaxis or learned-deformation success from the oracle diagnostic,
 or infer that amplitude imbalance alone proves a scaling fix.
 The exact TRAIN-only acquisition-view extension in
