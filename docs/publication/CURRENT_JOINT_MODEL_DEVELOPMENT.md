@@ -17,10 +17,18 @@ data, temporary files and runs belong on `I:`.
   landmark reduction6.48%, map error1.36% worse than identity, negligible normal
   improvement. Coordinate input alone provides only5.52um extra landmark gain
   over001. [Full result](LOCAL_COORDINATE_CONTROL_002_RESULT_20260929.md).
+- Joint adaptation plus broad proposal rehearsal003 is LIVE: session `38572`,
+  Python PID `22020`, launched2026-09-29 13:35:33 Warsaw from `8b4d58f` with
+  `training/run_joint_v6_joint_rehearsal.py`. Output:
+  `I:/AnatomyTracker/runs/joint_v6_joint_rehearsal_003`.
+  Full640-row global and256-row local step0 evaluations are confirmed on stdout.
+  Never open/hash/load/change this output tree before confirmed process exit.
 - Whole parent: own-lineage `joint_v6_proposal_curriculum_003/step_20000`.
-  Global proposal/source encoder frozen; native shared recurrent pose updater,
-  atlas stem and SVF decoder learn together. No weights from old models or
-  independent encoder merging. This is one full-model checkpoint.
+  Source/shared encoder and global proposal are now trainable along with the
+  recurrent pose updater, atlas stem and SVF decoder. Each update accumulates
+  local geometry loss and broad full-cell proposal NLL before one AdamW step.
+  No weights from old models or independent encoder merging. This remains one
+  full-model checkpoint, not continuation from the failed002 endpoint.
 - Explicit limits: truth-near starts, known synthetic PSF, one atlas with
   organizational group IDs, uncalibrated probabilities. This does not measure
   image-selected global capture or biological-animal generalization.
@@ -45,7 +53,7 @@ Protocol, paired geometric baselines and fixed continuation criteria:
 
 The local001 audit is complete; its weak geometry prevents qualification.
 Matched coordinate control002 is finished. Whole-model joint unfreezing with global
-proposal rehearsal is prepared in `training/run_joint_v6_joint_rehearsal.py`;
+proposal rehearsal is running via `training/run_joint_v6_joint_rehearsal.py`;
 its [fixed protocol and retention gates](JOINT_GLOBAL_REHEARSAL_PROTOCOL_20260929.md)
 start from the same whole003 parent, not the local002 endpoint. The frozen-source engineering gate must not
 become a permanent prohibition on investigating feature adaptation if these
@@ -75,7 +83,13 @@ The [coordinate-grid PSF rendering prerequisite](COHERENT_SUBJECT_COORDINATE_REN
 and [conservative full-plane sampler](COHERENT_SUBJECT_PLANE_SAMPLING_20260929.md)
 are implemented separately from active training. The exact subject-coordinate
 adapter and first accepted subject are complete; one inspected section has27um
-RMS normal residual. A sixteen-section paired-brush preparation script is ready.
+RMS normal residual. Sixteen-section paired-brush CPU preparation is LIVE:
+session `29655`, Python PID `22044`, source `3d48a91`, launched2026-09-29
+13:36:23 Warsaw. Driver `training/prepare_joint_v6_coherent_subject_sections.py`;
+output `I:/AnatomyTracker/data/joint_v6_coherent_subject_sections_001`.
+Preserve this active output tree untouched; use stdout until confirmed exit.
+It retains all16 arbitrary-plane draws and48 paired observations from one
+shared subject, with new exact3D targets and no legacy total2D-SVF labels.
 No curved-surface predictor or coherent-subject learning is claimed from these
 primitives. Opt-in atlas-image descriptor primitives are also prepared for a
 [fresh coarse retrieval alternative](ATLAS_IMAGE_RETRIEVAL_PLAN_20260929.md),
