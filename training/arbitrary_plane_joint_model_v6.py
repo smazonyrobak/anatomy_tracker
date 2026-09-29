@@ -71,6 +71,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         spatial_residual_blocks: int = 0,
         frame_centre_offset_conditioning: bool = False,
         coordinate_evidence_conditioning: bool = False,
+        image_key_descriptor_dim: int | None = None,
     ):
         super().__init__()
         if (
@@ -100,6 +101,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             spatial_residual_blocks=spatial_residual_blocks,
             frame_centre_offset_conditioning=frame_centre_offset_conditioning,
             coordinate_evidence_conditioning=coordinate_evidence_conditioning,
+            image_key_descriptor_dim=image_key_descriptor_dim,
         )
         self.deformation_decoder = AffineFreeSVFDecoder(
             hidden_channels,

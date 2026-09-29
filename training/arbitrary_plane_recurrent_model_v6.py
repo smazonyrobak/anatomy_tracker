@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 import torch
@@ -60,6 +61,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
         spatial_residual_blocks: int = 0,
         frame_centre_offset_conditioning: bool = False,
         coordinate_evidence_conditioning: bool = False,
+        image_key_descriptor_dim: int | None = None,
     ):
         verify_complete_catalogue_runtime_v6(catalogue_runtime_v6)
         if spatial_residual_blocks < 0:
@@ -121,6 +123,41 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
                 torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0x0FF5E8)
                 self.frame_centre_offset_proposal = nn.Linear(6, feature_channels, bias=False)
                 nn.init.zeros_(self.frame_centre_offset_proposal.weight)
+        self.image_key_descriptor_dim = image_key_descriptor_dim
+        if image_key_descriptor_dim is not None:
+            if image_key_descriptor_dim < 1:
+                raise ValueError("image-key descriptor dimension must be positive")
+            # Do not alter any existing parameter initialization or later draw.
+            with torch.random.fork_rng(devices=[]):
+                torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0xA71A5)
+                self.image_key_descriptor = nn.Linear(feature_channels * 4 * 4, image_key_descriptor_dim)
+
+    def descriptor_from_features(self, features: torch.Tensor) -> torch.Tensor:
+        """Shared image-key projection of histology or atlas features, (B,F,H,W)."""
+        if self.image_key_descriptor_dim is None:
+            raise ValueError("image-key descriptors require explicit opt-in")
+        with torch.autocast(device_type=features.device.type, enabled=False):
+            pooled = F.adaptive_avg_pool2d(features.float(), (4, 4)).flatten(1)
+            descriptor = self.image_key_descriptor(pooled.to(self.image_key_descriptor.weight))
+            return F.normalize(descriptor, dim=-1)
+
+    @staticmethod
+    def image_key_cosine_logits(
+        query: torch.Tensor, bank: torch.Tensor, temperature: float,
+    ) -> torch.Tensor:
+        """(B,D), (N,R,D) -> raw (B,N,R) scores; never a sampled posterior.
+
+        Preserve R, including distinct raster-reflection keys. The caller must
+        apply representation priors and normalize over a complete catalogue.
+        This does not identify anatomical left/right reflections as equivalent.
+        """
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError("image-key temperature must be finite and positive")
+        with torch.autocast(device_type=query.device.type, enabled=False):
+            return torch.einsum(
+                "bd,nrd->bnr", F.normalize(query.float(), dim=-1),
+                F.normalize(bank.float(), dim=-1),
+            ) / temperature
 
     def encode_histology(self, image, outline, outline_available):
         features = super().encode_histology(image, outline, outline_available)
