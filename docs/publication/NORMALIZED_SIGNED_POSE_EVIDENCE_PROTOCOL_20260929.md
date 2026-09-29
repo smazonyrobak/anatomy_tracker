@@ -1,6 +1,6 @@
 # Fixed TRAIN RMS scaling of signed pose evidence
 
-Prepared matched control; **not launched**. This changes one input scaling, not
+Prepared matched control; **compatibility preflight passed; not launched**. This changes one input scaling, not
 the architecture, feature encoder, optimizer, loss, rendering or topology limits.
 All work stays on I:. The separate full-coverage coarse run remains protected.
 
@@ -71,3 +71,16 @@ A passing local gate would still not establish honest global retrieval,
 biological generalization, calibration, public-benchmark superiority or GUI
 readiness. Any future successful coarse model needs native training within its
 own whole-model lineage; this control's refiner cannot be spliced into it.
+
+## Completed compatibility preflight
+
+Session17128 exited0 from `e6c97e6`. Fresh unscaled/scaled models had identical
+parameters/state keys/CPU RNG and exact zero-head outputs; both used22 forward
+atlas encodes. One scaled backward was finite, signed-projection gradient
+norm.1785823554, with no optimizer or parameter changes. Source/model proof is
+the new-code None-versus-RMS zero-head comparison plus the reviewed default-path
+diff, not a separate archived-legacy numerical replay. Receipt:
+`I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_preflight_001/preflight.json`,
+SHA256 `1d87df5a33bd2da6df570a84108b9e9a5b0fec888ef10f4c52578b8f7f4d68c4`.
+The matched runner pins this receipt, the failed comparator audit and original
+TRAIN activation scales, and requires matching shared operative source hashes.
