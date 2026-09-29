@@ -1,6 +1,6 @@
 # Prepared control: signed native pose evidence
 
-Status: **implemented; one fixed training-batch preflight passed; matched training launched from `0e6dc0d`, terminal70497/PID7604; not completed or qualified**. All development stays on I:. The canonical-bridge comparison has exited and its audit is complete. Do not inspect this new live output tree until process exit.
+Status: **completed and independently audited; predeclared gate failed**. Matched training from `0e6dc0d` (terminal70497) and CPU audit4417 both exited0; integrity passed, but oracle centre/slab and normal gains failed the fixed20% criteria. This is not a qualified model. See the [completed result and exact audit scope](NATIVE_SIGNED_POSE_EVIDENCE_001_RESULT_20260929.md). All development stays on I:; the protocol below remains the frozen prospective contract.
 
 ## Completed compatibility preflight
 

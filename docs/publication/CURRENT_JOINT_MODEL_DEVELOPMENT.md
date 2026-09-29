@@ -75,10 +75,13 @@ data, temporary files and runs belong on `I:`.
   `0e93978`; one fixed TRAIN-batch preflight27377 exited0. Zero-head outputs and
   all original parameters/RNG match exactly, gradients pass, no optimizer applied.
   Receipt SHA-256 `4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e`.
-  Native signed-pose session70497/PID7604 remains active from `0e6dc0d` and has
-  passed1,900 of2,000 updates. Its operative source and live output tree remain
-  untouched until exit; only terminal/stdout and GPU telemetry are monitored.
-  It is a separate controlled experiment, not a refiner to splice into coarse C.
+  Native signed-pose session70497 from `0e6dc0d` and independent CPUaudit4417
+  both exited0. Integrity passes, scientific gate fails: correct-reflection
+  centre814.236→709.931um improves12.81%, while normal6.13834→6.10189deg
+  improves only.594%. Relative to no probes, normal improves just.000935deg;
+  the extra signed-cost channels have not solved plane learning. Do not promote
+  or splice this separate controlled refiner into coarse C.
+  [Audited result](NATIVE_SIGNED_POSE_EVIDENCE_001_RESULT_20260929.md).
   [Predeclared protocol](NATIVE_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
 - Same-model full-gallery image-key to native-ribbon connectivity preflight62858
   exited0 from `d0eef25`. One original TRAIN observation592 passed K4/R2/T3
@@ -110,8 +113,10 @@ data, temporary files and runs belong on `I:`.
   That checkout and the entire output tree remain frozen/protected until the
   whole runner exits. A guarded independent auditor is prepared, not executed.
   [Frozen protocol](COARSE_FULL_COVERAGE_RANKING_PROTOCOL_20260929.md).
-- Earlier bridge, native-no-probe and coarse-rehearsal outputs/audits are frozen
-  and readable; signed-pose and full-coverage outputs are not. Concurrent run timings are not
+- Earlier bridge, native-no-probe, signed-pose and coarse-rehearsal outputs/audits
+  are frozen and readable. TRAIN-only pose-cost-direction diagnostic30641 also
+  exited0; only the full-coverage run's output remains protected until its exit.
+  Concurrent run timings are not
   hardware benchmarks. No independently trained encoders are
   merged; a future successful real warm start needs sequential native training
   of that **whole model**, not splicing in a separately trained native control.
@@ -147,11 +152,21 @@ PSF. This creates new acquisition views, not independent animals. Transform all
 coordinate/visibility fields consistently, apply raster reflection once, and
 refit the curved surface's canonical pose gauge after changing its canvas.
 
-If signed evidence fails, use a bounded TRAIN-only probe-direction diagnostic
+Signed evidence failed. Use a bounded TRAIN-only probe-direction diagnostic
 to decide between adapting the existing shared features with retrieval rehearsal
 and changing the update readout. Do not infer that choice from unfinished runs
 or start full-gallery native training blindly. The coarse-rehearsal auditor has
-completed; the signed-pose auditor remains prepared with its completion pin unset.
+completed, as has the signed-pose auditor. The prepared diagnostic is now enabled
+against failed audit SHA256
+`7acdc3ef87f85691b296f67fc828428aa090b1afed88a5ce05853a6e81853ad5`
+and completed as30641. It uses only eight TRAIN sections/all paired presentations,
+exact oracle fields/reflection and the original whole4k features: no optimizer,
+development data or learned-update qualification. Full-map cost directions chose
+geometry-improving probes128/144 times (oracle support weighting137/144), so
+these favorable oracle conditions do not support dismissing the frozen features
+as directionless. Next inspect signed evidence scale on one actual scheduled
+TRAIN batch before changing the update readout; do not infer multiaxis or
+learned-deformation success from the oracle diagnostic.
 The exact TRAIN-only acquisition-view extension in
 [this protocol](COHERENT_ACQUISITION_VIEWS_001_PROTOCOL_20260929.md) has completed
 all128 planned views and passed its frozen-corpus audit:227/384 paired

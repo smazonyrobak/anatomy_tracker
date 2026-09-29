@@ -3,9 +3,9 @@ from pathlib import Path
 import os
 import sys
 
-RUN_AFTER_FAILED_NATIVE_AUDIT = False
-FAILED_NATIVE_AUDIT = None  # Root binds the completed, failed audit before enabling.
-FAILED_NATIVE_AUDIT_SHA256 = "UNSET"
+RUN_AFTER_FAILED_NATIVE_AUDIT = True
+FAILED_NATIVE_AUDIT = Path("I:/AnatomyTracker/runs/joint_v6_signed_pose_evidence_001_independent_audit/audit.json")
+FAILED_NATIVE_AUDIT_SHA256 = "7acdc3ef87f85691b296f67fc828428aa090b1afed88a5ce05853a6e81853ad5"
 assert RUN_AFTER_FAILED_NATIVE_AUDIT and FAILED_NATIVE_AUDIT is not None
 assert len(FAILED_NATIVE_AUDIT_SHA256) == 64
 
@@ -31,6 +31,8 @@ import torch
 import torch.nn.functional as F
 
 assert hashlib.sha256(Path(FAILED_NATIVE_AUDIT).read_bytes()).hexdigest() == FAILED_NATIVE_AUDIT_SHA256
+failed_audit = json.loads(Path(FAILED_NATIVE_AUDIT).read_text())
+assert failed_audit["integrity_passed"] and not failed_audit["conditional_local_gate_passed"]
 archive_config_bytes = (ARCHIVE.parent / "experiment.json").read_bytes()
 assert hashlib.sha256(archive_config_bytes).hexdigest() == ARCHIVE_CONFIG_SHA
 archive_config = json.loads(archive_config_bytes)
