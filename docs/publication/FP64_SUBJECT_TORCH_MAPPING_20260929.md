@@ -3,9 +3,9 @@
 `training/arbitrary_plane_subject_torch_v6.py` contains two scientific
 functions, with no change to the existing NumPy adapter or default generator.
 This is an opt-in target-preparation primitive, not a model or training change.
-Only syntax/source inspection precedes this commit; **GPU numerical equivalence
-and acceleration have not been verified**. Do not use it to replace frozen
-target coordinates before the planned bounded comparison on the actual plan.
+The introduction had syntax/source inspection only. The subsequent bounded
+CPU and GPU comparisons below cover one actual accepted plan's inverse mapping;
+they are not general numerical validation or a production speed benchmark.
 
 Authenticate the accepted NumPy plan once outside these functions. Convert the
 following `plan["state"]` entries once to FP64 tensors on the query device and
@@ -43,3 +43,25 @@ boundaries require a bounded comparison of actual frozen-plan mappings before
 acceptance. A new evaluator's source/hash must remain explicit; neither its
 outputs nor receipts inherit old bytewise identities automatically. No GPU
 work is authorized by this implementation commit while rehearsal is active.
+
+## Completed actual-plan GPU comparison
+
+After confirmed rehearsal38572 exit, the GPU diagnostic exited0. It evaluated
+the exact92,160 frozen queries previously checked on CPU: canonical centre
+and all nine observed PSF rasters of eligible reflected section2. Maximum
+absolute coordinate disagreement with original NumPy is3.63798e-12um;
+point-L2 RMS is1.12589e-13um. GPU versus CPU Torch maximum disagreement is also
+3.63798e-12um, below the predeclared1e-8um tolerance. All outputs are finite.
+
+Observed mapping time was1.93235s on RTX2080Ti with FP64 tile8192, and peak
+allocated tensor memory51,323,392bytes. This timing excludes context loading,
+plan generation, rendering, annotations and artifact writing; it is not an
+end-to-end speed claim. Forward mapping, other plans and annotation-boundary
+effects are not covered. Preserve exact new evaluator provenance in future
+generation and do not overwrite any frozen NumPy target files.
+
+Output: `I:/AnatomyTracker/runs/joint_v6_subject_torch_gpu_check_001`.
+Completion SHA256:
+`a5b71a0483c027499059160399ab742e914b3c9163145d0b4a895a3dc9646546`.
+The output includes the exact input identities/hashes, source, raw coordinates
+and errors. CPU results are in [the earlier comparison](SUBJECT_TORCH_CPU_COMPARISON_20260929.md).
