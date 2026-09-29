@@ -4,6 +4,10 @@ Prepared 2026-09-29 while local001 is active; not launched or selected yet.
 Proceed only after its confirmed exit and independent endpoint audit. This is
 a targeted local-learning control, not global localization or benchmarking.
 
+The existing flat driver `training/run_joint_v6_local_refinement.py` is configured
+for `I:/AnatomyTracker/runs/joint_v6_local_coordinate_control_002`. Local001's
+exact executed driver is preserved in its frozen run and commit `338c636`.
+
 The sole intended model change from local001 is
 `coordinate_evidence_conditioning=True`: seven predicted geometric channels
 enter the shared nonlinear GRU through 896 zero-initialized weights. See

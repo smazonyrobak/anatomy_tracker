@@ -33,7 +33,7 @@ from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 from training.arbitrary_plane_joint_uncertainty import full_frame_residual
 from training.arbitrary_plane_recurrent_model import compose_antipodal_plane_frame_residual
 
-RUN = ROOT / "runs/joint_v6_local_refinement_001"
+RUN = ROOT / "runs/joint_v6_local_coordinate_control_002"
 PARENT = ROOT / "runs/joint_v6_proposal_curriculum_003/joint_model_step_20000.pt"
 PREPARED = ROOT / "runs/joint_v6_proposal_substantive_001"
 PACK = ROOT / "data/joint_v6_local_refinement_frozen_001"
@@ -47,6 +47,7 @@ TRAINABLE_PREFIXES = (
     "pose_model.atlas_stem.", "pose_model.refinement_pair_encoder.",
     "pose_model.recurrent_cell.", "pose_model.recurrent_update.",
     "pose_model.recurrent_log_likelihood.", "deformation_decoder.",
+    "pose_model.coordinate_evidence.",
 )
 
 pack_manifest = json.loads((PACK / "pack.json").read_text())
@@ -103,9 +104,13 @@ atlas_array, annotation = allen._decode_and_preprocess_allen_v6()
 atlas = torch.from_numpy(atlas_array).cuda()
 del atlas_array, annotation
 runtime = make_complete_catalogue_runtime_v6(catalogue, expected_catalogue_receipt_sha256=catalogue["receipt_sha256"], device="cuda", dtype=torch.float32)
-model_kwargs = {**parent["experiment"]["model_kwargs"], "deformation_integration_steps": 7, "joint_uncertainty_rank": None}
+model_kwargs = {**parent["experiment"]["model_kwargs"], "deformation_integration_steps": 7,
+                "joint_uncertainty_rank": None, "coordinate_evidence_conditioning": True,
+                "frame_centre_offset_conditioning": False}
 model = ArbitraryPlaneJointModelV6(runtime, **model_kwargs).cuda()
-model.load_state_dict(parent["model_state"], strict=True)
+missing, unexpected = model.load_state_dict(parent["model_state"], strict=False)
+assert missing == ["pose_model.coordinate_evidence.weight"] and not unexpected
+assert torch.count_nonzero(model.pose_model.coordinate_evidence.weight) == 0
 for name, parameter in model.named_parameters():
     parameter.requires_grad_(name.startswith(TRAINABLE_PREFIXES))
 frozen_reference = {name: parameter.detach().cpu().clone() for name, parameter in model.named_parameters() if not parameter.requires_grad}
@@ -136,6 +141,8 @@ config = {
     "covariance": "disabled; no calibrated uncertainty claim",
     "grouping": "animal-disjoint organizational synthetic groups from one Allen atlas, not biological subject generalization",
     "initialization": "own randomly initialized lineage; full parent checkpoint, fresh optimizer, no external weights",
+    "matched_control": "local001 data/seed/schedule/loss/optimizer/budget unchanged; only 896 zero-initialized predicted-coordinate evidence weights added and trained",
+    "new_parent_missing_parameter": "pose_model.coordinate_evidence.weight",
 }
 (RUN / "experiment.json").write_text(json.dumps(config, indent=2))
 del parent
