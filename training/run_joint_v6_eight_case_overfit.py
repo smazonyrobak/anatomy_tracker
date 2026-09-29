@@ -68,9 +68,11 @@ source_files = (
     "training/arbitrary_plane_joint_model_v6.py",
     "training/arbitrary_plane_coarse_proposal_v6.py",
     "training/arbitrary_plane_recurrent_model.py",
+    "training/arbitrary_plane_recurrent_model_v6.py",
 )
 experiment = {
     "scope": "eight fixed training observations; memorization diagnostic, no generalization or calibration claim",
+    "concurrency": "authorized brief GPU overlap with existing005 training; no timing comparison or performance benchmark;005 outputs untouched",
     "initialization": "fresh complete joint model; no loaded model weights, features or pseudolabels",
     "seed": SEED, "model_kwargs": model_kwargs, "device": DEVICE, "threads": 4,
     "optimizer": "AdamW", "learning_rate": 0.001, "weight_decay": 0.0001,
@@ -115,6 +117,8 @@ with (RUN / "metrics.jsonl").open("w", encoding="utf-8") as trace:
             if step:
                 metric["last_gradient_norm"] = float(gradient)
                 metric["projected1000_seconds"] = elapsed * STEPS / step
+            if DEVICE == "cuda":
+                metric["gpu_peak_allocated_bytes"] = torch.cuda.max_memory_allocated()
             trace.write(json.dumps(metric) + "\n")
             trace.flush()
             print(json.dumps(metric), flush=True)
