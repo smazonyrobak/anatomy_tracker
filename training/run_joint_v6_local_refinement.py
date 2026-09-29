@@ -132,6 +132,7 @@ config = {
     "scope": "conditional truth-near/oracle-initialized local development with known synthetic PSF; not global capture or benchmark",
     "development_deformation_feedback": "all rows enabled; truth censor flags affect metric eligibility only",
     "reflection_prior": "uniform over bound identity/horizontal states; labels used only for CE loss",
+    "initial_metric_baseline": "perturbed frame, identity pullback, identity reflection (fixed argmax tie of uniform prior)",
     "covariance": "disabled; no calibrated uncertainty claim",
     "grouping": "animal-disjoint organizational synthetic groups from one Allen atlas, not biological subject generalization",
     "initialization": "own randomly initialized lineage; full parent checkpoint, fresh optimizer, no external weights",
@@ -218,13 +219,27 @@ def local_pass(prepared, index, perturbation, training):
         ccf = ouv[:, :3, None, None] + ouv[:, 3:6, None, None] * (represented_yx[:, 1:2] / width) + ouv[:, 6:9, None, None] * (represented_yx[:, :1] / height)
         ccf_truth = prepared["target_ccf_coordinates_ap_dv_ml_um_float64"][index].cuda().float()
         ccf_error = (torch.where(pixel_weight > 0, (ccf - ccf_truth).norm(dim=1, keepdim=True), 0) * pixel_weight).sum((1, 2, 3)) / mass.clamp_min(1)
+        identity_yx = torch.stack(torch.meshgrid(torch.arange(height, device="cuda"), torch.arange(width, device="cuda"), indexing="ij")).float()[None]
+        initial_map_error = ((identity_yx - map_truth).norm(dim=1, keepdim=True) * pixel_weight).sum((1, 2, 3)) / mass.clamp_min(1)
+        initial_ouv = full_frame_state_to_physical_ouv(initial[:, 0])
+        initial_ccf = initial_ouv[:, :3, None, None] + initial_ouv[:, 3:6, None, None] * (identity_yx[:, 1:2] / width) + initial_ouv[:, 6:9, None, None] * (identity_yx[:, :1] / height)
+        initial_ccf_error = (torch.where(pixel_weight > 0, (initial_ccf - ccf_truth).norm(dim=1, keepdim=True), 0) * pixel_weight).sum((1, 2, 3)) / mass.clamp_min(1)
+        truth_ouv = full_frame_state_to_physical_ouv(truth)
+        truth_normal = F.normalize(torch.linalg.cross(truth_ouv[:, 3:6], truth_ouv[:, 6:9]), dim=-1)
+        initial_normal = F.normalize(torch.linalg.cross(initial_ouv[:, 3:6], initial_ouv[:, 6:9]), dim=-1)
+        final_normal = F.normalize(torch.linalg.cross(ouv[:, 3:6], ouv[:, 6:9]), dim=-1)
+        normal_angles = [torch.atan2(torch.linalg.cross(normal, truth_normal).norm(dim=-1), (normal * truth_normal).sum(-1).abs()) * (180 / np.pi) for normal in (initial_normal, final_normal)]
         metrics = {
             "initial_landmark_error_um": initial_error.masked_fill(pose_weight <= 0, torch.nan),
             "final_landmark_error_um": landmark_error.masked_fill(pose_weight <= 0, torch.nan),
+            "initial_plane_normal_error_deg": normal_angles[0].masked_fill(pose_weight <= 0, torch.nan),
+            "final_plane_normal_error_deg": normal_angles[1].masked_fill(pose_weight <= 0, torch.nan),
             "frame_rotation_error_deg": residual[:, -1, :3].norm(dim=-1).mul(180 / np.pi).masked_fill(pose_weight <= 0, torch.nan),
             "reflection_correct": (representation == reflection).float().masked_fill(pose_weight <= 0, torch.nan),
             "svf_vector_rmse_px": svf_error.masked_fill(~dense_eligible, torch.nan),
+            "initial_pullback_endpoint_error_px": initial_map_error.masked_fill(~dense_eligible, torch.nan),
             "pullback_endpoint_error_px": map_error.masked_fill(~dense_eligible, torch.nan),
+            "initial_joint_ccf_correspondence_error_um": initial_ccf_error.masked_fill(~dense_eligible, torch.nan),
             "joint_ccf_correspondence_error_um": ccf_error.masked_fill(~dense_eligible, torch.nan),
             "minimum_jacobian": jacobian[:, -1].flatten(1).min(-1).values,
         }

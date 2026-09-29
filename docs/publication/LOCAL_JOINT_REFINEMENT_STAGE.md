@@ -73,6 +73,26 @@ catalogue index or truth deformation gate, and only observable acquisition
 metadata. The remaining common deterministic frame/warp across representations,
 calibration, constraint/ray inference and desktop delivery are not solved here.
 
+## Paired starting-error measurements and continuation decision
+
+Before launch, the driver now also records initial/final physical antipodal
+normal errors, the identity-pullback endpoint error, and initial dense CCF
+correspondence error. The latter uses the actual perturbed frame, identity
+pullback and identity reflection: the fixed argmax tie of the uniform prior,
+not the true reflection. Report reflection-stratified results so resolving the
+discrete reflection cannot conceal a failure to learn pose or deformation.
+These additions change evaluation only, not the objective or sampling schedule.
+
+At the fixed 4,000-step endpoint, prioritize a subsequent joint-unfreezing stage
+only if group-macro landmark and dense CCF errors each fall at least 20% from
+their paired geometric starting errors, pullback error falls at least 10% from
+identity, normal error does not increase, and valid tissue has no nonpositive
+Jacobian. Report the same comparisons by brush mode and investigate a mode's
+regression before expansion. These are engineering continuation criteria on
+conditional synthetic development, not a statistical superiority test or a
+deployment threshold. A failed criterion means inspect the component losses
+and capture behavior rather than starting a public benchmark or hiding failures.
+
 ## Completed convention review — 2026-09-29
 
 The driver, packed targets, native `refine()` and v6 losses were reviewed with
