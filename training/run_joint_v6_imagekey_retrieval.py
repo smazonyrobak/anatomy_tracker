@@ -63,7 +63,9 @@ for key in ("animal_id", "specimen_id", "experiment_id", "synthetic_animal_id", 
 
 RUN.mkdir(parents=True, exist_ok=False)
 repository = Path(__file__).resolve().parents[1]
-source_names = sorted(set(previous["source"]["file_sha256"]) | {Path(__file__).relative_to(repository).as_posix()})
+source_names = sorted(set(previous["source"]["file_sha256"]) | {
+    Path(__file__).relative_to(repository).as_posix(), "training/arbitrary_plane_ribbon_v6.py",
+})
 source = {"git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip(),
           "file_sha256": {name: hashlib.sha256((repository / name).read_bytes()).hexdigest() for name in source_names}}
 (RUN / "source_diff.patch").write_bytes(subprocess.check_output(["git", "diff", "HEAD"], cwd=repository))
