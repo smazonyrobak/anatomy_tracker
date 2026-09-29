@@ -1,6 +1,12 @@
 # Prepared control: signed native pose evidence
 
-Status: **protocol only; not implemented, launched, trained or qualified**. All development stays on I:. The active canonical-bridge experiment and its operative sources/outputs are outside this preparation scope.
+Status: **implemented; one fixed training-batch preflight passed; matched training ready to launch, not trained or qualified**. All development stays on I:. The canonical-bridge comparison has exited and its audit is complete.
+
+## Completed compatibility preflight
+
+Implementation commit `0e93978`; terminal27377 EXIT0. The actual first scheduled B4 TRAIN batch was used with no optimizer update or development examples. Common fresh parameters and CPU RNG, all zero-projection outputs, and unchanged post-backward parameters matched exactly. The new projection's gradient norm was0.0138903223; pose and ribbon gradients were finite. Cost-map gradients are zero at this deliberately zero projection, not a failed gradient path. The instrumented forward/backward took3.5372s with peak allocation1,372,437,504bytes. Forward encoder calls were4 without probes and22 with probes. This is a compatibility result, not a throughput estimate or quality claim.
+
+Frozen preflight: `I:/AnatomyTracker/runs/joint_v6_signed_pose_evidence_preflight_001/preflight.json`; SHA-256 `4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e`. The matched driver pins this receipt and the original comparator's source and exact schedule bytes.
 
 ## Question and fixed comparator
 

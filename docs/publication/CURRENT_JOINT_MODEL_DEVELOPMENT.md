@@ -55,6 +55,8 @@ data, temporary files and runs belong on `I:`.
   with lower learning rate and stronger broad synthetic rehearsal, preserving
   the canonical real positives. B is an experimental warm start, not a promoted
   model; the six development donors are not untouched final validation.
+  The reviewed [rehearsal protocol](CANONICAL_REHEARSAL_001_PROTOCOL_20260929.md)
+  fixes2,000 updates,LR.00025 and2/3 synthetic loss, with original retention gates.
 - Native conditional pose+ribbon001 (89162, `dc32605`) and independent audit84435
   both exited0. Oracle centre error814.24→716.56um improves only about12%, below
   the fixed20% requirement; plane-normal error6.138→6.103deg barely changes.
@@ -65,8 +67,11 @@ data, temporary files and runs belong on `I:`.
 - The next matched native control adds six signed out-of-plane render-cost maps
   to the existing shared updater. Original whole4k parent, losses, sampling and
   training budget stay fixed; an explicit20% oracle-normal reduction is required
-  alongside the original dense-coordinate gate. Implementation and one fixed
-  training-batch compatibility preflight are in progress, not yet trained.
+  alongside the original dense-coordinate gate. Implementation is committed as
+  `0e93978`; one fixed TRAIN-batch preflight27377 exited0. Zero-head outputs and
+  all original parameters/RNG match exactly, gradients pass, no optimizer applied.
+  Receipt SHA-256 `4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e`.
+  Both reviewed training drivers are ready for committed launch, not qualified.
   [Predeclared protocol](NATIVE_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
 - Both training outputs and audits are now frozen and readable. Concurrent run
   timings are not hardware benchmarks. No independently trained encoders are

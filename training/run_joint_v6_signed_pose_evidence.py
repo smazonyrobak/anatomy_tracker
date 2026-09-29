@@ -31,7 +31,7 @@ from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 from training.arbitrary_plane_recurrent_model import compose_antipodal_plane_frame_residual
 from training.subject_deformed_slab_multiresolution_bundle_v2 import _read_raw_artifact
 
-READY_AFTER_PREFLIGHT = False
+READY_AFTER_PREFLIGHT = True
 assert READY_AFTER_PREFLIGHT, "Commit module and complete the fixed training-batch compatibility preflight before launch"
 RUN = ROOT / "runs/joint_v6_signed_pose_evidence_001"
 COMPARATOR = ROOT / "runs/joint_v6_ribbon_local_001"
@@ -39,7 +39,7 @@ COMPARATOR_COMPLETION_SHA256 = "a2bee6dc1ffcaafcef3b4ad4a49223653f582f41ab071a3c
 COMPARATOR_SCHEDULE_SHA256 = "e8aaa6eb1ff7e70097cbf1eeb1f6b9fc4d2ba4f01f26fc6d91b671c90c8dc0b9"
 COMPARATOR_DRIVER_SHA256 = "79902a890786c67384ef0f670d83cd651469c06c4503c6f64ee06314457ceddf"
 PREFLIGHT = ROOT / "runs/joint_v6_signed_pose_evidence_preflight_001/preflight.json"
-PREFLIGHT_SHA256 = "UNSET_UNTIL_COMPLETED_PREFLIGHT"
+PREFLIGHT_SHA256 = "4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e"
 DATA = ROOT / "data/joint_v6_coherent_subject_cohort_sections_002"
 PARENT = ROOT / "runs/joint_v6_imagekey_retrieval_001/joint_model_step_04000.pt"
 PARENT_AUDIT = ROOT / "runs/joint_v6_imagekey_retrieval_001_independent_audit/audit.json"
