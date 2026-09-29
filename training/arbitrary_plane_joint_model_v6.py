@@ -82,6 +82,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         image_key_descriptor_dim: int | None = None,
         ribbon_deformation: bool = False,
         signed_pose_evidence: bool = False,
+        signed_pose_cost_rms: tuple[float, float, float] | None = None,
     ):
         super().__init__()
         if (
@@ -113,6 +114,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
             coordinate_evidence_conditioning=coordinate_evidence_conditioning,
             image_key_descriptor_dim=image_key_descriptor_dim,
             signed_pose_evidence=signed_pose_evidence,
+            signed_pose_cost_rms=signed_pose_cost_rms,
         )
         self.deformation_decoder = AffineFreeSVFDecoder(
             hidden_channels,
@@ -284,7 +286,12 @@ class ArbitraryPlaneJointModelV6(nn.Module):
                         arguments = (state, ribbon["residual_local_um"], ribbon["director_delta_local"], delta, source_unit)
                         cost = checkpoint(probe_cost, *arguments, use_reentrant=False) if torch.is_grad_enabled() else probe_cost(*arguments)
                         differences.append(cost - central_cost)
-                addition = pose.signed_pose_evidence(torch.cat(differences, dim=1).to(pose.signed_pose_evidence.weight))
+                signed_cost = torch.cat(differences, dim=1).to(pose.signed_pose_evidence.weight)
+                if pose.signed_pose_cost_rms is not None:
+                    # One frozen TRAIN scale per axis, shared by its +/- probes.
+                    scales = signed_cost.new_tensor([value for value in pose.signed_pose_cost_rms for _ in range(2)])
+                    signed_cost = signed_cost / scales[None, :, None, None]
+                addition = pose.signed_pose_evidence(signed_cost)
                 evidence = evidence + addition.to(evidence)
             hidden = pose.recurrent_cell(evidence, hidden)
             states.append(state.reshape(batch, cells, representations, 12))

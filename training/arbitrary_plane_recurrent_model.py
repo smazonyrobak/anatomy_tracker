@@ -242,6 +242,7 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
         frame_centre_offset_conditioning: bool = False,
         coordinate_evidence_conditioning: bool = False,
         signed_pose_evidence: bool = False,
+        signed_pose_cost_rms: tuple[float, float, float] | None = None,
     ):
         super().__init__()
         if atlas_channels < 1 or feature_channels < 1 or hidden_channels < 1:
@@ -331,6 +332,14 @@ class ArbitraryPlaneRetrievalRefinementModel(nn.Module):
                 self.coordinate_evidence = nn.Conv2d(7, hidden_channels, 1, bias=False)
                 nn.init.zeros_(self.coordinate_evidence.weight)
         self.signed_pose_evidence_enabled = signed_pose_evidence
+        self.signed_pose_cost_rms = (
+            None if signed_pose_cost_rms is None else tuple(float(value) for value in signed_pose_cost_rms)
+        )
+        if self.signed_pose_cost_rms is not None and (
+            len(self.signed_pose_cost_rms) != 3
+            or any(not 0 < value < float("inf") for value in self.signed_pose_cost_rms)
+        ):
+            raise ValueError("signed pose cost RMS must contain three fixed positive finite values")
         if signed_pose_evidence:
             with torch.random.fork_rng(devices=[]):
                 torch.random.default_generator.manual_seed(torch.initial_seed() ^ 0x51C05E)

@@ -105,7 +105,7 @@ data, temporary files and runs belong on `I:`.
 - The fixed full-coverage uniform-first experiment is now running as session96942/
   PID22144 from `2935584` in the separate, existing
   `I:/AnatomyTracker/agent_worktrees/coarse_retrieval_scaling` checkout.
-  Arm A has passed1,900 of12,576 additional updates from the whole C10k parent.
+  Arm A has passed7,600 of12,576 additional updates from the whole C10k parent.
   Fresh generated cells cover the remaining50,304 previously unattempted cells;
   real training uses the audited1,280-image union. Conditional arm B uses the
   same whole parent/budget/schedules with snapshot-hard negatives only if A
@@ -167,9 +167,19 @@ these favorable oracle conditions do not support dismissing the frozen features
 as directionless. Independent raw-map remeasurement confirms those counts and
 finds no≤1e-6 cost ties; median absolute full-map plus/minus difference.02503.
 [Result](TRAIN_POSE_COST_DIRECTION_001_RESULT_20260929.md).
-Next inspect signed evidence scale on one actual scheduled
-TRAIN batch before changing the update readout; do not infer multiaxis or
-learned-deformation success from the oracle diagnostic.
+One subsequent scheduled TRAIN B4 forward (92025 EXIT0) found signed
+projection/base-evidence RMS1.532–1.794%, with raw per-axis RMS
+(.08283151464815028,.0678978954706466,.07608602924318171). No optimizer or
+model change was used for that measurement.
+[Activation result](SIGNED_POSE_TRAIN_ACTIVATION_001_RESULT_20260929.md).
+The next fixed control divides the existing signed maps by those TRAIN-only
+axis RMS values; no new architecture/features/loss or scale sweep. The optional
+three-value constructor argument is implemented with no parameter/RNG changes
+and an unchanged `None` path. Matched driver and one TRAIN compatibility
+preflight are being prepared, **not yet launched**.
+[Prospective protocol](NORMALIZED_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
+Do not infer multiaxis or learned-deformation success from the oracle diagnostic,
+or infer that amplitude imbalance alone proves a scaling fix.
 The exact TRAIN-only acquisition-view extension in
 [this protocol](COHERENT_ACQUISITION_VIEWS_001_PROTOCOL_20260929.md) has completed
 all128 planned views and passed its frozen-corpus audit:227/384 paired
