@@ -34,10 +34,11 @@ from training.arbitrary_plane_full_frame_primitives import (
 )
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 
-RUN = ROOT / "runs" / "joint_v6_proposal_normal_objective_005"
+RUN = ROOT / "runs" / "joint_v6_normal_readout_control_006"
 PREPARED = ROOT / "runs" / "joint_v6_proposal_substantive_001"
 SEED = 2026092805
-STEPS = 20_000
+STEPS = 4_000
+SCHEDULE_STEPS = 20_000  # Preserve the exact 005 schedule prefix when stopping early.
 BATCH = 16
 GENERATED = 8
 EVALUATE_EVERY = 1_000
@@ -52,6 +53,7 @@ MODEL_KWARGS = {
     "proposal_mixture_components": 8, "proposal_spatial_bins_h_w": (8, 8),
     "cascade_max_rendered_cells_per_sample": 32, "cascade_max_closure_rounds": 4,
     "pose_only_steps": 1, "deformation_integration_steps": 3,
+    "proposal_normal_readout_count": 384,
 }
 PREPARED_SHA256 = {
     "catalogue.pt": "9b49d203cc73ce3a66e648bbe5228231eb5cc9c17d5db4669eefe0f08ae22c71",
@@ -113,10 +115,10 @@ yy, xx = torch.meshgrid(torch.linspace(-1, 1, 96, device="cuda"), torch.linspace
 
 # Independent schedule/noise domains; counters never reset at a catalogue cycle.
 rng = np.random.default_rng(SEED + 1)
-count = STEPS * GENERATED
+count = SCHEDULE_STEPS * GENERATED
 cell_schedule = np.concatenate([rng.permutation(runtime.cell_count) for _ in range((count + runtime.cell_count - 1) // runtime.cell_count)])[:count]
-frozen_count = STEPS * (BATCH - GENERATED)
-frozen_schedule = np.concatenate([rng.permutation(len(train["label"])) for _ in range((frozen_count + len(train["label"]) - 1) // len(train["label"]))])[:frozen_count].reshape(STEPS, BATCH - GENERATED)
+frozen_count = SCHEDULE_STEPS * (BATCH - GENERATED)
+frozen_schedule = np.concatenate([rng.permutation(len(train["label"])) for _ in range((frozen_count + len(train["label"]) - 1) // len(train["label"]))])[:frozen_count].reshape(SCHEDULE_STEPS, BATCH - GENERATED)
 schedule = {
     "cell_index": cell_schedule,
     "sample_seed": SEED * 1_000_000 + np.arange(count, dtype=np.int64),
@@ -144,7 +146,7 @@ for name in ("generated_schedule.npz", "frozen_training_row_indices.npy"):
         schedule_sha256[name] = hashlib.file_digest(stream, "sha256").hexdigest()
 
 config = {
-    "source": source, "seed": SEED, "steps": STEPS, "batch_size": BATCH,
+    "source": source, "seed": SEED, "steps": STEPS, "schedule_horizon_steps": SCHEDULE_STEPS, "batch_size": BATCH,
     "generated_per_batch": GENERATED, "learning_rate": LEARNING_RATE,
     "optimizer": "AdamW", "weight_decay": 0.0001, "optimizer_state": "fresh",
     "evaluation_interval": EVALUATE_EVERY, "model_kwargs": MODEL_KWARGS,
@@ -156,11 +158,12 @@ config = {
     "training_phase": "proposal_only", "external_or_legacy_learned_dependencies": [], "probabilities_calibrated": False,
     "objective": "weighted joint-cell NLL + normal_marginal_nll_weight * weighted normal-marginal NLL",
     "normal_marginal_nll_weight": NORMAL_MARGINAL_NLL_WEIGHT,
-    "comparison": "same fresh initialization seed, generated appearance/cell schedules, frozen row order and optimizer as curriculum003; extra normal-marginal objective only; organizational ID namespace differs",
+    "comparison": "first4000 updates of the exact005 20000-step schedule; same existing initial parameters and RNG; add zero-initialized384-normal final-mixture tilt preserving offset/roll conditionals; same joint+normal objective; organizational ID namespace differs; enabled zero tilt may introduce FP32 normalization roundoff",
     "generated_schedule_sha256": schedule_sha256,
     "generator": {
         "cell_sampling": "shuffled complete 98304-cell permutations; no support rejection; exact cell frames, no subcell jitter",
-        "new_rendered_observations_planned": count, "unique_cells_planned": len(np.unique(cell_schedule)),
+        "new_rendered_observations_planned": STEPS * GENERATED, "scheduled_observations": count,
+        "unique_cells_planned": len(np.unique(cell_schedule[:STEPS * GENERATED])),
         "raster_shape_h_w": [96, 96], "physical_fov_y_x_um": [12000, 12000],
         "pixel_size_y_x_um": [125, 125], "psf_family": "boxcar_trapezoid_9",
         "psf_offsets": "linspace(-0.5,0.5,9) * scheduled thickness_um",
@@ -372,5 +375,5 @@ with (RUN / "training_trace.jsonl").open("w", encoding="utf-8") as trace:
             print(json.dumps({"development_step": step, "animal_macro": macro, "identifiable_animal_macro": support_macro["identifiable"]["animal_macro"], "elapsed_seconds": evaluation["elapsed_seconds"]}), flush=True)
             del checkpoint, raw, output, inputs
 
-(RUN / "completed.json").write_text(json.dumps({"steps": STEPS, "optimizer_steps_applied": applied_steps, "new_rendered_observations": count, "unique_catalogue_cells_sampled": len(np.unique(cell_schedule)), "generated_supervised": generated_supervised, "generated_censored": generated_censored, "elapsed_seconds": time.perf_counter() - started}, indent=2), encoding="utf-8")
+(RUN / "completed.json").write_text(json.dumps({"steps": STEPS, "optimizer_steps_applied": applied_steps, "new_rendered_observations": STEPS * GENERATED, "unique_catalogue_cells_sampled": len(np.unique(cell_schedule[:STEPS * GENERATED])), "generated_supervised": generated_supervised, "generated_censored": generated_censored, "elapsed_seconds": time.perf_counter() - started}, indent=2), encoding="utf-8")
 print(f"Finished {STEPS} mixed proposal updates: {RUN}", flush=True)

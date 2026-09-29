@@ -67,6 +67,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
         joint_uncertainty_coordinate_scale: tuple[float, ...] = (
             (0.1,) * 3 + (500.0,) * 3 + (0.1,) * 3 + (1.0,) * 26
         ),
+        proposal_normal_readout_count: int | None = None,
     ):
         super().__init__()
         if (
@@ -92,6 +93,7 @@ class ArbitraryPlaneJointModelV6(nn.Module):
                 cascade_max_rendered_cells_per_sample
             ),
             cascade_max_closure_rounds=cascade_max_closure_rounds,
+            proposal_normal_readout_count=proposal_normal_readout_count,
         )
         self.deformation_decoder = AffineFreeSVFDecoder(
             hidden_channels,

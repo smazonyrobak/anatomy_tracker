@@ -55,6 +55,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
         proposal_offset_scale_um: float = 10000.0,
         cascade_max_rendered_cells_per_sample: int = 64,
         cascade_max_closure_rounds: int = 4,
+        proposal_normal_readout_count: int | None = None,
     ):
         verify_complete_catalogue_runtime_v6(catalogue_runtime_v6)
         if (
@@ -88,6 +89,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
             mixture_components=proposal_mixture_components,
             spatial_bins_h_w=proposal_spatial_bins_h_w,
             offset_scale_um=proposal_offset_scale_um,
+            normal_readout_count=proposal_normal_readout_count,
         )
 
     @staticmethod
@@ -311,6 +313,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
             catalogue["cell_log_mass"],
             catalogue["support_origin_ap_dv_ml_um"],
             expected_catalogue_cell_count=self.catalogue_runtime_v6.cell_count,
+            cell_id=catalogue["cell_id"],
         )
         return {
             **proposal,
@@ -365,6 +368,7 @@ class ArbitraryPlaneRetrievalRefinementModelV6(
             catalogue["cell_log_mass"],
             catalogue["support_origin_ap_dv_ml_um"],
             expected_catalogue_cell_count=cells,
+            cell_id=catalogue["cell_id"],
         )
         proposal_log_probability = proposal[
             "raw_full_catalogue_cell_log_probability"

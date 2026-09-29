@@ -33,6 +33,7 @@ class AntipodalPlaneProposalV6(nn.Module):
         mixture_components: int = 8,
         spatial_bins_h_w: tuple[int, int] = (4, 4),
         offset_scale_um: float = 10000.0,
+        normal_readout_count: int | None = None,
     ):
         super().__init__()
         if min(feature_channels, proposal_channels, mixture_components) < 1:
@@ -49,12 +50,17 @@ class AntipodalPlaneProposalV6(nn.Module):
             raise ValueError("proposal spatial bins must be two positive integers")
         if not math.isfinite(offset_scale_um) or offset_scale_um <= 0.0:
             raise ValueError("proposal offset scale must be finite and positive")
+        if normal_readout_count is not None and (
+            not isinstance(normal_readout_count, int) or normal_readout_count < 1
+        ):
+            raise ValueError("normal readout count must be a positive integer")
 
         self.feature_channels = int(feature_channels)
         self.proposal_channels = int(proposal_channels)
         self.mixture_components = int(mixture_components)
         self.spatial_bins_h_w = tuple(spatial_bins_h_w)
         self.offset_scale_um = float(offset_scale_um)
+        self.normal_readout_count = normal_readout_count
         context_inputs = self.feature_channels * math.prod(self.spatial_bins_h_w)
 
         self.source_context = nn.Sequential(
@@ -94,6 +100,12 @@ class AntipodalPlaneProposalV6(nn.Module):
         ):
             nn.init.normal_(head.weight, std=1e-3)
             nn.init.zeros_(head.bias)
+        if normal_readout_count is not None:
+            # Zero residual at initialization; preserve every existing RNG draw.
+            with torch.random.fork_rng(devices=[]):
+                self.normal_readout = nn.Linear(self.feature_channels, normal_readout_count)
+                nn.init.zeros_(self.normal_readout.weight)
+                nn.init.zeros_(self.normal_readout.bias)
 
     def _geometry(
         self,
@@ -126,6 +138,7 @@ class AntipodalPlaneProposalV6(nn.Module):
         support_origin_ap_dv_ml_um: torch.Tensor | tuple[float, float, float],
         *,
         expected_catalogue_cell_count: int,
+        cell_id: torch.Tensor | None = None,
     ) -> dict[str, object]:
         if source_features.ndim != 4 or source_features.shape[1] != self.feature_channels:
             raise ValueError("proposal source features must have shape (B,F,h,w)")
@@ -205,9 +218,29 @@ class AntipodalPlaneProposalV6(nn.Module):
                 + torch.einsum("bld,bkd->blk", query(self.offset_query), offset_embedding)
                 + torch.einsum("bld,bkd->blk", query(self.roll_query), roll_embedding)
             )
+            if self.normal_readout_count is not None:
+                # Bound v3/v6 catalogue IDs are normal-major, then offset/roll.
+                # Index by IDs, not tensor position, so cell permutation is safe.
+                if cells % self.normal_readout_count or cell_id is None or cell_id.shape != (cells,):
+                    raise ValueError("normal readout requires complete normal-major catalogue IDs")
+                normal_index = cell_id // (cells // self.normal_readout_count)
+                normal_bias = self.normal_readout(context)
+                normal_bias = normal_bias - normal_bias.mean(dim=-1, keepdim=True)
         component_cell_log_probability = F.log_softmax(
             log_mass[:, None] + component_cell_log_score.to(probability_dtype), dim=2
         )
+        if self.normal_readout_count is not None:
+            # Tilt the FINAL mixture by a normal-only factor. Updating both the
+            # component densities and mixture weights preserves p(offset,roll|n)
+            # and keeps all returned mixture fields consistent with that tilt.
+            bias = normal_bias[:, None, normal_index].to(probability_dtype)
+            tilted = component_cell_log_probability + bias
+            component_log_normalizer = torch.logsumexp(tilted, dim=2)
+            component_cell_log_probability = tilted - component_log_normalizer[:, :, None]
+            mixture_log_probability = F.log_softmax(
+                mixture_log_probability + component_log_normalizer, dim=1
+            )
+            component_cell_log_score = component_cell_log_score + bias
         component_cell_probability = component_cell_log_probability.exp()
         cell_log_probability = torch.logsumexp(
             mixture_log_probability[:, :, None] + component_cell_log_probability,
