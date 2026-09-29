@@ -76,10 +76,23 @@ data, temporary files and runs belong on `I:`.
   all original parameters/RNG match exactly, gradients pass, no optimizer applied.
   Receipt SHA-256 `4e5a2fd3a9697da6a87c435abf35f337bb383e596c46abaa2cc2560e0a39a76e`.
   Native signed-pose session70497/PID7604 remains active from `0e6dc0d` and has
-  passed300 of2,000 updates. Its operative source and live output tree remain
+  passed700 of2,000 updates. Its operative source and live output tree remain
   untouched until exit; only terminal/stdout and GPU telemetry are monitored.
   It is a separate controlled experiment, not a refiner to splice into coarse C.
   [Predeclared protocol](NATIVE_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
+- Same-model full-gallery image-key to native-ribbon connectivity preflight62858
+  exited0 from `d0eef25`. One original TRAIN observation592 passed K4/R2/T3
+  chunk1-versus4 agreement; largest final coordinate difference.00293um.
+  Coarse retained mass.0068891 and omitted mass.9931111 are reported explicitly;
+  the refined tail remains unknown and probabilities uncalibrated. This uses
+  the whole failed native control, not a qualified global model or merged
+  refiner. No accuracy evaluation was performed.
+  [Result and frozen bindings](IMAGEKEY_RIBBON_INFERENCE_PREFLIGHT_001_RESULT_20260929.md).
+- Acquisition-view generator13699 from `4e89e3c` has reported all128 planned
+  TRAIN physical views generated; the frozen-corpus audit is pending. These
+  reuse eight existing synthetic subjects, not new biological animals.
+  Fixed1,024 additional TRAIN real-image acquisition91765 from `d807454` remains
+  live; its output tree and operative source are off-limits until exit.
 - Earlier bridge, native-no-probe and coarse-rehearsal outputs/audits are frozen
   and readable; signed-pose outputs are not. Concurrent run timings are not
   hardware benchmarks. No independently trained encoders are
@@ -89,13 +102,16 @@ data, temporary files and runs belong on `I:`.
 
 ## Next whole-model integration decision
 
-The existing public `forward()` still uses the older parametric proposal path;
-the trained image-key retrieval and conditional `refine_ribbon()` are not yet
-one native inference entry point. A successful pair of experiments is therefore
-not an integrated deliverable. Add complete image-key scoring, retained cells
-with separate reflection masses, chunked ribbon refinement and image-based
-selection inside one whole model. Keep omitted coarse mass separate: normalized
-retained-component scores are not calibrated global probabilities.
+The existing public `forward()` still uses the older parametric proposal path.
+The new functional `imagekey_ribbon_inference_v6()` now connects complete
+image-key scoring, stable retained cells with separate reflection masses,
+chunked same-model ribbon refinement and final image-based selection; one
+actual TRAIN-row numerical preflight has passed. It is not yet wired into the
+public forward or GUI, and supplies no new accuracy evidence. Original full
+component mass plus each final refinement score is normalized once across all
+retained cells/representations. Keep omitted coarse mass separate: normalized
+retained scores are not calibrated global probabilities, and the refined tail
+remains unresolved.
 
 Continue one whole coarse checkpoint through native training; do not import
 the signed-control refiner trained against its different4k encoder. If the
@@ -119,9 +135,10 @@ to decide between adapting the existing shared features with retrieval rehearsal
 and changing the update readout. Do not infer that choice from unfinished runs
 or start full-gallery native training blindly. The coarse-rehearsal auditor has
 completed; the signed-pose auditor remains prepared with its completion pin unset.
-An exact TRAIN-only acquisition-view extension is declared in
-[this protocol](COHERENT_ACQUISITION_VIEWS_001_PROTOCOL_20260929.md); it is not
-generated yet and does not turn synthetic group IDs into biological animals.
+The exact TRAIN-only acquisition-view extension in
+[this protocol](COHERENT_ACQUISITION_VIEWS_001_PROTOCOL_20260929.md) has reported
+all128 planned views generated and awaits its frozen-corpus audit. Do not use
+unaudited new targets or turn synthetic group IDs into biological animals.
 
 ## Completed planar/SVF experiment decisions
 
