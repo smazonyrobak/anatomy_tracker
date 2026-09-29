@@ -113,8 +113,13 @@ data, temporary files and runs belong on `I:`.
   cells, not98,304 successfully supervised positives. Output is frozen/readable.
   Audit SHA256 `c75c4ff817e7603eca31c8086080aafdb7f0953b3fec58c3f3f2f7842cf2afb3`.
   [Audited result](COARSE_FULL_COVERAGE_RANKING_001_RESULT_20260929.md).
-  The next TRAIN-only saved-candidate analysis will measure actual finite-frame
-  residuals for a whole-A native capture curriculum; no DEV-selected starts.
+  TRAIN-only saved-candidate analysis86237 from `a35038e` also exited0.
+  95.15% synthetic/100% real eligible top1 starts exceed the old local teacher
+  generation box. Even oracle best-frame/R starts exceed it83.63%/100%; real
+  median best-frame tangent displacement1.436mm and log-V-span correction.16164
+  show a finite-frame training gap. Coarse predicted R differs from best-frame R
+  on46.72% of eligible real top1 rows; keep both reflected hypotheses.
+  [TRAIN capture evidence](TRAIN_CAPTURE_RESIDUALS_001_RESULT_20260929.md).
 - The independent native mark adapter is implemented as `raw_marks_to_ribbon_ccf`
   in `training/arbitrary_plane_ribbon_marks.py`, committed `f5cdf77`. It maps
   recorded raw-to-model coordinates onto each retained observed curved surface,
@@ -193,7 +198,7 @@ Matched training is now active as90795/PID21188 from committed `2a86507` in
 the main integration checkout. Its output
 `I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_001` and operative
 model/runner source are protected until exit. Initial evaluation completed and
-training reached step100 with finite loss/gradients; no endpoint result is asserted.
+training reached step500 with finite loss/gradients; no endpoint result is asserted.
 A guarded adapted post-exit auditor is prepared, with completion pin unset and
 not run. Coarse session96942 has exited and its whole-A endpoint was audited;
 do not splice its encoder with this separately trained native control.
