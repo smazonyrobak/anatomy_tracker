@@ -38,16 +38,48 @@ only; don't access its output or change operative geometry sources while live.
 First-map held-query maximum interpolation error .472um; bake133s, sectionsabout
 .63s each. All8 subjects are expected to take roughly an hour, not yet measured.
 
-The committed `training/train_joint_v7_expanded.py` continues the same complete
-6,000-step model/optimizer for24,000 more updates at192px, mixes new synthetic and
-weak real data, balances physical pose supervision and anchors true-pose fitting.
-Real targets are converted to the synthetic canonical hemisphere with a finite
-horizontal flip preserving actual pixel coordinates. All constraints remain absent.
-Terminal **95614** is queued on the existing generator process handle. It starts
-the trainer only after process exit and a completed dataset exists; the trainer
-then verifies all bound data before loading weights. Do not start a duplicate.
-If generation fails, the queued job reports that training was not started.
-No heartbeat automation; native goal remains active.
+The fixed4,096-plane trainer queue **95614 was cancelled before launch (exit1)**.
+Do not restart `training/train_joint_v7_expanded.py`. Its finite training bank was
+too small as the intended main corpus. The remaining generator is useful because
+it freezes reusable inverse anatomical maps, not because4,096 is the final scale.
+
+`training/train_joint_v7_streaming.py` now prepares the same whole6,000-step model
+and AdamW continuation with fresh physical sections every synthetic update. It is
+not launched yet. This24,000-update stage supplies144,000 eligible new synthetic
+planes, with8113 real TRAIN images/58donors and the unchanged64 DEV/6donors.
+This is an intermediate stage; larger-data collection proceeds alongside training.
+DeepSlice generated~920k synthetic images (58k low-tissue exclusions) and used
+131,240 slide-mounted plus442,680 S2P real images in its two-phase programme
+([primary paper](https://www.nature.com/articles/s41467-023-41645-4)). Million-scale
+synthetic exposure and hundreds of thousands of trustworthy real sections are
+planning targets, not proof that size alone will meet the accuracy goal.
+
+The streaming sampler has512 fixed global-affine variants of8 base synthetic
+subjects from one atlas; these are not512 biological animals or independently
+varying local morphologies. Each generated plane has one background mode; retries,
+used planes and complete replay parameters are preserved separately. Map targets
+are explicitly approximate. Capacity statistics record director targets outside
+the current fitter's component bound without clipping the truth. No GPU streaming
+or training-speed result is available yet. Launch only after both preparation
+processes exit; first64 fixed diagnostic planes measure generation time/memory,
+and the first actual training batches measure full training cost and feedback.
+
+The8113 real expansion is live as Python PID **11052**, agent-local terminal98294,
+output `data/joint_v7_allen_fullcanvas_8113_192_001`. Root cannot poll that terminal
+handle; use process telemetry until it exits, then inspect the frozen output.
+Preserve both live output trees and operative sources. Large-cohort TRAIN-only
+acquisition has an approved donor-level plan (~263,754 candidate sections), but
+no large-cohort downloader has been launched. Calibration/final donor reservations
+exist before new image access; historical exposure caveats remain explicit.
+
+Readouts are saved at step0,1000 and every4000: likelihood loss, normal/centre
+errors and reflection-aware observed-coordinate errors. Real DEV192 is matched
+in resolution; legacy synthetic DEV96 is not, so its train/dev gap is not pure
+generalization evidence. Real and synthetic canonical charts also differ near
+dominant-normal seams; observed pixel geometry remains explicit and unchanged.
+All constraints remain absent in this stage. The native goal remains active;
+**the user requested solo work, no further agents**, fewer checks and milestone-only
+updates. Existing preparation processes were deliberately left running.
 
 Next-stage probe-observation preparation is implemented separately in
 `training/arbitrary_plane_probe_observations_v7.py`; it is **not yet trained or
@@ -60,12 +92,12 @@ The corrected CPU check `data/joint_v7_probe_observation_cpu_check_002` passed
 on one fixed TRAIN probe/64 sections (3 intersections, 6 retained clicks across
 presentations; maximum frozen-raster interpolation discrepancy 0.508um).
 Check001 is superseded: its voxel-centre-origin convention was corrected to
-the project's voxel-boundary origin before any training use. The queued
-expanded trainer remains constraint-free and its operative sources unchanged.
+the project's voxel-boundary origin before any training use. The forthcoming
+streaming trainer remains constraint-free.
 
-After expanded training exits successfully, run
-`python -u -m training.evaluate_joint_v7_expanded`. This prepared, unrun evaluator
-loads the complete30,000-update checkpoint and scores all16 fitted branches on
+`training.evaluate_joint_v7_expanded` is a prepared but unrun evaluator for the
+cancelled fixed-bank trainer. Adapt its input/output paths to the streamed run
+after training; do not launch it unchanged. It scores all16 fitted branches on
 the same384 synthetic DEV96 observations plus64 real DEV192 images. It preserves
 raw predictions and separates selected, prior-selected, unwarped and diagnostic
 oracle errors. Real192 vs the original96px experiment is not a matched comparison;

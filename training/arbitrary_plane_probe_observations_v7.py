@@ -40,6 +40,7 @@ def sample_subject_probe(
     root_seed, bregma_ccf_um, source_identifiers, *,
     origin_um=(0., 0., 0.), voxel_um=(25., 25., 25.),
     elevation_range_deg=(45., 90.), depth_range_um=(1500., 6000.), track_step_um=25.,
+    dorsal_cortical_voxels=None,
 ):
     """Sample independently of every section; caller supplies pinned atlas/plan.
 
@@ -51,6 +52,8 @@ def sample_subject_probe(
     Entry sampling is uniform over cortical
     AP/ML columns, not surface area. Tracks stop at the first sampled brain exit;
     25um stepping is an occupancy approximation, not an exact surface mesh.
+    The caller may precompute identical [AP,first-DV,ML] cortical voxels in
+    AP/ML row-major order once; this changes no random draws or geometry.
     """
     receipt = subject_deformation_plan_receipt_v2(plan)['receipt_sha256']
     if receipt != source_identifiers['subject_plan_receipt_sha256']:
@@ -60,13 +63,17 @@ def sample_subject_probe(
     rng, seed = _rng(root_seed, lineage['animal_id'], probe_id, 'shared-track')
     annotation = np.asarray(annotation_ap_dv_ml)
     origin, voxel = np.asarray(origin_um), np.asarray(voxel_um)
-    top = (annotation != 0).argmax(axis=1)
-    ap, ml = np.indices(top.shape)
-    candidates = np.argwhere(np.isin(annotation[ap, top, ml], list(cortical_region_ids)))
+    if dorsal_cortical_voxels is None:
+        top = (annotation != 0).argmax(axis=1)
+        ap, ml = np.indices(top.shape)
+        ap, ml = np.argwhere(np.isin(annotation[ap, top, ml], list(cortical_region_ids))).T
+        candidates = np.column_stack((ap, top[ap, ml], ml))
+    else:
+        candidates = np.asarray(dorsal_cortical_voxels)
     bregma_subject = _ccf_to_subject_points_from_verified_plan_v2(np.asarray(bregma_ccf_um)[None], plan)[0]
     for attempt in range(32):
-        ap, ml = candidates[rng.integers(len(candidates))]
-        entry_ccf = origin + voxel * np.array([ap + .5, top[ap, ml], ml + .5])
+        ap, dv, ml = candidates[rng.integers(len(candidates))]
+        entry_ccf = origin + voxel * np.array([ap + .5, dv, ml + .5])
         entry = _ccf_to_subject_points_from_verified_plan_v2(entry_ccf[None], plan)[0]
         elevation, azimuth = np.deg2rad(rng.uniform(*elevation_range_deg)), rng.uniform(-np.pi, np.pi)
         direction = np.array([np.cos(elevation) * np.cos(azimuth), np.sin(elevation), np.cos(elevation) * np.sin(azimuth)])
@@ -97,7 +104,7 @@ def sample_subject_probe(
         'ccf_context_sha256': plan['provenance']['ccf_context_sha256'],
         'root_seed': int(root_seed), 'track_seed_uint64': seed, 'physical_draw_attempt': attempt,
         'entry_subject_ap_dv_ml_um': entry, 'entry_ccf_ap_dv_ml_um': entry_ccf,
-        'entry_dorsal_atlas_voxel_ap_dv_ml': np.array([ap, top[ap, ml], ml]),
+        'entry_dorsal_atlas_voxel_ap_dv_ml': np.array([ap, dv, ml]),
         'direction_subject_ap_dv_ml': direction, 'elevation_deg': float(np.rad2deg(elevation)),
         'latent_azimuth_rad': float(azimuth), 'azimuth_is_observed': False,
         'requested_depth_um': float(requested_depth), 'depth_um': actual_depth,
