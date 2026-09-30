@@ -58,7 +58,11 @@ The [frozen streaming-stage result](STREAMING_JOINT_V7_STAGE_RESULT_20260930.md)
 shows final direct MAP errors of54.73deg/12.06mm on legacy96px held-out
 synthetic DEV versus3.61deg/657um against weak real DEV affines. This does not
 qualify arbitrary-plane performance. A fixed192px rerender of the same held-out
-synthetic subjects is the immediate next diagnostic; no public benchmark yet.
+synthetic subjects is [complete and audited](JOINT_V7_MATCHED_192_DEV_RESULT_20260930.md):
+direct MAP error remains8.2–8.7mm/38–40deg by background mode. The fitter
+changed no eligible branch and does not update full pose at inference. The next
+architecture step is an actual recurrent pose update plus trained fit-quality
+selection, not blind scaling of this deficient checkpoint; no public benchmark.
 
 The streaming sampler has512 fixed global-affine variants of8 base synthetic
 subjects from one atlas; these are not512 biological animals or independently
