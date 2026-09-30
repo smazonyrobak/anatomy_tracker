@@ -122,6 +122,7 @@ config = {
     'sampling': '64 independent TRAIN inverse-map subjects; one base and eight affine variants per batch; fresh arbitrary brain-intersecting physical planes; rejected slots redrawn for the same virtual identity; all attempts and selected modes recorded',
     'loss': 'geometry-best canonical five-point physical error /500um + .1 mixture pose NLL + .2 best-mode cross-entropy',
     'readout': 'fixed one eligible TRAIN plane per independent base, never optimizer; raw direct predictions at step 0 and each 10000; no DEV/test access',
+    'recovery': 'whole model, optimizer, RNG and attempted-plane count saved every 10000 updates; deterministic draw seed and schedule',
     'scope': 'synthetic TRAIN direct-pose exposure, not joint fitting validation, calibration, benchmark, or deployment',
     'calibrated': False, 'constraints': 'absent, not trained',
     'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repository, text=True).strip(),
@@ -198,15 +199,16 @@ def readout(stage_step):
     model.train()
 
 
-def save_checkpoint(stage_step):
+def save_checkpoint(stage_step, attempted_planes):
     torch.save({'model_state': model.state_dict(), 'optimizer_state': optimizer.state_dict(),
                 'step': 36000 + stage_step, 'stage_step': stage_step, 'config': config,
                 'eligible_optimizer_synthetic_planes': stage_step * BATCH,
+                'attempted_synthetic_planes': attempted_planes,
                 'torch_rng': torch.get_rng_state(), 'cuda_rng': torch.cuda.get_rng_state_all(),
                 'calibrated': False}, RUN / f'joint_step_{36000 + stage_step:06d}.pt')
 
 
-save_checkpoint(0)
+save_checkpoint(0, 0)
 readout(0)
 started = time.perf_counter()
 attempted = 0
@@ -245,7 +247,7 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as trace, \
             draws.flush()
             print(json.dumps(row), flush=True)
         if step % 10000 == 0:
-            save_checkpoint(step)
+            save_checkpoint(step, attempted)
             readout(step)
 for name, expected in source_sha.items():
     assert hashlib.sha256((repository / 'training' / name).read_bytes()).hexdigest() == expected
