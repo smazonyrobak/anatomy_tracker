@@ -63,6 +63,14 @@ Check001 is superseded: its voxel-centre-origin convention was corrected to
 the project's voxel-boundary origin before any training use. The queued
 expanded trainer remains constraint-free and its operative sources unchanged.
 
+After expanded training exits successfully, run
+`python -u -m training.evaluate_joint_v7_expanded`. This prepared, unrun evaluator
+loads the complete30,000-update checkpoint and scores all16 fitted branches on
+the same384 synthetic DEV96 observations plus64 real DEV192 images. It preserves
+raw predictions and separates selected, prior-selected, unwarped and diagnostic
+oracle errors. Real192 vs the original96px experiment is not a matched comparison;
+the trainer's own step0/final192 readouts provide the matched direct-pose check.
+
 - Image-key001 is completed and independently audited: candidate-stage gate
   passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%
   remain inadequate. Its whole step4,000 checkpoint is the native ribbon parent.
