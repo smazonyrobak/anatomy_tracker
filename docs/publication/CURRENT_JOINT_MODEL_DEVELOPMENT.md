@@ -64,10 +64,14 @@ or training-speed result is available yet. Launch only after both preparation
 processes exit; first64 fixed diagnostic planes measure generation time/memory,
 and the first actual training batches measure full training cost and feedback.
 
-The8113 real expansion is live as Python PID **11052**, agent-local terminal98294,
-output `data/joint_v7_allen_fullcanvas_8113_192_001`. Root cannot poll that terminal
-handle; use process telemetry until it exits, then inspect the frozen output.
-Preserve both live output trees and operative sources. Large-cohort TRAIN-only
+The8113 real expansion exited and its frozen `completed.json` reports6833 new
+downloads with zero failures, plus1280 exact reused TRAIN images and64 exact
+reused DEV images. Independent rehashing matched every declared output hash;
+the8177 records have unique section IDs,58 TRAIN and6 DEV donors with zero
+overlap, finite geometry and the declared192px float16 array shape. These are
+weak Allen affine labels, not expert-verified alignments; the extra images add
+no new donors. The synthetic preparation remains protected while running.
+Large-cohort TRAIN-only
 acquisition has an approved donor-level plan (~263,754 candidate sections), but
 no large-cohort downloader has been launched. Calibration/final donor reservations
 exist before new image access; historical exposure caveats remain explicit.
