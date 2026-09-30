@@ -5121,6 +5121,42 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         automatic_layout.setRowStretch(11, 1)
         self.alignment_tabs.addTab(automatic_tab, "Automatic section matching")
 
+        joint_tab = QtWidgets.QWidget()
+        joint_layout = QtWidgets.QGridLayout(joint_tab)
+        joint_help = QtWidgets.QLabel(
+            "Experimental: one model predicts slice location and fits its anatomy. Full-image input; "
+            "the existing smart-brush selection is optional. No automatic tissue selection is required. "
+            "Current weights are not qualified for anatomical accuracy or calibrated confidence. "
+            "AP limits, surgery settings and probe marks do not condition this model yet."
+        )
+        joint_help.setWordWrap(True)
+        joint_help.setStyleSheet("color:#e7bd7b;")
+        self.joint_checkpoint = QtWidgets.QLineEdit()
+        self.joint_checkpoint.setPlaceholderText("Select a completed whole-model v7 checkpoint on I:")
+        self.joint_checkpoint_browse = QtWidgets.QPushButton("Choose checkpoint")
+        self.joint_device = QtWidgets.QComboBox()
+        self.joint_device.addItems(["CUDA", "CPU"])
+        self.joint_thickness = QtWidgets.QDoubleSpinBox()
+        self.joint_thickness.setRange(1., 500.)
+        self.joint_thickness.setValue(50.)
+        self.joint_thickness.setSuffix(" um")
+        self.joint_thickness.setToolTip(
+            "Physical section thickness, not spacing between sections. A uniform through-plane "
+            "profile is assumed. The initial synthetic training covers 25–100 um."
+        )
+        self.joint_run_btn = QtWidgets.QPushButton("Run experimental joint model on current slice")
+        self.joint_run_btn.setEnabled(False)
+        joint_layout.addWidget(joint_help, 0, 0, 1, 4)
+        joint_layout.addWidget(self.joint_checkpoint, 1, 0, 1, 3)
+        joint_layout.addWidget(self.joint_checkpoint_browse, 1, 3)
+        joint_layout.addWidget(QtWidgets.QLabel("Section thickness"), 2, 0)
+        joint_layout.addWidget(self.joint_thickness, 2, 1)
+        joint_layout.addWidget(QtWidgets.QLabel("Compute device"), 2, 2)
+        joint_layout.addWidget(self.joint_device, 2, 3)
+        joint_layout.addWidget(self.joint_run_btn, 3, 0, 1, 4)
+        joint_layout.setRowStretch(4, 1)
+        self.alignment_tabs.addTab(joint_tab, "Joint model (experimental)")
+
         self.probe_type = QtWidgets.QComboBox()
         self.probe_type.addItems(["Neuropixels 1.0", "Neuropixels 2.0 single-shank", "Neuropixels 2.0 four-shank"])
         self.probe_name = QtWidgets.QComboBox()
@@ -5424,6 +5460,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.automatic_warp_all_btn.clicked.connect(self._automatic_warp_all_clicked)
         self.auto_align_btn.clicked.connect(self._auto_align_clicked)
         self.auto_align_all_btn.clicked.connect(self._auto_align_all_clicked)
+        self.joint_checkpoint_browse.clicked.connect(self._browse_joint_checkpoint)
+        self.joint_checkpoint.textChanged.connect(self._refresh_point_counts)
+        self.joint_run_btn.clicked.connect(self._joint_model_clicked)
         self.new_outline_segment_btn.clicked.connect(self.start_new_surface_segment)
         self.auto_order_up_btn.clicked.connect(lambda: self._move_auto_order_item(-1))
         self.auto_order_down_btn.clicked.connect(lambda: self._move_auto_order_item(1))
@@ -7821,6 +7860,12 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
 
     def _refresh_point_counts(self) -> None:
+        self.joint_run_btn.setEnabled(
+            self.current_session() is not None
+            and bool(self.joint_checkpoint.text().strip())
+            and self.atlas_volume is not None and self.annotation_volume is not None
+            and not self.auto_alignment_busy
+        )
         self.remove_selected_slice_btn.setEnabled(
             self.current_session() is not None and not self.auto_alignment_busy
         )
@@ -7901,7 +7946,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         )
         diagnostics = session.auto_alignment_diagnostics or {}
         registration = self._coordinate_registration(session)
-        if registration.get("status") == "applied" and registration.get("kind") == "joint":
+        if registration.get("status") == "applied" and registration.get("kind") in ("joint", "joint-native"):
             registration_text = " | joint alignment and deformation applied"
         elif registration.get("status") == "applied" and registration.get("kind") == "automatic":
             registration_text = " | automatic anatomical warp applied"
@@ -8311,12 +8356,74 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         prepared["oriented_image_sha256"] = array_sha256(session.weight_image)
         return prepared
 
+    def _browse_joint_checkpoint(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Choose a completed whole-model joint v7 checkpoint", "I:/AnatomyTracker/runs",
+            "PyTorch checkpoint (*.pt)"
+        )
+        if path:
+            self.joint_checkpoint.setText(path)
+
+    def _joint_model_clicked(self) -> None:
+        if self.auto_alignment_busy:
+            return
+        session = self.current_session()
+        if session is None or self.atlas_volume is None or self.annotation_volume is None:
+            return
+        try:
+            from joint_slice_worker import run_joint_slice
+            path = Path(self.joint_checkpoint.text().strip()).resolve()
+            if path.drive.upper() != "I:" or not path.is_file():
+                raise ValueError("Choose a completed whole-model checkpoint on I:")
+            image = session.weight_image.astype(np.float32) / 255.
+            source_hash = file_sha256(Path(session.path))
+            image_hash = array_sha256(session.weight_image)
+            orientation = session.slice_transform.copy()
+            brush = None if session.brain_brush_selection_mask is None else session.brain_brush_selection_mask.copy()
+            atlas_snapshot = (id(self.atlas_volume), id(self.annotation_volume), dict(self.atlas_file_hashes))
+            session_snapshot = self._automatic_warp_batch_snapshot(session)
+            messages: queue.SimpleQueue = queue.SimpleQueue()
+            cancel_event = threading.Event()
+            progress = QtWidgets.QProgressDialog("Loading experimental joint model...", "Cancel", 0, 0, self)
+            progress.setWindowTitle("Experimental joint alignment")
+            progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+            progress.setMinimumDuration(0)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
+            progress.canceled.connect(cancel_event.set)
+            self.auto_alignment_busy = True
+            self._set_auto_constraint_controls_enabled(False)
+            self._refresh_point_counts()
+            future = self.alignment_executor.submit(
+                run_joint_slice, path, image, orientation, session.raw_display.shape, brush,
+                source_hash, image_hash, self.atlas_volume, self.annotation_volume,
+                dict(self.atlas_file_hashes), self.joint_thickness.value(), self.joint_device.currentText().lower(),
+                messages, cancel_event,
+            )
+
+            def install(result: tuple) -> None:
+                if (not any(item is session for item in self.sessions)
+                        or self._automatic_warp_batch_snapshot(session) != session_snapshot
+                        or (id(self.atlas_volume), id(self.annotation_volume), self.atlas_file_hashes) != atlas_snapshot):
+                    raise RuntimeError("Slice, alignment or atlas changed during inference; result was discarded")
+                self._apply_joint_model_prediction(session, *result)
+
+            self._watch_alignment_future(future, messages, cancel_event, progress, install,
+                                         failure_title="Experimental joint model failed",
+                                         operation_name="Experimental joint alignment")
+            progress.show()
+            self.status.setText("Joint model running in the background. Existing alignment stays unchanged until success.")
+        except Exception as exc:
+            self._finish_auto_alignment_ui()
+            QtWidgets.QMessageBox.critical(self, "Experimental joint model failed", str(exc))
+            self.status.setText(f"Experimental joint model failed: {exc}")
+
     def _apply_joint_model_prediction(self, session: SliceSession, prepared: dict,
                                       prediction: dict, checkpoint_sha256: str) -> None:
         """Install one native experimental result, not a legacy pose/warp fallback.
 
-        Called only with a completed whole-model inference. The deployment UI
-        entry point remains pending model validation and constraint training.
+        Called only with a completed whole-model inference. Experimental GUI
+        access does not qualify accuracy, constraints or uncertainty.
         """
         import torch
         from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_physical_ouv
@@ -8344,6 +8451,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "selected_component": [int(mode), int(reflection)], "raw_to_model_xy": raw_to_model.tolist(),
             "raw_shape_h_w": list(prepared["raw_shape_h_w"]), "model_shape_h_w": list(surface.shape[:2]),
             "brush_available": prepared["brush_available"], "probabilities_calibrated": False,
+            "runtime": prediction.get("runtime", {}),
             "constraints_used": False, "quality_status": "experimental, not qualified"},
             "coordinate_registration": {"kind": "joint-native", "status": "applied"}}
         candidate = replace(session, atlas_ouv_ap_dv_ml_um=ouv.tolist(),
@@ -8802,6 +8910,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.status.setText(f"Global auto-alignment failed: {exc}")
 
     def _set_auto_constraint_controls_enabled(self, enabled: bool) -> None:
+        for control in (self.joint_checkpoint, self.joint_checkpoint_browse, self.joint_device, self.joint_thickness):
+            control.setEnabled(enabled)
         self.pose_engine.setEnabled(enabled)
         self.own_cnn_weight.setEnabled(enabled and self.pose_engine.currentText() == POSE_ENGINE_WEIGHTED)
         self.limit_auto_align_ap.setEnabled(enabled)
