@@ -71,10 +71,13 @@ the8177 records have unique section IDs,58 TRAIN and6 DEV donors with zero
 overlap, finite geometry and the declared192px float16 array shape. These are
 weak Allen affine labels, not expert-verified alignments; the extra images add
 no new donors. The synthetic preparation remains protected while running.
-Large-cohort TRAIN-only
-acquisition has an approved donor-level plan (~263,754 candidate sections), but
-no large-cohort downloader has been launched. Calibration/final donor reservations
-exist before new image access; historical exposure caveats remain explicit.
+Large-cohort TRAIN-only metadata acquisition is frozen at
+`data/joint_v7_reserved_train_metadata_001`:1885 reserved donors and263754
+candidate sections. Independent audit matched all raw and summary hashes, found
+zero reserved-split leakage or duplicate section IDs, and found finite nonzero
+2D/3D transform determinants. No large-cohort image downloader has been launched.
+Calibration/final donor reservations exist before new image access; historical
+exposure caveats remain explicit. These upstream affines remain weak labels.
 
 Readouts are saved at step0,1000 and every4000: likelihood loss, normal/centre
 errors and reflection-aware observed-coordinate errors. Real DEV192 is matched
