@@ -20,3 +20,10 @@ Preassigned donor-reservation JSONL SHA-256:
 This makes a large, provenance-preserved real **training** source available for
 the same standalone model lineage. It is not held-out validation, calibration or
 a reason to claim anatomical accuracy from those weak labels alone.
+
+The affine geometry is overwhelmingly near-coronal: median plane-normal offset
+from the AP axis is 4.91 degrees (10th–90th percentile 1.98–8.03 degrees), with
+no section above 30 degrees; recorded section thickness is 100 µm throughout.
+Thus this large real source cannot itself establish arbitrary-plane competence.
+Synthetic full-plane training and independently annotated oblique real material
+remain necessary.
