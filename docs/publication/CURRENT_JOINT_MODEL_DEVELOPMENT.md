@@ -32,20 +32,21 @@ public benchmark. New GUI-consistent real192px preparation is complete (same
 58TRAIN/6DEV donors), and the actual offscreen Qt inference/save/reload smoke
 passed after fixing its stale overlay canvas size. No accuracy qualification.
 
-TRAIN-only4,096-plane192px generation is live, session **27036**, Python PID
-**22128**, output `data/joint_v7_training_data_001`. Observe terminal/process/GPU
-only; don't access its output or change operative geometry sources while live.
-First-map held-query maximum interpolation error .472um; bake133s, sectionsabout
-.63s each. All8 subjects are expected to take roughly an hour, not yet measured.
+TRAIN-only4,096-plane192px preparation finished in3748s. All eight subject
+shards,4096 section-file hashes and inverse-map hashes passed the frozen audit;
+the maximum sampled inverse-map interpolation error per subject was below.5um.
+This is a reusable source map set, not a sufficiently large final training bank.
 
 The fixed4,096-plane trainer queue **95614 was cancelled before launch (exit1)**.
 Do not restart `training/train_joint_v7_expanded.py`. Its finite training bank was
 too small as the intended main corpus. The remaining generator is useful because
 it freezes reusable inverse anatomical maps, not because4,096 is the final scale.
 
-`training/train_joint_v7_streaming.py` now prepares the same whole6,000-step model
-and AdamW continuation with fresh physical sections every synthetic update. It is
-not launched yet. This24,000-update stage supplies144,000 eligible new synthetic
+`training/train_joint_v7_streaming.py` now runs the same whole6,000-step model
+and AdamW continuation with fresh physical sections every synthetic update. Its
+first launch `_001` stopped before any update on a sampler unpacking typo; the
+repaired `_002` passed a focused GPU sample and started training. This24,000-update
+stage supplies144,000 eligible new synthetic
 planes, with8113 real TRAIN images/58donors and the unchanged64 DEV/6donors.
 This is an intermediate stage; larger-data collection proceeds alongside training.
 DeepSlice generated~920k synthetic images (58k low-tissue exclusions) and used
@@ -59,10 +60,12 @@ subjects from one atlas; these are not512 biological animals or independently
 varying local morphologies. Each generated plane has one background mode; retries,
 used planes and complete replay parameters are preserved separately. Map targets
 are explicitly approximate. Capacity statistics record director targets outside
-the current fitter's component bound without clipping the truth. No GPU streaming
-or training-speed result is available yet. Launch only after both preparation
-processes exit; first64 fixed diagnostic planes measure generation time/memory,
-and the first actual training batches measure full training cost and feedback.
+the current fitter's component bound without clipping the truth. The first64
+fixed diagnostic planes took.65s; training step1 peaked at5038MiB allocated
+GPU memory and fitting sent a nonzero gradient to the direct pose head. At1000
+updates, weak real DEV normal error was4.57deg but arbitrary-plane synthetic
+DEV remained59.68deg and13.13mm five-point error, worse than its step0
+coordinate error. This is not usable arbitrary-plane accuracy.
 
 The8113 real expansion exited and its frozen `completed.json` reports6833 new
 downloads with zero failures, plus1280 exact reused TRAIN images and64 exact
@@ -70,12 +73,14 @@ reused DEV images. Independent rehashing matched every declared output hash;
 the8177 records have unique section IDs,58 TRAIN and6 DEV donors with zero
 overlap, finite geometry and the declared192px float16 array shape. These are
 weak Allen affine labels, not expert-verified alignments; the extra images add
-no new donors. The synthetic preparation remains protected while running.
+no new donors.
 Large-cohort TRAIN-only metadata acquisition is frozen at
 `data/joint_v7_reserved_train_metadata_001`:1885 reserved donors and263754
 candidate sections. Independent audit matched all raw and summary hashes, found
 zero reserved-split leakage or duplicate section IDs, and found finite nonzero
-2D/3D transform determinants. No large-cohort image downloader has been launched.
+2D/3D transform determinants. Donor-sharded TRAIN-only image acquisition has
+started separately; it reuses8113 exact matching TRAIN source JPEGs and never
+uses the64 DEV images. Its output is protected while running.
 Calibration/final donor reservations exist before new image access; historical
 exposure caveats remain explicit. These upstream affines remain weak labels.
 
@@ -84,9 +89,12 @@ errors and reflection-aware observed-coordinate errors. Real DEV192 is matched
 in resolution; legacy synthetic DEV96 is not, so its train/dev gap is not pure
 generalization evidence. Real and synthetic canonical charts also differ near
 dominant-normal seams; observed pixel geometry remains explicit and unchanged.
-All constraints remain absent in this stage. The native goal remains active;
-**the user requested solo work, no further agents**, fewer checks and milestone-only
-updates. Existing preparation processes were deliberately left running.
+All constraints remain absent in this stage. The optional-constraint packer
+encodes elevation bounds and depth in context slots7–11, while the model's
+context docstring describes a unit probe direction/cone in those slots; this
+semantic mismatch must be resolved before constraint training or GUI wiring.
+The native goal remains active. The user permits selective useful agents but
+wants to avoid excessive delegation, checks and status updates.
 
 Next-stage probe-observation preparation is implemented separately in
 `training/arbitrary_plane_probe_observations_v7.py`; it is **not yet trained or
