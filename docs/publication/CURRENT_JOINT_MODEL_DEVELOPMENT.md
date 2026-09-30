@@ -42,11 +42,10 @@ Do not restart `training/train_joint_v7_expanded.py`. Its finite training bank w
 too small as the intended main corpus. The remaining generator is useful because
 it freezes reusable inverse anatomical maps, not because4,096 is the final scale.
 
-`training/train_joint_v7_streaming.py` now runs the same whole6,000-step model
-and AdamW continuation with fresh physical sections every synthetic update. Its
-first launch `_001` stopped before any update on a sampler unpacking typo; the
-repaired `_002` passed a focused GPU sample and started training. This24,000-update
-stage supplies144,000 eligible new synthetic
+`training/train_joint_v7_streaming.py` continued the same whole6,000-step model
+and AdamW state with fresh physical sections every synthetic update. Its first
+launch `_001` stopped before any update on a sampler unpacking typo; the
+repaired `_002` exited cleanly after24,000 updates and144,000 eligible new synthetic
 planes, with8113 real TRAIN images/58donors and the unchanged64 DEV/6donors.
 This is an intermediate stage; larger-data collection proceeds alongside training.
 DeepSlice generated~920k synthetic images (58k low-tissue exclusions) and used
@@ -54,6 +53,12 @@ DeepSlice generated~920k synthetic images (58k low-tissue exclusions) and used
 ([primary paper](https://www.nature.com/articles/s41467-023-41645-4)). Million-scale
 synthetic exposure and hundreds of thousands of trustworthy real sections are
 planning targets, not proof that size alone will meet the accuracy goal.
+
+The [frozen streaming-stage result](STREAMING_JOINT_V7_STAGE_RESULT_20260930.md)
+shows final direct MAP errors of54.73deg/12.06mm on legacy96px held-out
+synthetic DEV versus3.61deg/657um against weak real DEV affines. This does not
+qualify arbitrary-plane performance. A fixed192px rerender of the same held-out
+synthetic subjects is the immediate next diagnostic; no public benchmark yet.
 
 The streaming sampler has512 fixed global-affine variants of8 base synthetic
 subjects from one atlas; these are not512 biological animals or independently
