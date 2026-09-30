@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-READY_AFTER_NORMALIZED_ENDPOINT_AND_ROOT_REVIEW = False
+READY_AFTER_NORMALIZED_ENDPOINT_AND_ROOT_REVIEW = True
 assert READY_AFTER_NORMALIZED_ENDPOINT_AND_ROOT_REVIEW, "Draft: await normalized endpoint and explicit launch decision"
 ROOT = Path("I:/AnatomyTracker")
 SIGNED = ROOT / "runs/joint_v6_signed_pose_evidence_001"

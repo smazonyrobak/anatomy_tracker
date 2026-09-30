@@ -11,7 +11,7 @@ sys.dont_write_bytecode = True
 
 import hashlib
 import json
-RUN_COMPLETION_SHA256 = "UNSET"
+RUN_COMPLETION_SHA256 = "57554cc00bcd4446409cb3cd3bc0dd0fb11320565e32b4f1b97a4c7bc33331c1"
 assert len(RUN_COMPLETION_SHA256) == 64, "Confirm exit and pin completed.json before any run access"
 
 import numpy as np

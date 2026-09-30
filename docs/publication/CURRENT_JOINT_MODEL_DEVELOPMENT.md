@@ -1,4 +1,4 @@
-# Current joint-model development — 2026-09-29
+# Current joint-model development — 2026-09-30
 
 The native goal is active. No heartbeat automation is used. This is an unfinished
 model-development goal, not a shipped or benchmark-qualified system. All work,
@@ -143,8 +143,8 @@ data, temporary files and runs belong on `I:`.
   [Remaining integration gaps](JOINT_CONSTRAINT_INTEGRATION_GAPS_20260929.md).
 - Earlier bridge, native-no-probe, signed-pose and coarse-rehearsal outputs/audits
   are frozen and readable. TRAIN-only pose-cost-direction diagnostic30641 also
-  exited0. Full-coverage outputs are now frozen/readable; only the live normalized
-  signed-pose output and its operative model/runner source remain protected.
+  exited0. Full-coverage and normalized signed-pose outputs are frozen/readable;
+  the latter's independent audit also completed and confirms a failed normal gate.
   Concurrent run timings are not
   hardware benchmarks. No independently trained encoders are
   merged; a future successful real warm start needs sequential native training
@@ -208,23 +208,24 @@ and an unchanged `None` path. Compatibility preflight17128 from `e6c97e6`
 passed exact zero-head outputs/common parameters/RNG and finite backward,
 with no optimizer update; receipt SHA256
 `1d87df5a33bd2da6df570a84108b9e9a5b0fec888ef10f4c52578b8f7f4d68c4`.
-Matched training is now active as90795/PID21188 from committed `2a86507` in
-the main integration checkout. Its output
-`I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_001` and operative
-model/runner source are protected until exit. Terminal-only observation at
-16:35UTC reached step1600/2000 with finite loss/gradients; no endpoint result is asserted.
-A guarded adapted post-exit auditor is prepared, with completion pin unset and
-not run. Coarse session96942 has exited and its whole-A endpoint was audited;
+Matched training90795 from `2a86507` exited0 after2,000 updates. Its completed
+independent audit passes integrity and fails the unchanged oracle-normal20% gate.
+Correct-reflection centre improves709.931→644.067um versus the unscaled control,
+but selected centre worsens842.274→960.625um and normal improves only
+6.10189→5.87902degrees. No promotion, extension or scalar sweep. All artifacts
+are now frozen/readable. [Completed result and exact bindings](NORMALIZED_SIGNED_POSE_EVIDENCE_001_RESULT_20260930.md).
+Coarse session96942 has exited and its whole-A endpoint was audited;
 do not splice its encoder with this separately trained native control.
 [Prospective protocol](NORMALIZED_SIGNED_POSE_EVIDENCE_PROTOCOL_20260929.md).
-After this endpoint is independently audited, a failed normal-learning gate
-can trigger the prepared, guarded TRAIN-only feature-Jacobian/readout comparison
+The failed, independently audited normal-learning gate now triggers the
+enabled TRAIN-only feature-Jacobian/readout comparison
 in `training/diagnose_joint_v6_train_pose_jacobian_readout.py` (`634b27c`). It
 uses one completed whole signed checkpoint, exact24 prior TRAIN observations,
 fixed oracle fields/reflection/PSF and three paired learned-versus-damped-solve
 updates; no optimizer or hyperparameter sweep. Root and independent source
-review found no correctness blocker, but it is unlaunched and off-policy,
-not qualification. [Fixed protocol and interpretation limits](TRAIN_POSE_JACOBIAN_READOUT_DISCRIMINATOR_20260929.md).
+review found no correctness blocker. It is off-policy, not qualification, and
+compares against the unscaled head, not the latest normalized readout.
+[Fixed protocol and interpretation limits](TRAIN_POSE_JACOBIAN_READOUT_DISCRIMINATOR_20260929.md).
 Do not infer multiaxis or learned-deformation success from the oracle diagnostic,
 or infer that amplitude imbalance alone proves a scaling fix.
 The exact TRAIN-only acquisition-view extension in

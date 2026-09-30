@@ -1,6 +1,6 @@
-# Draft: fixed-feature TRAIN pose-Jacobian/readout discriminator
+# Fixed-feature TRAIN pose-Jacobian/readout discriminator
 
-Status: **unlaunched; pending the normalized control's completed endpoint and a separate launch decision**. One bounded diagnostic, no optimizer, parameter sweep, development examples, model edit, benchmark or qualification claim.
+Status: **enabled for launch on 2026-09-30** after the normalized control exited and its independent audit confirmed the failed normal-learning gate (audit SHA256 `c42402dbfb5d74c790aff62e9bbc59b4cbebb60f79618474016e1a931dbe16d8`). Root reread the complete runner; the earlier independent source review found no blocker. One bounded diagnostic, no optimizer, parameter sweep, development examples, model edit, benchmark or qualification claim. The comparator remains the predeclared **unscaled** signed checkpoint, not the new normalized endpoint; this cannot establish a paired win against the latest normalized readout.
 
 ## Frozen inputs
 

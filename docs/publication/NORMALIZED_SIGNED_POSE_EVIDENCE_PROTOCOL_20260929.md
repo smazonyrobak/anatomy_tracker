@@ -1,11 +1,11 @@
 # Fixed TRAIN RMS scaling of signed pose evidence
 
-Matched control **launched from `2a86507`, session90795/PID21188**, after its
+Matched control **completed from `2a86507`, session90795 EXIT0**, after its
 compatibility preflight passed. Output `I:/AnatomyTracker/runs/joint_v6_normalized_signed_pose_evidence_001`
-and operative main-checkout model/runner source are protected until exit.
+is frozen and independently audited; the scientific normal-learning gate fails.
 This changes one input scaling, not
 the architecture, feature encoder, optimizer, loss, rendering or topology limits.
-All work stays on I:. The separate full-coverage coarse run remains protected.
+All work stays on I:. The separate full-coverage coarse run also completed.
 
 ## Evidence and hypothesis
 
@@ -46,6 +46,10 @@ is saved in model configuration; `None` preserves the old arithmetic and state
 dictionary. No new parameters, persistent buffers or random draws are introduced.
 
 ## Matched learning and decision
+
+Completed: runner90795 exited0 and the independent audit passed integrity but
+failed the unchanged normal-learning gate. See the
+[result and continuation decision](NORMALIZED_SIGNED_POSE_EVIDENCE_001_RESULT_20260930.md).
 
 Initialize the **whole original image-key4k model**, not the trained signed2k
 weights and not any separately trained coarse encoder. Fresh native heads,
