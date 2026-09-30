@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -67,7 +68,10 @@ protocol = {'checkpoint': str(RUN / 'joint_step_36000.pt'),
     'selected': 'trained fit-quality + .2 direct log prior - .05 deformation difficulty, fixed before this evaluation',
     'oracle': 'minimum reference error over 16 fitted branches; diagnostic, never a deployed selection rule',
     'aggregation': 'eligible observations averaged within synthetic subject and background mode, then four subjects equally weighted',
-    'scope': 'synthetic development only; no biological animal, expert, calibration, GUI or public benchmark claim'}
+    'scope': 'synthetic development only; no biological animal, expert, calibration, GUI or public benchmark claim',
+    'evaluator_sha256': sha(Path(__file__)),
+    'inference_sha256': sha(repository / 'training/arbitrary_plane_joint_inference_v8.py'),
+    'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repository, text=True).strip()}
 (OUTPUT / 'evaluation.json').write_text(json.dumps(protocol, indent=2), encoding='utf8')
 atlas = torch.from_numpy(_decode_and_preprocess_allen_v6()[0][:1]).cuda()
 rows = []
