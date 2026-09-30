@@ -81,6 +81,7 @@ torch.save({'base_index': base_indices, 'virtual_index': virtual_indices}, RUN /
 (RUN / 'identities.json').write_text(json.dumps(context['subjects']), encoding='utf8')
 source_names = sorted(set(context['provenance']['source_sha256']) | {
     'arbitrary_plane_joint_model_v8.py', 'arbitrary_plane_joint_model_v7.py',
+    'arbitrary_plane_joint_inference_v8.py',
     'arbitrary_plane_recurrent_model.py', 'arbitrary_plane_ribbon_v6.py',
     'train_joint_v8_million_direct.py',
 })
@@ -91,6 +92,7 @@ for name in source_names:
     source_sha[name] = hashlib.sha256(path.read_bytes()).hexdigest()
 config = {
     'seed': SEED, 'stage_updates': STEPS, 'batch': BATCH, 'resolution': [SIDE, SIDE],
+    'modes': model.modes, 'fitter_steps': 4,
     'eligible_optimizer_plane_target': STEPS * BATCH,
     'parent_checkpoint': str(parent_path), 'parent_checkpoint_sha256': parent_sha,
     'parent_completed_sha256': hashlib.sha256((PARENT / 'completed.json').read_bytes()).hexdigest(),
