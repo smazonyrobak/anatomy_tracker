@@ -106,6 +106,18 @@ source, schedule and raw predictions; no mixing independently trained branches.
 
 ## Necessary work after initialization
 
+Parallel desktop integration now has a bounded-memory all-mode inference adapter,
+an exact raw-display-to-model affine, optional brush preprocessing matching the
+existing three training input channels, and native curved-surface point mapping.
+The GUI can install this result through a private integration method and save/load
+its arrays in session version 3 (versions 1/2 remain readable). No new default or
+public experimental button is enabled yet. One actual frozen TRAIN section
+reproduced all three input modes exactly; native point lifting, including a display
+flip, matched its stored reference coordinates exactly. These are coordinate
+contract checks, not trained-model accuracy or a complete desktop workflow test.
+Real-image photometry, trained constraints, confidence calibration and distributable
+packaging remain unfinished. No live training artifacts were opened for this work.
+
 1. Establish direct prediction learning and useful fitting feedback, using a
    matched disconnected-feedback comparison only when training is stable. Expand
    the existing generator to adequate independent synthetic subjects, anatomical

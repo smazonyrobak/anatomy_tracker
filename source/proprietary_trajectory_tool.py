@@ -15,7 +15,7 @@ import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -51,6 +51,7 @@ from deepslice_runtime import (
 from dense_registration_preprocessing import NATIVE_SHAPE as DENSE_REGISTRATION_SHAPE
 from dense_registration_runtime import run_dense_registration
 from nonlinear_registration import SliceAtlasTransform2D
+from joint_slice_input import prepare_joint_slice_input, joint_raw_points_to_ccf
 from probe_constraints import (
     InfeasibleProbeConstraint,
     ProbeInsertionConstraint,
@@ -106,7 +107,7 @@ MIND_TILT_PRIOR_WEIGHT = 0.0005
 MIND_SURFACE_WEIGHT = 0.05
 MIND_PROBE_GEOMETRY_WEIGHT = 1.0
 SESSION_ARCHIVE_FORMAT = "Proprietary Anatomy Tracker session"
-SESSION_ARCHIVE_VERSION = 2
+SESSION_ARCHIVE_VERSION = 3
 SESSION_STATE_FIELDS = (
     "rotation_deg",
     "flip_horizontal",
@@ -3174,6 +3175,11 @@ def session_points_to_volume(
     Explicit legacy pose arguments are used only when no full-plane state exists.
     """
     points = np.asarray(points_xy, dtype=np.float64).reshape(-1, 2)
+    if session.atlas_surface_ccf_um is not None:
+        physical, _ = joint_raw_points_to_ccf(
+            points, np.eye(3), session.atlas_surface_ccf_um, session.atlas_surface_ccf_um.shape[:2],
+        )
+        return physical / VOXEL_UM - 0.5
     if session.atlas_ouv_ap_dv_ml_um is not None:
         origin, edge_u, edge_v = np.asarray(session.atlas_ouv_ap_dv_ml_um, dtype=np.float64).reshape(3, 3)
         height, width = session.atlas_raster_shape_h_w
@@ -3204,6 +3210,10 @@ def session_atlas_slice(volume: np.ndarray, session: SliceSession, *, order: int
 
 
 def session_plane_corners(session: SliceSession, volume_shape: tuple[int, int, int]) -> np.ndarray:
+    if session.atlas_surface_ccf_um is not None:
+        height, width = session.atlas_surface_ccf_um.shape[:2]
+        return session_points_to_volume(session, np.asarray([[0, 0], [width - 1, 0],
+                                        [width - 1, height - 1], [0, height - 1]]), volume_shape)
     if session.atlas_ouv_ap_dv_ml_um is not None:
         height, width = session.atlas_raster_shape_h_w
         return session_points_to_volume(session, np.asarray([[0, 0], [width, 0], [width, height], [0, height]]), volume_shape)
@@ -3286,6 +3296,10 @@ class SliceSession:
     # Optional joint-model plane: absolute physical Allen AP/DV/ML O/U/V and its raster.
     atlas_ouv_ap_dv_ml_um: list[float] | None = None
     atlas_raster_shape_h_w: tuple[int, int] | None = None
+    # Absolute observed-raster surface, including curvature and reflection once.
+    # This is the atlas reference chart, retained during manual landmark edits.
+    atlas_surface_ccf_um: np.ndarray | None = None
+    joint_model_arrays: dict[str, np.ndarray] | None = None
     atlas_landmarks: list[tuple[float, float]] = field(default_factory=list)
     slice_landmarks: list[tuple[float, float]] = field(default_factory=list)
     brain_outline_points: list[tuple[float, float]] = field(default_factory=list)
@@ -5661,6 +5675,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                             )
                             archive.writestr(mask_member, payload.getvalue())
                             record["brush_mask_member"] = mask_member
+                        if session.atlas_surface_ccf_um is not None:
+                            native_member = f"state/{index:04d}_joint_model.npz"
+                            payload = io.BytesIO()
+                            np.savez_compressed(payload, selected_surface_ccf_um=session.atlas_surface_ccf_um,
+                                                **(session.joint_model_arrays or {}))
+                            archive.writestr(native_member, payload.getvalue())
+                            record["joint_model_member"] = native_member
                         if session.slice_atlas_transform is not None:
                             transform_member = f"state/{index:04d}_slice_atlas_transform.npz"
                             transform_path = Path(transform_folder) / f"{index:04d}.npz"
@@ -5686,7 +5707,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         try:
             with zipfile.ZipFile(source, "r") as archive:
                 state = json.loads(archive.read("session.json"))
-                if state.get("format") != SESSION_ARCHIVE_FORMAT or state.get("version") not in (1, SESSION_ARCHIVE_VERSION):
+                if state.get("format") != SESSION_ARCHIVE_FORMAT or state.get("version") not in (1, 2, SESSION_ARCHIVE_VERSION):
                     raise ValueError("Unsupported or invalid Anatomy Tracker session file")
                 saved_hashes = state.get("atlas_file_hashes", {})
                 if saved_hashes and self.atlas_file_hashes and saved_hashes != self.atlas_file_hashes:
@@ -5733,6 +5754,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     if mask_member := record.get("brush_mask_member"):
                         with np.load(io.BytesIO(archive.read(mask_member)), allow_pickle=False) as values:
                             session.brain_brush_selection_mask = values["mask"].astype(bool)
+                    if native_member := record.get("joint_model_member"):
+                        with np.load(io.BytesIO(archive.read(native_member)), allow_pickle=False) as values:
+                            session.atlas_surface_ccf_um = values["selected_surface_ccf_um"]
+                            session.joint_model_arrays = {key: values[key] for key in values.files
+                                                          if key != "selected_surface_ccf_um"}
                     if transform_member := record.get("transform_member"):
                         transform_path = cache_path / f"transform_{index:04d}.npz"
                         transform_path.write_bytes(archive.read(transform_member))
@@ -8267,6 +8293,87 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             "tissue_mask_sha256": mask_sha256,
             "snapshot": snapshot,
         }
+
+    def _joint_model_inputs(self, session: SliceSession, output_shape_h_w: tuple[int, int]) -> dict:
+        """Full oriented image, optional brush; never call registration_brain_mask.
+
+        Current synthetic-only weights have not established this real-image
+        grayscale transfer. Display brightness curves are deliberately excluded.
+        Mark conditioning stays absent until its training stage is complete.
+        """
+        prepared = prepare_joint_slice_input(
+            session.weight_image.astype(np.float32) / 255., session.slice_transform,
+            session.raw_display.shape, output_shape_h_w,
+            brush_mask=session.brain_brush_selection_mask,
+        )
+        prepared["source_sha256"] = file_sha256(Path(session.path))
+        prepared["raw_to_oriented_xy"] = session.slice_transform.copy()
+        prepared["oriented_image_sha256"] = array_sha256(session.weight_image)
+        return prepared
+
+    def _apply_joint_model_prediction(self, session: SliceSession, prepared: dict,
+                                      prediction: dict, checkpoint_sha256: str) -> None:
+        """Install one native experimental result, not a legacy pose/warp fallback.
+
+        Called only with a completed whole-model inference. The deployment UI
+        entry point remains pending model validation and constraint training.
+        """
+        import torch
+        from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_physical_ouv
+        from training.arbitrary_plane_geometry import horizontal_flip_quicknii_ouv
+
+        if (prepared["source_sha256"] != file_sha256(Path(session.path))
+                or not np.array_equal(prepared["raw_to_oriented_xy"], session.slice_transform)
+                or prepared["oriented_image_sha256"] != array_sha256(session.weight_image)):
+            raise RuntimeError("Slice changed during joint inference; result was not installed")
+        current = self._joint_model_inputs(session, prepared["model_shape_h_w"])
+        if not np.array_equal(current["channels"], prepared["channels"]):
+            raise RuntimeError("Brush or input pixels changed during joint inference")
+        arrays = {key: value.numpy() if torch.is_tensor(value) else value
+                  for key, value in prediction.items() if torch.is_tensor(value) or isinstance(value, np.ndarray)}
+        mode, reflection = prediction["selected_component"]
+        surface = arrays["surface"][mode, reflection]
+        ouv = full_frame_state_to_physical_ouv(torch.as_tensor(arrays["state"][mode, reflection]))
+        if reflection:
+            ouv = horizontal_flip_quicknii_ouv(ouv, surface.shape[1])
+        raw_to_model = prepared["raw_to_model_xy"]
+        transform = SliceAtlasTransform2D(raw_to_model @ np.linalg.inv(session.slice_transform),
+                                          session.weight_image.shape, surface.shape[:2])
+        run_id = f"joint-v7-{time.time_ns()}"
+        diagnostics = {"joint_model": {"checkpoint_sha256": checkpoint_sha256,
+            "selected_component": [int(mode), int(reflection)], "raw_to_model_xy": raw_to_model.tolist(),
+            "raw_shape_h_w": list(prepared["raw_shape_h_w"]), "model_shape_h_w": list(surface.shape[:2]),
+            "brush_available": prepared["brush_available"], "probabilities_calibrated": False,
+            "constraints_used": False, "quality_status": "experimental, not qualified"},
+            "coordinate_registration": {"kind": "joint-native", "status": "applied"}}
+        candidate = replace(session, atlas_ouv_ap_dv_ml_um=ouv.tolist(),
+                            atlas_raster_shape_h_w=surface.shape[:2], atlas_surface_ccf_um=surface,
+                            joint_model_arrays=arrays, slice_atlas_transform=transform,
+                            slice_to_atlas_tps=None, atlas_to_slice_tps=None,
+                            auto_alignment_diagnostics=diagnostics)
+        updates = self._probe_coordinate_updates(candidate, transform)
+        overlay = transform.render_display_image_in_atlas(session.rotated)
+        for name in ("atlas_ouv_ap_dv_ml_um", "atlas_raster_shape_h_w", "atlas_surface_ccf_um",
+                     "joint_model_arrays", "slice_atlas_transform", "slice_to_atlas_tps", "atlas_to_slice_tps",
+                     "auto_alignment_diagnostics"):
+            setattr(session, name, getattr(candidate, name))
+        session.transformed_overlay = overlay
+        session.auto_alignment_engine = "Joint model v7 (experimental)"
+        session.auto_alignment_method = "Direct pose distribution and native anatomical fitting"
+        session.auto_alignment_scope = "single-section-experimental"
+        session.auto_alignment_run_id = run_id
+        session.alignment_source_sha256 = prepared["source_sha256"]
+        session.auto_alignment_global = False
+        session.auto_alignment_score = None
+        session.atlas_landmarks.clear()
+        session.slice_landmarks.clear()
+        self._commit_probe_coordinate_updates(session, updates)
+        self._probe_fit_cache.clear()
+        self._refresh_atlas()
+        self._refresh_points()
+        self._update_probe_fit_summary()
+        self._refresh_3d()
+        self.status.setText("Experimental joint result: review anatomy. Confidence is uncalibrated; constraints were not used.")
 
     def _automatic_warp_batch_snapshot(self, session: SliceSession) -> tuple:
         source = Path(session.path)
