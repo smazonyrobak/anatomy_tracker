@@ -71,6 +71,22 @@ for name, parameter in model.named_parameters():
 trainable = [p for p in model.parameters() if p.requires_grad]
 optimizer = torch.optim.AdamW(trainable, lr=8e-5, weight_decay=1e-4)
 
+
+def predict_direct(inputs):
+    # The frozen image decoder is needed for joint fitting, not this pose-only stage.
+    x = inputs
+    for layer in model.encoder:
+        x = layer(x)
+    context = inputs.new_zeros(len(inputs), 12)
+    z = model.pose(torch.cat((F.adaptive_avg_pool2d(x, 4).flatten(1), context), -1))
+    z = z.reshape(-1, model.modes, 21)
+    centre = model.center_origin + z[..., :3] * model.center_scale
+    return {'state': torch.cat((centre, z[..., 3:9],
+                                math.log(12000.) + z[..., 9:11].clamp(-2.5, 2.), z[..., 11:12]), -1),
+            'std': (.005 + F.softplus(z[..., 12:18])).clamp_max(4.),
+            'concentration': (.05 + F.softplus(z[..., 18])).clamp_max(500.),
+            'log_mass': z[..., 19].log_softmax(-1), 'reflection_logit': z[..., 20]}
+
 generator = torch.Generator().manual_seed(SEED)
 base_indices = torch.randint(64, (STEPS,), generator=generator)
 virtual_indices = base_indices[:, None] * VARIANTS + torch.randint(
@@ -99,6 +115,7 @@ config = {
     'parent_total_updates': 36000,
     'initialization': 'strict whole-model continuation of the random-init v8 lineage; fresh direct-only AdamW',
     'trainable_modules': ['encoder', 'pose'],
+    'direct_forward': 'same encoder and pose head as model.predict; frozen image decoder skipped',
     'frozen_modules': ['lateral', 'image_decoder', 'atlas_encoder', 'pair', 'fitter',
                        'field', 'uncertainty', 'pose_residual', 'fit_quality'],
     'optimizer': 'AdamW, cosine learning rate 8e-5 to 1e-5, weight decay 1e-4, norm clip 5, FP32',
@@ -163,7 +180,7 @@ def readout(stage_step):
     outputs = {key: [] for key in ('state', 'log_mass', 'std', 'concentration', 'reflection_logit')}
     with torch.no_grad():
         for start in range(0, 64, BATCH):
-            prediction = model.predict(fixed['inputs'][start:start + BATCH].cuda())
+            prediction = predict_direct(fixed['inputs'][start:start + BATCH].cuda())
             for key in outputs:
                 outputs[key].append(prediction[key].cpu())
     outputs = {key: torch.cat(value) for key, value in outputs.items()}
@@ -201,7 +218,7 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as trace, \
         attempted += tries
         for group in optimizer.param_groups:
             group['lr'] = 1e-5 + 7e-5 * .5 * (1 + math.cos(math.pi * (step - 1) / STEPS))
-        prediction = model.predict(sample['inputs'])
+        prediction = predict_direct(sample['inputs'])
         truth, reflection = sample['state'], sample['reflection']
         distance = (five_points(prediction['state']) - five_points(truth)[:, None]).norm(dim=-1).mean(-1)
         best = distance.detach().argmin(-1)
