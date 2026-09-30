@@ -5149,14 +5149,17 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         joint_help = QtWidgets.QLabel(
             "Experimental: one model predicts slice location and fits its anatomy. Full-image input; "
             "the existing smart-brush selection is optional. No automatic tissue selection is required. "
-            "Current weights are not qualified for anatomical accuracy or calibrated confidence. "
+            "v8 fits all 16 pose/deformation branches, but its scores are uncalibrated—not region "
+            "probabilities or a qualified anatomical result. "
             "AP limits, surgery settings and probe marks do not condition this model yet."
         )
         joint_help.setWordWrap(True)
         joint_help.setStyleSheet("color:#e7bd7b;")
         self.joint_checkpoint = QtWidgets.QLineEdit()
-        self.joint_checkpoint.setPlaceholderText("Select a completed whole-model v7 checkpoint on I:")
+        self.joint_checkpoint.setPlaceholderText("Select a completed whole-model v7 or v8 checkpoint on I:")
         self.joint_checkpoint_browse = QtWidgets.QPushButton("Choose checkpoint")
+        self.joint_version = QtWidgets.QComboBox()
+        self.joint_version.addItems(["v7", "v8"])
         self.joint_device = QtWidgets.QComboBox()
         self.joint_device.addItems(["CUDA", "CPU"])
         self.joint_thickness = QtWidgets.QDoubleSpinBox()
@@ -5172,12 +5175,14 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         joint_layout.addWidget(joint_help, 0, 0, 1, 4)
         joint_layout.addWidget(self.joint_checkpoint, 1, 0, 1, 3)
         joint_layout.addWidget(self.joint_checkpoint_browse, 1, 3)
-        joint_layout.addWidget(QtWidgets.QLabel("Section thickness"), 2, 0)
-        joint_layout.addWidget(self.joint_thickness, 2, 1)
-        joint_layout.addWidget(QtWidgets.QLabel("Compute device"), 2, 2)
-        joint_layout.addWidget(self.joint_device, 2, 3)
-        joint_layout.addWidget(self.joint_run_btn, 3, 0, 1, 4)
-        joint_layout.setRowStretch(4, 1)
+        joint_layout.addWidget(QtWidgets.QLabel("Model version"), 2, 0)
+        joint_layout.addWidget(self.joint_version, 2, 1)
+        joint_layout.addWidget(QtWidgets.QLabel("Section thickness"), 2, 2)
+        joint_layout.addWidget(self.joint_thickness, 2, 3)
+        joint_layout.addWidget(QtWidgets.QLabel("Compute device"), 3, 0)
+        joint_layout.addWidget(self.joint_device, 3, 1)
+        joint_layout.addWidget(self.joint_run_btn, 4, 0, 1, 4)
+        joint_layout.setRowStretch(5, 1)
         self.alignment_tabs.addTab(joint_tab, "Joint model (experimental)")
 
         self.probe_type = QtWidgets.QComboBox()
@@ -8526,7 +8531,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _browse_joint_checkpoint(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Choose a completed whole-model joint v7 checkpoint", "I:/AnatomyTracker/runs",
+            self, "Choose a completed whole-model joint v7 or v8 checkpoint", "I:/AnatomyTracker/runs",
             "PyTorch checkpoint (*.pt)"
         )
         if path:
@@ -8566,7 +8571,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 run_joint_slice, path, image, orientation, session.raw_display.shape, brush,
                 source_hash, image_hash, self.atlas_volume, self.annotation_volume,
                 dict(self.atlas_file_hashes), self.joint_thickness.value(), self.joint_device.currentText().lower(),
-                messages, cancel_event,
+                messages, cancel_event, self.joint_version.currentText(),
             )
 
             def install(result: tuple) -> None:
@@ -8614,7 +8619,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         raw_to_model = prepared["raw_to_model_xy"]
         transform = SliceAtlasTransform2D(raw_to_model @ np.linalg.inv(session.slice_transform),
                                           session.weight_image.shape, surface.shape[:2])
-        run_id = f"joint-v7-{time.time_ns()}"
+        version = prediction["runtime"]["model_version"]
+        run_id = f"joint-{version}-{time.time_ns()}"
         diagnostics = {"joint_model": {"checkpoint_sha256": checkpoint_sha256,
             "selected_component": [int(mode), int(reflection)], "raw_to_model_xy": raw_to_model.tolist(),
             "raw_shape_h_w": list(prepared["raw_shape_h_w"]), "model_shape_h_w": list(surface.shape[:2]),
@@ -8634,8 +8640,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                      "auto_alignment_diagnostics"):
             setattr(session, name, getattr(candidate, name))
         session.transformed_overlay = overlay
-        session.auto_alignment_engine = "Joint model v7 (experimental)"
-        session.auto_alignment_method = "Direct pose distribution and native anatomical fitting"
+        session.auto_alignment_engine = f"Joint model {version} (experimental, uncalibrated)"
+        session.auto_alignment_method = ("Recurrent full-pose and deformation fitting" if version == "v8"
+                                         else "Direct pose distribution and native anatomical fitting")
         session.auto_alignment_scope = "single-section-experimental"
         session.auto_alignment_run_id = run_id
         session.manual_refined_from_run_id = None
@@ -8650,7 +8657,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._refresh_points()
         self._update_probe_fit_summary()
         self._refresh_3d()
-        self.status.setText("Experimental joint result: review anatomy. Confidence is uncalibrated; constraints were not used.")
+        self.status.setText("Experimental joint prediction: review anatomy. Confidence is uncalibrated; constraints were not used.")
 
     def _automatic_warp_batch_snapshot(self, session: SliceSession) -> tuple:
         source = Path(session.path)
@@ -9079,7 +9086,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.status.setText(f"Global auto-alignment failed: {exc}")
 
     def _set_auto_constraint_controls_enabled(self, enabled: bool) -> None:
-        for control in (self.joint_checkpoint, self.joint_checkpoint_browse, self.joint_device, self.joint_thickness):
+        for control in (self.joint_checkpoint, self.joint_checkpoint_browse, self.joint_version,
+                        self.joint_device, self.joint_thickness):
             control.setEnabled(enabled)
         self.pose_engine.setEnabled(enabled)
         self.own_cnn_weight.setEnabled(enabled and self.pose_engine.currentText() == POSE_ENGINE_WEIGHTED)

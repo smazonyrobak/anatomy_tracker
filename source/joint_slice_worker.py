@@ -11,7 +11,7 @@ from joint_slice_input import prepare_joint_slice_input
 
 def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_mask,
                     source_sha256, image_sha256, atlas_volume, annotation_volume,
-                    atlas_hashes, thickness_um, device, messages, cancel_event):
+                    atlas_hashes, thickness_um, device, messages, cancel_event, version='v7'):
     root = Path('I:/AnatomyTracker')
     for variable, directory in (('TEMP', 'tmp'), ('TMP', 'tmp'),
                                 ('TORCH_HOME', 'cache/torch'), ('CUDA_CACHE_PATH', 'cache/cuda')):
@@ -27,7 +27,14 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     from training.arbitrary_plane_allen_atlas_binding_v6 import (
         TEMPLATE_RAW_SHA256_V6, ANNOTATION_RAW_SHA256_V6, ATLAS_SHAPE_AP_DV_ML_V6,
     )
-    from training.arbitrary_plane_joint_inference_v7 import load_joint_v7_checkpoint, infer_joint_v7
+    if version == 'v7':
+        from training.arbitrary_plane_joint_inference_v7 import load_joint_v7_checkpoint as load_checkpoint
+        from training.arbitrary_plane_joint_inference_v7 import infer_joint_v7 as infer_joint
+    elif version == 'v8':
+        from training.arbitrary_plane_joint_inference_v8 import load_joint_v8_checkpoint as load_checkpoint
+        from training.arbitrary_plane_joint_inference_v8 import infer_joint_v8 as infer_joint
+    else:
+        raise ValueError(f'Unsupported joint-model version: {version}')
 
     if cancel_event.is_set():
         raise InterruptedError
@@ -43,9 +50,15 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     messages.put((0, 'Loading the selected whole checkpoint; no legacy model is used.'))
     with path.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-    model, config = load_joint_v7_checkpoint(path, device=device)
+    model, config = load_checkpoint(path, device=device)
+    if f'arbitrary_plane_joint_model_{version}.py' not in config['source_sha256']:
+        raise ValueError(f'Selected checkpoint is not a whole-model {version} checkpoint')
+    if version == 'v8' and config['modes'] != 8:
+        raise ValueError('Joint v8 GUI inference requires eight modes (16 branches).')
     for name, expected in config['source_sha256'].items():
-        if name in ('train_joint_v7.py', 'train_joint_v7_expanded.py'):
+        if name in ('train_joint_v7.py', 'train_joint_v7_expanded.py',
+                    'train_joint_v7_streaming.py', 'train_joint_v8_feedback_pilot.py',
+                    'train_joint_v8_million_direct.py'):
             continue  # Training schedules do not change inference semantics.
         current = repository / 'training' / name
         if hashlib.sha256(current.read_bytes()).hexdigest() != expected:
@@ -68,10 +81,11 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     if cancel_event.is_set():
         raise InterruptedError
     messages.put((0, 'Fitting all predicted locations, two at a time. Cancel discards the result when inference returns.'))
-    prediction = infer_joint_v7(model, inputs, atlas, offsets, weights, context=None, chunk=2)
+    prediction = infer_joint(model, inputs, atlas, offsets, weights, context=None, chunk=2)
     if cancel_event.is_set():
         raise InterruptedError
     prediction['runtime'] = {'device': device, 'section_thickness_um': float(thickness_um),
                              'psf': 'assumed uniform through-plane profile; nine-node trapezoidal integration',
-                             'checkpoint_path': str(path), 'training_scope': config['scope']}
+                             'checkpoint_path': str(path), 'training_scope': config['scope'],
+                             'model_version': version}
     return prepared, prediction, digest
