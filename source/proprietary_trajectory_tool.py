@@ -109,6 +109,10 @@ MIND_PROBE_GEOMETRY_WEIGHT = 1.0
 SESSION_ARCHIVE_FORMAT = "Proprietary Anatomy Tracker session"
 SESSION_ARCHIVE_VERSION = 3
 SESSION_STATE_FIELDS = (
+    "animal_id",
+    "specimen_id",
+    "experiment_id",
+    "section_id",
     "rotation_deg",
     "flip_horizontal",
     "flip_vertical",
@@ -3278,6 +3282,11 @@ class SliceSession:
     # so rotation and flips can be changed without accumulating coordinate error.
     name: str
     path: str = ""
+    # User-supplied provenance only. Empty means unknown, never a shared animal.
+    animal_id: str = ""
+    specimen_id: str = ""
+    experiment_id: str = ""
+    section_id: str = ""
     display_scale: float = 1.0
     raw_display: np.ndarray | None = None
     adjusted: np.ndarray | None = None
@@ -4862,6 +4871,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.remove_all_slices_btn = QtWidgets.QPushButton("Remove all")
         self.remove_all_slices_btn.setToolTip("Remove every loaded slice and its unsaved annotations")
         self.remove_all_slices_btn.setEnabled(False)
+        self.slice_identifiers_btn = QtWidgets.QPushButton("Slice IDs")
+        self.slice_identifiers_btn.setToolTip("Explicit animal, specimen, experiment and section IDs for this slice; blanks stay unknown")
+        self.slice_identifiers_btn.setEnabled(False)
         self.previous_slice_btn = QtWidgets.QPushButton("‹")
         self.previous_slice_btn.setToolTip("Previous slice (Ctrl+Left)")
         self.previous_slice_btn.setFixedWidth(32)
@@ -4908,6 +4920,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         slice_geometry_row.addWidget(QtWidgets.QLabel("Flip"))
         slice_geometry_row.addWidget(self.flip_horizontal)
         slice_geometry_row.addWidget(self.flip_vertical)
+        slice_geometry_row.addWidget(self.slice_identifiers_btn)
         slice_setup_layout.addLayout(slice_geometry_row)
         self.setup_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         self.setup_splitter.setChildrenCollapsible(False)
@@ -4997,6 +5010,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         manual_layout.setColumnStretch(0, 1)
         manual_layout.setColumnStretch(1, 1)
         manual_layout.setRowStretch(4, 1)
+        self.native_pose_btn = QtWidgets.QPushButton("Adjust joint pose")
+        self.native_pose_restore_btn = QtWidgets.QPushButton("Restore predicted pose")
+        self.native_pose_btn.setToolTip("Move the selected curved atlas surface rigidly; preserve the original model prediction")
+        self.native_pose_restore_btn.setToolTip("Undo rigid joint-pose adjustments; keep the current 2-D landmark mapping")
+        self.native_pose_btn.setEnabled(False)
+        self.native_pose_restore_btn.setEnabled(False)
+        manual_layout.addWidget(self.native_pose_btn, 4, 0)
+        manual_layout.addWidget(self.native_pose_restore_btn, 4, 1)
+        manual_layout.setRowStretch(4, 0)
+        manual_layout.setRowStretch(5, 1)
         self.alignment_tabs.addTab(manual_tab, "Landmark registration")
 
         automatic_tab = QtWidgets.QWidget()
@@ -5448,6 +5471,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.add_slice_btn.clicked.connect(self._load_slice_dialog)
         self.remove_selected_slice_btn.clicked.connect(self._remove_selected_slice)
         self.remove_all_slices_btn.clicked.connect(self._remove_all_slices)
+        self.slice_identifiers_btn.clicked.connect(self._edit_slice_identifiers)
         self.slice_list.currentIndexChanged.connect(self._switch_slice)
         self.previous_slice_btn.clicked.connect(lambda: self._step_slice(-1))
         self.next_slice_btn.clicked.connect(lambda: self._step_slice(1))
@@ -5458,6 +5482,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self.transform_btn.clicked.connect(self.transform_current_slice)
         self.automatic_warp_btn.clicked.connect(self._automatic_warp_clicked)
         self.automatic_warp_all_btn.clicked.connect(self._automatic_warp_all_clicked)
+        self.native_pose_btn.clicked.connect(self._native_pose_dialog)
+        self.native_pose_restore_btn.clicked.connect(self._restore_native_pose)
         self.auto_align_btn.clicked.connect(self._auto_align_clicked)
         self.auto_align_all_btn.clicked.connect(self._auto_align_all_clicked)
         self.joint_checkpoint_browse.clicked.connect(self._browse_joint_checkpoint)
@@ -5641,7 +5667,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
         state = {
             "format": SESSION_ARCHIVE_FORMAT,
-            "version": SESSION_ARCHIVE_VERSION if any(session.atlas_ouv_ap_dv_ml_um is not None for session in self.sessions) else 1,
+            "version": SESSION_ARCHIVE_VERSION,
             "saved_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
             "atlas_folder": str(self.atlas_folder),
             "atlas_file_hashes": self.atlas_file_hashes,
@@ -6505,6 +6531,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         self._update_axis_control(session.atlas_index)
         self._update_slice_image()
         self._update_slice_navigation()
+        self._update_probe_fit_summary()
         self._refresh_3d()
         if source_changed:
             self.status.setText(
@@ -6529,6 +6556,36 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         if 0 <= self.current_session_index < len(self.sessions):
             return self.sessions[self.current_session_index]
         return None
+
+    def _edit_slice_identifiers(self) -> None:
+        session = self.current_session()
+        if session is None or self.auto_alignment_busy:
+            return
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle(f"Explicit identifiers — {session.name}")
+        layout = QtWidgets.QFormLayout(dialog)
+        note = QtWidgets.QLabel("Enter identifiers from your records, including a lab/dataset prefix where needed.\n"
+                               "Blank means unknown. IDs apply only to this slice; no grouping is inferred.")
+        note.setWordWrap(True)
+        layout.addRow(note)
+        fields = {}
+        for name in ("animal_id", "specimen_id", "experiment_id", "section_id"):
+            fields[name] = QtWidgets.QLineEdit(getattr(session, name))
+            fields[name].setObjectName(name)
+            fields[name].setPlaceholderText("Unknown")
+            layout.addRow(name.replace("_", " ").capitalize(), fields[name])
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                            | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            for name, editor in fields.items():
+                setattr(session, name, editor.text().strip())
+            self._probe_fit_cache.clear()
+            self._update_probe_fit_summary()
+            self._refresh_3d()
+            self.status.setText(f"Explicit identifiers saved for {session.name}; blank IDs remain unknown.")
 
     def _active_probe_name(self) -> str:
         return self.probe_name.currentText().strip()
@@ -6695,13 +6752,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             self.probe_fit_summary.setStyleSheet("color:#9fb4c8;")
             self.probe_fit_summary.setText("Fit: select a probe")
             return
-        points = self.all_probe_volume_points(probe_name)
         raw_count = sum(
             len(trace.slice_points)
             for session in self.sessions
             if (trace := session.probe_traces.get(probe_name)) is not None
         )
         try:
+            points = self.all_probe_volume_points(probe_name)
             entry, deep_endpoint, surface_direction = self.probe_brain_geometry(probe_name)
         except InfeasibleProbeConstraint as exc:
             self.probe_fit_summary.setStyleSheet("color:#ff8c8c;")
@@ -7860,6 +7917,16 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         ]
 
     def _refresh_point_counts(self) -> None:
+        session = self.current_session()
+        self.slice_identifiers_btn.setEnabled(session is not None and not self.auto_alignment_busy)
+        native_editable = (session is not None and session.atlas_surface_ccf_um is not None
+                           and self._coordinate_registration(session).get("status") == "applied"
+                           and not (session.auto_alignment_diagnostics or {}).get("alignment_run_stale", False)
+                           and not self.auto_alignment_busy)
+        self.native_pose_btn.setEnabled(native_editable)
+        self.native_pose_restore_btn.setEnabled(native_editable and bool(
+            (session.auto_alignment_diagnostics or {}).get("manual_native_pose", {}).get("edits", [])
+        ))
         self.joint_run_btn.setEnabled(
             self.current_session() is not None
             and bool(self.joint_checkpoint.text().strip())
@@ -7966,7 +8033,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             registration_text = " | coordinate warp not applied"
         if session.atlas_ouv_ap_dv_ml_um is not None:
             stale_text = " | joint result stale — rerun joint alignment" if diagnostics.get("alignment_run_stale") else ""
-            self.alignment_summary.setText(f"Full physical atlas plane{registration_text}{stale_text}")
+            manual_text = " | manual pose: model uncertainty not applicable" if diagnostics.get("manual_native_pose", {}).get("edits") else ""
+            self.alignment_summary.setText(f"Full physical atlas plane{registration_text}{stale_text}{manual_text}")
         elif session.auto_alignment_engine is not None:
             ap_um = int(round((session.atlas_index - float(self.bregma_voxel[0])) * VOXEL_UM * STEREOTAXIC_AXIS_SIGN_AP_DV_ML[0]))
             scope = session.auto_alignment_scope or ("global" if session.auto_alignment_global else "single")
@@ -8356,6 +8424,106 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         prepared["oriented_image_sha256"] = array_sha256(session.weight_image)
         return prepared
 
+    def _native_pose_dialog(self) -> None:
+        if not self.native_pose_btn.isEnabled():
+            return
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Adjust selected joint pose")
+        layout = QtWidgets.QFormLayout(dialog)
+        note = QtWidgets.QLabel("Rigidly move this slice's curved atlas surface. Rotate about the plane's pixel-centre midpoint.\n"
+                               "CCF positive directions: AP posterior, DV ventral, ML right.\n"
+                               "Original model arrays stay unchanged; model uncertainty will not describe this edit.")
+        note.setWordWrap(True)
+        layout.addRow(note)
+        shifts = []
+        for axis in ("AP", "DV", "ML"):
+            value = QtWidgets.QDoubleSpinBox()
+            value.setObjectName(f"translation_{axis}")
+            value.setRange(-5000., 5000.)
+            value.setSingleStep(25.)
+            value.setSuffix(" um")
+            layout.addRow(f"Translate {axis}", value)
+            shifts.append(value)
+        axis_box = QtWidgets.QComboBox()
+        axis_box.setObjectName("rotation_axis")
+        axis_box.addItems(["AP", "DV", "ML"])
+        angle = QtWidgets.QDoubleSpinBox()
+        angle.setObjectName("rotation_angle")
+        angle.setRange(-45., 45.)
+        angle.setSingleStep(.5)
+        angle.setSuffix(" deg")
+        angle.setToolTip("Right-handed rotation about the selected positive CCF axis")
+        layout.addRow("Rotate about CCF axis", axis_box)
+        layout.addRow("Angle", angle)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok
+                                            | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        session = self.current_session()
+        translation = np.array([value.value() for value in shifts])
+        if not np.any(translation) and angle.value() == 0:
+            return
+        rotation_vector = np.eye(3)[axis_box.currentIndex()] * np.deg2rad(angle.value())
+        rotation = cv2.Rodrigues(rotation_vector)[0]
+        ouv = np.asarray(session.atlas_ouv_ap_dv_ml_um, dtype=np.float64).reshape(3, 3)
+        height, width = session.atlas_raster_shape_h_w
+        centre = ouv[0] + (width - 1) / (2 * width) * ouv[1] + (height - 1) / (2 * height) * ouv[2]
+        offset = centre + translation - rotation @ centre
+        moved_ouv = ouv @ rotation.T
+        moved_ouv[0] += offset
+        surface = session.atlas_surface_ccf_um.astype(np.float64) @ rotation.T + offset
+        previous = (session.auto_alignment_diagnostics or {}).get("manual_native_pose", {})
+        manual = {"original_ouv_ap_dv_ml_um": previous.get("original_ouv_ap_dv_ml_um", ouv.tolist()),
+                  "edits": [*previous.get("edits", []), {"rotation_ccf": rotation.tolist(),
+                    "offset_ccf_um": offset.tolist(), "translation_ccf_um": translation.tolist(),
+                    "axis": axis_box.currentText(), "angle_deg": angle.value(),
+                    "at": datetime.now().astimezone().isoformat()}]}
+        self._install_native_manual_pose(session, moved_ouv, surface, manual)
+
+    def _restore_native_pose(self) -> None:
+        if not self.native_pose_restore_btn.isEnabled():
+            return
+        session = self.current_session()
+        metadata = session.auto_alignment_diagnostics
+        mode, reflection = metadata["joint_model"]["selected_component"]
+        manual = {**metadata["manual_native_pose"], "edits": [], "restored_at": datetime.now().astimezone().isoformat()}
+        self._install_native_manual_pose(session, np.asarray(manual["original_ouv_ap_dv_ml_um"]),
+                                          session.joint_model_arrays["surface"][mode, reflection].copy(), manual)
+
+    def _install_native_manual_pose(self, session: SliceSession, ouv: np.ndarray,
+                                    surface: np.ndarray, manual: dict) -> None:
+        try:
+            if error := self._source_binding_error(session):
+                raise ValueError(error)
+            candidate = replace(session, atlas_ouv_ap_dv_ml_um=ouv.tolist(), atlas_surface_ccf_um=surface)
+            updates = self._probe_coordinate_updates(candidate)
+            overlay = render_session_slice_in_atlas(candidate, session.rotated, surface.shape[:2])
+            session.atlas_ouv_ap_dv_ml_um = candidate.atlas_ouv_ap_dv_ml_um
+            session.atlas_surface_ccf_um = candidate.atlas_surface_ccf_um
+            session.transformed_overlay = overlay
+            session.manual_refined_from_run_id = session.manual_refined_from_run_id or session.auto_alignment_run_id
+            session.auto_alignment_run_id = f"joint-manual-{time.time_ns()}"
+            session.auto_alignment_scope = "manual-refined"
+            diagnostics = dict(session.auto_alignment_diagnostics or {})
+            diagnostics["manual_native_pose"] = manual
+            diagnostics["joint_model"] = {**diagnostics.get("joint_model", {}),
+                "uncertainty_invalidated_by_manual_edit": True, "probabilities_calibrated": False,
+                "model_arrays_scope": "original prediction, not the manually corrected surface"}
+            session.auto_alignment_diagnostics = diagnostics
+            self._commit_probe_coordinate_updates(session, updates)
+            self._probe_fit_cache.clear()
+            self._refresh_atlas()
+            self._refresh_points()
+            self._update_probe_fit_summary()
+            self._refresh_3d()
+            self.status.setText("Joint pose updated; probes remapped. Original prediction retained; uncertainty not applicable to manual edits.")
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, "Joint pose adjustment failed", str(exc))
+            self.status.setText(f"Joint pose adjustment failed: {exc}")
+
     def _browse_joint_checkpoint(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Choose a completed whole-model joint v7 checkpoint", "I:/AnatomyTracker/runs",
@@ -8470,6 +8638,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.auto_alignment_method = "Direct pose distribution and native anatomical fitting"
         session.auto_alignment_scope = "single-section-experimental"
         session.auto_alignment_run_id = run_id
+        session.manual_refined_from_run_id = None
         session.alignment_source_sha256 = prepared["source_sha256"]
         session.auto_alignment_global = False
         session.auto_alignment_score = None
@@ -9529,7 +9698,33 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             session.probe_traces[probe_name].volume_points = volume_points
         self._update_probe_fit_summary()
 
+    def _require_probe_workspace_identity(self) -> None:
+        contributors = [session for session in self.sessions if any(
+            trace.slice_points or trace.atlas_points or trace.volume_points
+            for trace in session.probe_traces.values()
+        )]
+        if not any(session.joint_model_arrays is not None for session in contributors):
+            return  # Preserve legacy-only workspaces, including unknown IDs.
+        problems = []
+        missing = [session.name for session in contributors if not session.animal_id.strip()]
+        if missing:
+            problems.append("Missing animal ID: " + ", ".join(missing))
+        for field, label in (("animal_id", "animal"), ("specimen_id", "specimen")):
+            supplied = {getattr(session, field).strip() for session in contributors} - {""}
+            if len(supplied) > 1:
+                problems.append(f"Conflicting {label} IDs: " + "; ".join(
+                    f"{session.name} = {getattr(session, field).strip()}"
+                    for session in contributors if getattr(session, field).strip()
+                ))
+        if problems:
+            raise InfeasibleProbeConstraint(
+                "Native joint trajectories require one animal per workspace. " + ". ".join(problems)
+                + ". Use Slice IDs to enter recorded IDs, or open different animals/specimens separately. "
+                  "No sections were excluded; probe constraints are shared by probe name, not by animal."
+            )
+
     def all_probe_volume_points(self, probe_name: str) -> np.ndarray:
+        self._require_probe_workspace_identity()
         points = []
         for session in self.sessions:
             trace = session.probe_traces.get(probe_name)
@@ -9538,6 +9733,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         return np.asarray(points, dtype=np.float64).reshape(-1, 3)
 
     def all_probe_signal_values(self, probe_name: str) -> np.ndarray:
+        self._require_probe_workspace_identity()
         values = []
         for session in self.sessions:
             trace = session.probe_traces.get(probe_name)
@@ -9546,6 +9742,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         return np.asarray(values, dtype=np.float64)
 
     def probe_observations_by_slice(self, probe_name: str) -> dict[int, np.ndarray]:
+        self._require_probe_workspace_identity()
         return {
             index: volume_to_stereotaxic_um(np.asarray(trace.volume_points), self.bregma_voxel)
             for index, session in enumerate(self.sessions)
@@ -9554,6 +9751,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         }
 
     def probe_regression_weights(self, probe_name: str, n_points: int) -> np.ndarray:
+        self._require_probe_workspace_identity()
         if not self.brightness_weighting.isChecked():
             return np.ones(n_points, dtype=np.float64)
         values = self.all_probe_signal_values(probe_name)
@@ -9723,6 +9921,13 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                     )
                     self.view3d.addItem(label_item)
                     self.dynamic_gl_items.append(label_item)
+        try:
+            self._require_probe_workspace_identity()
+        except InfeasibleProbeConstraint as exc:
+            self.probe_fit_summary.setStyleSheet("color:#ff8c8c;")
+            self.probe_fit_summary.setText(f"Trajectory blocked: {exc}")
+            self.probe_fit_summary.setToolTip(str(exc))
+            return
         probe_names = sorted(
             {
                 probe_name
@@ -9930,6 +10135,11 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 "Alignment still running",
                 "Wait for the current section match or anatomical warp to finish before mapping channels/units.",
             )
+            return
+        try:
+            self._require_probe_workspace_identity()
+        except InfeasibleProbeConstraint as exc:
+            QtWidgets.QMessageBox.warning(self, "Animal identity required", str(exc))
             return
         run_folder = Path(self.run_folder.text().strip())
         data_folder = self._resolve_data_folder(run_folder)
@@ -10210,6 +10420,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         insertion_depth_um: float,
         observed_depth_um: float,
     ) -> None:
+        self._require_probe_workspace_identity()
         anatomy_dir = data_folder / "anatomy"
         anatomy_dir.mkdir(exist_ok=True)
 
@@ -10339,6 +10550,10 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
                 {
                     "name": session.name,
                     "path": session.path,
+                    "animal_id": session.animal_id,
+                    "specimen_id": session.specimen_id,
+                    "experiment_id": session.experiment_id,
+                    "section_id": session.section_id,
                     "alignment_source_sha256": session.alignment_source_sha256,
                     "display_scale": session.display_scale,
                     "rotation_deg": session.rotation_deg,

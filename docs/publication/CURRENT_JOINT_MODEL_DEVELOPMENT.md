@@ -71,6 +71,16 @@ raw predictions and separates selected, prior-selected, unwarped and diagnostic
 oracle errors. Real192 vs the original96px experiment is not a matched comparison;
 the trainer's own step0/final192 readouts provide the matched direct-pose check.
 
+GUI integration now includes explicit animal/specimen/experiment/section IDs,
+rigid native-pose adjustment and exact restore of the model prediction. Native
+probe trajectory pooling/mapping/export requires a single explicit animal across
+all contributing sections and rejects conflicting supplied specimen IDs; it
+never silently drops another animal. Legacy-only workspaces remain unchanged.
+Manual edits preserve original model arrays and invalidate their uncertainty
+interpretation. The actual offscreen Qt workflow/ID-conflict checks passed in
+`runs/joint_v7_gui_identity_pose_smoke_004`; this verifies interaction and
+coordinate persistence, not model accuracy or uncertainty calibration.
+
 - Image-key001 is completed and independently audited: candidate-stage gate
   passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%
   remain inadequate. Its whole step4,000 checkpoint is the native ribbon parent.
