@@ -32,7 +32,7 @@ from training.arbitrary_plane_geometry import physical_ouv_to_frame, frame_to_ph
 from training.arbitrary_plane_joint_model_v7 import JointSliceModel
 from training.arbitrary_plane_joint_uncertainty import local_rotation_log
 
-RUN = ROOT / 'runs/joint_v7_streaming_joint_001'
+RUN = ROOT / 'runs/joint_v7_streaming_joint_002'
 PARENT = ROOT / 'runs/joint_v7_direct_joint_001'
 SYNTHETIC = ROOT / 'data/joint_v7_training_data_001'
 REAL = ROOT / 'data/joint_v7_allen_fullcanvas_8113_192_001'

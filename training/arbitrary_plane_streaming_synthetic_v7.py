@@ -158,7 +158,7 @@ def sample_streaming_synthetic_v7(context, subject_indices, seed, side=192):
     """
     subjects = [context['subjects'][int(i)] for i in subject_indices]
     count, device = len(subjects), context['atlas'].device
-    ouv_rows, offsets, reflections, records, parameters, modes, noises, illuminations, textures = [], [], [], [], [], [], [], [], [], []
+    ouv_rows, offsets, reflections, records, parameters, modes, noises, illuminations, textures = [], [], [], [], [], [], [], [], []
     for row, subject in enumerate(subjects):
         prefix = [int(seed), subject['virtual_index'], row]
         rng = np.random.default_rng(np.random.SeedSequence([*prefix, 0]))
