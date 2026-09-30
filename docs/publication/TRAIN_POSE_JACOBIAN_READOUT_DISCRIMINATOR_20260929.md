@@ -4,6 +4,12 @@ Status: **enabled for launch on 2026-09-30** after the normalized control exited
 
 ## Frozen inputs
 
+First launch6743 exited1 before output creation: the archived generic bundle
+reader imported an unrelated, unarchived generator module. The diagnostic now
+reads only its required named arrays through the same JSON `__ndarray__`
+references, avoiding that unused generator dependency. Archived model sources,
+weights and all experiment settings remain unchanged; no partial trial exists.
+
 Load the complete unscaled signed checkpoint `I:/AnatomyTracker/runs/joint_v6_signed_pose_evidence_001/joint_model_step_02000.pt`, SHA256 `555c129b2cbe5832b37c7642d5ee15e31c1ba57199952901959751918cae6136`, using its archived source and exact model kwargs. Its independent audit SHA256 is `7acdc3ef87f85691b296f67fc828428aa090b1afed88a5ce05853a6e81853ad5`; the retrieval feature tensors remain equal to the whole original4000 parent. No module merging, new weights or normalized-control weights.
 
 Reuse the exact24 TRAIN observation IDs and saved geometry from `I:/AnatomyTracker/runs/joint_v6_train_pose_cost_direction_001/completed.json`, SHA256 `556fc13ee2f6dfc1db059c3ce8e5a3b00eca429b2de23c394be19e552cdc5ed5`, authenticating its listed artifacts. Subjects00000000..00000007 use section indices `[1,0,2,0,0,1,0,2]` in the `joint-v6-coherent-sections-002-train-subject-XXXXXXXX-section-XXXXXXXX` namespace, each with raw/exact_black/imperfect_brush presentations. Retain recorded eligibility and IDs; do not reselect sections. Reuse the six saved starts per observation: normal-tangent u/v at ±6° and offset at ±300µm. This gives144 paired trajectories, not144 independent animals.

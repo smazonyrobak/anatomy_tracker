@@ -65,7 +65,6 @@ from training.arbitrary_plane_catalogue_runtime_v6 import make_complete_catalogu
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components, full_frame_state_to_physical_ouv, render_finite_thickness_coordinate_grid
 from training.arbitrary_plane_joint_model_v6 import ArbitraryPlaneJointModelV6
 from training.arbitrary_plane_recurrent_model import _pair_evidence, compose_antipodal_plane_frame_residual
-from training.subject_deformed_slab_multiresolution_bundle_v2 import _read_raw_artifact
 
 loaded_source = {name: str(Path(module.__file__).resolve()) for name, module in sys.modules.items() if name.startswith("training.") and getattr(module, "__file__", None)}
 assert all(Path(path).is_relative_to(SIGNED / "source") or (name == "training.arbitrary_plane_joint_uncertainty" and Path(path) == (SUPPLEMENT / "training/arbitrary_plane_joint_uncertainty.py").resolve()) for name, path in loaded_source.items())
@@ -122,7 +121,13 @@ with torch.inference_mode():
         assert record["lineage"]["split"] == "train" and record["lineage"]["subject_id"] == subject_id
         for name, expected in record["artifact_sha256"].items():
             assert sha(DATA / name) == expected
-        section = _read_raw_artifact(DATA, record["artifacts"])
+        section = json.loads((DATA / record["artifacts"]["metadata"]).read_text())
+        with np.load(DATA / record["artifacts"]["arrays"], allow_pickle=False) as arrays:
+            for key in ("reflection_xy", "target_centre_ccf_coordinates_ap_dv_ml_um_float64", "target_psf_ccf_coordinates_ap_dv_ml_um_float64"):
+                section[key] = arrays[section[key]["__ndarray__"]]
+            for item in section["observations"]:
+                key = "image_outline_availability_float32"
+                item[key] = arrays[item[key]["__ndarray__"]]
         records = [item for item in measurements if item["section_id"] == section_id and item["weighting"] == "full"]
         raw_names = {item["raw_artifact"] for item in records}
         assert len(records) == 18 and len(raw_names) == 1
