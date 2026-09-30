@@ -129,6 +129,15 @@ Prioritize distinct TRAIN geometry/appearance, real training inputs, direct phys
 pose supervision independent of predicted variance, and known-field fitter anchors.
 Preserve the complete checkpoint; no new architecture or public benchmark is justified.
 
+Native evaluation of all16 pose/reflection combinations also completed (448
+observations,323.6s). Eligible synthetic DEV macro error was56.12deg and4,601um
+over visible coordinate grids; six real DEV donors averaged57.38deg and7,474um
+against weak full-canvas Allen affines. Real inputs here were the earlier96px
+red-channel crop, not the new GUI-consistent192px collection. Do not call either
+coordinate metric blinded physical landmark error. Exact native arrays are saved
+in `runs/joint_v7_direct_joint_001_native_development_002`; this is a failed
+initial generalization result, not a benchmark score or shipping checkpoint.
+
 ## Necessary work after initialization
 
 Parallel desktop integration now has a bounded-memory all-mode inference adapter,
@@ -144,6 +153,22 @@ flip, matched its stored reference coordinates exactly. These are coordinate
 contract checks, not trained-model accuracy or a complete desktop workflow test.
 Real-image photometry, trained constraints, confidence calibration and distributable
 packaging remain unfinished. No live training artifacts were opened for this work.
+
+The actual experimental button-to-worker-to-install path subsequently passed an
+offscreen Qt check on one real TRAIN image with the whole6,000-step checkpoint:
+2.313s CPU inference/install,13 native arrays and curved surface restored exactly,
+zero coordinate drift for two engineering-only marked pixels. This exposed and
+fixed a stale canvas-size bug in archive overlay reconstruction. Receipt:
+`runs/joint_v7_gui_workflow_smoke_002/completed.json`. This is execution/persistence
+evidence, not anatomical accuracy or visible-desktop validation.
+
+The192px real collection is also complete:1,280 images/58 TRAIN donors and64/6DEV,
+using actual downloaded JPEGs, the exact GUI channel-average/percentile pipeline
+and full-canvas pixel-centre resize. Source affines, IDs and hashes are retained.
+These references remain weak Allen labels, with no real deformation truth. The
+new synthetic generator is producing4,096 distinct TRAIN planes with explicit
+bounded map interpolation and exact sparse finite-PSF coordinates; no DEV split
+changes or learned source dependencies.
 
 1. Establish direct prediction learning and useful fitting feedback, using a
    matched disconnected-feedback comparison only when training is stable. Expand

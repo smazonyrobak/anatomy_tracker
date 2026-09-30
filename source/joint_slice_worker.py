@@ -45,7 +45,7 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     model, config = load_joint_v7_checkpoint(path, device=device)
     for name, expected in config['source_sha256'].items():
-        if name == 'train_joint_v7.py':
+        if name in ('train_joint_v7.py', 'train_joint_v7_expanded.py'):
             continue  # Training schedules do not change inference semantics.
         current = repository / 'training' / name
         if hashlib.sha256(current.read_bytes()).hexdigest() != expected:

@@ -25,14 +25,20 @@ despite preferring the correct over a perturbed plane in 31/32 cases. Preserve t
 checkpoint and continue this same architecture with more distinct planes, real
 images, direct physical pose supervision and anchored deformation training.
 
-Full native synthetic/weak-real development evaluation is running in session
-**98065**, output `runs/joint_v7_direct_joint_001_native_development_002`.
-Observe only terminal/process/GPU while live. Its first attempt stopped before
-predictions because a real-metadata normal field was named differently; corrected.
-New TRAIN-only 4,096-plane192px generation and GUI-consistent real192px preparation
-are being implemented by agents explicitly requested by the user. Do not launch
-another GPU job until the native evaluation finishes. The GUI experimental tab
-is now implemented, but its full checkpoint-to-desktop workflow is not verified.
+Full native synthetic/weak-real evaluation completed448 observations: synthetic
+56.12deg/4,601um visible-grid error; real57.38deg/7,474um weak full-canvas affine
+error. Output `runs/joint_v7_direct_joint_001_native_development_002`; not a
+public benchmark. New GUI-consistent real192px preparation is complete (same
+58TRAIN/6DEV donors), and the actual offscreen Qt inference/save/reload smoke
+passed after fixing its stale overlay canvas size. No accuracy qualification.
+
+TRAIN-only4,096-plane192px generation is now live, session **27036**, output
+`data/joint_v7_training_data_001`. Observe terminal/process/GPU only; don't access
+its output or change operative geometry sources while live. Agent is implementing
+`training/train_joint_v7_expanded.py` to continue the same whole6,000-step model,
+mix expanded synthetic and weak real data, balance physical pose supervision and
+anchor true-pose deformation. Do not start that trainer before required data are
+fully completed and checked. No heartbeat; native goal remains active.
 
 - Image-key001 is completed and independently audited: candidate-stage gate
   passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%

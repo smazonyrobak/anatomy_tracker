@@ -9500,7 +9500,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         session.transformed_overlay = render_session_slice_in_atlas(
             session,
             session.rotated,
-            self.current_atlas_image.shape,
+            (session.atlas_raster_shape_h_w if session.atlas_ouv_ap_dv_ml_um is not None
+             else self.current_atlas_image.shape),
         )
 
     def _recompute_probe_points_from_slice_points(self, session: SliceSession) -> None:
