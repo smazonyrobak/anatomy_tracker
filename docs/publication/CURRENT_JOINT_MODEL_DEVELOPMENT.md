@@ -49,6 +49,20 @@ then verifies all bound data before loading weights. Do not start a duplicate.
 If generation fails, the queued job reports that training was not started.
 No heartbeat automation; native goal remains active.
 
+Next-stage probe-observation preparation is implemented separately in
+`training/arbitrary_plane_probe_observations_v7.py`; it is **not yet trained or
+wired into the GUI**. One probe is sampled independently of section geometry in
+subject space, then intersected with each finite slab. Clicks retain their
+through-plane offsets; a straight subject probe is not forced straight in CCF.
+Entry-disk, elevation-interval and maximum-depth observations include missing
+and contradictory variants, with no invented azimuth or AP-range anchor.
+The corrected CPU check `data/joint_v7_probe_observation_cpu_check_002` passed
+on one fixed TRAIN probe/64 sections (3 intersections, 6 retained clicks across
+presentations; maximum frozen-raster interpolation discrepancy 0.508um).
+Check001 is superseded: its voxel-centre-origin convention was corrected to
+the project's voxel-boundary origin before any training use. The queued
+expanded trainer remains constraint-free and its operative sources unchanged.
+
 - Image-key001 is completed and independently audited: candidate-stage gate
   passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%
   remain inadequate. Its whole step4,000 checkpoint is the native ribbon parent.
