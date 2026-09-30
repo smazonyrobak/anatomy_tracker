@@ -32,13 +32,22 @@ public benchmark. New GUI-consistent real192px preparation is complete (same
 58TRAIN/6DEV donors), and the actual offscreen Qt inference/save/reload smoke
 passed after fixing its stale overlay canvas size. No accuracy qualification.
 
-TRAIN-only4,096-plane192px generation is now live, session **27036**, output
-`data/joint_v7_training_data_001`. Observe terminal/process/GPU only; don't access
-its output or change operative geometry sources while live. Agent is implementing
-`training/train_joint_v7_expanded.py` to continue the same whole6,000-step model,
-mix expanded synthetic and weak real data, balance physical pose supervision and
-anchor true-pose deformation. Do not start that trainer before required data are
-fully completed and checked. No heartbeat; native goal remains active.
+TRAIN-only4,096-plane192px generation is live, session **27036**, Python PID
+**22128**, output `data/joint_v7_training_data_001`. Observe terminal/process/GPU
+only; don't access its output or change operative geometry sources while live.
+First-map held-query maximum interpolation error .472um; bake133s, sectionsabout
+.63s each. All8 subjects are expected to take roughly an hour, not yet measured.
+
+The committed `training/train_joint_v7_expanded.py` continues the same complete
+6,000-step model/optimizer for24,000 more updates at192px, mixes new synthetic and
+weak real data, balances physical pose supervision and anchors true-pose fitting.
+Real targets are converted to the synthetic canonical hemisphere with a finite
+horizontal flip preserving actual pixel coordinates. All constraints remain absent.
+Terminal **95614** is queued on the existing generator process handle. It starts
+the trainer only after process exit and a completed dataset exists; the trainer
+then verifies all bound data before loading weights. Do not start a duplicate.
+If generation fails, the queued job reports that training was not started.
+No heartbeat automation; native goal remains active.
 
 - Image-key001 is completed and independently audited: candidate-stage gate
   passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%
