@@ -86,6 +86,7 @@ torch.save({'base_index': base_indices, 'virtual_index': virtual_indices,
 (RUN / 'identities.json').write_text(json.dumps(context['subjects']), encoding='utf8')
 source_names = sorted(set(context['provenance']['source_sha256']) | {
     'arbitrary_plane_joint_model_v8.py', 'arbitrary_plane_joint_model_v7.py',
+    'arbitrary_plane_joint_inference_v8.py',
     'arbitrary_plane_recurrent_model.py', 'arbitrary_plane_ribbon_v6.py',
     'train_joint_v8_allbranch_feedback.py',
 })
@@ -102,6 +103,8 @@ config = {'seed': SEED, 'stage_updates': STEPS, 'batch': BATCH, 'resolution': [S
     'sampling': '64 independent synthetic TRAIN maps; one base and two affine variants per update; fresh eligible arbitrary physical planes; all 16 mode/reflection fits per image in randomized pairs',
     'physical_target': 'observed PSF slab; reflect canonical predicted slab before comparison',
     'fit_to_pose': 'differentiable final and intermediate physical errors from the geometry-best mode with correct reflection; no detached predicted pose; all 16 scores trained on synthetic physical error',
+    'quality_learning': 'all-branch physical-error score regression and randomized pair ranking; deformation penalty detached inside score to prevent wrong branches learning implausible deformation as a rejection signal',
+    'anatomical_loss': 'atlas-like source appearance against finite-thickness atlas render on visible synthetic tissue only; damaged and missing pixels excluded',
     'negative_modes': 'quality/ranking only, no forced deformation to the true atlas location',
     'optimizer': 'AdamW; pose 1e-5 and fitting 3e-5 cosine to 20%; norm clip 5; FP32',
     'calibrated': False, 'constraints': 'absent, not trained',
@@ -200,7 +203,7 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as trace, \
             prior = prediction['log_mass'][rows[:, None], mode]
             logit = prediction['reflection_logit'][rows[:, None], mode]
             prior = prior + F.logsigmoid(torch.where(flag.bool(), logit, -logit))
-            score = fitted['fit_quality'] + .2 * prior - .05 * fitted['difficulty']
+            score = fitted['fit_quality'] + .2 * prior - .05 * fitted['difficulty'].detach()
             quality = F.smooth_l1_loss(score, -torch.log1p(slab_error.detach() / 500))
             margin = (slab_error[:, 0] - slab_error[:, 1]).detach().abs() > 250
             rank = F.cross_entropy(score[margin], slab_error.detach()[margin].argmin(-1)) if margin.any() else score.sum() * 0
@@ -209,13 +212,18 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as trace, \
             if positive.any():
                 trajectory = fitted['pose_sequence'].reshape(BATCH, 2, 5, 12)[:, :, 1:-1]
                 trajectory_error = (five_points(trajectory) - five_points(truth)[:, None, None]).norm(dim=-1).mean(-1)
+                rendered = fitted['rendered'][:, 0].reshape(BATCH, 2, SIDE, SIDE)
+                tissue = sample['visible'][:, None]
+                appearance_fit = (((prediction['appearance'][:, 0, None] - rendered).square() * tissue)
+                                  .sum((2, 3)) / tissue.sum((2, 3)).clamp_min(1))
                 field = fitted['geometry']
                 field = F.interpolate(torch.cat((field['residual_local_um'] / 200,
                                                  field['director_delta_local'] / .1), 1),
                                       (8, 8), mode='bilinear', align_corners=False).reshape(BATCH, 2, 6, 8, 8)
                 field_error = F.smooth_l1_loss(field, sample['field'][:, None].expand_as(field), reduction='none').mean((2, 3, 4))
                 physical = ((point_error / 500 + .5 * slab_error / 500 +
-                             .08 * trajectory_error / 500 + .05 * field_error +
+                             .08 * trajectory_error.mean(-1) / 500 + .05 * field_error +
+                             .1 * appearance_fit +
                              .01 * fitted['difficulty']) * positive).sum() / BATCH
                 if step == 1:
                     gradient = torch.autograd.grad(physical, model.pose[-1].weight,
