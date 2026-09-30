@@ -61,8 +61,11 @@ qualify arbitrary-plane performance. A fixed192px rerender of the same held-out
 synthetic subjects is [complete and audited](JOINT_V7_MATCHED_192_DEV_RESULT_20260930.md):
 direct MAP error remains8.2–8.7mm/38–40deg by background mode. The fitter
 changed no eligible branch and does not update full pose at inference. The next
-architecture step is an actual recurrent pose update plus trained fit-quality
-selection, not blind scaling of this deficient checkpoint; no public benchmark.
+architecture experiment [now has a frozen negative result](JOINT_V8_FEEDBACK_PILOT_RESULT_20260930.md):
+the corrected loop improves the prior branch by143um on average but its
+candidate ranking loses287um and selected error remains about9mm. The next
+priority is independent anatomy diversity and richer candidate supervision,
+not blind scaling of this deficient checkpoint; no public benchmark.
 
 The streaming sampler has512 fixed global-affine variants of8 base synthetic
 subjects from one atlas; these are not512 biological animals or independently
