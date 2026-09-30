@@ -6,6 +6,14 @@ data, temporary files and runs belong on `I:`.
 
 ## Latest handoff
 
+**2026-09-30 priority update:** the user's required model is direct probabilistic
+coordinate prediction trained jointly with anatomical fitting, with fitting
+performance improving future coordinate predictions. The old catalogue-centred
+path is no longer the default next experiment. Both final v6 TRAIN diagnostics
+are completed and compactly closed out. See
+[direct joint-model design, results and staged training](DIRECT_JOINT_MODEL_20260930.md)
+for the current work; the list below is historical evidence, not a fresh queue.
+
 - Image-key001 is completed and independently audited: candidate-stage gate
   passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%
   remain inadequate. Its whole step4,000 checkpoint is the native ribbon parent.
