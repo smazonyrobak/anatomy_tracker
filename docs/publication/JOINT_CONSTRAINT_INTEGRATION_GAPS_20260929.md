@@ -1,5 +1,35 @@
 # Optional joint constraints: integration gaps
 
+## 2026-09-30 native-v7 update
+
+Native curved point mapping and an experimental GUI inference/save/reload path
+now exist and passed an offscreen execution check. Constraints remain untrained
+and explicitly unused; the v6-specific observations below are historical.
+
+The GUI supplies elevation bounds, not a measured3D direction/azimuth. Before
+constraint training, redefine the currently unused12-value context as AP
+bounds/availability3, entryAPML/radius/availability4, elevation bounds/availability3,
+and maximum-depth/availability2. Keep tip-depth/end-point knowledge separate.
+The legacy AP bound is a coronal reference-plane parameter, not arbitrary-image
+centreAP: define the intended anatomical anchor explicitly before using it.
+
+Stereotaxic-to-physical CCF conversion is `25*(bregma_voxel+.5)` plus
+`diag(-1,-1,+1)*stereotaxic_um`; directions omit translation. Preserve raw marks
+and their probe IDs through the native curved map, without a second reflection.
+The12-value context alone does not establish coherent multi-probe conditioning.
+
+Use one independently sampled subject-space trajectory per subject/probe and
+derive observed marks from its finite-section intersections, crop/damage/brush,
+and separately sampled observation noise. A straight subject-space probe can
+map to a curved CCF path: do not penalize this correct deformation with a hard
+straight-CCF-ray factor. Model shared surgery once per probe; independently
+numbered mixture modes across slices are not coherent joint animal hypotheses.
+The GUI still needs explicit animal/specimen/experiment IDs for such grouping.
+Train missing and conflicting constraints, retain unconstrained inference, and
+never reinterpret a hard tolerance as a Gaussian standard deviation.
+
+## Original v6 review
+
 2026-09-29. Read-only source review; no trained constraint capability or
 calibrated uncertainty is established. No active global/local training outputs
 were accessed for this review.

@@ -200,6 +200,18 @@ No full benchmark has been started. No superiority, biological calibration or
 finished GUI deliverable is claimed. Prioritize substantial training and useful
 Git checkpoints over another series of catalogue-only controls or large audits.
 
+Independent validation access remains unsecured. A metadata-only search identified
+the [AMBIA authors' in-house slide-scanned histology](https://link.springer.com/article/10.1007/s12021-023-09632-8)
+as the strongest expert-reference access request (exclude its Allen-derived
+sections; confirm animal IDs, individual reference alignments, licenses and
+blinding). [IBL](https://docs.internationalbrainlab.org/notebooks_external/2024_data_release_repro_ephys.html)
+is a downstream probe-validation lead, not independent slice-registration truth.
+The [Mouse Brain Library](https://www.mbl.org/procedures.html) includes noncoronal
+material but would need reuse permission and new blinded CCF annotations. No
+images, landmarks or test examples from these candidates were inspected, and no
+external contacts were made. None yet supplies untouched extreme-oblique expert
+ground truth; human annotation/new material cannot be replaced by more training.
+
 ## Scientific precedents and limits
 
 - [Deep Directional Statistics, ECCV 2018](https://openaccess.thecvf.com/content_ECCV_2018/html/Sergey_Prokudin_Deep_Directional_Statistics_ECCV_2018_paper.html):
