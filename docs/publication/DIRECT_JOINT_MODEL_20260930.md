@@ -104,14 +104,41 @@ rows retained and eligible subject summaries. This is a direct-pose developmenta
 readout, not a full fitted-model qualification. Save whole optimizer/RNG state,
 source, schedule and raw predictions; no mixing independently trained branches.
 
+## First joint initialization result
+
+The 6,000-step run completed successfully in about20 minutes, from random weights.
+At update2,001 fitting loss alone produced a finite nonzero pose-head gradient
+(6.22668). This establishes the connection, not its accuracy benefit.
+Post-exit diagnosis `runs/joint_v7_direct_joint_001_learning_diagnosis` preserves
+all eligible TRAIN/DEV direct predictions and32 known-pose fitter comparisons.
+
+Eligible synthetic-subject macro normal errors were TRAIN14.87deg versus DEV56.12deg;
+centre errors733um versus2,900um. Truth-density-selected TRAIN modes had8.59deg error,
+but even the lowest-angle DEV mode among8 averaged29.81deg. Ranking alone cannot
+repair the generalization problem. The922 eligible TRAIN presentations represent
+only311 physical sections, versus91 eligible DEV sections. These are synthetic
+subjects of one atlas, not biological animals.
+
+Known-correct DEV plane mappings had55.67um error without deformation and96.84um
+after fitting. Correct-pose fit scores beat controlled wrong-pose scores in31/32
+cases, but appearance-score improvement did not imply spatial improvement.
+One fixed TRAIN batch had span/shear-NLL head-gradient norm1166, centre319.5,
+rotation115.1 and dense-coordinate83.0. Concentrations9.6–20.0 and finite6D frame
+vector norms do not support orientation-uncertainty collapse at the final step.
+Prioritize distinct TRAIN geometry/appearance, real training inputs, direct physical
+pose supervision independent of predicted variance, and known-field fitter anchors.
+Preserve the complete checkpoint; no new architecture or public benchmark is justified.
+
 ## Necessary work after initialization
 
 Parallel desktop integration now has a bounded-memory all-mode inference adapter,
 an exact raw-display-to-model affine, optional brush preprocessing matching the
 existing three training input channels, and native curved-surface point mapping.
-The GUI can install this result through a private integration method and save/load
-its arrays in session version 3 (versions 1/2 remain readable). No new default or
-public experimental button is enabled yet. One actual frozen TRAIN section
+The GUI can install this result and save/load its arrays in session version3
+(versions1/2 remain readable). A separate experimental tab now selects a complete
+checkpoint, section thickness and CPU/CUDA, and runs a bounded background worker
+with no legacy fallback. It explicitly labels accuracy/uncertainty unqualified and
+constraints unused. No new default is enabled. One actual frozen TRAIN section
 reproduced all three input modes exactly; native point lifting, including a display
 flip, matched its stored reference coordinates exactly. These are coordinate
 contract checks, not trained-model accuracy or a complete desktop workflow test.

@@ -23,7 +23,7 @@ from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_c
 from training.arbitrary_plane_joint_inference_v7 import load_joint_v7_checkpoint, infer_joint_v7
 
 PARENT = ROOT / 'runs/joint_v7_direct_joint_001'
-OUTPUT = ROOT / 'runs/joint_v7_direct_joint_001_native_development'
+OUTPUT = ROOT / 'runs/joint_v7_direct_joint_001_native_development_002'
 DATA = ROOT / 'data/joint_v6_coherent_subject_cohort_sections_002'
 REAL = ROOT / 'runs/joint_v6_imagekey_retrieval_001_allen_raw'
 TRAIN_REAL = ROOT / 'data/allen_real_training_expansion_20260929/union_training_index.jsonl'
@@ -76,7 +76,7 @@ for image, row in zip(real_images, real_records):
     channels = np.concatenate((image, np.zeros((4, 96, 96), dtype=np.float32)))
     z = np.linspace(-.5, .5, 9, dtype=np.float32) * row['section_thickness_um']
     w = np.array([1, 2, 2, 2, 2, 2, 2, 2, 1], dtype=np.float32) / 16
-    samples.append((channels, truth, np.asarray(row['upstream_affine_normal_ap_dv_ml']),
+    samples.append((channels, truth, np.asarray(row['truth_normal_ap_dv_ml']),
                     np.ones((96, 96), dtype=np.float32), z, w,
                     {**row, 'mode': 'raw', 'eligible': True, 'domain': 'real_weak_affine', 'group': str(row['animal_id'])}))
 

@@ -14,18 +14,25 @@ are completed and compactly closed out. See
 [direct joint-model design, results and staged training](DIRECT_JOINT_MODEL_20260930.md)
 for the current work; the list below is historical evidence, not a fresh queue.
 
-The new whole-model run `I:/AnatomyTracker/runs/joint_v7_direct_joint_001`
-launched from pushed commit `36446e3`, terminal session **17600**, process **19160**.
-Live stdout confirmed initialization and optimizer step 1 with finite gradients;
-5,197,180 parameters, 1,536 TRAIN presentations (922 eligible), eight TRAIN and
-four separate development synthetic subjects. Planned 6,000 updates: first 2,000
-initialize the two tasks, then 4,000 use the direct predicted poses in fitting.
-The first connected step includes a fitting-only gradient check at the pose head.
-This is random initialization, not a previous-checkpoint continuation. Initial
-development errors are random-network baselines, not trained performance.
-While live, inspect terminal/stdout/process/GPU only; do not open its output tree
-or modify operative training sources. After exit, inspect raw development results,
-training trajectory, feedback gradient and whole checkpoint before the next stage.
+The whole-model run `I:/AnatomyTracker/runs/joint_v7_direct_joint_001` completed
+6,000 updates and terminal session 17600 exited successfully. Fitting-only gradient
+reached the direct pose head (norm 6.22668), but accuracy is not satisfactory:
+eligible-subject macro TRAIN MAP normal error 14.87 degrees versus DEV 56.12;
+center error 733 versus 2,900 um. Only 311 distinct eligible TRAIN planes were
+repeated. This indicates substantial memorization, not a successful global model.
+The focused known-pose fitter diagnostic worsened spatial error 55.67 -> 96.84 um,
+despite preferring the correct over a perturbed plane in 31/32 cases. Preserve the
+checkpoint and continue this same architecture with more distinct planes, real
+images, direct physical pose supervision and anchored deformation training.
+
+Full native synthetic/weak-real development evaluation is running in session
+**98065**, output `runs/joint_v7_direct_joint_001_native_development_002`.
+Observe only terminal/process/GPU while live. Its first attempt stopped before
+predictions because a real-metadata normal field was named differently; corrected.
+New TRAIN-only 4,096-plane192px generation and GUI-consistent real192px preparation
+are being implemented by agents explicitly requested by the user. Do not launch
+another GPU job until the native evaluation finishes. The GUI experimental tab
+is now implemented, but its full checkpoint-to-desktop workflow is not verified.
 
 - Image-key001 is completed and independently audited: candidate-stage gate
   passes, but MAP orientation40.36deg and full-frame1mm top32 capture4.28%
