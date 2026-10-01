@@ -7,7 +7,7 @@ ROOT = Path('I:/AnatomyTracker')
 os.environ['TEMP'] = os.environ['TMP'] = str(ROOT / 'tmp')
 os.environ['OMP_NUM_THREADS'] = os.environ['MKL_NUM_THREADS'] = '4'
 sys.dont_write_bytecode = True
-READY_AFTER_CONFIRMED_EXIT = False
+READY_AFTER_CONFIRMED_EXIT = True
 assert READY_AFTER_CONFIRMED_EXIT, 'Do not read the mixed run until PID24036 has exited and root authorizes evaluation'
 
 import hashlib

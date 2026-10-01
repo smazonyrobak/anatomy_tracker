@@ -1,0 +1,18 @@
+# One-shot mixed-real continuation: frozen internal result (1 October 2026)
+
+The random-initialized one-shot lineage continued for 20,000 four-image batches (80,000 presentations: three freshly sampled synthetic planes and one distinct real TRAIN section per batch) in `I:/AnatomyTracker/runs/one_shot_joint_mixed_real_003`. The process exited; `completed.json`, all 11 checkpoints, the real-section schedule, raw draw records and training logs are retained on `I:`. This stage still had **no atlas-fitting loss backpropagating into the pose predictor**. No calibration, final-test animals or public benchmark were used.
+
+The frozen independent readout is `I:/AnatomyTracker/runs/one_shot_joint_mixed_real_003_development_eval`: all 11 checkpoints on the same 256-pixel inputs, all 16 pose/reflection branches, with raw section IDs and checkpoint hashes. Errors below are donor-equal five-point physical placement means, **not** expert-landmark registration errors.
+
+| Development stratum | Start: selected / oracle / plane-normal | Batch 20,000: selected / oracle / plane-normal |
+| --- | --- | --- |
+| 43 eligible arbitrary-plane synthetic sections, four synthetic deformation identities | 12.10 / 6.08 mm / 51.8° | **11.44 / 5.01 mm / 48.0°** |
+| 64 real sections, six separate Allen donors, existing weak affine references | 11.64 / 5.58 mm / 29.4° | **1.01 / 0.64 mm / 3.5°** |
+
+The other 21/64 saved synthetic development sections have no usable tissue support: retain them as no-information failures/abstention cases, not registration successes. Synthetic deformation identities reuse one atlas and are not independent biological animals. The real alignment target is an upstream Allen affine, not a blinded expert reference; the 1.01 mm result therefore cannot establish anatomical accuracy. At batch 20,000, the selected synthetic mode with oracle reflection was still 9.34 mm; oracle mode with its predicted reflection was 6.56 mm. Both branch ranking and candidate geometry remain inadequate.
+
+The local mapper also failed to show a useful held-out correction. On those 43 eligible synthetic development sections with the **true pose supplied**, the model's map was 59.09 µm versus 58.98 µm with zero added warp. A separate fresh-draw check, `I:/AnatomyTracker/runs/one_shot_fresh_fitter_001`, found 108.33 versus 108.29 µm over 64 distinct eligible plane draws, with only 51.6% improved. These fresh draws reuse TRAIN synthetic deformation bases and are diagnostic, not independent-animal validation.
+
+There is nevertheless a reason to test fit-to-pose feedback: `I:/AnatomyTracker/runs/one_shot_full_pose_capture_001` found the true atlas fit better than every ±250 µm AP/DV/ML shift on 43 eligible sections. Starting close to truth, a step down the fit gradient reduced actual five-point pose error in 79–97% of the seven tested perturbation types; the opposite-gradient control almost never helped. This is a **local** directional result, not evidence that the current 5–11 mm candidate errors can be corrected globally.
+
+Decision: do not scale the old training recipe, calibrate probabilities, run DeepSlice, or present the GUI integration as qualified. The next controlled continuation compares the same model/checkpoint and exactly matched fresh training draws with versus without bounded atlas-fit gradients into the pose head, while jointly repairing 16-branch ranking. Its oracle-guided near-truth bridge is a curriculum diagnostic, not the final deployed prediction loop; success must be demonstrated on eligible arbitrary-plane development sections without weakening the real-donor result, and the fitter itself still needs improvement.
