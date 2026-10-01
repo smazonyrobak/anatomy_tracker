@@ -1,8 +1,9 @@
-"""Initial random-start training of the final one-pass pose-and-warp architecture.
+"""Continue the one-pass pose-and-warp model with fresh independent planes.
 
 Each optimizer example draws a new arbitrary plane once; no stored section is
 re-styled for another training example. Development sections are never trained.
 """
+import hashlib
 import json
 import math
 import os
@@ -27,10 +28,11 @@ from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 from training.arbitrary_plane_one_shot_stream import sample_one_shot_stream
 from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_synthetic_v7_64
 
-RUN = ROOT / 'runs/one_shot_joint_initial_001'
+RUN = ROOT / 'runs/one_shot_joint_pose_curriculum_002'
+PARENT = ROOT / 'runs/one_shot_joint_initial_001/joint_step_00500.pt'
 SYN_DEV = ROOT / 'data/joint_v7_synthetic_dev192_001'
 REAL = ROOT / 'data/joint_v7_allen_fullcanvas_192_001'
-SEED, UPDATES, TEACHER_UPDATES, BATCH, SIDE = 2026100102, 2500, 700, 4, 256
+SEED, UPDATES, TEACHER_UPDATES, BATCH, SIDE = 2026100201, 10000, 10000, 4, 256
 torch.set_num_threads(4)
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
@@ -40,14 +42,22 @@ torch.backends.cudnn.allow_tf32 = False
 context = load_streaming_synthetic_v7_64(device='cuda')
 model = OneShotJointSliceModel().cuda()
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+parent = torch.load(PARENT, map_location='cpu', weights_only=True)
+assert parent['step'] == 500 and not parent['calibrated']
+model.load_state_dict(parent['model'])
+optimizer.load_state_dict(parent['optimizer'])
+for group in optimizer.param_groups:
+    group['lr'] = 5e-5
+del parent
 subjects_rng = torch.Generator().manual_seed(SEED)
 RUN.mkdir(parents=True, exist_ok=False)
 config = {'seed': SEED, 'updates': UPDATES, 'teacher_updates': TEACHER_UPDATES,
     'batch': BATCH, 'resolution': SIDE, 'training_anatomies': 64,
-    'initialization': 'all learned weights randomly initialized; no earlier model checkpoint',
-    'sampling': 'fresh continuous arbitrary plane, appearance, artifacts and background per draw; no deliberate repeated section',
+    'initialization': 'whole-model continuation from the randomly initialized initial run, step 500',
+    'parent_checkpoint': str(PARENT), 'parent_sha256': hashlib.sha256(PARENT.read_bytes()).hexdigest(),
+    'sampling': 'fresh continuous arbitrary plane, appearance, artifacts and background per draw; no deliberate repeated section; warp strength now also includes near-clean cases',
     'teacher_stage': 'known plane trains local mapping while direct probabilistic pose learns from physical labels',
-    'joint_stage': 'predicted plane and local map receive dense coordinate and differentiable atlas-fit losses',
+    'joint_stage': 'deferred until predicted planes are accurate enough for atlas-fit feedback to be informative',
     'development': 'one observation from each of 64 held-out synthetic planes and 64 weak-label real sections from six held-out donors',
     'calibrated': False, 'public_benchmark_used': False,
     'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
@@ -161,7 +171,9 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as log, \
         best_mode = distance.detach().argmin(-1)
         direct = distance.gather(1, best_mode[:, None]).mean() / 1000
         nll = -model.component_log_prob(prediction, truth, reflected).logsumexp(-1).mean()
-        mass = F.nll_loss(prediction['log_mass'], best_mode)
+        rank = F.kl_div(prediction['log_mass'], (-distance.detach() / 2000).softmax(-1), reduction='batchmean')
+        reflection_loss = F.binary_cross_entropy_with_logits(
+            prediction['reflection_logit'], reflected[:, None].float().expand_as(prediction['reflection_logit']))
         if step <= TEACHER_UPDATES:
             state = prediction['state'].scatter(1, best_mode[:, None, None].expand(-1, 1, 12), truth[:, None])
             mapping_prediction = {**prediction, 'state': state}
@@ -173,19 +185,23 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as log, \
         error = (mapped['centre_surface_ccf_ap_dv_ml_um'][:, 0] - batch['centre']).norm(dim=-1)
         mapping = (error * valid).sum() / valid.sum().clamp_min(1) / 500
         field = mapped['local_displacement_um'][:, 0]
+        magnitude = field.square().mean().sqrt() / 1000
         smooth = ((field[:, :, 1:] - field[:, :, :-1]).abs().mean()
                   + (field[:, :, :, 1:] - field[:, :, :, :-1]).abs().mean()) / 200
         mask = F.binary_cross_entropy_with_logits(mapped['correspondence_logit'][:, 0, 0], valid)
         fit = (model.atlas_fit_loss(batch['inputs'], mapped, context['atlas'],
                                    batch['weights'], batch['valid_mask']).mean()
                if step > TEACHER_UPDATES else direct.new_zeros(()))
-        loss = direct + .1 * nll + .2 * mass + mapping + .02 * smooth + .1 * mask + .25 * fit
+        loss = direct + .1 * nll + .5 * rank + .3 * reflection_loss + mapping \
+            + .1 * magnitude + .02 * smooth + .1 * mask + .25 * fit
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         gradient = torch.nn.utils.clip_grad_norm_(model.parameters(), 5., error_if_nonfinite=True)
         optimizer.step()
         record = {'step': step, 'presentations': step * BATCH, 'direct_five_point_um': float(direct.detach() * 1000),
             'map_error_um': float(mapping.detach() * 500), 'nll': float(nll.detach()),
+            'rank': float(rank.detach()), 'reflection_loss': float(reflection_loss.detach()),
+            'warp_magnitude_um': float(magnitude.detach() * 1000),
             'atlas_fit': float(fit.detach()), 'loss': float(loss.detach()),
             'gradient': float(gradient), 'seconds': time.perf_counter() - started}
         log.write(json.dumps(record) + '\n')
@@ -193,7 +209,7 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as log, \
             log.flush()
             draws.flush()
             print(json.dumps(record), flush=True)
-        if step % 500 == 0:
+        if step % 1000 == 0:
             save(step, f'joint_step_{step:05d}.pt')
             metrics = dev_readout(step)
             score = math.sqrt(metrics['synthetic'] * metrics['real_weak_allen'])

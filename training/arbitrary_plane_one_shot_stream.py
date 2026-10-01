@@ -19,7 +19,7 @@ def sample_one_shot_stream(context, subject_indices, seed, side=192):
     coefficients, parameters, records = [[], [], []], [], []
     for row, (subject_index, original) in enumerate(zip(subject_indices, source['provenance'])):
         rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(subject_index), row, 19]))
-        strength = float(rng.uniform(.55, 1.3))
+        strength = float(1.3 * rng.random() ** 2)
         for level, size in enumerate((4, 8, 16)):
             coefficients[level].append(rng.standard_normal((2, size, size)).astype('float32')
                 * strength * side / 192 * (2.8, 1.4, .55)[level])
