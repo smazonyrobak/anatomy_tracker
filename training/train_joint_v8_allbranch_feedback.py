@@ -1,6 +1,6 @@
-"""Continue the same whole model with fitting-to-pose feedback on all 16 branches.
+"""Continue the mixed whole model with fitting-to-pose feedback on all 16 branches.
 
-Synthetic TRAIN only. Run after the million-plane direct stage is frozen and read out.
+Synthetic fitting plus weak-real TRAIN pose retention, after matched development readout.
 The slab target is in observed raster order; fitted coordinates are reflected to
 that order before physical supervision. This corrects the older joint pilot loss.
 """
@@ -27,13 +27,16 @@ import torch.nn.functional as F
 
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_joint_model_v8 import JointSliceFeedbackModel
+from training.arbitrary_plane_reserved_real_stream_v8 import (
+    load_reserved_real_train, sample_reserved_real_train,
+)
 from training.arbitrary_plane_streaming_synthetic_v7_64 import (
     load_streaming_synthetic_v7_64, sample_streaming_synthetic_v7_64,
 )
 
 RUN = ROOT / 'runs/joint_v8_allbranch_feedback_001'
-PARENT = ROOT / 'runs/joint_v8_million_direct_tail_001'
-SEED, STEPS, BATCH, SIDE = 2026100101, 30000, 2, 192
+PARENT = ROOT / 'runs/joint_v8_mixed_direct_001'
+SEED, START_STEP, STEPS, BATCH, REAL_BATCH, SIDE = 2026100101, 181000, 30000, 2, 4, 192
 repository = Path(__file__).resolve().parents[1]
 torch.set_num_threads(4)
 torch.manual_seed(SEED)
@@ -56,16 +59,34 @@ def five_points(state):
     return centre[..., None, :] + torch.einsum('...ij,pj->...pi', frame[..., :2] @ basis, uv)
 
 
+def predict_pose_only(inputs):
+    x = inputs
+    for layer in model.encoder:
+        x = layer(x)
+    z = model.pose(torch.cat((F.adaptive_avg_pool2d(x, 4).flatten(1),
+                              inputs.new_zeros(len(inputs), 12)), -1))
+    z = z.reshape(-1, model.modes, 21)
+    centre = model.center_origin + z[..., :3] * model.center_scale
+    return {'state': torch.cat((centre, z[..., 3:9],
+                                math.log(12000.) + z[..., 9:11].clamp(-2.5, 2.), z[..., 11:12]), -1),
+            'std': (.005 + F.softplus(z[..., 12:18])).clamp_max(4.),
+            'concentration': (.05 + F.softplus(z[..., 18])).clamp_max(500.),
+            'log_mass': z[..., 19].log_softmax(-1), 'reflection_logit': z[..., 20]}
+
+
 parent_done = json.loads((PARENT / 'completed.json').read_text())
-assert parent_done['stage_updates'] == 125000
-assert parent_done['unique_eligible_optimizer_synthetic_planes'] == 1000000
-assert parent_done['replayed_tail_updates'] == 5000 and parent_done['max_reference_loss_gap'] < .01
-parent_path = PARENT / 'joint_step_161000.pt'
+assert parent_done['stage_updates'] == 20000 and parent_done['total_updates'] == START_STEP
+assert parent_done['eligible_optimizer_synthetic_planes'] == 160000
+assert parent_done['real_training_image_exposures'] == 160000
+parent_path = PARENT / f'joint_step_{START_STEP}.pt'
 parent_sha = sha(parent_path)
+assert parent_sha == parent_done['final_checkpoint_sha256']
 checkpoint = torch.load(parent_path, map_location='cpu', weights_only=True)
-assert checkpoint['step'] == 161000 and not checkpoint['calibrated']
+assert checkpoint['step'] == START_STEP and not checkpoint['calibrated']
 context = load_streaming_synthetic_v7_64(device='cuda')
 assert len(context['bases']) == 64 and len(context['subjects']) == 4096
+real_context = load_reserved_real_train()
+assert len(real_context['donors']) == 1885 and real_context['training_images'] == 263754
 model = JointSliceFeedbackModel().cuda()
 model.load_state_dict(checkpoint['model_state'], strict=True)
 del checkpoint
@@ -79,16 +100,23 @@ generator = torch.Generator().manual_seed(SEED)
 base_indices = torch.randint(64, (STEPS,), generator=generator)
 virtual_indices = base_indices[:, None] * 64 + torch.randint(64, (STEPS, BATCH), generator=generator)
 pair_order = torch.stack([torch.randperm(16, generator=generator) for _ in range(STEPS)])
+real_donor_indices = torch.randint(len(real_context['donors']), (STEPS,), generator=generator)
+real_row_indices = torch.stack([
+    torch.randint(len(real_context['donors'][int(donor)]['state']), (REAL_BATCH,), generator=generator)
+    for donor in real_donor_indices
+])
 assert torch.equal(virtual_indices // 64, base_indices[:, None].expand_as(virtual_indices))
 
 RUN.mkdir(parents=True, exist_ok=False)
 torch.save({'base_index': base_indices, 'virtual_index': virtual_indices,
-            'candidate_pair_order': pair_order}, RUN / 'schedule.pt')
+            'candidate_pair_order': pair_order, 'real_donor_index': real_donor_indices,
+            'real_row_index': real_row_indices}, RUN / 'schedule.pt')
 (RUN / 'identities.json').write_text(json.dumps(context['subjects']), encoding='utf8')
 source_names = sorted(set(context['provenance']['source_sha256']) | {
     'arbitrary_plane_joint_model_v8.py', 'arbitrary_plane_joint_model_v7.py',
     'arbitrary_plane_joint_inference_v8.py',
     'arbitrary_plane_recurrent_model.py', 'arbitrary_plane_ribbon_v6.py',
+    'arbitrary_plane_reserved_real_stream_v8.py',
     'train_joint_v8_allbranch_feedback.py',
 })
 source_sha = {}
@@ -96,24 +124,30 @@ for name in source_names:
     path = repository / 'training' / name
     shutil.copyfile(path, RUN / name)
     source_sha[name] = sha(path)
-config = {'seed': SEED, 'stage_updates': STEPS, 'batch': BATCH, 'resolution': [SIDE, SIDE],
+config = {'seed': SEED, 'stage_updates': STEPS, 'batch': BATCH, 'real_batch': REAL_BATCH,
+    'resolution': [SIDE, SIDE],
     'modes': model.modes, 'fitter_steps': 4, 'candidate_branches_per_image': 16,
     'parent_checkpoint': str(parent_path), 'parent_checkpoint_sha256': parent_sha,
     'parent_completed_sha256': sha(PARENT / 'completed.json'),
     'initialization': 'strict whole-model continuation of the standalone random-init v8 lineage',
-    'sampling': '64 independent synthetic TRAIN maps; one base and two affine variants per update; fresh eligible arbitrary physical planes; all 16 mode/reflection fits per image in randomized pairs',
+    'sampling': '64 independent synthetic TRAIN maps; one base and two affine variants per update; fresh eligible arbitrary physical planes; all 16 mode/reflection fits per synthetic image in randomized pairs; four weakly registered real TRAIN sections from one uniformly sampled donor per update',
     'physical_target': 'observed PSF slab; reflect canonical predicted slab before comparison',
     'fit_to_pose': 'differentiable final and intermediate physical errors from the geometry-best mode with correct reflection; no detached predicted pose; all 16 scores trained on synthetic physical error',
     'quality_learning': 'all-branch physical-error score regression and randomized pair ranking; deformation penalty detached inside score to prevent wrong branches learning implausible deformation as a rejection signal',
-    'anatomical_loss': 'atlas-like source appearance against finite-thickness atlas render on visible synthetic tissue only; damaged and missing pixels excluded',
+    'anatomical_loss': 'atlas-like source appearance against finite-thickness atlas render on visible synthetic tissue; decoder reconstruction also uses non-tissue background, while damaged and missing tissue pixels are excluded',
     'negative_modes': 'quality/ranking only, no forced deformation to the true atlas location',
+    'real_label_role': 'weak Allen affine, not expert anatomy or a final-test reference',
+    'real_retention_loss': '0.25 times donor-uniform real TRAIN best-mode five-point physical error /500um plus mixture NLL and best-mode cross-entropy; no real deformation ground truth assumed',
     'optimizer': 'AdamW; pose 1e-5 and fitting 3e-5 cosine to 20%; norm clip 5; FP32',
     'calibrated': False, 'constraints': 'absent, not trained',
-    'scope': 'synthetic TRAIN joint feedback; not animal validation, calibration, public benchmark, or deployment',
+    'scope': 'synthetic TRAIN joint feedback with real TRAIN pose retention; not animal validation, calibration, public benchmark, or deployment',
     'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repository, text=True).strip(),
     'runtime': {'python': sys.version, 'numpy': np.__version__, 'torch': str(torch.__version__),
                 'gpu': torch.cuda.get_device_name()},
     'source_sha256': source_sha, 'data_sha256': context['bindings'],
+    'real_data_sha256': real_context['bindings'],
+    'real_training_images': real_context['training_images'],
+    'real_training_donors': len(real_context['donors']),
     'synthetic_provenance': context['provenance'],
     'schedule_sha256': sha(RUN / 'schedule.pt'),
     'identities_sha256': sha(RUN / 'identities.json')}
@@ -147,23 +181,49 @@ def draw(subjects, step, trace):
 
 def save_checkpoint(step, attempted):
     torch.save({'model_state': model.state_dict(), 'optimizer_state': optimizer.state_dict(),
-                'step': 161000 + step, 'stage_step': step, 'config': config,
+                'step': START_STEP + step, 'stage_step': step, 'config': config,
                 'eligible_optimizer_synthetic_planes': step * BATCH,
+                'real_training_image_exposures': step * REAL_BATCH,
                 'attempted_synthetic_planes': attempted,
                 'torch_rng': torch.get_rng_state(), 'cuda_rng': torch.cuda.get_rng_state_all(),
-                'calibrated': False}, RUN / f'joint_step_{161000 + step:06d}.pt')
+                'calibrated': False}, RUN / f'joint_step_{START_STEP + step:06d}.pt')
 
 
 save_checkpoint(0, 0)
 started = time.perf_counter()
 attempted = 0
 with (RUN / 'training.jsonl').open('w', encoding='utf8') as trace, \
-     (RUN / 'synthetic_draws.jsonl').open('w', encoding='utf8') as draws:
+     (RUN / 'synthetic_draws.jsonl').open('w', encoding='utf8') as draws, \
+     (RUN / 'real_draws.jsonl').open('w', encoding='utf8') as real_draws:
     for step in range(1, STEPS + 1):
         sample, tries = draw(virtual_indices[step - 1], step, draws)
         attempted += tries
         image, truth, reflection = sample['inputs'], sample['state'], sample['reflection']
         offsets, weights = sample['offsets'], sample['weights']
+        cosine = .2 + .8 * .5 * (1 + math.cos(math.pi * (step - 1) / STEPS))
+        for group, peak in zip(optimizer.param_groups, (1e-5, 3e-5)):
+            group['lr'] = peak * cosine
+        optimizer.zero_grad(set_to_none=True)
+        real_donor = int(real_donor_indices[step - 1])
+        real_sample = sample_reserved_real_train(real_context, real_donor,
+                                                 real_row_indices[step - 1].tolist())
+        real_prediction = predict_pose_only(real_sample['inputs'])
+        real_truth, real_reflection = real_sample['state'], real_sample['reflection']
+        real_error = (five_points(real_prediction['state']) - five_points(real_truth)[:, None]).norm(dim=-1).mean(-1)
+        real_best = real_error.detach().argmin(-1)
+        real_rows = torch.arange(REAL_BATCH, device='cuda')
+        real_direct_loss = real_error[real_rows, real_best].mean() / 500
+        real_direct_loss = real_direct_loss + .1 * (-model.component_log_prob(
+            real_prediction, real_truth, real_reflection).logsumexp(-1).mean())
+        real_direct_loss = real_direct_loss + .2 * F.nll_loss(real_prediction['log_mass'], real_best)
+        real_map_um = float(real_error[real_rows, real_prediction['log_mass'].argmax(-1)].mean().detach())
+        real_oracle_um = float(real_error[real_rows, real_best].mean().detach())
+        real_loss_value = float(real_direct_loss.detach())
+        (.25 * real_direct_loss).backward()
+        for identity in real_sample['identities']:
+            real_draws.write(json.dumps({**identity, 'stage_step': step,
+                                         'donor_index': real_donor}) + '\n')
+        del real_prediction, real_error, real_direct_loss, real_sample
         prediction = model.predict(image)
         direct_error = (five_points(prediction['state']) - five_points(truth)[:, None]).norm(dim=-1).mean(-1)
         best = direct_error.detach().argmin(-1)
@@ -173,10 +233,6 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as trace, \
         direct_loss = direct_loss + .2 * F.nll_loss(prediction['log_mass'], best)
         valid = (1 - sample['support'] + sample['visible']).clamp(0, 1)
         appearance_loss = ((prediction['appearance'][:, 0] - sample['clean']).abs() * valid).sum() / valid.sum().clamp_min(1)
-        cosine = .2 + .8 * .5 * (1 + math.cos(math.pi * (step - 1) / STEPS))
-        for group, peak in zip(optimizer.param_groups, (1e-5, 3e-5)):
-            group['lr'] = peak * cosine
-        optimizer.zero_grad(set_to_none=True)
         (.3 * direct_loss + .05 * appearance_loss).backward(retain_graph=True)
         scores = image.new_empty(BATCH, 16)
         slab_errors = image.new_empty(BATCH, 16)
@@ -241,11 +297,14 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as trace, \
             [p for p in model.parameters() if p.requires_grad], 5., error_if_nonfinite=True)
         optimizer.step()
         selected = scores.argmax(-1)
-        row = {'stage_step': step, 'total_step': 161000 + step,
+        row = {'stage_step': step, 'total_step': START_STEP + step,
             'base_index': int(base_indices[step - 1]),
             'virtual_indices': virtual_indices[step - 1].tolist(),
             'eligible_optimizer_planes': step * BATCH, 'attempted_planes': attempted,
             'loss': float((.3 * direct_loss + .05 * appearance_loss).detach()) + pair_loss_total,
+            'loss_including_real': float((.3 * direct_loss + .05 * appearance_loss).detach()) + pair_loss_total + .25 * real_loss_value,
+            'real_pose_loss': real_loss_value, 'real_train_map_five_point_um': real_map_um,
+            'real_train_oracle_five_point_um': real_oracle_um,
             'direct_best_five_point_um': float(direct_error[rows, best].mean().detach()),
             'fitted_selected_five_point_um': float(fitted_errors[rows, selected].mean()),
             'fitted_oracle_five_point_um': float(fitted_errors.min(-1).values.mean()),
@@ -257,13 +316,15 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as trace, \
         if step == 1 or step % 100 == 0:
             trace.flush()
             draws.flush()
+            real_draws.flush()
             print(json.dumps(row), flush=True)
         if step % 5000 == 0:
             save_checkpoint(step, attempted)
 for name, expected in source_sha.items():
     assert sha(repository / 'training' / name) == expected, name
 (RUN / 'completed.json').write_text(json.dumps({'stage_updates': STEPS,
-    'total_updates': 161000 + STEPS, 'eligible_optimizer_synthetic_planes': STEPS * BATCH,
+    'total_updates': START_STEP + STEPS, 'eligible_optimizer_synthetic_planes': STEPS * BATCH,
     'attempted_synthetic_planes': attempted, 'seconds': time.perf_counter() - started,
+    'real_training_image_exposures': STEPS * REAL_BATCH,
     'calibrated': False, 'scope': config['scope']}, indent=2), encoding='utf8')
 print('All-branch joint feedback stage complete; frozen audit and development evaluation required', flush=True)

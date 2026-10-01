@@ -19,7 +19,7 @@ from training.arbitrary_plane_allen_atlas_binding_v6 import _decode_and_preproce
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_joint_inference_v8 import infer_joint_v8, load_joint_v8_checkpoint
 
-DIRECT = ROOT / 'runs/joint_v8_million_direct_001'
+DIRECT = ROOT / 'runs/joint_v8_mixed_direct_001'
 JOINT = ROOT / 'runs/joint_v8_allbranch_feedback_001'
 DATA = ROOT / 'data/joint_v7_synthetic_dev192_001'
 OUTPUT = ROOT / 'runs/joint_v8_allbranch_feedback_dev192_001'
@@ -46,16 +46,18 @@ def five_points(state, reflection):
 
 direct_done = json.loads((DIRECT / 'completed.json').read_text())
 joint_done = json.loads((JOINT / 'completed.json').read_text())
-assert direct_done['stage_updates'] == 125000 and direct_done['unique_eligible_optimizer_synthetic_planes'] == 1000000
-assert joint_done['stage_updates'] == 30000 and joint_done['total_updates'] == 191000
+assert direct_done['stage_updates'] == 20000 and direct_done['total_updates'] == 181000
+assert direct_done['eligible_optimizer_synthetic_planes'] == 160000
+assert direct_done['real_training_image_exposures'] == 160000
+assert joint_done['stage_updates'] == 30000 and joint_done['total_updates'] == 211000
 data_done = json.loads((DATA / 'completed.json').read_text())
 assert data_done['physical_sections'] == 64 and data_done['observations'] == 192
 assert sha(DATA / 'protocol.json') == data_done['protocol_sha256']
 assert sha(DATA / 'records.jsonl') == data_done['records_sha256']
 records = [json.loads(s) for s in (DATA / 'records.jsonl').read_text().splitlines()]
 assert len(records) == 64 and len({r['animal_id'] for r in records}) == 4
-checkpoints = {'before_joint': DIRECT / 'joint_step_161000.pt',
-               'after_joint': JOINT / 'joint_step_191000.pt'}
+checkpoints = {'before_joint': DIRECT / 'joint_step_181000.pt',
+               'after_joint': JOINT / 'joint_step_211000.pt'}
 repository = Path(__file__).resolve().parents[1]
 direct_config = torch.load(checkpoints['before_joint'], map_location='cpu', weights_only=True)['config']
 joint_config = torch.load(checkpoints['after_joint'], map_location='cpu', weights_only=True)['config']
@@ -86,7 +88,7 @@ rows = []
 started = time.perf_counter()
 for label, path in checkpoints.items():
     model, config = load_joint_v8_checkpoint(path)
-    assert config['resolution'] == [192, 192] and config['modes'] == 8
+    assert config['resolution'] == [192, 192] and model.modes == 8
     for section_index, record in enumerate(records):
         source = DATA / record['file']
         assert sha(source) == record['sha256']

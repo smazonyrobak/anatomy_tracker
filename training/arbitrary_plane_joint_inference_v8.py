@@ -7,7 +7,10 @@ from training.arbitrary_plane_joint_model_v8 import JointSliceFeedbackModel
 
 def load_joint_v8_checkpoint(path, device='cuda'):
     checkpoint = torch.load(path, map_location='cpu', weights_only=True)
-    model = JointSliceFeedbackModel(modes=checkpoint['config']['modes']).to(device)
+    modes, remainder = divmod(checkpoint['model_state']['pose.2.bias'].numel(), 21)
+    if remainder or checkpoint['config'].get('modes', modes) != modes:
+        raise ValueError('Checkpoint pose-head mode count is inconsistent')
+    model = JointSliceFeedbackModel(modes=modes).to(device)
     model.load_state_dict(checkpoint['model_state'], strict=True)
     model.eval()
     return model, checkpoint['config']

@@ -24,7 +24,7 @@ MIXED = ROOT / 'runs/joint_v8_mixed_direct_001'
 SYNTHETIC = ROOT / 'data/joint_v7_synthetic_dev192_001'
 REAL = ROOT / 'data/joint_v7_allen_fullcanvas_192_001'
 RESERVATIONS = ROOT / 'data/joint_v7_reserved_train_metadata_001/proposed_donor_reservations.jsonl'
-OUTPUT = ROOT / 'runs/joint_v8_mixed_direct_dev_001'
+OUTPUT = ROOT / 'runs/joint_v8_mixed_direct_dev_002'
 SIDE = 192
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -106,7 +106,9 @@ pixels = torch.tensor([[0., 0.], [191., 0.], [0., 191.], [191., 191.], [95.5, 95
 rows = []
 for stage, path in checkpoints.items():
     checkpoint = torch.load(path, map_location='cpu', weights_only=True)
-    model = JointSliceFeedbackModel(modes=checkpoint['config']['modes']).cuda().eval()
+    modes, remainder = divmod(checkpoint['model_state']['pose.2.bias'].numel(), 21)
+    assert remainder == 0 and modes == 8
+    model = JointSliceFeedbackModel(modes=modes).cuda().eval()
     model.load_state_dict(checkpoint['model_state'], strict=True)
     del checkpoint
     for index, record in enumerate(synthetic_records):

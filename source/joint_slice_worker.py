@@ -53,7 +53,7 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     model, config = load_checkpoint(path, device=device)
     if f'arbitrary_plane_joint_model_{version}.py' not in config['source_sha256']:
         raise ValueError(f'Selected checkpoint is not a whole-model {version} checkpoint')
-    if version == 'v8' and config['modes'] != 8:
+    if version == 'v8' and model.modes != 8:
         raise ValueError('Joint v8 GUI inference requires eight modes (16 branches).')
     for name, expected in config['source_sha256'].items():
         if name in ('train_joint_v7.py', 'train_joint_v7_expanded.py',
