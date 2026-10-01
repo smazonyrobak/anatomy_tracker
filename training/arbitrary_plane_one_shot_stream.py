@@ -8,10 +8,13 @@ import torch
 import torch.nn.functional as F
 
 from training.arbitrary_plane_streaming_synthetic_v7 import sample_streaming_synthetic_v7
+from training.arbitrary_plane_streaming_synthetic_v7_64 import sample_streaming_synthetic_v7_64
 
 
 def sample_one_shot_stream(context, subject_indices, seed, side=192):
-    source = sample_streaming_synthetic_v7(context, subject_indices, seed, side)
+    sampler = (sample_streaming_synthetic_v7_64 if 'displacement_cpu' in context['bases'][0]
+               else sample_streaming_synthetic_v7)
+    source = sampler(context, subject_indices, seed, side)
     device = source['inputs'].device
     coefficients, parameters, records = [[], [], []], [], []
     for row, (subject_index, original) in enumerate(zip(subject_indices, source['provenance'])):
