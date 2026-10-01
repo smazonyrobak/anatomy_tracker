@@ -13,10 +13,13 @@ from training.arbitrary_plane_streaming_synthetic_v7 import sample_streaming_syn
 from training.arbitrary_plane_streaming_synthetic_v7_64 import sample_streaming_synthetic_v7_64
 
 
-def sample_one_shot_stream(context, subject_indices, seed, side=192):
-    sampler = (sample_streaming_synthetic_v7_64 if 'displacement_cpu' in context['bases'][0]
-               else sample_streaming_synthetic_v7)
-    source = sampler(context, subject_indices, seed, side)
+def sample_one_shot_stream(context, subject_indices, seed, side=192, source_sample=None):
+    if source_sample is None:
+        sampler = (sample_streaming_synthetic_v7_64 if 'displacement_cpu' in context['bases'][0]
+                   else sample_streaming_synthetic_v7)
+        source = sampler(context, subject_indices, seed, side)
+    else:
+        source = source_sample
     device = source['inputs'].device
     coefficients, parameters, records = [[], [], []], [], []
     for row, (subject_index, original) in enumerate(zip(subject_indices, source['provenance'])):
