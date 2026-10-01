@@ -1,7 +1,8 @@
 """Randomly initialized one-pass arbitrary-plane pose and tissue mapping.
 
-The atlas is used for the differentiable training loss and display, not as an
-input to the warp head. Mixture scores and uncertainty outputs are uncalibrated.
+The optional atlas-conditioned warp compares the slice with a rendered candidate
+plane; the original image-only path remains the default. Mixture scores and
+uncertainty outputs are uncalibrated.
 """
 import math
 
@@ -14,13 +15,15 @@ from training.arbitrary_plane_full_frame_primitives import (
 )
 from training.arbitrary_plane_geometry import normalized_raster_to_ccf
 from training.arbitrary_plane_joint_model_v7 import ResidualBlock
+from training.arbitrary_plane_recurrent_model import local_correlation
 from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 
 
 class OneShotJointSliceModel(nn.Module):
-    def __init__(self, modes=8, uncertainty_rank=4):
+    def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False):
         super().__init__()
         self.modes, self.uncertainty_rank = modes, uncertainty_rank
+        self.atlas_conditioning = atlas_conditioning
         widths = (64, 128, 256, 320)
         self.encoder = nn.ModuleList()
         channels = 5
@@ -48,6 +51,18 @@ class OneShotJointSliceModel(nn.Module):
             nn.Conv2d(64, 64, 1), nn.GELU(),
             nn.Conv2d(64, 4, 3, padding=1),
         )
+        if atlas_conditioning:
+            self.atlas_encoder = nn.Sequential(
+                nn.Conv2d(2, 64, 5, padding=2), nn.GroupNorm(8, 64), nn.GELU(),
+                ResidualBlock(64),
+            )
+            self.pair = nn.Sequential(
+                nn.Conv2d(64 * 3 + 25 + 2, 64, 3, padding=1),
+                nn.GroupNorm(8, 64), nn.GELU(), ResidualBlock(64),
+                nn.Conv2d(64, 64, 1),
+            )
+            nn.init.zeros_(self.pair[-1].weight)
+            nn.init.zeros_(self.pair[-1].bias)
         latent_size = 9 + 3 * 8 * 8
         self.uncertainty = nn.Linear(widths[-1] + 13, latent_size * (1 + uncertainty_rank))
         self.register_buffer('center_origin', torch.tensor([6600., 4000., 5700.]))
@@ -116,7 +131,7 @@ class OneShotJointSliceModel(nn.Module):
         )
         return prediction['log_mass'] + normal_lp + rotation_lp + reflection_lp
 
-    def map(self, prediction, offsets, mode_index, reflection, image_shape):
+    def map(self, prediction, offsets, mode_index, reflection, image_shape, atlas=None, weights=None):
         batch, count = mode_index.shape
         row = torch.arange(batch, device=mode_index.device)[:, None]
         state = prediction['state'][row, mode_index].reshape(-1, 12)
@@ -129,11 +144,44 @@ class OneShotJointSliceModel(nn.Module):
         feature = prediction['feature'][:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
         scale, bias = self.warp_condition(condition).chunk(2, -1)
         feature = feature * (1 + .25 * scale.tanh()[..., None, None]) + bias[..., None, None]
+        height, width = image_shape
+        if self.atlas_conditioning:
+            if atlas is None or weights is None:
+                raise ValueError('atlas-conditioned warp requires the atlas and axial PSF weights')
+            center, frame, basis = full_frame_state_to_components(state)
+            fh, fw = feature.shape[-2:]
+            yy, xx = torch.meshgrid(
+                torch.arange(fh, device=state.device, dtype=state.dtype) / fh,
+                torch.arange(fw, device=state.device, dtype=state.dtype) / fw,
+                indexing='ij',
+            )
+            sx = torch.where(reflected[:, None, None], (width - 1) / width - xx, xx)
+            chart = torch.stack((sx.expand(-1, fh, -1), yy.expand(len(state), -1, -1)), -1)
+            plane = normalized_raster_to_ccf(
+                center[:, None, None], frame[:, None, None], basis[:, None, None], chart
+            )
+            z = torch.as_tensor(offsets, device=state.device, dtype=state.dtype)
+            w = torch.as_tensor(weights, device=state.device, dtype=state.dtype)
+            if z.ndim == 1:
+                z = z[None].expand(batch, -1)
+            if w.ndim == 1:
+                w = w[None].expand(batch, -1)
+            z = z[:, None].expand(-1, count, -1).flatten(0, 1)
+            w = w[:, None].expand(-1, count, -1).flatten(0, 1)
+            rigid = plane[:, None] + z[:, :, None, None, None] * frame[:, None, None, None, :, 2]
+            rendered = render_finite_thickness_coordinate_grid(
+                atlas, rigid, (0., 0., 0.), (25., 25., 25.), w
+            )
+            support = rendered[:, 1:2]
+            target = self.atlas_encoder(torch.cat((rendered[:, :1] / support.clamp_min(1e-4), support), 1))
+            xy = torch.stack((xx, yy))[None].expand(len(state), -1, -1, -1)
+            evidence = torch.cat((feature, target, (feature - target).abs(),
+                                  local_correlation(feature, target, 2), xy), 1)
+            feature = feature + self.pair(evidence)
         raw = F.interpolate(self.warp(feature), image_shape, mode='bilinear', align_corners=False)
         requested_local = 1000 * raw[:, :3].tanh()
         local, removed_affine = project_surface_affine_out(requested_local)
         center, frame, basis = full_frame_state_to_components(state)
-        height, width = image_shape
         y, x = torch.meshgrid(
             torch.arange(height, device=state.device, dtype=state.dtype) / height,
             torch.arange(width, device=state.device, dtype=state.dtype) / width,
@@ -168,7 +216,8 @@ class OneShotJointSliceModel(nn.Module):
             'calibrated': False,
         }
 
-    def forward(self, inputs, offsets, context=None, mode_index=None, reflection=None, candidates=4):
+    def forward(self, inputs, offsets, context=None, mode_index=None, reflection=None, candidates=4,
+                atlas=None, weights=None):
         prediction = self.predict(inputs, context)
         if mode_index is None:
             log_reflection = torch.stack((F.logsigmoid(-prediction['reflection_logit']),
@@ -178,7 +227,7 @@ class OneShotJointSliceModel(nn.Module):
             mode_index, reflection = selected // 2, selected % 2
         if mode_index.ndim == 1:
             mode_index, reflection = mode_index[:, None], reflection[:, None]
-        mapped = self.map(prediction, offsets, mode_index, reflection, inputs.shape[-2:])
+        mapped = self.map(prediction, offsets, mode_index, reflection, inputs.shape[-2:], atlas, weights)
         mapped['prediction'] = prediction
         return mapped
 
