@@ -45,7 +45,7 @@ execute it, but must not repeatedly inspect final-test animals.
 
 ## Probabilistic pose and downstream uncertainty
 
-The current one-shot model predicts eight full-frame pose components with
+The experimental one-shot model predicts multiple full-frame pose components with
 reflection scores and component scales. These are **not** calibrated posterior
 probabilities; its dense-map covariance output is not yet trained. Any later
 atlas-fit reranking changes the effective distribution and must be evaluated
