@@ -20,7 +20,7 @@ from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 
 
 class OneShotJointSliceModel(nn.Module):
-    def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False):
+    def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False):
         super().__init__()
         self.modes, self.uncertainty_rank = modes, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
@@ -63,6 +63,14 @@ class OneShotJointSliceModel(nn.Module):
             )
             nn.init.zeros_(self.pair[-1].weight)
             nn.init.zeros_(self.pair[-1].bias)
+            if fit_quality:
+                self.fit_quality_head = nn.Sequential(
+                    nn.Conv2d(64 * 3 + 25 + 2 + 4, 64, 3, padding=1),
+                    nn.GroupNorm(8, 64), nn.GELU(),
+                    nn.Conv2d(64, 32, 3, stride=2, padding=1),
+                    nn.GroupNorm(8, 32), nn.GELU(),
+                    nn.AdaptiveAvgPool2d(4), nn.Flatten(), nn.Linear(32 * 4 * 4, 1),
+                )
         latent_size = 9 + 3 * 8 * 8
         self.uncertainty = nn.Linear(widths[-1] + 13, latent_size * (1 + uncertainty_rank))
         self.register_buffer('center_origin', torch.tensor([6600., 4000., 5700.]))
@@ -179,6 +187,10 @@ class OneShotJointSliceModel(nn.Module):
                                   local_correlation(feature, target, 2), xy), 1)
             feature = feature + self.pair(evidence)
         raw = F.interpolate(self.warp(feature), image_shape, mode='bilinear', align_corners=False)
+        if hasattr(self, 'fit_quality_head'):
+            match = torch.cat((evidence, F.interpolate(raw, evidence.shape[-2:],
+                mode='bilinear', align_corners=False)), 1)
+            fit_energy = F.softplus(self.fit_quality_head(match).squeeze(-1))
         requested_local = 1000 * raw[:, :3].tanh()
         local, removed_affine = project_surface_affine_out(requested_local)
         center, frame, basis = full_frame_state_to_components(state)
@@ -202,7 +214,7 @@ class OneShotJointSliceModel(nn.Module):
         covariance = self.uncertainty(torch.cat((global_feature, condition), -1)).reshape(
             len(state), 9 + 3 * 8 * 8, 1 + self.uncertainty_rank
         )
-        return {
+        output = {
             'state': state.reshape(batch, count, 12),
             'mode_index': mode_index,
             'reflection': reflection,
@@ -215,6 +227,9 @@ class OneShotJointSliceModel(nn.Module):
             'joint_factor': covariance[..., 1:].reshape(batch, count, -1, self.uncertainty_rank),
             'calibrated': False,
         }
+        if hasattr(self, 'fit_quality_head'):
+            output['fit_energy'] = fit_energy.reshape(batch, count)
+        return output
 
     def forward(self, inputs, offsets, context=None, mode_index=None, reflection=None, candidates=4,
                 atlas=None, weights=None):

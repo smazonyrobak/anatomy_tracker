@@ -11,6 +11,7 @@ def load_one_shot_checkpoint(path, device='cuda'):
     model = OneShotJointSliceModel(
         modes=checkpoint['model']['pose.2.bias'].numel() // 21,
         atlas_conditioning=any(key.startswith('atlas_encoder.') for key in checkpoint['model']),
+        fit_quality=any(key.startswith('fit_quality_head.') for key in checkpoint['model']),
     ).to(device)
     model.load_state_dict(checkpoint['model'])
     return model.eval(), checkpoint['config']
