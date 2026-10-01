@@ -7,6 +7,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from training.arbitrary_plane_full_frame_primitives import full_frame_state_from_components
+from training.arbitrary_plane_geometry import physical_ouv_to_frame
 from training.arbitrary_plane_streaming_synthetic_v7 import sample_streaming_synthetic_v7
 from training.arbitrary_plane_streaming_synthetic_v7_64 import sample_streaming_synthetic_v7_64
 
@@ -99,7 +101,18 @@ def sample_one_shot_stream(context, subject_indices, seed, side=192):
     eroded[:, :, :-1] &= brush[:, :, 1:]
     inputs[:, 1] = ((brush & ~eroded) & available[:, None, None]).float()
     inputs[:, 2] = available[:, None, None].float()
-    return {'inputs': inputs, 'state': source['state'], 'reflection': source['reflection'],
+    canonical = torch.where(source['reflection'][:, None, None, None].bool(), centre.flip(-2), centre)
+    st = torch.arange(side, device=device, dtype=centre.dtype) / side
+    centred = st - st.mean()
+    edge_u = (canonical * centred[None, None, :, None]).sum((1, 2)) / (side * centred.square().sum())
+    edge_v = (canonical * centred[None, :, None, None]).sum((1, 2)) / (side * centred.square().sum())
+    origin = canonical.mean((1, 2)) - st.mean() * (edge_u + edge_v)
+    state = full_frame_state_from_components(*physical_ouv_to_frame(torch.stack((origin, edge_u, edge_v), 1)))
+    for row, record in enumerate(records):
+        record['one_shot']['source_state'] = source['state'][row].cpu().tolist()
+        record['one_shot']['observed_affine_state'] = state[row].cpu().tolist()
+        record['one_shot']['pose_gauge'] = 'full-canvas affine fit to observed CCF target; local warp excludes affine'
+    return {'inputs': inputs, 'state': state, 'reflection': source['reflection'],
         'offsets': source['offsets'], 'weights': source['weights'], 'centre': centre,
         'valid_mask': valid, 'visible': visible * ~removed, 'brush_mask': brush, 'eligible': eligible,
         'observed_to_source_grid': grid, 'provenance': records}

@@ -39,6 +39,7 @@ synthetic = load_streaming_synthetic_v7_64(device='cuda')
 real = load_reserved_real_train()
 assert real['training_images'] == 263754 and len(real['donors']) == 1885
 parent = torch.load(PARENT, map_location='cpu', weights_only=True)
+parent_step = parent['step']
 model = OneShotJointSliceModel().cuda()
 model.load_state_dict(parent['model'])
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5, weight_decay=1e-4)
@@ -70,12 +71,14 @@ schedule = np.asarray(schedule, dtype=np.int32)
 np.save(RUN / 'real_schedule.npy', schedule)
 config = {'seed': SEED, 'updates': UPDATES, 'synthetic_per_batch': SYNTHETIC_PER_BATCH,
     'distinct_real_train_sections': UPDATES, 'resolution': SIDE,
-    'parent_checkpoint': str(PARENT), 'parent_sha256': hashlib.sha256(PARENT.read_bytes()).hexdigest(),
+    'parent_checkpoint': str(PARENT), 'parent_step': parent_step,
+    'parent_sha256': hashlib.sha256(PARENT.read_bytes()).hexdigest(),
     'initialization': 'whole-model continuation of random-start one-shot lineage',
     'synthetic_sampling': 'three new continuous arbitrary planes per batch, each with independently random appearance and damage',
     'real_sampling': 'one TRAIN section per batch, randomized donor rounds and within-donor order; no real section repeats',
     'real_label_role': real['label_role'], 'real_bindings': real['bindings'],
     'synthetic_provenance': synthetic['provenance'],
+    'synthetic_generator_sha256': hashlib.sha256(Path(__file__).with_name('arbitrary_plane_one_shot_stream.py').read_bytes()).hexdigest(),
     'real_schedule_sha256': hashlib.sha256((RUN / 'real_schedule.npy').read_bytes()).hexdigest(),
     'fit_feedback': 'deferred pending useful direct plane accuracy; this stage trains pose and correct-plane local mapping',
     'calibrated': False, 'public_benchmark_used': False,

@@ -17,7 +17,7 @@ from training.arbitrary_plane_one_shot_stream import sample_one_shot_stream
 from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_synthetic_v7_64
 
-OUT = ROOT / 'runs/one_shot_warp_gauge_001'
+OUT = ROOT / 'runs/one_shot_warp_gauge_002'
 OUT.mkdir(parents=True, exist_ok=False)
 torch.set_num_threads(4)
 context = load_streaming_synthetic_v7_64(device='cuda')
