@@ -20,14 +20,16 @@ from training.arbitrary_plane_joint_model_v8 import JointSliceFeedbackModel
 REAL = ROOT / 'data/joint_v7_allen_fullcanvas_192_001'
 RESERVATIONS = ROOT / 'data/joint_v7_reserved_train_metadata_001/proposed_donor_reservations.jsonl'
 PARENT = ROOT / 'runs/joint_v8_feedback_pilot_001/joint_step_36000.pt'
-DIRECT = ROOT / 'runs/joint_v8_million_direct_001/joint_step_161000.pt'
+TAIL = ROOT / 'runs/joint_v8_million_direct_tail_001'
+DIRECT = TAIL / 'joint_step_161000.pt'
 OUTPUT = ROOT / 'runs/joint_v8_million_direct_real_dev_001'
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
-done = json.loads((ROOT / 'runs/joint_v8_million_direct_001/completed.json').read_text())
+done = json.loads((TAIL / 'completed.json').read_text())
 assert done['stage_updates'] == 125000 and done['unique_eligible_optimizer_synthetic_planes'] == 1000000
+assert done['replayed_tail_updates'] == 5000 and done['max_reference_loss_gap'] < .01
 real_done = json.loads((REAL / 'completed.json').read_text())
 assert real_done['development_images'] == 64 and real_done['development_donors'] == 6
 records = [json.loads(line) for line in (REAL / 'records.jsonl').read_text().splitlines()]
@@ -45,7 +47,7 @@ assert images.shape == (1344, 1, 192, 192)
 assert all(not is_train[row['array_row_index']] for row in dev)
 
 hashes = {}
-for path in (PARENT, DIRECT, REAL / 'images.npy', REAL / 'geometry.npz',
+for path in (PARENT, DIRECT, TAIL / 'completed.json', REAL / 'images.npy', REAL / 'geometry.npz',
              REAL / 'records.jsonl', REAL / 'preparation_source.py',
              REAL / 'completed.json', RESERVATIONS, Path(__file__)):
     with path.open('rb') as stream:

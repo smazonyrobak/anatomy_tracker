@@ -32,7 +32,7 @@ from training.arbitrary_plane_streaming_synthetic_v7_64 import (
 )
 
 RUN = ROOT / 'runs/joint_v8_allbranch_feedback_001'
-PARENT = ROOT / 'runs/joint_v8_million_direct_001'
+PARENT = ROOT / 'runs/joint_v8_million_direct_tail_001'
 SEED, STEPS, BATCH, SIDE = 2026100101, 30000, 2, 192
 repository = Path(__file__).resolve().parents[1]
 torch.set_num_threads(4)
@@ -59,6 +59,7 @@ def five_points(state):
 parent_done = json.loads((PARENT / 'completed.json').read_text())
 assert parent_done['stage_updates'] == 125000
 assert parent_done['unique_eligible_optimizer_synthetic_planes'] == 1000000
+assert parent_done['replayed_tail_updates'] == 5000 and parent_done['max_reference_loss_gap'] < .01
 parent_path = PARENT / 'joint_step_161000.pt'
 parent_sha = sha(parent_path)
 checkpoint = torch.load(parent_path, map_location='cpu', weights_only=True)

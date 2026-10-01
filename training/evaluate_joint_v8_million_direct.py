@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_joint_model_v8 import JointSliceFeedbackModel
 
-RUN = ROOT / 'runs/joint_v8_million_direct_001'
+RUN = ROOT / 'runs/joint_v8_million_direct_tail_001'
 DATA = ROOT / 'data/joint_v7_synthetic_dev192_001'
 OUTPUT = ROOT / 'runs/joint_v8_million_direct_dev192_001'
 SIDE = 192
@@ -43,6 +43,8 @@ def five_points(state, reflection):
 
 training_done = json.loads((RUN / 'completed.json').read_text())
 assert training_done['stage_updates'] == 125000 and training_done['unique_eligible_optimizer_synthetic_planes'] == 1000000
+assert training_done['replayed_tail_updates'] == 5000
+assert training_done['max_reference_loss_gap'] < .01
 data_done = json.loads((DATA / 'completed.json').read_text())
 assert data_done['physical_sections'] == 64 and data_done['observations'] == 192
 assert sha(DATA / 'protocol.json') == data_done['protocol_sha256']
