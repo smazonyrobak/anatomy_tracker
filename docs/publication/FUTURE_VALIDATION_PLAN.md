@@ -45,22 +45,17 @@ execute it, but must not repeatedly inspect final-test animals.
 
 ## Probabilistic pose and downstream uncertainty
 
-The preferred compact design reuses scored pose candidates as a proposal set
-for a discrete multimodal posterior and predicts a small local covariance
-around each surviving mode. The current nonuniform, truncated candidates and
-forced truth-centre insertion are not posterior mass: training must define the
-target measure and apply the required proposal correction before normalization
-and calibration. This candidate is retained only if its added complexity is
-proportionate and it preserves a precise point estimate. Constraints may
-condition or truncate a calibrated posterior, but cannot manufacture certainty
-after inference.
+The current one-shot model predicts eight full-frame pose components with
+reflection scores and component scales. These are **not** calibrated posterior
+probabilities; its dense-map covariance output is not yet trained. Any later
+atlas-fit reranking changes the effective distribution and must be evaluated
+and calibrated as part of the complete model. Constraints may condition a
+calibrated posterior, but cannot manufacture certainty after inference.
 
-The initial local covariance has only three degrees of freedom: two rotations
-of the plane normal and one physical normal offset. It is not a full
-finite-frame or deformation posterior and is insufficient for trajectory or
-region-assignment confidence. Those downstream outputs remain explicitly
-uncalibrated and unavailable for confidence propagation until in-plane-frame
-and dense-deformation uncertainty are also represented and calibrated.
+Pose, deformation and between-section/within-animal dependence must all be
+represented before propagating uncertainty to a trajectory or brain-region
+assignment. The current outputs are insufficient for those claims and remain
+explicitly uncalibrated.
 
 Fit any temperature or conformal calibration only on held-out calibration
 animals. On unseen animals report negative log likelihood/proper scoring rules,
