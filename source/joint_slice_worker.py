@@ -33,6 +33,9 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     elif version == 'v8':
         from training.arbitrary_plane_joint_inference_v8 import load_joint_v8_checkpoint as load_checkpoint
         from training.arbitrary_plane_joint_inference_v8 import infer_joint_v8 as infer_joint
+    elif version == 'one-shot':
+        from training.arbitrary_plane_one_shot_inference import load_one_shot_checkpoint as load_checkpoint
+        from training.arbitrary_plane_one_shot_inference import infer_one_shot as infer_joint
     else:
         raise ValueError(f'Unsupported joint-model version: {version}')
 
@@ -51,28 +54,36 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     with path.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     model, config = load_checkpoint(path, device=device)
-    if f'arbitrary_plane_joint_model_{version}.py' not in config['source_sha256']:
-        raise ValueError(f'Selected checkpoint is not a whole-model {version} checkpoint')
-    if version == 'v8' and model.modes != 8:
-        raise ValueError('Joint v8 GUI inference requires eight modes (16 branches).')
-    for name, expected in config['source_sha256'].items():
-        if name in ('train_joint_v7.py', 'train_joint_v7_expanded.py',
-                    'train_joint_v7_streaming.py', 'train_joint_v8_feedback_pilot.py',
-                    'train_joint_v8_million_direct.py'):
-            continue  # Training schedules do not change inference semantics.
-        current = repository / 'training' / name
-        if hashlib.sha256(current.read_bytes()).hexdigest() != expected:
-            raise RuntimeError(f'Checkpoint implementation differs from installed source: {name}')
+    if version == 'one-shot':
+        if config['resolution'] != 256 or model.modes != 8:
+            raise ValueError('Experimental one-shot GUI inference requires 256 pixels and 16 branches.')
+        resolution = (256, 256)
+    else:
+        if f'arbitrary_plane_joint_model_{version}.py' not in config['source_sha256']:
+            raise ValueError(f'Selected checkpoint is not a whole-model {version} checkpoint')
+        if version == 'v8' and model.modes != 8:
+            raise ValueError('Joint v8 GUI inference requires eight modes (16 branches).')
+        for name, expected in config['source_sha256'].items():
+            if name in ('train_joint_v7.py', 'train_joint_v7_expanded.py',
+                        'train_joint_v7_streaming.py', 'train_joint_v8_feedback_pilot.py',
+                        'train_joint_v8_million_direct.py'):
+                continue  # Training schedules do not change inference semantics.
+            current = repository / 'training' / name
+            if hashlib.sha256(current.read_bytes()).hexdigest() != expected:
+                raise RuntimeError(f'Checkpoint implementation differs from installed source: {name}')
+        resolution = tuple(config['resolution'])
     if cancel_event.is_set():
         raise InterruptedError
     prepared = prepare_joint_slice_input(image, raw_to_oriented, raw_shape,
-                                         tuple(config['resolution']), brush_mask=brush_mask)
+                                         resolution, brush_mask=brush_mask)
     prepared.update(source_sha256=source_sha256, raw_to_oriented_xy=raw_to_oriented,
                     oriented_image_sha256=image_sha256)
     # Exactly the fixed training-atlas intensity transform, not display contrast.
     intensity = np.clip((atlas_volume.astype(np.float32) - np.float32(9)) / np.float32(264), 0, 1)
     intensity[annotation_volume == 0] = 0
-    atlas = torch.from_numpy(intensity[None]).to(device)
+    atlas_channels = (np.stack((intensity, (annotation_volume != 0).astype(np.float32)))
+                      if version == 'one-shot' else intensity[None])
+    atlas = torch.from_numpy(atlas_channels).to(device)
     inputs = torch.from_numpy(prepared['channels'][None]).to(device)
     offsets = torch.linspace(-thickness_um / 2, thickness_um / 2, 9, device=device)[None]
     weights = torch.ones_like(offsets)
@@ -80,12 +91,16 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     weights /= weights.sum(-1, keepdim=True)
     if cancel_event.is_set():
         raise InterruptedError
-    messages.put((0, 'Fitting all predicted locations, two at a time. Cancel discards the result when inference returns.'))
+    operation = ('Mapping 16 one-pass pose/warp candidates' if version == 'one-shot'
+                 else 'Fitting all predicted locations')
+    messages.put((0, f'{operation}, two at a time. Cancel discards the result when inference returns.'))
     prediction = infer_joint(model, inputs, atlas, offsets, weights, context=None, chunk=2)
     if cancel_event.is_set():
         raise InterruptedError
     prediction['runtime'] = {'device': device, 'section_thickness_um': float(thickness_um),
                              'psf': 'assumed uniform through-plane profile; nine-node trapezoidal integration',
-                             'checkpoint_path': str(path), 'training_scope': config['scope'],
-                             'model_version': version}
+                             'checkpoint_path': str(path),
+                             'training_scope': prediction['scope'] if version == 'one-shot' else config['scope'],
+                             'model_version': version, 'constraints_used': False,
+                             'probabilities_calibrated': False}
     return prepared, prediction, digest

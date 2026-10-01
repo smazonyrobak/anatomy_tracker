@@ -5147,19 +5147,19 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         joint_tab = QtWidgets.QWidget()
         joint_layout = QtWidgets.QGridLayout(joint_tab)
         joint_help = QtWidgets.QLabel(
-            "Experimental: one model predicts slice location and fits its anatomy. Full-image input; "
+            "Experimental: one model predicts slice location and a local tissue map. Full-image input; "
             "the existing smart-brush selection is optional. No automatic tissue selection is required. "
-            "v8 fits all 16 pose/deformation branches, but its scores are uncalibrated—not region "
-            "probabilities or a qualified anatomical result. "
+            "The one-shot option maps all 16 pose/deformation branches in one pass; its scores are "
+            "uncalibrated—not region probabilities or a qualified anatomical result. "
             "AP limits, surgery settings and probe marks do not condition this model yet."
         )
         joint_help.setWordWrap(True)
         joint_help.setStyleSheet("color:#e7bd7b;")
         self.joint_checkpoint = QtWidgets.QLineEdit()
-        self.joint_checkpoint.setPlaceholderText("Select a completed whole-model v7 or v8 checkpoint on I:")
+        self.joint_checkpoint.setPlaceholderText("Select a completed experimental whole-model checkpoint on I:")
         self.joint_checkpoint_browse = QtWidgets.QPushButton("Choose checkpoint")
         self.joint_version = QtWidgets.QComboBox()
-        self.joint_version.addItems(["v7", "v8"])
+        self.joint_version.addItems(["v7", "v8", "one-shot"])
         self.joint_device = QtWidgets.QComboBox()
         self.joint_device.addItems(["CUDA", "CPU"])
         self.joint_thickness = QtWidgets.QDoubleSpinBox()
@@ -8531,7 +8531,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
 
     def _browse_joint_checkpoint(self) -> None:
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Choose a completed whole-model joint v7 or v8 checkpoint", "I:/AnatomyTracker/runs",
+            self, "Choose a completed experimental whole-model checkpoint", "I:/AnatomyTracker/runs",
             "PyTorch checkpoint (*.pt)"
         )
         if path:
@@ -8641,7 +8641,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             setattr(session, name, getattr(candidate, name))
         session.transformed_overlay = overlay
         session.auto_alignment_engine = f"Joint model {version} (experimental, uncalibrated)"
-        session.auto_alignment_method = ("Recurrent full-pose and deformation fitting" if version == "v8"
+        session.auto_alignment_method = ("One-pass pose and local tissue map" if version == "one-shot"
+                                         else "Recurrent full-pose and deformation fitting" if version == "v8"
                                          else "Direct pose distribution and native anatomical fitting")
         session.auto_alignment_scope = "single-section-experimental"
         session.auto_alignment_run_id = run_id
