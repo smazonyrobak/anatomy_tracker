@@ -167,6 +167,9 @@ _DEFAULT_CONFIG = {
         "finite_global_illumination_probability": 0.70,
         "finite_global_gradient_log_gain": [-0.30, 0.30],
         "finite_global_vignette_log_gain": [-0.25, 0.15],
+        "finite_tile_stitch_probability": 0.25,
+        "finite_tile_gain_log_std": [0.02, 0.12],
+        "finite_tile_offset_std": [0.005, 0.04],
         "artifact_probability": 0.35,
         "artifact_fraction": [0.001, 0.01],
         "minimum_q99_q01": 0.10,
@@ -1346,6 +1349,34 @@ def _g2_attempt(
         background *= illumination
         appearance = np.clip(appearance, 0.0, 1.0).astype(np.float32)
         background = np.clip(background, 0.0, 1.0).astype(np.float32)
+    tile_stitching = bool(
+        slab_mode
+        and stage_rng("tile-stitch-enable").random()
+        < float(g2["finite_tile_stitch_probability"])
+    )
+    tile_parameters = {"present": tile_stitching}
+    if tile_stitching:
+        tile_rng = stage_rng("tile-stitch-parameters")
+        rows, columns = tile_rng.integers(2, 4, size=2)
+        gain_std = _uniform(tile_rng, g2["finite_tile_gain_log_std"])
+        offset_std = _uniform(tile_rng, g2["finite_tile_offset_std"])
+        gains = np.exp(tile_rng.normal(0.0, gain_std, (rows, columns)))
+        offsets = tile_rng.normal(0.0, offset_std, (rows, columns))
+        y_edges = np.linspace(0, appearance.shape[0], rows + 1, dtype=int)
+        x_edges = np.linspace(0, appearance.shape[1], columns + 1, dtype=int)
+        for iy in range(rows):
+            for ix in range(columns):
+                tile = np.s_[y_edges[iy]:y_edges[iy + 1], x_edges[ix]:x_edges[ix + 1]]
+                appearance[tile] = np.clip(appearance[tile] * gains[iy, ix] + offsets[iy, ix], 0, 1)
+                background[tile] = np.clip(background[tile] * gains[iy, ix] + offsets[iy, ix], 0, 1)
+        tile_parameters = {
+            "present": True,
+            "grid_rows_columns": [int(rows), int(columns)],
+            "log_gain_standard_deviation": gain_std,
+            "offset_standard_deviation": offset_std,
+            "tile_gains": gains.tolist(),
+            "tile_offsets": offsets.tolist(),
+        }
     artifact_enabled = bool(
         not identity
         and stage_rng("artifact-enable").random() < float(g2["artifact_probability"])
@@ -1373,6 +1404,7 @@ def _g2_attempt(
             "smooth_field_standard_deviation": field_std,
             "pixel_noise_standard_deviation": noise_std_bg,
         },
+        tile_stitching=tile_parameters,
         finite_global_illumination={
             "eligible": slab_mode,
             "present": illumination_enabled,
@@ -1393,6 +1425,7 @@ def _g2_attempt(
                 "background-field", "background-noise-parameter", "background-noise", "artifact-enable", "artifact-parameter",
                 "artifact-field", "artifact-value", "global-illumination-enable", "global-illumination-angle",
                 "global-illumination-gradient", "global-illumination-vignette",
+                "tile-stitch-enable", "tile-stitch-parameters",
             ], attempt
         ),
     )
@@ -1552,18 +1585,10 @@ def _damage_event(
         outer_ry = max(2.0, radius * float(rng.uniform(0.7, 1.3)))
         ring_fraction = float(rng.uniform(0.18, 0.38))
         outer = _ellipse(tissue.shape, cx, cy, outer_rx, outer_ry, angle)
-        inner = _ellipse(
-            tissue.shape,
-            cx,
-            cy,
-            outer_rx * (1.0 - ring_fraction),
-            outer_ry * (1.0 - ring_fraction),
-            angle,
-        )
-        mask = outer & ~inner & tissue
+        mask = outer & tissue
         category = "appearance_artifact"
         geometry = {
-            "primitive": "elliptical mounting-bubble annulus",
+            "primitive": "elliptical refracting bubble with bright annulus",
             "outer_radius_xy_px": [outer_rx, outer_ry],
             "ring_fraction": ring_fraction,
         }
@@ -1632,6 +1657,7 @@ def _g3(
         occlusion = np.zeros(tissue.shape, bool)
         damage_artifact = np.zeros(tissue.shape, bool)
         events = []
+        event_layers = []
         events_valid = True
         for slot in range(event_count):
             kind = kinds[int(_rng(config, "g3", f"event-{slot}-type", damage_attempt).integers(len(kinds)))]
@@ -1651,6 +1677,7 @@ def _g3(
                 occlusion |= mask
             else:
                 damage_artifact |= mask
+            event_layers.append((kind, mask.copy(), receipt))
             events.append(receipt)
         occlusion &= ~physical
         appearance_artifact = (
@@ -1730,6 +1757,37 @@ def _g3(
     image[physical] = g2_arrays["acquired_background"][physical]
     image[occlusion] = 0.0
     image[damage_artifact] = np.clip(image[damage_artifact] + 0.45, 0, 1)
+    yy, xx = np.mgrid[:image.shape[0], :image.shape[1]]
+    for kind, mask, event in event_layers:
+        if kind == "fold-like-bright-or-doubled-strip":
+            cx, cy = event["center_xy"]
+            angle = event["angle_rad"]
+            across = -(xx - cx) * math.sin(angle) + (yy - cy) * math.cos(angle)
+            doubled = ndimage.map_coordinates(
+                g2_arrays["pre_damage_image"],
+                (yy - 2 * across * math.cos(angle), xx + 2 * across * math.sin(angle)),
+                order=1, mode="nearest", prefilter=False,
+            )
+            image[mask] = np.clip(
+                0.45 * g2_arrays["pre_damage_image"][mask] + 0.55 * doubled[mask] + 0.14,
+                0, 1,
+            )
+        elif kind == "mounting-bubble-ring":
+            cx, cy = event["center_xy"]
+            angle = event["angle_rad"]
+            rx, ry = event["geometry"]["outer_radius_xy_px"]
+            along = (xx - cx) * math.cos(angle) + (yy - cy) * math.sin(angle)
+            across = -(xx - cx) * math.sin(angle) + (yy - cy) * math.cos(angle)
+            radius = np.sqrt((along / rx) ** 2 + (across / ry) ** 2)
+            magnification = 1.0 + 0.22 * np.maximum(0.0, 1.0 - radius) ** 2
+            refracted = ndimage.map_coordinates(
+                g2_arrays["pre_damage_image"],
+                (cy + (yy - cy) * magnification, cx + (xx - cx) * magnification),
+                order=1, mode="nearest", prefilter=False,
+            )
+            image[mask] = np.clip(0.85 * refracted[mask] + 0.15 * g2_arrays["pre_damage_image"][mask], 0, 1)
+            rim = mask & (radius >= 1.0 - event["geometry"]["ring_fraction"])
+            image[rim] = np.clip(image[rim] + 0.32, 0, 1)
     compression_enabled = bool(
         slab_mode
         and _rng(

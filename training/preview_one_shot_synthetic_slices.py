@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path('I:/AnatomyTracker')
-OUT = ROOT / 'previews/one_shot_slices_20261001_v2'
+OUT = ROOT / 'previews/one_shot_slices_20261001_v4'
 OUT.mkdir(parents=True, exist_ok=True)
 (ROOT / 'tmp').mkdir(exist_ok=True)
 os.environ['TEMP'] = os.environ['TMP'] = str(ROOT / 'tmp')
@@ -45,7 +45,7 @@ cases = [
     ('oblique B', -1, .72, 0.62, 0.04),
     ('AP-like B', 0, .78, 0.82, 0.02),
 ]
-sheet = Image.new('RGB', (3 * 430, 2 * 450), 'white')
+sheet = Image.new('RGB', (4 * 330, 3 * 350), 'white')
 records = []
 used = set()
 for index, (name, axis, threshold, background, texture) in enumerate(cases):
@@ -69,6 +69,7 @@ for index, (name, axis, threshold, background, texture) in enumerate(cases):
     background_ranges = {key: [background, background] for key in
         ('dark-field-like', 'brightfield-glass-like', 'neutral-scanner-stress')}
     for root_seed in range(20000 + index * 100, 20030 + index * 100):
+        tile_stitching = index == 4
         sample = make_arbitrary_plane_synthetic_realization(
             parent, support, slab_observation_v4=slab, root_seed=root_seed,
             outline_mode=ABSENT_OUTLINE,
@@ -76,24 +77,38 @@ for index, (name, axis, threshold, background, texture) in enumerate(cases):
                 'g2': {'background_base': [background, background],
                        'finite_background_base_by_family': background_ranges,
                        'background_field_std': [texture, texture],
-                       'background_noise_std': [0.0, 0.01 if background else 0.0]},
+                       'background_noise_std': [0.0, 0.01 if background else 0.0],
+                       'finite_tile_stitch_probability': float(tile_stitching),
+                       'finite_tile_gain_log_std': [0.08, 0.08],
+                       'finite_tile_offset_std': [0.02, 0.02]},
                 'g3': {'event_count_probabilities': [0.0, 0.6, 0.4],
                        'finite_transform_compression_probability': 0.6}},
         )
-        if index != 3 or 'mounting-bubble-ring' in [event['type'] for event in sample['g3']['parameters']['events']]:
+        desired_event = {3: 'mounting-bubble-ring', 4: 'tear-or-crack'}.get(index)
+        if desired_event is None or desired_event in [event['type'] for event in sample['g3']['parameters']['events']]:
             break
     observed = sample['arrays']['model_input_image']
     assert observed.shape == (256, 256)
     assert not sample['outline']['parameters']['outline_available']
     Image.fromarray(np.uint8(np.rint(observed * 255)), 'L').save(OUT / f'slice_{index + 1:02d}.png')
-    tile = Image.fromarray(np.uint8(np.rint(observed * 255)), 'L').convert('RGB').resize((400, 400))
-    x, y = (index % 3) * 430 + 15, (index // 3) * 450 + 12
-    sheet.paste(tile, (x, y))
-    ImageDraw.Draw(sheet).text((x, y + 408), f'{index + 1}: {name}; background {background:.2f}', fill='black')
+    atlas = slab['observed_scalar_float32']
+    atlas_mask = slab['slab_observable_support_mask']
+    lower, upper = np.quantile(atlas[atlas_mask], [0.01, 0.99])
+    atlas_display = np.where(atlas_mask, np.clip((atlas - lower) / (upper - lower), 0, 1), 0)
+    Image.fromarray(np.uint8(np.rint(atlas_display * 255)), 'L').save(OUT / f'atlas_{index + 1:02d}.png')
+    x, y = (index % 2) * 660 + 10, (index // 2) * 350 + 10
+    for column, values in enumerate((observed, atlas_display)):
+        tile = Image.fromarray(np.uint8(np.rint(values * 255)), 'L').convert('RGB').resize((310, 310))
+        sheet.paste(tile, (x + column * 330, y))
+    label = ImageDraw.Draw(sheet)
+    label.text((x, y + 315), f'{index + 1}: observed {name}, background {background:.2f}', fill='black')
+    label.text((x + 330, y + 315), 'matching clean atlas plane', fill='black')
     records.append({'image': f'slice_{index + 1:02d}.png', 'plane': name, 'seed': seed,
+        'atlas_image': f'atlas_{index + 1:02d}.png',
         'appearance_seed': root_seed, 'section_thickness_um': (35., 50., 70., 85., 60., 45.)[index],
         'normal_ap_dv_ml': normal.tolist(), 'background_level': background,
         'damage_events': [event['type'] for event in sample['g3']['parameters']['events']],
+        'tile_stitching': sample['g2']['parameters']['tile_stitching'],
         'finite_plane_render_id': parent['finite_plane_render_id'],
         'synthetic_realization_id': sample['synthetic_realization_id']})
     print(json.dumps({'sample': index + 1, 'plane': name, 'damage': records[-1]['damage_events']}), flush=True)
