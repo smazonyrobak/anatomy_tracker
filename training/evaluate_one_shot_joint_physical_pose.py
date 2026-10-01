@@ -18,10 +18,10 @@ import torch.nn.functional as F
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 
-RUN = ROOT / 'runs/one_shot_joint_physical_pose_001'
+RUN = ROOT / 'runs/one_shot_joint_physical_pose_002'
 SYN = ROOT / 'data/one_shot_native256_synthetic_dev_001'
 REAL = ROOT / 'data/joint_v7_allen_fullcanvas_192_001'
-OUT = ROOT / 'runs/one_shot_joint_physical_pose_001_development_eval'
+OUT = ROOT / 'runs/one_shot_joint_physical_pose_002_development_eval'
 STEPS = (0, 2000, 4000, 6000, 8000)
 SIDE = 256
 torch.set_num_threads(4)

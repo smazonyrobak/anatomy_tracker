@@ -23,8 +23,8 @@ from training.arbitrary_plane_reserved_real_stream_v8 import load_reserved_real_
 from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_synthetic_v7_64
 
 PARENT = ROOT / 'runs/one_shot_atlas_conditioned_warp_matched_001/atlas_conditioned/warp_step_04000.pt'
-RUN = ROOT / 'runs/one_shot_joint_physical_pose_001'
-SEED, UPDATES, SIDE, SYNTHETIC = 2026100701, 8000, 256, 3
+RUN = ROOT / 'runs/one_shot_joint_physical_pose_002'
+SEED, UPDATES, SIDE, SYNTHETIC = 2026100702, 8000, 256, 3
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
@@ -150,9 +150,11 @@ with (RUN / 'training.jsonl').open('w') as log, (RUN / 'draws.jsonl').open('w') 
         marginal = -torch.logsumexp(flat_prior - flat_distance / 1500, -1).mean()
         rank = F.kl_div(flat_prior, (-flat_distance.detach() / 1500).softmax(-1),
                         reduction='batchmean')
-        true_state = prediction['state'][:SYNTHETIC].clone()
+        mapping_prediction = {key: value[:SYNTHETIC] if torch.is_tensor(value) else value
+                              for key, value in prediction.items()}
+        true_state = mapping_prediction['state'].clone()
         true_state[:, 0] = batch['state']
-        mapped = model.map({**prediction, 'state': true_state}, batch['offsets'],
+        mapped = model.map({**mapping_prediction, 'state': true_state}, batch['offsets'],
                            torch.zeros((SYNTHETIC, 1), device='cuda', dtype=torch.long),
                            batch['reflection'][:, None], (SIDE, SIDE),
                            context['atlas'], batch['weights'])
