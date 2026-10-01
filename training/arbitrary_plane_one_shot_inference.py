@@ -8,7 +8,10 @@ from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 
 def load_one_shot_checkpoint(path, device='cuda'):
     checkpoint = torch.load(path, map_location='cpu', weights_only=True)
-    model = OneShotJointSliceModel(modes=checkpoint['model']['pose.2.bias'].numel() // 21).to(device)
+    model = OneShotJointSliceModel(
+        modes=checkpoint['model']['pose.2.bias'].numel() // 21,
+        atlas_conditioning=any(key.startswith('atlas_encoder.') for key in checkpoint['model']),
+    ).to(device)
     model.load_state_dict(checkpoint['model'])
     return model.eval(), checkpoint['config']
 
@@ -23,7 +26,7 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
         for first in range(0, len(mode), chunk):
             chosen = mode[first:first + chunk][None]
             flags = reflection[first:first + chunk][None]
-            mapped = model.map(prediction, offsets_um, chosen, flags, inputs.shape[-2:])
+            mapped = model.map(prediction, offsets_um, chosen, flags, inputs.shape[-2:], atlas, weights)
             count = chosen.shape[1]
             slab = mapped['coordinates'][0]
             channel_weights = weights.expand(count, -1)
