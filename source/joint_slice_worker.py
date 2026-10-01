@@ -55,7 +55,7 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     model, config = load_checkpoint(path, device=device)
     if version == 'one-shot':
-        if config['resolution'] != 256 or model.modes != 8:
+        if config.get('resolution', config.get('image_side')) != 256 or model.modes != 8:
             raise ValueError('Experimental one-shot GUI inference requires 256 pixels and 16 branches.')
         resolution = (256, 256)
     else:
