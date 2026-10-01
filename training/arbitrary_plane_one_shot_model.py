@@ -11,7 +11,8 @@ import torch.nn.functional as F
 from torch import nn
 
 from training.arbitrary_plane_full_frame_primitives import (
-    full_frame_state_to_components, render_finite_thickness_coordinate_grid,
+    compose_full_frame_state, full_frame_state_to_components,
+    render_finite_thickness_coordinate_grid,
 )
 from training.arbitrary_plane_geometry import normalized_raster_to_ccf
 from training.arbitrary_plane_joint_model_v7 import ResidualBlock
@@ -20,7 +21,8 @@ from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 
 
 class OneShotJointSliceModel(nn.Module):
-    def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False):
+    def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
+                 vector_refinement=False):
         super().__init__()
         self.modes, self.uncertainty_rank = modes, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
@@ -71,6 +73,14 @@ class OneShotJointSliceModel(nn.Module):
                     nn.GroupNorm(8, 32), nn.GELU(),
                     nn.AdaptiveAvgPool2d(4), nn.Flatten(), nn.Linear(32 * 4 * 4, 1),
                 )
+            if vector_refinement:
+                self.pose_refiner = nn.Sequential(
+                    nn.Conv2d(229, 64, 5, stride=2, padding=2), nn.GroupNorm(8, 64), nn.GELU(),
+                    ResidualBlock(64),
+                    nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.GroupNorm(8, 128), nn.GELU(),
+                    ResidualBlock(128), nn.AdaptiveAvgPool2d(4), nn.Flatten(),
+                    nn.Linear(128 * 4 * 4, 10),
+                )
         latent_size = 9 + 3 * 8 * 8
         self.uncertainty = nn.Linear(widths[-1] + 13, latent_size * (1 + uncertainty_rank))
         self.register_buffer('center_origin', torch.tensor([6600., 4000., 5700.]))
@@ -83,6 +93,9 @@ class OneShotJointSliceModel(nn.Module):
         nn.init.zeros_(self.warp[-1].bias)
         nn.init.normal_(self.uncertainty.weight, std=.001)
         nn.init.zeros_(self.uncertainty.bias)
+        if hasattr(self, 'pose_refiner'):
+            nn.init.zeros_(self.pose_refiner[-1].weight)
+            nn.init.zeros_(self.pose_refiner[-1].bias)
         with torch.no_grad():
             rotations, _ = torch.linalg.qr(torch.randn(modes, 3, 3))
             rotations[:, :, 2] *= torch.linalg.det(rotations)[:, None]
@@ -139,7 +152,8 @@ class OneShotJointSliceModel(nn.Module):
         )
         return prediction['log_mass'] + normal_lp + rotation_lp + reflection_lp
 
-    def map(self, prediction, offsets, mode_index, reflection, image_shape, atlas=None, weights=None):
+    def map(self, prediction, offsets, mode_index, reflection, image_shape, atlas=None, weights=None,
+            return_refinement_feature=False):
         batch, count = mode_index.shape
         row = torch.arange(batch, device=mode_index.device)[:, None]
         state = prediction['state'][row, mode_index].reshape(-1, 12)
@@ -188,8 +202,8 @@ class OneShotJointSliceModel(nn.Module):
             feature = feature + self.pair(evidence)
         raw = F.interpolate(self.warp(feature), image_shape, mode='bilinear', align_corners=False)
         if hasattr(self, 'fit_quality_head'):
-            match = torch.cat((evidence, F.interpolate(raw, evidence.shape[-2:],
-                mode='bilinear', align_corners=False)), 1)
+            raw_small = F.interpolate(raw, evidence.shape[-2:], mode='bilinear', align_corners=False)
+            match = torch.cat((evidence, raw_small), 1)
             fit_energy = F.softplus(self.fit_quality_head(match).squeeze(-1))
         requested_local = 1000 * raw[:, :3].tanh()
         local, removed_affine = project_surface_affine_out(requested_local)
@@ -229,7 +243,26 @@ class OneShotJointSliceModel(nn.Module):
         }
         if hasattr(self, 'fit_quality_head'):
             output['fit_energy'] = fit_energy.reshape(batch, count)
+        if return_refinement_feature:
+            local_small = F.interpolate(local, evidence.shape[-2:], mode='bilinear',
+                                        align_corners=False) / 1000
+            dx = F.pad((local_small[..., 1:] - local_small[..., :-1]).square().sum(1, keepdim=True),
+                       (0, 1, 0, 0))
+            dy = F.pad((local_small[..., 1:, :] - local_small[..., :-1, :]).square().sum(1, keepdim=True),
+                       (0, 0, 0, 1))
+            cost = torch.cat((local_small.square().sum(1, keepdim=True).sqrt(),
+                              (dx + dy + 1e-8).sqrt()), 1)
+            output['refinement_feature'] = torch.cat((evidence, raw_small, local_small,
+                                                      support, cost), 1).reshape(
+                batch, count, 229, *evidence.shape[-2:])
         return output
+
+    def refine(self, feature, state):
+        batch, count = state.shape[:2]
+        raw = self.pose_refiner(feature.flatten(0, 1)).reshape(batch, count, 10)
+        limits = raw.new_tensor((.9, .9, .9, 4000., 4000., 4000., .25, .25, .2))
+        update = raw[..., :9].tanh() * limits
+        return compose_full_frame_state(state, update), raw[..., 9], update
 
     def forward(self, inputs, offsets, context=None, mode_index=None, reflection=None, candidates=4,
                 atlas=None, weights=None):
