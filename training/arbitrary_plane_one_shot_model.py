@@ -195,7 +195,8 @@ class OneShotJointSliceModel(nn.Module):
                 atlas, rigid, (0., 0., 0.), (25., 25., 25.), w
             )
             support = rendered[:, 1:2]
-            target = self.atlas_encoder(torch.cat((rendered[:, :1] / support.clamp_min(1e-4), support), 1))
+            atlas_pair = torch.cat((rendered[:, :1] / support.clamp_min(1e-4), support), 1)
+            target = self.atlas_encoder(atlas_pair)
             xy = torch.stack((xx, yy))[None].expand(len(state), -1, -1, -1)
             evidence = torch.cat((feature, target, (feature - target).abs(),
                                   local_correlation(feature, target, 2), xy), 1)
@@ -255,6 +256,7 @@ class OneShotJointSliceModel(nn.Module):
             output['refinement_feature'] = torch.cat((evidence, raw_small, local_small,
                                                       support, cost), 1).reshape(
                 batch, count, 229, *evidence.shape[-2:])
+            output['atlas_pair'] = atlas_pair.reshape(batch, count, 2, *atlas_pair.shape[-2:])
         return output
 
     def refine(self, feature, state):
