@@ -5149,7 +5149,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         joint_help = QtWidgets.QLabel(
             "Experimental: one model predicts slice location and a local tissue map. Full-image input; "
             "the existing smart-brush selection is optional. No automatic tissue selection is required. "
-            "The one-shot option maps all 16 pose/deformation branches in one pass; its scores are "
+            "The one-shot option maps every pose/deformation branch in one pass; its scores are "
             "uncalibrated—not region probabilities or a qualified anatomical result. "
             "AP limits, surgery settings and probe marks do not condition this model yet."
         )

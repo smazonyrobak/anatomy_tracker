@@ -55,8 +55,9 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     model, config = load_checkpoint(path, device=device)
     if version == 'one-shot':
-        if config.get('resolution', config.get('image_side')) != 256 or model.modes != 8:
-            raise ValueError('Experimental one-shot GUI inference requires 256 pixels and 16 branches.')
+        image_side = config.get('resolution', config.get('image_side', config.get('side')))
+        if image_side != 256 or model.modes not in (8, 16):
+            raise ValueError('Experimental one-shot GUI inference requires 256 pixels and 8 or 16 modes.')
         resolution = (256, 256)
     else:
         if f'arbitrary_plane_joint_model_{version}.py' not in config['source_sha256']:
@@ -91,7 +92,7 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     weights /= weights.sum(-1, keepdim=True)
     if cancel_event.is_set():
         raise InterruptedError
-    operation = ('Mapping 16 one-pass pose/warp candidates' if version == 'one-shot'
+    operation = (f'Mapping {2 * model.modes} one-pass pose/warp candidates' if version == 'one-shot'
                  else 'Fitting all predicted locations')
     messages.put((0, f'{operation}, two at a time. Cancel discards the result when inference returns.'))
     prediction = infer_joint(model, inputs, atlas, offsets, weights, context=None, chunk=2)
