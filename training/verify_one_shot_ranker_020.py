@@ -38,7 +38,8 @@ assert {(row['step'], row['slot']) for row in used} == {
     (step, slot) for step in range(1, 6001) for slot in range(2)}
 panel = root / 'data/one_shot_fresh_synthetic_dev_panel_001/records.jsonl'
 development = {row['animal_id'] for row in map(json.loads, panel.open())}
-assert not development & {row['animal_id'] for row in used}
+assert all(row['base_lineage']['split'] == 'train' for row in used)
+assert not development & {row['base_lineage']['animal_id'] for row in used}
 training = [json.loads(line) for line in (run / 'training.jsonl').open()]
 assert [row['step'] for row in training] == list(range(1, 6001))
 assert np.isfinite([row['loss'] for row in training]).all()
