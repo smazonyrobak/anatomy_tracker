@@ -12,10 +12,10 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 
 from training.arbitrary_plane_full_frame_primitives import (
-    compose_full_frame_state, full_frame_state_to_components,
+    compose_full_frame_state, full_frame_state_from_components, full_frame_state_to_components,
     render_finite_thickness_coordinate_grid,
 )
-from training.arbitrary_plane_geometry import normalized_raster_to_ccf
+from training.arbitrary_plane_geometry import normalized_raster_to_ccf, physical_ouv_to_frame
 from training.arbitrary_plane_joint_model_v7 import ResidualBlock
 from training.arbitrary_plane_recurrent_model import local_correlation
 from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
@@ -23,7 +23,8 @@ from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 
 class OneShotJointSliceModel(nn.Module):
     def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
-                 vector_refinement=False, candidate_ranking=False, fitted_ranking=False):
+                 vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
+                 dense_coordinate=False):
         super().__init__()
         self.modes, self.uncertainty_rank = modes, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
@@ -41,6 +42,11 @@ class OneShotJointSliceModel(nn.Module):
             nn.Linear(widths[-1] * 4 * 4 + 12, 768), nn.GELU(),
             nn.Linear(768, modes * 21),
         )
+        if dense_coordinate:
+            self.dense_coordinate_head = nn.Sequential(
+                nn.Conv2d(2 * widths[-1] + 2, 128, 3, padding=1), nn.GroupNorm(8, 128), nn.GELU(),
+                ResidualBlock(128), nn.Conv2d(128, 4, 1),
+            )
         self.lateral = nn.ModuleList(nn.Conv2d(width, 64, 1) for width in widths)
         self.warp_shared = nn.Sequential(
             nn.Conv2d(64, 64, 3, padding=1, groups=64),
@@ -119,6 +125,9 @@ class OneShotJointSliceModel(nn.Module):
         if hasattr(self, 'fitted_matcher'):
             nn.init.zeros_(self.fitted_matcher[-1].weight)
             nn.init.zeros_(self.fitted_matcher[-1].bias)
+        if hasattr(self, 'dense_coordinate_head'):
+            nn.init.normal_(self.dense_coordinate_head[-1].weight, std=.001)
+            nn.init.zeros_(self.dense_coordinate_head[-1].bias)
         with torch.no_grad():
             rotations, _ = torch.linalg.qr(torch.randn(modes, 3, 3))
             rotations[:, :, 2] *= torch.linalg.det(rotations)[:, None]
@@ -144,7 +153,7 @@ class OneShotJointSliceModel(nn.Module):
             feature = self.lateral[level](pyramid[level]) + F.interpolate(
                 feature, size=pyramid[level].shape[-2:], mode='bilinear', align_corners=False
             )
-        return {
+        result = {
             'state': state,
             'std': (.005 + F.softplus(z[..., 12:18])).clamp_max(4.),
             'concentration': (.05 + F.softplus(z[..., 18])).clamp_max(500.),
@@ -154,6 +163,33 @@ class OneShotJointSliceModel(nn.Module):
             'global_feature': x.mean((-2, -1)),
             'calibrated': False,
         }
+        if hasattr(self, 'dense_coordinate_head'):
+            yy, xx = torch.meshgrid(
+                (torch.arange(x.shape[-2], device=x.device, dtype=x.dtype) + .5) / x.shape[-2]
+                - .5 / inputs.shape[-2],
+                (torch.arange(x.shape[-1], device=x.device, dtype=x.dtype) + .5) / x.shape[-1]
+                - .5 / inputs.shape[-1], indexing='ij')
+            position = torch.stack((xx, yy), 0)[None].expand(len(x), -1, -1, -1)
+            result['dense_coordinate'] = self.dense_coordinate_head(
+                torch.cat((x, x.mean((-2, -1), keepdim=True).expand_as(x), position), 1))
+        return result
+
+    def dense_coordinate_plane(self, prediction, source_side=256):
+        field = prediction['dense_coordinate']
+        batch, _, height, width = field.shape
+        y, x = torch.meshgrid((torch.arange(height, device=field.device) + .5) / height - .5 / source_side,
+                              (torch.arange(width, device=field.device) + .5) / width - .5 / source_side,
+                              indexing='ij')
+        design = torch.stack((torch.ones_like(x), x, y), -1).reshape(-1, 3)
+        weight = field[:, 3].sigmoid().flatten(1).clamp_min(1e-6)
+        coordinates = (self.center_origin[None, :, None, None]
+                       + field[:, :3] * self.center_scale[None, :, None, None])
+        coordinates = coordinates.flatten(2).transpose(1, 2)
+        gram = torch.einsum('ni,bn,nj->bij', design, weight, design)
+        right = torch.einsum('ni,bn,bnj->bij', design, weight, coordinates)
+        coefficients = torch.linalg.solve(
+            gram + 1e-6 * torch.eye(3, device=field.device, dtype=field.dtype)[None], right)
+        return full_frame_state_from_components(*physical_ouv_to_frame(coefficients))
 
     def component_log_prob(self, prediction, target_state, reflection):
         state = prediction['state']

@@ -14,6 +14,7 @@ def load_one_shot_checkpoint(path, device='cuda'):
         fit_quality=any(key.startswith('fit_quality_head.') for key in checkpoint['model']),
         candidate_ranking=any(key.startswith('candidate_matcher.') for key in checkpoint['model']),
         fitted_ranking=any(key.startswith('fitted_matcher.') for key in checkpoint['model']),
+        dense_coordinate=any(key.startswith('dense_coordinate_head.') for key in checkpoint['model']),
     ).to(device)
     model.candidate_uses_atlas = checkpoint.get('arm') != 'direct'
     model.load_state_dict(checkpoint['model'])
