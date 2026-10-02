@@ -16,6 +16,7 @@ sys.dont_write_bytecode = True
 import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.spatial import cKDTree
 
 from training.arbitrary_plane_allen_atlas_binding_v6 import _decode_and_preprocess_allen_v6
 from training.atlas_point_proposal_024 import AtlasPointProposal024, atlas_cubes, observed_patches
@@ -39,6 +40,7 @@ rng = np.random.default_rng(2026102401)
 selected = rng.choice(support_flat, 100000, replace=False)
 bank_coords = (np.array(np.unravel_index(selected, support.shape)).T.astype('float32') + .375) * 100
 bank = torch.from_numpy(bank_coords).cuda()
+bank_tree = cKDTree(bank_coords)
 out.mkdir(parents=True, exist_ok=False)
 np.save(out / 'bank_ccf_ap_dv_ml_um.npy', bank_coords, allow_pickle=False)
 
@@ -96,7 +98,7 @@ with torch.inference_mode():
             points = torch.from_numpy(xy.copy()).cuda().float()
             query = observed_patches(inputs, torch.zeros(32, device='cuda', dtype=torch.long), points)
             truth_gpu = torch.from_numpy(truth).cuda()
-            nearest = torch.cdist(truth_gpu[None], bank[None])[0].min(-1).values.cpu().numpy()
+            nearest = bank_tree.query(truth, k=1)[0]
             for step, model, embeddings in zip(steps, models, banks):
                 descriptor = F.normalize(model.image(query), dim=-1)
                 top = (descriptor @ embeddings.T).topk(16, -1).indices
