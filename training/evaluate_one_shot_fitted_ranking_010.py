@@ -71,6 +71,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 reference = torch.from_numpy(arrays['target_centre_um'].copy()).cuda()
                 valid = torch.from_numpy(arrays['valid_mask'].copy()).cuda().bool()
                 truth = torch.from_numpy(arrays['target_state'][None].copy()).cuda()
+                true_reflection = torch.as_tensor(arrays['reflection'].copy(), device='cuda').long().reshape(1)
                 offsets = torch.from_numpy(arrays['offsets_um'][None].copy()).cuda()
                 weights = torch.from_numpy(arrays['weights'][None].copy()).cuda()
             prediction = model.predict(image)
@@ -97,6 +98,14 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                                (side, side), atlas, weights)
             surfaces = mapped['centre_surface_ccf_ap_dv_ml_um'][0].reshape(2, side * side, 3)
             mapped_error = (surfaces[:, indices] - target[None]).norm(dim=-1).mean(-1)
+            true_pose_unwarped = (points(truth, true_reflection, chart)[0] - target).norm(dim=-1).mean()
+            truth_states = prediction['state'].clone()
+            truth_states[:, 0] = truth
+            true_map = model.map({**prediction, 'state': truth_states}, offsets,
+                                 torch.zeros((1, 1), device='cuda', dtype=torch.long),
+                                 true_reflection[:, None], (side, side), atlas, weights)
+            true_surface = true_map['centre_surface_ccf_ap_dv_ml_um'][0, 0].reshape(side * side, 3)
+            true_pose_mapped = (true_surface[indices] - target).norm(dim=-1).mean()
             true_normal = full_frame_state_to_components(truth)[1][0, :, 2]
             normals = full_frame_state_to_components(prediction['state'])[1][0, :, :, 2]
             normal_error = torch.rad2deg(torch.acos((normals * true_normal).sum(-1)
@@ -108,6 +117,8 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                        all32_oracle_tissue_um=float(geometry.min()),
                        prior_mapped_tissue_um=float(mapped_error[0]),
                        fitted_mapped_tissue_um=float(mapped_error[1]),
+                       true_pose_unwarped_um=float(true_pose_unwarped),
+                       true_pose_mapped_um=float(true_pose_mapped),
                        fitted_normal_deg=float(normal_error[fitted_choice // 2]),
                        top8_branches=top.tolist(), top8_scores=scores.tolist(),
                        top8_tissue_um=geometry[top].tolist())
@@ -158,7 +169,8 @@ summary = []
 for split, names in (
     ('synthetic', ('prior_tissue_um', 'fitted_tissue_um', 'top8_oracle_tissue_um',
                    'all32_oracle_tissue_um', 'prior_mapped_tissue_um',
-                   'fitted_mapped_tissue_um', 'fitted_normal_deg')),
+                   'fitted_mapped_tissue_um', 'true_pose_unwarped_um',
+                   'true_pose_mapped_um', 'fitted_normal_deg')),
     ('real_weak_allen', ('prior_five_um', 'fitted_five_um', 'top8_oracle_five_um'))):
     group = [row for row in rows if row['set'] == split]
     scored = [row for row in group if split != 'synthetic' or row['eligible']]
@@ -175,6 +187,12 @@ for split, names in (
               'median_fitted_um': float(np.median([row[names[1]] for row in scored])),
               'p90_fitted_um': float(np.percentile([row[names[1]] for row in scored], 90))}
     if split == 'synthetic':
+        report['true_pose_mapping'] = {
+            'improved_count': sum(row['true_pose_mapped_um'] < row['true_pose_unwarped_um']
+                                  for row in scored),
+            'worse_count': sum(row['true_pose_mapped_um'] > row['true_pose_unwarped_um']
+                               for row in scored),
+        }
         report['mapped_comparison'] = {
             'fitted_better_count': sum(row['fitted_mapped_tissue_um'] < row['prior_mapped_tissue_um']
                                        for row in scored),
