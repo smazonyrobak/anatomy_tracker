@@ -5149,7 +5149,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         joint_help = QtWidgets.QLabel(
             "Experimental: one model predicts slice location and a local tissue map. Full-image input; "
             "the existing smart-brush selection is optional. No automatic tissue selection is required. "
-            "The one-shot option maps every pose/deformation branch in one pass; its scores are "
+            "The one-shot option maps every pose/deformation branch and may refine its leading "
+            "candidates against atlas sections; its scores are "
             "uncalibrated—not region probabilities or a qualified anatomical result. "
             "AP limits, surgery settings and probe marks do not condition this model yet."
         )
@@ -8623,6 +8624,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         run_id = f"joint-{version}-{time.time_ns()}"
         diagnostics = {"joint_model": {"checkpoint_sha256": checkpoint_sha256,
             "selected_component": [int(mode), int(reflection)], "raw_to_model_xy": raw_to_model.tolist(),
+            "selection_method": prediction.get("selection_method"),
             "raw_shape_h_w": list(prepared["raw_shape_h_w"]), "model_shape_h_w": list(surface.shape[:2]),
             "brush_available": prepared["brush_available"], "probabilities_calibrated": False,
             "runtime": prediction.get("runtime", {}),
@@ -8641,7 +8643,9 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
             setattr(session, name, getattr(candidate, name))
         session.transformed_overlay = overlay
         session.auto_alignment_engine = f"Joint model {version} (experimental, uncalibrated)"
-        session.auto_alignment_method = ("One-pass pose and local tissue map" if version == "one-shot"
+        session.auto_alignment_method = ("Joint atlas-fit pose refinement and local tissue map"
+                                         if prediction.get("selection_method") == "joint_rerender_refinement" else
+                                         "One-pass pose and local tissue map" if version == "one-shot"
                                          else "Recurrent full-pose and deformation fitting" if version == "v8"
                                          else "Direct pose distribution and native anatomical fitting")
         session.auto_alignment_scope = "single-section-experimental"
