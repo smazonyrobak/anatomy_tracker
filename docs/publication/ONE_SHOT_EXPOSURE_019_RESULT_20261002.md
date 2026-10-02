@@ -1,0 +1,17 @@
+# One-shot joint model: substantial exposure continuation 019
+
+The frozen 019 run continued the same 018 model for 30,000 batches without resetting its optimizer or random state. It saw 60,000 newly sampled arbitrary-plane synthetic sections and 30,000 previously unused real TRAIN sections. Each real section retained its donor, specimen, experiment, section and source identity. No public benchmark, calibration animal or final-test animal was used.
+
+The independent read-only verifier passed: 30,000 training rows, 60,000 accepted synthetic draws, 30,000 distinct real TRAIN draws, 3,984 frozen development rows, matching source/input/output hashes, and no TRAIN/DEV donor overlap. The fixed development panel has 185 eligible synthetic sections from eight synthetic deformation identities and 64 real sections from six independent donors. Synthetic identities are not biological animals; the real labels are inherited weak Allen affines, not expert ground truth.
+
+| 019 checkpoint | Identity-equal synthetic selected mapping error | Synthetic best-eight rigid oracle | Synthetic exact-pose mapping error | Identity-equal real weak-label five-point error |
+| --- | ---: | ---: | ---: | ---: |
+| Parent 018 (batch 0) | 2.734 mm | 1.216 mm | 0.130 mm | 0.565 mm |
+| Best selected (batch 18,000) | **2.591 mm** | 1.166 mm | 0.129 mm | 0.595 mm |
+| Final (batch 30,000) | 2.707 mm | 1.110 mm | 0.129 mm | 0.568 mm |
+
+The prespecified 0.25 mm improvement gate **failed**: the best selected gain was only 0.143 mm. There was no >0.2 mm real weak-label regression, and exact-pose mapping remained below 0.2 mm. The final checkpoint was worse than the best intermediate checkpoint and should not be chosen merely because it trained longer. The direct prior remained 2.954 mm at the best selected checkpoint, so the extra data did not solve one-pass plane localization either.
+
+On 185 cases at batch 18,000, the ordinary case-mean selected mapping error was 2.622 mm (median 2.079 mm; 90th percentile 4.671 mm). The lowest tissue-support quartile averaged 4.016 mm. The selected rigid pose was 1.460 mm worse than the best available candidate on average, while 57.8% of cases had a best-eight rigid candidate within 1 mm and only 34.1% of selected mapped cases were within 1 mm. These are not interchangeable measures, but together they localize the dominant remaining gap to candidate generation/selection rather than the local mapper under a correct pose. Increased exposure improved the best-eight oracle by 0.106 mm at the final checkpoint without reliably converting that improvement to selected accuracy.
+
+Decision: retain batch 18,000 as the best 019 development checkpoint, but do not deploy it as a qualified replacement and do not run the DeepSlice public benchmark. Next, inspect the frozen per-candidate score-versus-physical-error relationship at this checkpoint, then make only a targeted candidate-ranking or pose-retrieval change justified by that result. Do not infer calibrated uncertainty or electrode-region probabilities from these uncalibrated development errors.
