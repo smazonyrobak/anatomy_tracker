@@ -163,17 +163,37 @@ for split, names in (
     group = [row for row in rows if row['set'] == split]
     scored = [row for row in group if split != 'synthetic' or row['eligible']]
     identities = sorted({row['animal_id'] for row in scored})
-    summary.append({'set': split, 'rows': len(group), 'scored': len(scored),
-                    'identities': len(identities),
-                    'identity_equal_mean': {name: float(np.mean([np.mean([
+    report = {'set': split, 'rows': len(group), 'scored': len(scored),
+              'identities': len(identities),
+              'identity_equal_mean': {name: float(np.mean([np.mean([
                         row[name] for row in scored if row['animal_id'] == identity])
                         for identity in identities])) for name in names},
-                    'fitted_better_count': sum(row[names[1]] < row[names[0]] for row in scored),
-                    'fitted_worse_count': sum(row[names[1]] > row[names[0]] for row in scored),
-                    'prior_over_5mm': sum(row[names[0]] > 5000 for row in scored),
-                    'fitted_over_5mm': sum(row[names[1]] > 5000 for row in scored),
-                    'median_fitted_um': float(np.median([row[names[1]] for row in scored])),
-                    'p90_fitted_um': float(np.percentile([row[names[1]] for row in scored], 90))})
+              'fitted_better_count': sum(row[names[1]] < row[names[0]] for row in scored),
+              'fitted_worse_count': sum(row[names[1]] > row[names[0]] for row in scored),
+              'prior_over_5mm': sum(row[names[0]] > 5000 for row in scored),
+              'fitted_over_5mm': sum(row[names[1]] > 5000 for row in scored),
+              'median_fitted_um': float(np.median([row[names[1]] for row in scored])),
+              'p90_fitted_um': float(np.percentile([row[names[1]] for row in scored], 90))}
+    if split == 'synthetic':
+        report['mapped_comparison'] = {
+            'fitted_better_count': sum(row['fitted_mapped_tissue_um'] < row['prior_mapped_tissue_um']
+                                       for row in scored),
+            'fitted_worse_count': sum(row['fitted_mapped_tissue_um'] > row['prior_mapped_tissue_um']
+                                      for row in scored),
+            'prior_over_5mm': sum(row['prior_mapped_tissue_um'] > 5000 for row in scored),
+            'fitted_over_5mm': sum(row['fitted_mapped_tissue_um'] > 5000 for row in scored),
+            'median_fitted_um': float(np.median([row['fitted_mapped_tissue_um'] for row in scored])),
+            'p90_fitted_um': float(np.percentile([row['fitted_mapped_tissue_um'] for row in scored], 90)),
+        }
+        prior_regret = np.mean([np.mean([row['prior_tissue_um'] - row['top8_oracle_tissue_um']
+                                        for row in scored if row['animal_id'] == identity])
+                                for identity in identities])
+        fitted_regret = np.mean([np.mean([row['fitted_tissue_um'] - row['top8_oracle_tissue_um']
+                                         for row in scored if row['animal_id'] == identity])
+                                 for identity in identities])
+        report['top8_rigid_selection_regret_um'] = {'prior': float(prior_regret),
+                                                    'fitted': float(fitted_regret)}
+    summary.append(report)
 (out / 'summary.json').write_text(json.dumps(summary, indent=2))
 (out / 'completed.json').write_text(json.dumps({
     'rows': len(rows), 'checkpoint_sha256': hashlib.sha256(checkpoint_path.read_bytes()).hexdigest(),
