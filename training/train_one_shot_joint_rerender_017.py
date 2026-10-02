@@ -161,7 +161,7 @@ with (run / 'training.jsonl').open('w') as log, (run / 'draws.jsonl').open('w') 
         chart = torch.stack((indices.remainder(side),
                              indices.div(side, rounding_mode='floor')), -1).float() / side
         dense = (points(states[:synthetic], branch_flags[:synthetic], chart[:, None, None])
-                 - target[:, None]).norm(dim=-1).mean(-1)
+                 - target[:, None, None]).norm(dim=-1).mean(-1)
         normal = full_frame_state_to_components(prediction['state'])[1][..., :, 2]
         true_normal = full_frame_state_to_components(truth)[1][:, :, 2]
         normal_penalty = 4000 * (1 - (normal * true_normal[:, None]).sum(-1).abs().clamp_max(1))
