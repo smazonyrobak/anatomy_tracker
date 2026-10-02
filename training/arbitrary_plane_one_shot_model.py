@@ -9,6 +9,7 @@ import math
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from training.arbitrary_plane_full_frame_primitives import (
     compose_full_frame_state, full_frame_state_to_components,
@@ -22,7 +23,7 @@ from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 
 class OneShotJointSliceModel(nn.Module):
     def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
-                 vector_refinement=False):
+                 vector_refinement=False, candidate_ranking=False):
         super().__init__()
         self.modes, self.uncertainty_rank = modes, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
@@ -73,6 +74,14 @@ class OneShotJointSliceModel(nn.Module):
                     nn.GroupNorm(8, 32), nn.GELU(),
                     nn.AdaptiveAvgPool2d(4), nn.Flatten(), nn.Linear(32 * 4 * 4, 1),
                 )
+            if candidate_ranking:
+                self.candidate_matcher = nn.Sequential(
+                    nn.Conv2d(64 * 3 + 25 + 2 + 1 + 13, 64, 3, padding=1),
+                    nn.GroupNorm(8, 64), nn.GELU(), ResidualBlock(64),
+                    nn.Conv2d(64, 32, 3, stride=2, padding=1),
+                    nn.GroupNorm(8, 32), nn.GELU(),
+                    nn.AdaptiveAvgPool2d(4), nn.Flatten(), nn.Linear(32 * 4 * 4, 1),
+                )
             if vector_refinement:
                 self.pose_refiner = nn.Sequential(
                     nn.Conv2d(229, 64, 5, stride=2, padding=2), nn.GroupNorm(8, 64), nn.GELU(),
@@ -96,6 +105,9 @@ class OneShotJointSliceModel(nn.Module):
         if hasattr(self, 'pose_refiner'):
             nn.init.zeros_(self.pose_refiner[-1].weight)
             nn.init.zeros_(self.pose_refiner[-1].bias)
+        if hasattr(self, 'candidate_matcher'):
+            nn.init.zeros_(self.candidate_matcher[-1].weight)
+            nn.init.zeros_(self.candidate_matcher[-1].bias)
         with torch.no_grad():
             rotations, _ = torch.linalg.qr(torch.randn(modes, 3, 3))
             rotations[:, :, 2] *= torch.linalg.det(rotations)[:, None]
@@ -151,6 +163,67 @@ class OneShotJointSliceModel(nn.Module):
             prediction['reflection_logit'], reflection[:, None].expand_as(kappa).float(), reduction='none'
         )
         return prediction['log_mass'] + normal_lp + rotation_lp + reflection_lp
+
+    def score_candidates(self, prediction, offsets, weights, atlas, use_atlas=True,
+                         side=64, chunk=4, image_shape=(256, 256)):
+        batch = prediction['state'].shape[0]
+        device = prediction['state'].device
+        source = F.adaptive_avg_pool2d(prediction['feature'], (side, side))
+        y, x = torch.meshgrid(torch.arange(side, device=device) / side,
+                              torch.arange(side, device=device) / side, indexing='ij')
+        xy = torch.stack((x, y))[None]
+        z = torch.as_tensor(offsets, device=device, dtype=source.dtype)
+        w = torch.as_tensor(weights, device=device, dtype=source.dtype)
+        if z.ndim == 1:
+            z = z[None].expand(batch, -1)
+        if w.ndim == 1:
+            w = w[None].expand(batch, -1)
+        def score_chunk(branches, all_states, image_source):
+            count = len(branches)
+            state = all_states[:, branches // 2].reshape(-1, 12)
+            reflected = (branches % 2)[None].expand(batch, -1).reshape(-1).bool()
+            condition = torch.cat(((state[:, :3] - self.center_origin) / self.center_scale,
+                                   state[:, 3:9], state[:, 9:11] - math.log(12000.),
+                                   state[:, 11:12], reflected[:, None].to(state.dtype)), -1)
+            if use_atlas:
+                center, frame, basis = full_frame_state_to_components(state)
+                sx = torch.where(reflected[:, None, None],
+                                 (image_shape[1] - 1) / image_shape[1] - x, x)
+                chart = torch.stack((sx.expand(-1, side, -1),
+                                     y.expand(len(state), -1, -1)), -1)
+                plane = normalized_raster_to_ccf(
+                    center[:, None, None], frame[:, None, None], basis[:, None, None], chart)
+                axial = z[:, None].expand(-1, count, -1).flatten(0, 1)
+                masses = w[:, None].expand(-1, count, -1).flatten(0, 1)
+                coordinates = plane[:, None] + axial[:, :, None, None, None] * frame[:, None, None, None, :, 2]
+                rendered = render_finite_thickness_coordinate_grid(
+                    atlas, coordinates, (0., 0., 0.), (25., 25., 25.), masses)
+                support = rendered[:, 1:2]
+                atlas_pair = torch.cat((rendered[:, :1] / support.clamp_min(1e-4), support), 1)
+            else:
+                support = image_source.new_zeros(batch * count, 1, side, side)
+                atlas_pair = image_source.new_zeros(batch * count, 2, side, side)
+            target = self.atlas_encoder(atlas_pair)
+            image = image_source[:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
+            evidence = torch.cat((image, target, (image - target).abs(),
+                                  local_correlation(image, target, 2),
+                                  xy.expand(batch * count, -1, -1, -1), support,
+                                  condition[..., None, None].expand(-1, -1, side, side)), 1)
+            return self.candidate_matcher(evidence).reshape(batch, count)
+
+        scores = []
+        for first in range(0, self.modes * 2, chunk):
+            branches = torch.arange(first, min(first + chunk, self.modes * 2), device=device)
+            if torch.is_grad_enabled():
+                scores.append(checkpoint(score_chunk, branches, prediction['state'], source,
+                                         use_reentrant=False))
+            else:
+                scores.append(score_chunk(branches, prediction['state'], source))
+        match = torch.cat(scores, -1)
+        reflection_log = torch.stack((F.logsigmoid(-prediction['reflection_logit']),
+                                      F.logsigmoid(prediction['reflection_logit'])), -1)
+        prior = (prediction['log_mass'][..., None] + reflection_log).flatten(1)
+        return prior + match
 
     def map(self, prediction, offsets, mode_index, reflection, image_shape, atlas=None, weights=None,
             return_refinement_feature=False):
