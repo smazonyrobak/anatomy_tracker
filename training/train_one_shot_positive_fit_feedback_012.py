@@ -33,7 +33,8 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 context = load_streaming_synthetic_v7_64(device='cuda')
 real = load_reserved_real_train()
-prior_schedules = sorted(root.glob('runs/*/real_schedule.npy'))
+prior_schedules = sorted([*root.glob('runs/*/real_schedule.npy'),
+                          *root.glob('runs/*/new_real_schedule.npy')])
 used_real = {tuple(map(int, row)) for path in prior_schedules for row in np.load(path)}
 rng = np.random.default_rng(seed)
 remaining = [rng.permutation(len(donor['identities'])).tolist() for donor in real['donors']]
@@ -195,9 +196,12 @@ with (run / 'training.jsonl').open('w') as log, (run / 'draws.jsonl').open('w') 
         branch_prior = (extended['log_mass'][row, modes] + torch.where(
             reflected.bool(), F.logsigmoid(extended['reflection_logit'][row, modes]),
             F.logsigmoid(-extended['reflection_logit'][row, modes])))
-        fit_rank = F.kl_div(F.log_softmax(scores - branch_prior, -1),
-                            F.softmax(-mapped_tissue.detach() / 500, -1),
-                            reduction='none').sum(-1).mean()
+        positive_rank = F.kl_div(F.log_softmax(scores - branch_prior, -1),
+                                 F.softmax(-mapped_tissue.detach() / 500, -1),
+                                 reduction='none').sum(-1).mean()
+        candidate_rank = F.kl_div(F.log_softmax(scores[:, :beam], -1),
+                                  F.softmax(-mapped_tissue[:, :beam].detach() / 800, -1),
+                                  reduction='none').sum(-1).mean()
         expected = (F.softmax(scores[:, :beam], -1) * mapped_tissue[:, :beam]).sum(-1).mean() / 1000
         mapping_loss = expected + .25 * mapped_tissue[:, :beam].min(-1).values.mean() / 1000
         teacher_loss = mapped_tissue[:, beam].mean() / 1000
@@ -209,7 +213,7 @@ with (run / 'training.jsonl').open('w') as log, (run / 'draws.jsonl').open('w') 
         local_penalty = (.1 * field.square().mean().sqrt() / 1000
                          + .02 * ((field[..., 1:, :] - field[..., :-1, :]).abs().mean()
                                   + (field[..., 1:] - field[..., :-1]).abs().mean()) / 200)
-        loss = (direct_loss + mapping_loss + 1.5 * fit_rank + teacher_loss
+        loss = (direct_loss + mapping_loss + positive_rank + candidate_rank + teacher_loss
                 + .1 * reliability_loss + local_penalty)
         decay = .1 + .9 * .5 * (1 + math.cos(math.pi * step / updates))
         for group, rate in zip(optimizer.param_groups, rates):
@@ -253,7 +257,8 @@ with (run / 'training.jsonl').open('w') as log, (run / 'draws.jsonl').open('w') 
                    1, prior[synthetic:].detach().argmax(-1)[:, None]).mean()),
                'direct_loss': float(direct_loss.detach()),
                'mapping_loss': float(mapping_loss.detach()),
-               'fit_rank_loss': float(fit_rank.detach()),
+               'positive_rank_loss': float(positive_rank.detach()),
+               'candidate_rank_loss': float(candidate_rank.detach()),
                'teacher_loss': float(teacher_loss.detach()),
                'reliability_loss': float(reliability_loss.detach()),
                'local_penalty': float(local_penalty.detach()),
