@@ -23,7 +23,7 @@ from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 
 class OneShotJointSliceModel(nn.Module):
     def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
-                 vector_refinement=False, candidate_ranking=False):
+                 vector_refinement=False, candidate_ranking=False, fitted_ranking=False):
         super().__init__()
         self.modes, self.uncertainty_rank = modes, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
@@ -82,6 +82,14 @@ class OneShotJointSliceModel(nn.Module):
                     nn.GroupNorm(8, 32), nn.GELU(),
                     nn.AdaptiveAvgPool2d(4), nn.Flatten(), nn.Linear(32 * 4 * 4, 1),
                 )
+            if fitted_ranking:
+                self.fitted_matcher = nn.Sequential(
+                    nn.Conv2d(241, 64, 3, padding=1),
+                    nn.GroupNorm(8, 64), nn.GELU(), ResidualBlock(64),
+                    nn.Conv2d(64, 32, 3, stride=2, padding=1),
+                    nn.GroupNorm(8, 32), nn.GELU(),
+                    nn.AdaptiveAvgPool2d(4), nn.Flatten(), nn.Linear(32 * 4 * 4, 1),
+                )
             if vector_refinement:
                 self.pose_refiner = nn.Sequential(
                     nn.Conv2d(229, 64, 5, stride=2, padding=2), nn.GroupNorm(8, 64), nn.GELU(),
@@ -108,6 +116,9 @@ class OneShotJointSliceModel(nn.Module):
         if hasattr(self, 'candidate_matcher'):
             nn.init.zeros_(self.candidate_matcher[-1].weight)
             nn.init.zeros_(self.candidate_matcher[-1].bias)
+        if hasattr(self, 'fitted_matcher'):
+            nn.init.zeros_(self.fitted_matcher[-1].weight)
+            nn.init.zeros_(self.fitted_matcher[-1].bias)
         with torch.no_grad():
             rotations, _ = torch.linalg.qr(torch.randn(modes, 3, 3))
             rotations[:, :, 2] *= torch.linalg.det(rotations)[:, None]
@@ -226,7 +237,7 @@ class OneShotJointSliceModel(nn.Module):
         return prior + match
 
     def map(self, prediction, offsets, mode_index, reflection, image_shape, atlas=None, weights=None,
-            return_refinement_feature=False):
+            return_refinement_feature=False, feature_side=None, source_shape=None):
         batch, count = mode_index.shape
         row = torch.arange(batch, device=mode_index.device)[:, None]
         state = prediction['state'][row, mode_index].reshape(-1, 12)
@@ -237,6 +248,8 @@ class OneShotJointSliceModel(nn.Module):
             state[:, 11:12], reflected[:, None].to(state.dtype),
         ), -1)
         feature = prediction['feature'][:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
+        if feature_side is not None:
+            feature = F.adaptive_avg_pool2d(feature, (feature_side, feature_side))
         scale, bias = self.warp_condition(condition).chunk(2, -1)
         feature = feature * (1 + .25 * scale.tanh()[..., None, None]) + bias[..., None, None]
         height, width = image_shape
@@ -245,12 +258,15 @@ class OneShotJointSliceModel(nn.Module):
                 raise ValueError('atlas-conditioned warp requires the atlas and axial PSF weights')
             center, frame, basis = full_frame_state_to_components(state)
             fh, fw = feature.shape[-2:]
-            yy, xx = torch.meshgrid(
-                torch.arange(fh, device=state.device, dtype=state.dtype) / fh,
-                torch.arange(fw, device=state.device, dtype=state.dtype) / fw,
-                indexing='ij',
-            )
-            sx = torch.where(reflected[:, None, None], (width - 1) / width - xx, xx)
+            if source_shape is None:
+                fy = torch.arange(fh, device=state.device, dtype=state.dtype) / fh
+                fx = torch.arange(fw, device=state.device, dtype=state.dtype) / fw
+            else:
+                fy = (torch.arange(fh, device=state.device, dtype=state.dtype) + .5) / fh - .5 / source_shape[0]
+                fx = (torch.arange(fw, device=state.device, dtype=state.dtype) + .5) / fw - .5 / source_shape[1]
+            yy, xx = torch.meshgrid(fy, fx, indexing='ij')
+            source_width = width if source_shape is None else source_shape[1]
+            sx = torch.where(reflected[:, None, None], (source_width - 1) / source_width - xx, xx)
             chart = torch.stack((sx.expand(-1, fh, -1), yy.expand(len(state), -1, -1)), -1)
             plane = normalized_raster_to_ccf(
                 center[:, None, None], frame[:, None, None], basis[:, None, None], chart
@@ -282,12 +298,15 @@ class OneShotJointSliceModel(nn.Module):
         requested_local = 1000 * raw[:, :3].tanh()
         local, removed_affine = project_surface_affine_out(requested_local)
         center, frame, basis = full_frame_state_to_components(state)
-        y, x = torch.meshgrid(
-            torch.arange(height, device=state.device, dtype=state.dtype) / height,
-            torch.arange(width, device=state.device, dtype=state.dtype) / width,
-            indexing='ij',
-        )
-        s = torch.where(reflected[:, None, None], (width - 1) / width - x, x)
+        if source_shape is None:
+            oy = torch.arange(height, device=state.device, dtype=state.dtype) / height
+            ox = torch.arange(width, device=state.device, dtype=state.dtype) / width
+        else:
+            oy = (torch.arange(height, device=state.device, dtype=state.dtype) + .5) / height - .5 / source_shape[0]
+            ox = (torch.arange(width, device=state.device, dtype=state.dtype) + .5) / width - .5 / source_shape[1]
+        y, x = torch.meshgrid(oy, ox, indexing='ij')
+        source_width = width if source_shape is None else source_shape[1]
+        s = torch.where(reflected[:, None, None], (source_width - 1) / source_width - x, x)
         st = torch.stack((s.expand(-1, height, -1), y.expand(len(state), -1, -1)), -1)
         plane = normalized_raster_to_ccf(
             center[:, None, None], frame[:, None, None], basis[:, None, None], st
@@ -331,6 +350,52 @@ class OneShotJointSliceModel(nn.Module):
                 batch, count, 229, *evidence.shape[-2:])
             output['atlas_pair'] = atlas_pair.reshape(batch, count, 2, *atlas_pair.shape[-2:])
         return output
+
+    def score_fitted_candidates(self, inputs, prediction, mapped, atlas, weights):
+        batch, count, samples, side = mapped['coordinates'].shape[:4]
+        coordinates = mapped['coordinates'].flatten(0, 1)
+        masses = torch.as_tensor(weights, device=inputs.device, dtype=inputs.dtype)
+        if masses.ndim == 1:
+            masses = masses[None].expand(batch, -1)
+        masses = masses[:, None].expand(-1, count, -1).flatten(0, 1)
+        rendered = render_finite_thickness_coordinate_grid(
+            atlas, coordinates, (0., 0., 0.), (25., 25., 25.), masses)
+        support = rendered[:, 1:2].clamp(0, 1)
+        atlas_pair = torch.cat((rendered[:, :1] / support.clamp_min(1e-4), support), 1)
+        target = self.atlas_encoder(atlas_pair)
+        image = F.adaptive_avg_pool2d(prediction['feature'], (side, side))[:, None]
+        image = image.expand(-1, count, -1, -1, -1).flatten(0, 1)
+        source = F.interpolate(inputs[:, :1], (side, side), mode='area')[:, None]
+        source = source.expand(-1, count, -1, -1, -1).flatten(0, 1)
+        local = mapped['local_displacement_um'].flatten(0, 1) / 1000
+        magnitude = local.square().sum(1, keepdim=True).sqrt()
+        dx = F.pad((local[..., 1:] - local[..., :-1]).square().sum(1, keepdim=True),
+                   (0, 1, 0, 0))
+        dy = F.pad((local[..., 1:, :] - local[..., :-1, :]).square().sum(1, keepdim=True),
+                   (0, 0, 0, 1))
+        roughness = (dx + dy + 1e-8).sqrt()
+        reliability = mapped['correspondence_logit'].flatten(0, 1).sigmoid()
+        state = mapped['state'].flatten(0, 1)
+        reflected = mapped['reflection'].flatten(0, 1).to(state.dtype)
+        condition = torch.cat(((state[:, :3] - self.center_origin) / self.center_scale,
+                               state[:, 3:9], state[:, 9:11] - math.log(12000.),
+                               state[:, 11:12], reflected[:, None]), -1)
+        yy, xx = torch.meshgrid(torch.arange(side, device=state.device) / side,
+                                torch.arange(side, device=state.device) / side, indexing='ij')
+        xy = torch.stack((xx, yy))[None].expand(batch * count, -1, -1, -1)
+        evidence = torch.cat((image, target, (image - target).abs(),
+                              local_correlation(image, target, 2), xy, source,
+                              atlas_pair[:, :1], support, local, magnitude, roughness,
+                              reliability, condition[..., None, None].expand(-1, -1, side, side)), 1)
+        learned = self.fitted_matcher(evidence).reshape(batch, count)
+        penalty = (magnitude.square() + .1 * roughness.square()).mean((1, 2, 3)).reshape(batch, count)
+        row = torch.arange(batch, device=state.device)[:, None]
+        mode = mapped['mode_index']
+        log_reflection = torch.where(mapped['reflection'].bool(),
+                                     F.logsigmoid(prediction['reflection_logit'][row, mode]),
+                                     F.logsigmoid(-prediction['reflection_logit'][row, mode]))
+        prior = prediction['log_mass'][row, mode] + log_reflection
+        return prior + learned - .1 * penalty
 
     def refine(self, feature, state):
         batch, count = state.shape[:2]
