@@ -24,6 +24,7 @@ panel = root / 'data/one_shot_fresh_synthetic_dev_panel_001'
 real = root / 'data/joint_v7_allen_fullcanvas_192_001'
 out = root / 'runs/one_shot_positive_fit_feedback_012_development_eval'
 side, beam, fit_side = 256, 8, 96
+steps = tuple(range(0, 8001, 1000))
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
@@ -56,7 +57,7 @@ def points(state, reflection, chart):
 out.mkdir(parents=True, exist_ok=False)
 rows = []
 with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
-    for step in (0, 8000):
+    for step in steps:
         checkpoint_path = run / f'joint_step_{step:05d}.pt'
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
         assert checkpoint['step'] == step and not checkpoint['calibrated']
@@ -164,7 +165,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
     stream.flush()
 
 summary = []
-for step in (0, 8000):
+for step in steps:
     for split, names in (('synthetic', ('prior_rigid_um', 'fitted_rigid_um',
                                       'top8_oracle_rigid_um', 'all32_oracle_rigid_um',
                                       'prior_mapped_um', 'fitted_mapped_um',
@@ -183,7 +184,7 @@ for step in (0, 8000):
 (out / 'completed.json').write_text(json.dumps({
     'rows': len(rows),
     'checkpoint_sha256': {str(step): hashlib.sha256(
-        (run / f'joint_step_{step:05d}.pt').read_bytes()).hexdigest() for step in (0, 8000)},
+        (run / f'joint_step_{step:05d}.pt').read_bytes()).hexdigest() for step in steps},
     'panel_records_sha256': hashlib.sha256((panel / 'records.jsonl').read_bytes()).hexdigest(),
     'real_records_sha256': hashlib.sha256((real / 'records.jsonl').read_bytes()).hexdigest(),
     'source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
