@@ -97,8 +97,10 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     weights /= weights.sum(-1, keepdim=True)
     if cancel_event.is_set():
         raise InterruptedError
-    operation = (f'Mapping {2 * model.modes} one-pass pose/warp candidates' if version == 'one-shot'
-                 else 'Fitting all predicted locations')
+    operation = (f'Refining atlas fits and mapping {2 * model.modes} pose/warp candidates'
+                 if version == 'one-shot' and hasattr(model, 'pose_refiner') else
+                 f'Mapping {2 * model.modes} one-pass pose/warp candidates'
+                 if version == 'one-shot' else 'Fitting all predicted locations')
     messages.put((0, f'{operation}, two at a time. Cancel discards the result when inference returns.'))
     prediction = infer_joint(model, inputs, atlas, offsets, weights, context=None, chunk=2)
     if cancel_event.is_set():
