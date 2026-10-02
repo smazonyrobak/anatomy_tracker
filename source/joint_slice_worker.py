@@ -58,6 +58,11 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
         image_side = config.get('resolution', config.get('image_side', config.get('side')))
         if image_side != 256 or model.modes not in (8, 16):
             raise ValueError('Experimental one-shot GUI inference requires 256 pixels and 8 or 16 modes.')
+        if hasattr(model, 'fitted_matcher'):
+            name = 'arbitrary_plane_one_shot_model.py'
+            expected = config['source_sha256'][name]
+            if hashlib.sha256((repository / 'training' / name).read_bytes()).hexdigest() != expected:
+                raise RuntimeError(f'Checkpoint implementation differs from installed source: {name}')
         resolution = (256, 256)
     else:
         if f'arbitrary_plane_joint_model_{version}.py' not in config['source_sha256']:
