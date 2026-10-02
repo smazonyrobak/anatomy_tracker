@@ -12,6 +12,7 @@ def load_one_shot_checkpoint(path, device='cuda'):
         modes=checkpoint['model']['pose.2.bias'].numel() // 21,
         atlas_conditioning=any(key.startswith('atlas_encoder.') for key in checkpoint['model']),
         fit_quality=any(key.startswith('fit_quality_head.') for key in checkpoint['model']),
+        candidate_ranking=any(key.startswith('candidate_matcher.') for key in checkpoint['model']),
     ).to(device)
     model.load_state_dict(checkpoint['model'])
     return model.eval(), checkpoint['config']
@@ -24,6 +25,9 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
                                     'correspondence_logit', 'joint_std', 'joint_factor', 'atlas_image')}
     with torch.inference_mode():
         prediction = model.predict(inputs, context)
+        candidate_score = (model.score_candidates(prediction, offsets_um, weights, atlas,
+                                                  side=64, chunk=chunk, image_shape=inputs.shape[-2:])
+                           if hasattr(model, 'candidate_matcher') else None)
         for first in range(0, len(mode), chunk):
             chosen = mode[first:first + chunk][None]
             flags = reflection[first:first + chunk][None]
@@ -46,8 +50,14 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
         F.logsigmoid(prediction['reflection_logit'][0])), -1)
     result['prior_log_weight'] = prior.cpu()
     result['component_log_weight'] = prior.cpu()
-    result['selected_component'] = divmod(int(prior.flatten().argmax()), 2)
+    selected = prior.flatten() if candidate_score is None else candidate_score[0]
+    result['selected_component'] = divmod(int(selected.argmax()), 2)
+    result['selection_method'] = ('image_prior' if candidate_score is None
+                                  else 'atlas_candidate_score')
+    if candidate_score is not None:
+        result['candidate_score'] = candidate_score[0].reshape(model.modes, 2).cpu()
     result['psf_offsets_um'], result['psf_weights'] = offsets_um.cpu(), weights.cpu()
     result['calibrated'] = False
-    result['scope'] = 'one-pass direct pose and local map; prior selection, no calibrated probabilities'
+    result['scope'] = ('one-pass direct pose and local map; '
+                       + result['selection_method'] + '; no calibrated probabilities')
     return result
