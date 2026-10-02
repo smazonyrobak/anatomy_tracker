@@ -1,0 +1,5 @@
+# Is the near-truth pose discarded by the top-eight beam? — diagnostic 023
+
+Before changing the pose generator, measure whether 019's image-only beam discards a good pose it already predicted. On the same 185 eligible synthetic DEV sections, use the frozen 019 batch-18,000 network to compute rigid tissue-coordinate error for every one of its 16 pose modes under both reflection states (32 branches). Compare the physically best of all 32 with the physically best of the exact top eight selected by the existing prior; report identity-equal means and case fractions with a branch below 0.25, 0.5 and 1.0 mm. This uses known synthetic CCF coordinates only for a read-only diagnostic, never to choose at inference. Preserve source, checkpoint, panel and output hashes. No model training, image viewing, public benchmark or final-test use occurs.
+
+If all-32 capture is substantially better, the top-eight truncation/prior is the next target. If all-32 remains far from truth, more fitted scoring cannot solve the proposal gap: the global pose representation/training must be strengthened before fine atlas matching.
