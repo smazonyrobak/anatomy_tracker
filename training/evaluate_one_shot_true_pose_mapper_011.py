@@ -105,12 +105,25 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                                     torch.zeros((1, 1), device='cuda', dtype=torch.long),
                                     true_reflection[:, None], (side, side), atlas, weights)
                 true_surface = teacher['centre_surface_ccf_ap_dv_ml_um'][0, 0].reshape(side * side, 3)
+                teacher_fit = model.map({**prediction, 'state': states}, offsets,
+                                        torch.zeros((1, 1), device='cuda', dtype=torch.long),
+                                        true_reflection[:, None], (fit_side, fit_side), atlas,
+                                        weights, feature_side=fit_side,
+                                        source_shape=(side, side))
+                sample_grid = (torch.stack((indices.remainder(side),
+                                            indices.div(side, rounding_mode='floor')), -1).float()
+                               + .5) * (2 / side) - 1
+                fit_surface = teacher_fit['centre_surface_ccf_ap_dv_ml_um'][0, 0].permute(2, 0, 1)[None]
+                fit_points = F.grid_sample(fit_surface, sample_grid[None, None],
+                                           mode='bilinear', padding_mode='border',
+                                           align_corners=False)[0, :, 0].T
                 row.update(prior_choice=prior_choice, fitted_choice=fitted_choice,
                            prior_mapped_um=float(mapped_error[0]),
                            fitted_mapped_um=float(mapped_error[1]),
                            true_rigid_um=float((points(truth, true_reflection, chart)[0]
                                                 - target).norm(dim=-1).mean()),
-                           true_mapped_um=float((true_surface[indices] - target).norm(dim=-1).mean()))
+                           true_mapped_um=float((true_surface[indices] - target).norm(dim=-1).mean()),
+                           true_mapped_fit96_um=float((fit_points - target).norm(dim=-1).mean()))
             rows.append(row)
             stream.write(json.dumps(row) + '\n')
         print(json.dumps({'step': step, 'synthetic_rows': len(records)}), flush=True)
@@ -154,7 +167,8 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
 summary = []
 for step in (0, 4000):
     for split, names in (('synthetic', ('prior_mapped_um', 'fitted_mapped_um',
-                                      'true_rigid_um', 'true_mapped_um')),
+                                      'true_rigid_um', 'true_mapped_um',
+                                      'true_mapped_fit96_um')),
                          ('real_weak_allen', ('prior_five_um', 'fitted_five_um'))):
         group = [row for row in rows if row['set'] == split and row['step'] == step
                  and (split != 'synthetic' or row['eligible'])]
