@@ -70,7 +70,7 @@ config = {
     'real_label_role': real['label_role'],
     'comparison': 'identical model, initialization, draws, losses and candidate states; atlas arm scorer has rendered atlas evidence; direct scorer receives zero atlas channels',
     'objective': 'all-32 on-policy listwise physical targets and detached score-weighted physical loss; predicted-branch mapped-tissue loss and gated native atlas fit',
-    'fit_weight': 'first-batch pose-gradient ratio 0.2, upper bounded 0.02, no floor',
+    'fit_weight': 'direct-arm first gated pose-gradient ratio 0.2, upper bounded 0.02, no floor; same per-step coefficient in both arms',
     'uncertainty_calibrated': False, 'public_benchmark_used': False,
     'source_sha256': {name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                       for name in ('train_one_shot_on_policy_atlas_rank_009.py',
@@ -91,6 +91,7 @@ def points(state, reflection, chart):
 
 
 results = {}
+shared_fit_weights = []
 for arm in ('direct', 'atlas'):
     directory = run / arm
     directory.mkdir()
@@ -218,7 +219,8 @@ for arm in ('direct', 'atlas'):
             fit_map = model.atlas_fit_loss(batch['inputs'], mapped, context['atlas'],
                                            batch['weights'], batch['valid_mask'])
             fit_term = (fit_map * gate).sum() / gate.sum().clamp_min(1)
-            if step == 1 or (fit_weight is None and gate_count):
+            evidence = None
+            if step == 1 or (arm == 'direct' and fit_weight is None and gate_count):
                 evidence = {'step': step,
                     'score_to_global_pose_gradient': float(torch.autograd.grad(
                     rank.mean(), model.pose[-1].weight, retain_graph=True)[0].norm()),
@@ -228,12 +230,17 @@ for arm in ('direct', 'atlas'):
                                                     retain_graph=True)[0].norm()
                 fit_gradient = torch.autograd.grad(fit_term, model.pose[-1].weight,
                                                    retain_graph=True)[0].norm()
-                if float(fit_gradient) > 0:
+                if arm == 'direct' and float(fit_gradient) > 0:
                     fit_weight = float((.2 * base_gradient / fit_gradient).clamp(max=.02))
                 evidence.update({'fit_gate_branches': gate_count,
                                  'base_pose_gradient': float(base_gradient),
-                                 'fit_pose_gradient': float(fit_gradient),
-                                 'fit_weight': fit_weight})
+                                 'fit_pose_gradient': float(fit_gradient)})
+            if arm == 'direct':
+                shared_fit_weights.append(fit_weight)
+            else:
+                fit_weight = shared_fit_weights[step - 1]
+            if evidence is not None:
+                evidence['fit_weight'] = fit_weight
                 (directory / 'fit_gradient_scaling.json').write_text(json.dumps(evidence, indent=2))
             loss = base_loss + (fit_weight or 0.) * fit_term
             decay = .1 + .9 * .5 * (1 + math.cos(math.pi * step / updates))
