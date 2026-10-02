@@ -1,0 +1,19 @@
+# Real-coordinate adaptation 014: frozen development result
+
+The batch-5,000 checkpoint of spatial-head model 013 was continued for 12,000 batches. Only its dense CCF-coordinate/validity head changed; the image encoder, direct probabilistic pose head, atlas-conditioned tissue mapper and fit scorer were frozen. Each batch used two fresh arbitrary-plane synthetic sections and two distinct Allen TRAIN sections with inherited weak affine fields: 24,000 accepted synthetic presentations and 24,000 previously unused real section identities. The real labels are weak upstream alignments, not expert-confirmed plane truth. No old-model weights, external pretrained features, DEV labels, final-test animals or public benchmark examples entered training.
+
+The same fixed DEV panel used for 013 contains 185 scorable synthetic sections from eight **synthetic deformation plans**, plus 64 real Allen DEV sections from six held-out donors. The 014 independent readout scored seven checkpoints, including the exact 013 parent as batch zero. Animal/plan-equal means:
+
+| Added batches | Synthetic coordinate-field error on tissue | Synthetic mapped tissue error | Real five-point disagreement with weak affine |
+| ---: | ---: | ---: | ---: |
+| 0 | 2.963 mm | 2.922 mm | 9.957 mm |
+| 4,000 | 2.925 mm | 2.872 mm | 0.816 mm |
+| 8,000 | 2.908 mm | 2.861 mm | 0.685 mm |
+| 10,000 | 2.861 mm | 2.812 mm | **0.651 mm** |
+| 12,000 | **2.843 mm** | **2.793 mm** | 0.666 mm |
+
+Real field supervision removed most of the gross domain mismatch, confirming that the 013 real failure was at least partly a missing-supervision problem. It did **not** solve global localization. The unchanged direct image-pose branch has 2.984 mm mapped synthetic error and **0.564 mm real weak-affine disagreement** at this parent checkpoint; the adapted coordinate branch remains worse than direct on real donors and only 0.192 mm better on synthetic. The known-correct pose with the same frozen mapper has 0.130 mm synthetic mapped error. Severe partial sections (<5% visible tissue) improved from 5.33 to 4.93 mm but remain far from useful; one of eight synthetic plans worsened. These are 3D visible-tissue distances, not AP-only errors. The real numbers are comparisons with inherited weak affines, not biological ground truth.
+
+**Decision:** keep the 014 head experimental and do not use its candidate in the GUI, calibrate its mixture scores, or claim deployment accuracy. More fitting freedom is not indicated: the correct-pose mapper is already accurate. The next architecture change must improve global pose capture from image evidence, particularly arbitrary oblique/partial planes, and prove that an atlas-informed candidate adds value on the same fixed physical panel. The image-only direct branch is the real-domain control; any new candidate must be scored against both it and the 014 branch without tuning on final-test animals or a DeepSlice benchmark. Simply continuing weak-affine head fitting is unlikely to close the remaining multi-millimetre synthetic gap.
+
+Frozen training output: `I:/AnatomyTracker/runs/one_shot_real_coordinate_pose_014`; coordinate DEV: `I:/AnatomyTracker/runs/one_shot_real_coordinate_pose_014_development_eval`; mapped physical DEV: `I:/AnatomyTracker/runs/one_shot_real_coordinate_pose_014_mapped_eval`. The training process completed normally in 1,583 s. A read-only independent audit passed: all pinned source, parent, real-image acquisition, excluded schedule, output log and checkpoint hashes matched; all 24,000 real TRAIN identities were unique and disjoint from earlier schedules; the 1,743 coordinate and 555 mapped raw DEV rows regenerated every recorded animal/plan-equal summary within 1e-6 µm. Neither DEV readout used the public benchmark, final-test animals or numerical probability calibration.
