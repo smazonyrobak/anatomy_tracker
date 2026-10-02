@@ -13,6 +13,7 @@ def load_one_shot_checkpoint(path, device='cuda'):
         atlas_conditioning=any(key.startswith('atlas_encoder.') for key in checkpoint['model']),
         fit_quality=any(key.startswith('fit_quality_head.') for key in checkpoint['model']),
         candidate_ranking=any(key.startswith('candidate_matcher.') for key in checkpoint['model']),
+        fitted_ranking=any(key.startswith('fitted_matcher.') for key in checkpoint['model']),
     ).to(device)
     model.candidate_uses_atlas = checkpoint.get('arm') != 'direct'
     model.load_state_dict(checkpoint['model'])
@@ -26,10 +27,22 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
                                     'correspondence_logit', 'joint_std', 'joint_factor', 'atlas_image')}
     with torch.inference_mode():
         prediction = model.predict(inputs, context)
-        candidate_score = (model.score_candidates(prediction, offsets_um, weights, atlas,
-                                                  use_atlas=model.candidate_uses_atlas,
-                                                  side=64, chunk=chunk, image_shape=inputs.shape[-2:])
-                           if hasattr(model, 'candidate_matcher') else None)
+        if hasattr(model, 'fitted_matcher'):
+            log_reflection = torch.stack((F.logsigmoid(-prediction['reflection_logit']),
+                                            F.logsigmoid(prediction['reflection_logit'])), -1)
+            prior_score = (prediction['log_mass'][..., None] + log_reflection).flatten(1)
+            top = prior_score.topk(min(8, 2 * model.modes), -1).indices
+            coarse = model.map(prediction, offsets_um, top // 2, top % 2, (96, 96),
+                               atlas, weights, feature_side=96, source_shape=inputs.shape[-2:])
+            fitted = model.score_fitted_candidates(inputs, prediction, coarse, atlas, weights)
+            candidate_score = torch.full_like(prior_score, -torch.inf).scatter_(1, top, fitted)
+        elif hasattr(model, 'candidate_matcher'):
+            candidate_score = model.score_candidates(prediction, offsets_um, weights, atlas,
+                                                     use_atlas=model.candidate_uses_atlas,
+                                                     side=64, chunk=chunk,
+                                                     image_shape=inputs.shape[-2:])
+        else:
+            candidate_score = None
         for first in range(0, len(mode), chunk):
             chosen = mode[first:first + chunk][None]
             flags = reflection[first:first + chunk][None]
@@ -54,7 +67,8 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
     result['component_log_weight'] = prior.cpu()
     selected = prior.flatten() if candidate_score is None else candidate_score[0]
     result['selected_component'] = divmod(int(selected.argmax()), 2)
-    result['selection_method'] = ('image_prior' if candidate_score is None else
+    result['selection_method'] = ('postfit_atlas_candidate_score' if hasattr(model, 'fitted_matcher') else
+                                  'image_prior' if candidate_score is None else
                                   'atlas_candidate_score' if model.candidate_uses_atlas else
                                   'image_candidate_score')
     if candidate_score is not None:
