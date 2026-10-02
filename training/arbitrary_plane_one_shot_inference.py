@@ -14,6 +14,7 @@ def load_one_shot_checkpoint(path, device='cuda'):
         fit_quality=any(key.startswith('fit_quality_head.') for key in checkpoint['model']),
         candidate_ranking=any(key.startswith('candidate_matcher.') for key in checkpoint['model']),
     ).to(device)
+    model.candidate_uses_atlas = checkpoint.get('arm') != 'direct'
     model.load_state_dict(checkpoint['model'])
     return model.eval(), checkpoint['config']
 
@@ -26,6 +27,7 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
     with torch.inference_mode():
         prediction = model.predict(inputs, context)
         candidate_score = (model.score_candidates(prediction, offsets_um, weights, atlas,
+                                                  use_atlas=model.candidate_uses_atlas,
                                                   side=64, chunk=chunk, image_shape=inputs.shape[-2:])
                            if hasattr(model, 'candidate_matcher') else None)
         for first in range(0, len(mode), chunk):
@@ -52,8 +54,9 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
     result['component_log_weight'] = prior.cpu()
     selected = prior.flatten() if candidate_score is None else candidate_score[0]
     result['selected_component'] = divmod(int(selected.argmax()), 2)
-    result['selection_method'] = ('image_prior' if candidate_score is None
-                                  else 'atlas_candidate_score')
+    result['selection_method'] = ('image_prior' if candidate_score is None else
+                                  'atlas_candidate_score' if model.candidate_uses_atlas else
+                                  'image_candidate_score')
     if candidate_score is not None:
         result['candidate_score'] = candidate_score[0].reshape(model.modes, 2).cpu()
     result['psf_offsets_um'], result['psf_weights'] = offsets_um.cpu(), weights.cpu()
