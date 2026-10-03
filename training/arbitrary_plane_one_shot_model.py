@@ -368,7 +368,8 @@ class OneShotJointSliceModel(nn.Module):
         return prior + match
 
     def map(self, prediction, offsets, mode_index, reflection, image_shape, atlas=None, weights=None,
-            return_refinement_feature=False, feature_side=None, source_shape=None):
+            return_refinement_feature=False, feature_side=None, source_shape=None,
+            spatial_evidence=None):
         batch, count = mode_index.shape
         row = torch.arange(batch, device=mode_index.device)[:, None]
         state = prediction['state'][row, mode_index].reshape(-1, 12)
@@ -381,6 +382,10 @@ class OneShotJointSliceModel(nn.Module):
         feature = prediction['feature'][:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
         if feature_side is not None:
             feature = F.adaptive_avg_pool2d(feature, (feature_side, feature_side))
+        if spatial_evidence is not None:
+            feature = feature + F.interpolate(
+                spatial_evidence.flatten(0, 1), feature.shape[-2:],
+                mode='bilinear', align_corners=False)
         scale, bias = self.warp_condition(condition).chunk(2, -1)
         feature = feature * (1 + .25 * scale.tanh()[..., None, None]) + bias[..., None, None]
         height, width = image_shape
