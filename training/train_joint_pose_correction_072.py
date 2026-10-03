@@ -285,4 +285,4 @@ with (run / 'training.jsonl').open('w') as log, (run / 'draws.jsonl').open('w') 
         if step in (warmup, 6000, batches):
             save(step)
 print(json.dumps({'finished_batches': batches,
-    'fit_to_pose_gradient': fit_to_pose_gradient}, flush=True))
+    'fit_to_pose_gradient': fit_to_pose_gradient}), flush=True)
