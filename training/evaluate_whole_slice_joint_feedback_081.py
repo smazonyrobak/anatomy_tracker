@@ -155,6 +155,11 @@ finished = json.loads((run / 'completed.json').read_text())
 steps = tuple(training['evaluation_steps'])
 assert finished['batches'] == training['batches'] and steps == (0, 500, 1500, 3000)
 assert training['parent_sha256'] == sha(training['parent'])
+assert finished['config_sha256'] == sha(run / 'config.json')
+assert finished['checkpoint_sha256'] == {
+    str(step): sha(run / f'joint_step_{step:05d}.pt') for step in steps}
+assert all(sha(Path(__file__).parent / name) == digest
+           for name, digest in training['source_sha256'].items())
 checkpoint_sha256 = {str(step): sha(run / f'joint_step_{step:05d}.pt') for step in steps}
 assert checkpoint_sha256 == finished['checkpoint_sha256']
 synthetic = [row for row in map(json.loads, (panel / 'records.jsonl').open()) if row['eligible']]
