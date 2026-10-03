@@ -1,0 +1,17 @@
+# 079: perfect broad-region labels do not rescue blind plane selection
+
+The [frozen protocol](COARSE_REGION_EVIDENCE_079_PROTOCOL_20261004.md) was run without retraining, image review, truth insertion into the candidate bank, or use of public/final-test cases. The 059 parent produced the same 14 blind candidates for each of 246 eligible synthetic DEV sections from eight disjoint deformation identities. At 1,024 fixed surviving-tissue pixels, target labels came from the *known synthetic CCF correspondence* and each candidate's labels from its predicted physical CCF points in the pinned annotation. These are **oracle labels unavailable to the deployed model**.
+
+| Selection among the same 14 candidates | Identity-equal visible-tissue error |
+| --- | ---: |
+| Frozen 059 image prior | 2.656 mm |
+| Perfect 14-class region-label Dice | 2.327 mm |
+| Physically best candidate, chosen with truth | 1.022 mm |
+
+The oracle broad-region score improved the prior by 0.329 mm, below the predeclared 0.500-mm requirement, and missed the required ≤1.800-mm final error. It chose the physically best branch on 34.96% of sections; its mean within-section score/error pairwise concordance was 59.94%. It improved 122 sections, worsened 75, and tied 49. The predeclared appearance and tissue-support non-regression checks passed, but the joint gate **failed**. Exact-black, imperfect-brush, and raw strata yielded semantic-selected errors of 2.369, 2.249, and 2.380 mm respectively. Low-support sections remained especially difficult at 2.655 mm; higher-support sections were 2.211 mm.
+
+Two post-hoc, non-gating diagnostics from the same frozen rows sharpen the inference: selecting by *perfect fine Allen-ID agreement* gave 2.330 mm, essentially no better than the 14 broad classes, while tissue-support overlap alone gave 2.799 mm. The target had 7.49 broad classes per section on average and only 2.25% unassigned pixels, so missing broad labels do not explain the failure. These post-hoc comparisons are exploratory, not alternate success criteria or evidence that a learned segmentation branch would work.
+
+The decision is **not to train a coarse-region auxiliary head for this selection purpose**. The gap to the truth-best candidate is still 1.305 mm even with privileged regional labels. The next effort should examine the image-to-pose objective, representation, and ranking mechanics that generated and scored these candidates, rather than adding another regional reranker or expanding the failed 077 loop. This result concerns the current 14-proposal bank and label-overlap score, not an impossibility theorem for all anatomy-aware pose models. No biological arbitrary-oblique validation or calibrated probability claim follows from it.
+
+Raw receipt: `I:\AnatomyTracker\runs\coarse_region_evidence_079_development_diagnostic`. The source and protocol are in commit `d4b2a6c`. Independently recomputed row count, eight identity groups, candidate lengths, parent match to 077, selected and oracle errors, identity-equal summary, parent checkpoint SHA-256, and the three output hashes all passed. `completed.json` binds `config.json` (`5d41258568a76aea384b37019db4bc0962b7d5521df93571811bad111a96f06d`), `rows.jsonl` (`7fc6659852c5693887b8bf59f3b5c49cfcae176986bdbdf057c2c57b55aceeb2`), and `summary.json` (`86936d471da36bdd613e7614fa7dc552c74753ddd85a5461924973cfd1073d0e`). The config binds the 059 checkpoint, panel and receipt, atlas annotation, ontology, source code, and protocol; all result files are on `I:`.
