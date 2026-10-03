@@ -61,8 +61,14 @@ class OneShotJointSliceModel(nn.Module):
                 nn.Linear(64 * 8 * 8 + 12, 768), nn.GELU(),
                 nn.Linear(768, normal_anchor_count * 18),
             )
+            self.anchor_global = nn.Sequential(
+                nn.Linear(widths[-1] * 4 * 4 + 12, 384), nn.GELU(),
+                nn.Linear(384, normal_anchor_count * 18),
+            )
             nn.init.normal_(self.anchor_pose[-1].weight, std=.001)
             nn.init.zeros_(self.anchor_pose[-1].bias)
+            nn.init.zeros_(self.anchor_global[-1].weight)
+            nn.init.zeros_(self.anchor_global[-1].bias)
             with torch.no_grad():
                 self.anchor_pose[-1].bias.view(normal_anchor_count, 18)[:, 16] = -2
         if dense_coordinate:
@@ -177,9 +183,11 @@ class OneShotJointSliceModel(nn.Module):
                 feature, size=pyramid[level].shape[-2:], mode='bilinear', align_corners=False
             )
         if self.normal_anchor_count:
-            anchors = self.anchor_pose(torch.cat((
-                F.adaptive_avg_pool2d(feature, 8).flatten(1), context), -1)).reshape(
-                    -1, self.normal_anchor_count, 18)
+            anchors = (self.anchor_pose(torch.cat((
+                F.adaptive_avg_pool2d(feature, 8).flatten(1), context), -1))
+                + self.anchor_global(torch.cat((
+                    F.adaptive_avg_pool2d(x, 4).flatten(1), context), -1))).reshape(
+                        -1, self.normal_anchor_count, 18)
             tilt = torch.cat((.65 * anchors[..., 3:5].tanh(),
                               torch.zeros_like(anchors[..., 5:6])), -1)
             roll = torch.cat((torch.zeros_like(anchors[..., 3:5]),
@@ -496,7 +504,16 @@ class OneShotJointSliceModel(nn.Module):
             log_reflection = torch.stack((F.logsigmoid(-prediction['reflection_logit']),
                                           F.logsigmoid(prediction['reflection_logit'])), -1)
             scores = (prediction['log_mass'][..., None] + log_reflection).flatten(1)
-            selected = scores.topk(min(candidates, scores.shape[1]), -1).indices
+            if self.normal_anchor_count and candidates > 1:
+                old_count = min(2 * self.base_modes, max(1, candidates // 4))
+                old = scores[:, :2 * self.base_modes].topk(old_count, -1).indices
+                new = scores[:, 2 * self.base_modes:].topk(
+                    min(candidates - old_count, 2 * self.normal_anchor_count), -1
+                ).indices + 2 * self.base_modes
+                selected = torch.cat((old, new), -1)
+                selected = selected.gather(1, scores.gather(1, selected).argsort(-1, descending=True))
+            else:
+                selected = scores.topk(min(candidates, scores.shape[1]), -1).indices
             mode_index, reflection = selected // 2, selected % 2
         if mode_index.ndim == 1:
             mode_index, reflection = mode_index[:, None], reflection[:, None]
