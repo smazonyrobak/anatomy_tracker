@@ -80,6 +80,8 @@ out.mkdir(parents=True, exist_ok=False)
     'real_images_sha256': sha(real / 'images.npy'),
     'real_geometry_sha256': sha(real / 'geometry.npz'),
     'synthetic_section_points': 1024,
+    'synthetic_raw_field_metric': 'bilinear 128-to-256 CCF field; mean Euclidean error at surviving tissue pixels',
+    'synthetic_validity_metric': '128-grid Dice, predicted logit >= 0 versus pooled valid fraction >= 0.5',
     'low_support_definition': 'bottom quartile of eligible 061 DEV visible-tissue fraction',
     'low_support_cutoff': support_cutoff,
     'synthetic_identities': 8, 'real_development_donors': 6,
@@ -118,6 +120,14 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             dense_state = model.dense_coordinate_plane(prediction)[:, None]
             dense_error = (points(dense_state, torch.zeros((1, 1), device='cuda'), chart)
                            - reference).norm(dim=-1).mean()
+            field = prediction['dense_coordinate']
+            raw = F.interpolate(field[:, :3], (side, side), mode='bilinear', align_corners=False)[0]
+            raw = raw.permute(1, 2, 0) * model.center_scale + model.center_origin
+            raw_tissue_error = (raw[valid] - target[valid]).norm(dim=-1).mean()
+            valid_128 = F.avg_pool2d(valid[None, None].float(), 2)[0, 0] >= .5
+            predicted_valid_128 = field[0, 3] >= 0
+            valid_dice = (2 * (predicted_valid_128 & valid_128).sum()
+                          / (predicted_valid_128.sum() + valid_128.sum()).clamp_min(1))
             selected = int(prior[0].argmax())
             beam_error = errors[choice[0]]
             row = {'set': 'synthetic', 'step': step,
@@ -130,6 +140,8 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 'prior_best8_um': float(beam_error.min()),
                 'prior_best160_um': float(errors.min()),
                 'field_fit_um': float(dense_error),
+                'field_raw_tissue_um': float(raw_tissue_error),
+                'field_valid_dice': float(valid_dice),
                 'field_validity_mean': float(prediction['dense_coordinate'][:, 3].sigmoid().mean()),
                 'prior_selected_branch': selected}
             rows.append(row)
@@ -177,21 +189,29 @@ for step in steps:
     for split, identity in (('synthetic', 'synthetic_subject_plan_id'),
                             ('real_weak_allen', 'animal_id')):
         group = [row for row in rows if row['step'] == step and row['set'] == split]
+        scored_metrics = (metrics + ('field_raw_tissue_um',)
+                          if split == 'synthetic' else metrics)
+        reported_metrics = (scored_metrics + ('field_valid_dice',)
+                            if split == 'synthetic' else scored_metrics)
         entry[split] = {'sections': len(group), 'identities': len({row[identity] for row in group}),
             'identity_equal_mean_um': {name: identity_mean(group, name, identity)
-                                       for name in metrics},
+                                       for name in scored_metrics},
             'by_identity': {str(key): {name: float(np.mean([row[name] for row in group
-                if row[identity] == key])) for name in metrics}
+                if row[identity] == key])) for name in reported_metrics}
                 for key in sorted({row[identity] for row in group})}}
         if split == 'synthetic':
+            entry[split]['identity_equal_mean_dice'] = identity_mean(
+                group, 'field_valid_dice', identity)
             entry[split]['by_appearance'] = {appearance: {
                 'sections': len(subset), 'identity_equal_mean_um': {
-                    name: identity_mean(subset, name, identity) for name in metrics}}
+                    name: identity_mean(subset, name, identity) for name in scored_metrics},
+                'identity_equal_mean_dice': identity_mean(subset, 'field_valid_dice', identity)}
                 for appearance in sorted({row['appearance_mode'] for row in group})
                 if (subset := [row for row in group if row['appearance_mode'] == appearance])}
             entry[split]['by_support'] = {str(low): {
                 'sections': len(subset), 'identity_equal_mean_um': {
-                    name: identity_mean(subset, name, identity) for name in metrics}}
+                    name: identity_mean(subset, name, identity) for name in scored_metrics},
+                'identity_equal_mean_dice': identity_mean(subset, 'field_valid_dice', identity)}
                 for low in (True, False)
                 if (subset := [row for row in group if row['low_support'] == low])}
             entry[split]['selected_over_5mm'] = sum(
