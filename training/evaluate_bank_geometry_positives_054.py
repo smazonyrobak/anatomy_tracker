@@ -22,14 +22,13 @@ from training.atlas_oriented_patch_025 import AtlasOrientedPatch025, atlas_surfa
 
 train = root / 'runs/bank_geometry_positives_054_pilot'
 panel = root / 'data/one_shot_fresh_synthetic_dev_panel_001'
-out = root / 'runs/bank_geometry_positives_054_rigid_local_eval'
-steps = (0, 1000, 3000, 5000)
+out = root / 'runs/bank_geometry_positives_054_early_stopped_rigid_local_eval'
+steps = (0, 1000)
 sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
-receipt = json.loads((train / 'completed.json').read_text())
-assert receipt['batches'] == 5000 and receipt['accepted_synthetic'] == 5000
+assert not (train / 'completed.json').exists()
 models = []
 for step in steps:
     checkpoint = torch.load(train / f'patch_step_{step:05d}.pt', map_location='cpu', weights_only=True)
@@ -43,7 +42,10 @@ atlas = torch.from_numpy(_decode_and_preprocess_allen_v6()[0]).cuda()
 records = [row for row in map(json.loads, (panel / 'records.jsonl').open()) if row['eligible']]
 assert len(records) == 185 and len({row['animal_id'] for row in records}) == 8
 out.mkdir(parents=True, exist_ok=False)
-config = {'steps': steps, 'training_completed_sha256': sha(train / 'completed.json'),
+config = {'steps': steps, 'early_stopped_after_checkpoint_1000': True,
+          'training_config_sha256': sha(train / 'config.json'),
+          'partial_training_sha256': sha(train / 'training.jsonl'),
+          'partial_draws_sha256': sha(train / 'draws.jsonl'),
           'panel_records_sha256': sha(panel / 'records.jsonl'),
           'checkpoint_sha256': {str(step): sha(train / f'patch_step_{step:05d}.pt') for step in steps},
           'query_selection': 'same fixed seeded 32 GT-valid points as 025/053; not inference',
