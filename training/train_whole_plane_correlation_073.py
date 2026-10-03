@@ -25,7 +25,7 @@ from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_sy
 from training.arbitrary_plane_whole_correlation_073 import WholePlaneCorrelationHead
 
 parent = root / 'runs/one_shot_anchor_quality_059/joint_step_50000.pt'
-run = root / 'runs/whole_plane_correlation_073_pilot_001'
+run = root / 'runs/whole_plane_correlation_073_pilot_002'
 seed, batches, side = 2026100373, 2500, 256
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -80,7 +80,7 @@ def branch_states(prediction):
 
 def truth_label(sample, centre, edge, normal):
     true_centre, true_frame, true_basis = full_frame_state_to_components(sample['state'])
-    true_edge = true_frame[0, :, :, :2] @ true_basis[0]
+    true_edge = true_frame[0, :, :2] @ true_basis[0]
     true_xy = points_xy.clone()
     if bool(sample['reflection'][0]):
         true_xy[:, 0] = 255 / 256 - true_xy[:, 0]
