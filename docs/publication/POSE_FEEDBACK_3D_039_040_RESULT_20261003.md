@@ -1,0 +1,25 @@
+# 039/040: 3D anatomy is reachable; learned matching is not yet reliable
+
+The predeclared 039 pilot failed its development gate. A first startup attempt stopped before its first batch because a pose-loss reduction returned a scalar; the source was corrected and the clean `pilot_v2` run completed 500 batches on 1,000 fresh accepted synthetic TRAIN sections. The frozen 019 direct pose/warp network supplied actual top-four candidate/reflection branches; a randomly initialized trainable image-to-3D-atlas descriptor saw those plus two perturbed true poses and one exact training-only pose. The atlas context was 13 finite-thickness slabs over ±6 mm normal and a 24×24 in-plane grid spanning twice the candidate field. Soft 2D-to-3D correspondence fed a robust, regularized full-frame fit. No real image trained this pilot. An independent verifier passed all source/checkpoint/output hashes, distinct TRAIN physical-section IDs, eight disjoint synthetic development identities, 723 frozen evaluation rows and all group-weighted gate numbers.
+
+| Frozen 039 readout (equal synthetic-identity means) | Parent 019 | Batch 250 | Batch 500 |
+|---|---:|---:|---:|
+| Top-ranked physical tissue error | 2.499 mm | 2.576 mm | 2.476 mm |
+| Best-of-eight physical tissue error | 1.001 mm | 1.156 mm | 1.074 mm |
+| Score-selected physical tissue error | 2.499 mm | 2.576 mm | 2.476 mm |
+| Correct 3D point within 1.5 mm from learned soft match, top-ranked / prior-best-eight candidate | — | 29% / 49% | 30% / 48% |
+
+The selected 0.023 mm gain at batch 500 is far below the 0.250 mm gate, and the best candidate became 0.073 mm worse rather than improving by 0.200 mm. The 112 near-true cases (prior best-eight ≤1 mm) worsened from 0.681 to 0.806 mm. All raw, exact-black and imperfect-brush appearance strata failed the best-eight improvement. On the weak-reference real development images (64 sections, six held-out donors), the selected five-point disagreement increased from the parent **0.584 mm** to **3.533 mm**; worst donor regression was 3.544 mm, above the 0.200 mm limit. These affines are inherited Allen registrations, not expert arbitrary-plane truth, but the transfer failure is large enough to reject promotion. The head is uncalibrated and cannot replace the GUI models.
+
+040 then isolated the geometric fit from learned appearance matching on the same frozen synthetic DEV panel. It supplied the **exact synthetic tissue-to-CCF coordinates** at 16×16 visible query cells, either continuously or snapped to the nearest 039 atlas key, while keeping the same candidate planes, robust least-squares fit and regularization. This is an unavailable-at-inference upper bound, not a model result:
+
+| Equal synthetic-identity mean | Prior | Exact continuous correspondence | Oracle nearest 3D key |
+|---|---:|---:|---:|
+| Original top-ranked candidate | 2.499 mm | 1.208 mm | 1.254 mm |
+| Best of eight candidates | 1.001 mm | 0.395 mm | 0.422 mm |
+
+Nearly all visible query cells have a candidate key within the 1.5 mm oracle matching radius (99.4% for top-ranked and 100% for the physically best candidate). Thus the search volume and plane-fit layer can substantially improve pose **if** they receive anatomically correct correspondences. The frozen 039 network's 30%/48% match recall, candidate misranking and severe real-domain failure are the immediate bottlenecks. Longer unchanged 039 training is not justified by this short pilot's predeclared continuation rule; the direct absolute-coordinate experiments 013–015 already showed that more exposure to the same direct-field recipe did not solve global localization either.
+
+The next narrow change should add whole-slice anatomical/topological context and a geometry-consistency score to cross-modal matching, train on actual wrong candidate poses with hard lookalikes, and incorporate real TRAIN donor examples for domain transfer without treating their weak affines as expert truth. Compare physical pose correction and match recall on the frozen development panel **before** joint pose/warp unfreezing. This direction is motivated, not established for arbitrary-plane mouse histology, by published image-to-3D correspondence plus robust pose fitting ([2D3D-MATR](https://openaccess.thecvf.com/content/ICCV2023/papers/Li_2D3D-MATR_2D-3D_Matching_Transformer_for_Detection-Free_Registration_Between_Images_and_ICCV_2023_paper.pdf)) and learned global histology-to-volume similarity ([DISA-based histology/µCT registration](https://pmc.ncbi.nlm.nih.gov/articles/PMC12271352/)).
+
+Frozen TRAIN: `I:/AnatomyTracker/runs/pose_feedback_3d_039_pilot_v2`; development evaluation: `I:/AnatomyTracker/runs/pose_feedback_3d_039_pilot_development_eval`; geometric oracle: `I:/AnatomyTracker/runs/pose_feedback_3d_oracle_fit_040`. Independent read-only audits: `training/verify_pose_feedback_3d_039.py` and `training/verify_pose_fit_oracle_040.py`. This is synthetic-identity development and weak-real-donor checking, not independent biological animal validation, numerical calibration, or a DeepSlice benchmark.
