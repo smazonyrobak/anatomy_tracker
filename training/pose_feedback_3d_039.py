@@ -34,6 +34,9 @@ class PoseFeedback3D039(nn.Module):
         nn.init.zeros_(self.ranker[-1].bias)
         self.log_temperature = nn.Parameter(torch.tensor(math.log(12.)))
 
+    def contextualize(self, query, key, query_chart):
+        return query, key
+
     def forward(self, prediction, inputs, state, reflection, atlas, offsets, weights):
         batch, candidates = state.shape[:2]
         centre, frame, basis = full_frame_state_to_components(state)
@@ -76,15 +79,16 @@ class PoseFeedback3D039(nn.Module):
         visible_logit = self.visibility(query).flatten(2)[:, 0]
         query = query.flatten(2).transpose(1, 2)[:, None].expand(
             -1, candidates, -1, -1).reshape(batch * candidates, 256, 32)
-        query = F.normalize(query, dim=-1)
-        key = F.normalize(key, dim=-1)
-        similarity = self.log_temperature.exp().clamp(5, 30) * query @ key.transpose(1, 2)
         query_axis = (torch.arange(16, device=device, dtype=dtype) + .5) / 16
         qy, qx = torch.meshgrid(query_axis, query_axis, indexing='ij')
         qchart = torch.stack((qx, qy), -1).reshape(1, 1, 256, 2).expand(
             batch, candidates, -1, -1).clone()
         qchart[..., 0] = torch.where(reflection[..., None].bool(),
                                      255 / 256 - qchart[..., 0], qchart[..., 0])
+        query, key = self.contextualize(query, key, qchart.flatten(0, 1))
+        query = F.normalize(query, dim=-1)
+        key = F.normalize(key, dim=-1)
+        similarity = self.log_temperature.exp().clamp(5, 30) * query @ key.transpose(1, 2)
         query_base = centre[..., None, :] + torch.einsum(
             'bkij,bkqj->bkqi', edges, qchart - .5)
         geometric = torch.cdist(query_base.reshape(batch * candidates, 256, 3),
