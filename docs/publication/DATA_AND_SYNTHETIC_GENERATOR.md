@@ -8,9 +8,9 @@
 
 ### Allen registered histology
 
-The frozen AtlasPose baseline uses Allen Product 5 connectivity serial two-photon/block-face sections as trusted real-image pose supervision and checkpoint-selection data. Product 8 slide-mounted affine labels are diagnostic only because specimen-level offsets were observed. Product 8 cannot enter training, selection, calibration or a release gate unless a future, independently documented curation changes its role.
+The frozen AtlasPose baseline used Allen Product 5 connectivity serial two-photon/block-face sections for real-image pose supervision and checkpoint selection. Those registered TSV/TVR affines are more usable than the Product 8 slide-mounted affines, which showed specimen-level offsets, but they are **weak references, not blinded expert 3-D pose truth**. The standalone donor-keyed Product 5 source uses the same underlying registration fields. Product 8 remains diagnostic only and cannot enter training, selection, calibration or a release gate unless a future, independently documented curation changes its role.
 
-Product 5 contributes realistic appearance and registered plane labels. It does not automatically provide exact individual-anatomy dense deformation ground truth.
+Product 5 contributes realistic appearance and predominantly near-coronal registered plane labels. Its current reserved TRAIN cohort has 263,754 sections from 1,885 donors, a median normal about 4.91° off coronal, and none over 30°; the small six-donor DEV cohort is similarly near-coronal ([TRAIN inventory](RESERVED_ALLEN_TRAIN_IMAGES_20260930.md), [DEV geometry](ALLEN_RAW_PROPOSAL_GEOMETRY_20260928.md)). These labels do not validate arbitrary-oblique inference or supply exact individual-anatomy dense deformation ground truth.
 
 ### DeepSlice public benchmark
 
