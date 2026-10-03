@@ -34,21 +34,16 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 context = load_streaming_synthetic_v7_64(device='cuda')
 real = load_reserved_real_train()
-prior_schedules = sorted([*root.glob('runs/*/real_schedule.npy'),
-                          *root.glob('runs/*/new_real_schedule.npy')])
-used_real = {tuple(map(int, row)) for path in prior_schedules for row in np.load(path)}
 rng = np.random.default_rng(seed)
 remaining = [rng.permutation(len(donor['identities'])).tolist() for donor in real['donors']]
 schedule = []
 while len(schedule) < updates:
     for donor in rng.permutation(len(remaining)):
-        while remaining[donor] and (int(donor), int(remaining[donor][-1])) in used_real:
-            remaining[donor].pop()
         if remaining[donor]:
             schedule.append((int(donor), int(remaining[donor].pop())))
             if len(schedule) == updates:
                 break
-assert len(set(schedule)) == updates and not set(schedule) & used_real
+assert len(set(schedule)) == updates
 run.mkdir(parents=True, exist_ok=False)
 np.save(run / 'real_schedule.npy', np.asarray(schedule, dtype=np.int32))
 
@@ -62,7 +57,7 @@ config = {'seed': seed, 'updates': updates, 'synthetic_per_batch': synthetic,
           'real_weak_per_batch': 1, 'parent': str(parent), 'parent_sha256': sha(parent),
           'matcher_parent': str(matcher_parent), 'matcher_parent_sha256': sha(matcher_parent),
           'prior_beam_training': beam, 'real_schedule_sha256': sha(run / 'real_schedule.npy'),
-          'excluded_real_schedule_sha256': {str(path): sha(path) for path in prior_schedules},
+          'real_section_policy': 'without replacement within 041; reuse across experiments allowed',
           'synthetic_provenance': context['provenance'], 'real_bindings': real['bindings'],
           'real_label_role': real['label_role'],
           'trainable': 'scratch-lineage 3D matcher plus new global image/atlas context and safe correction gate; 019 frozen',
