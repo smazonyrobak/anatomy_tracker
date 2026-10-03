@@ -35,17 +35,25 @@ context = load_streaming_synthetic_v7_64(device='cuda')
 real = load_reserved_real_train()
 used = {tuple(map(int, row)) for path in root.glob('runs/*/real_schedule.npy') for row in np.load(path)}
 rng = np.random.default_rng(seed)
-remaining = [rng.permutation(len(donor['identities'])).tolist() for donor in real['donors']]
+fresh, previous = [], []
+for donor, records in enumerate(real['donors']):
+    sections = rng.permutation(len(records['identities'])).tolist()
+    fresh.append([section for section in sections if (donor, section) not in used])
+    previous.append([section for section in sections if (donor, section) in used])
 schedule = []
-while len(schedule) < batches:
-    for donor in rng.permutation(len(remaining)):
-        while remaining[donor] and (int(donor), int(remaining[donor][-1])) in used:
-            remaining[donor].pop()
-        if remaining[donor]:
-            schedule.append((int(donor), int(remaining[donor].pop())))
+for pool in (fresh, previous):
+    while len(schedule) < batches:
+        progressed = False
+        for donor in rng.permutation(len(pool)):
+            if pool[donor]:
+                schedule.append((int(donor), int(pool[donor].pop())))
+                progressed = True
             if len(schedule) == batches:
                 break
-assert len(set(schedule)) == batches and not set(schedule) & used
+        if not progressed:
+            break
+assert len(set(schedule)) == batches
+never_before_used = len(set(schedule) - used)
 
 run.mkdir(parents=True, exist_ok=False)
 np.save(run / 'real_schedule.npy', np.asarray(schedule, np.int32))
@@ -53,6 +61,9 @@ config = {'seed': seed, 'batches': batches, 'synthetic_per_batch': synthetic,
           'real_per_batch': 1, 'normal_anchors': 64, 'legacy_modes': 16, 'beam': beam,
           'parent': str(parent), 'parent_sha256': hashlib.sha256(parent.read_bytes()).hexdigest(),
           'real_schedule_sha256': hashlib.sha256((run / 'real_schedule.npy').read_bytes()).hexdigest(),
+          'unique_real_sections_within_run': batches,
+          'never_before_used_real_sections': never_before_used,
+          'previously_used_in_earlier_runs': batches - never_before_used,
           'synthetic_provenance': context['provenance'], 'real_bindings': real['bindings'],
           'real_label_role': real['label_role'],
           'training_only_true_normal_neighbourhood': True,
@@ -266,7 +277,8 @@ with (run / 'training.jsonl').open('w') as log, (run / 'draws.jsonl').open('w') 
     draws.flush()
 (run / 'completed.json').write_text(json.dumps({
     'batches': batches, 'accepted_synthetic': batches * synthetic,
-    'distinct_real_train': batches,
+    'unique_real_train_within_run': batches,
+    'never_before_used_real_train': never_before_used,
     'draws_sha256': hashlib.sha256((run / 'draws.jsonl').read_bytes()).hexdigest(),
     'training_sha256': hashlib.sha256((run / 'training.jsonl').read_bytes()).hexdigest(),
     'config_sha256': hashlib.sha256((run / 'config.json').read_bytes()).hexdigest(),
