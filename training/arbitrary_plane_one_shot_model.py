@@ -13,7 +13,7 @@ from torch.utils.checkpoint import checkpoint
 
 from training.arbitrary_plane_full_frame_primitives import (
     compose_full_frame_state, full_frame_state_from_components, full_frame_state_to_components,
-    render_finite_thickness_coordinate_grid,
+    frame_to_rotation_6d, render_finite_thickness_coordinate_grid, so3_exp_map,
 )
 from training.arbitrary_plane_geometry import normalized_raster_to_ccf, physical_ouv_to_frame
 from training.arbitrary_plane_joint_model_v7 import ResidualBlock
@@ -24,9 +24,10 @@ from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 class OneShotJointSliceModel(nn.Module):
     def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
                  vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
-                 dense_coordinate=False):
+                 dense_coordinate=False, normal_anchor_count=0):
         super().__init__()
-        self.modes, self.uncertainty_rank = modes, uncertainty_rank
+        self.base_modes, self.normal_anchor_count = modes, normal_anchor_count
+        self.modes, self.uncertainty_rank = modes + normal_anchor_count, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
         widths = (64, 128, 256, 320)
         self.encoder = nn.ModuleList()
@@ -42,6 +43,28 @@ class OneShotJointSliceModel(nn.Module):
             nn.Linear(widths[-1] * 4 * 4 + 12, 768), nn.GELU(),
             nn.Linear(768, modes * 21),
         )
+        if normal_anchor_count:
+            generator = torch.Generator().manual_seed(20261003)
+            candidates = F.normalize(torch.randn(4096, 3, generator=generator), dim=-1)
+            selected = [0]
+            distance = 1 - (candidates @ candidates[0]).abs()
+            for _ in range(1, normal_anchor_count):
+                selected.append(int(distance.argmax()))
+                distance = torch.minimum(distance, 1 - (candidates @ candidates[selected[-1]]).abs())
+            normals = candidates[selected]
+            normals *= torch.where(normals.gather(1, normals.abs().argmax(-1, keepdim=True)) < 0, -1, 1)
+            axis = F.one_hot(normals.abs().argmin(-1), 3).to(normals.dtype)
+            horizontal = F.normalize(axis - (axis * normals).sum(-1, keepdim=True) * normals, dim=-1)
+            vertical = torch.linalg.cross(normals, horizontal)
+            self.register_buffer('normal_anchor_frames', torch.stack((horizontal, vertical, normals), -1))
+            self.anchor_pose = nn.Sequential(
+                nn.Linear(64 * 8 * 8 + 12, 768), nn.GELU(),
+                nn.Linear(768, normal_anchor_count * 18),
+            )
+            nn.init.normal_(self.anchor_pose[-1].weight, std=.001)
+            nn.init.zeros_(self.anchor_pose[-1].bias)
+            with torch.no_grad():
+                self.anchor_pose[-1].bias.view(normal_anchor_count, 18)[:, 16] = -2
         if dense_coordinate:
             self.dense_coordinate_head = nn.Sequential(
                 nn.Conv2d(2 * widths[-1] + 2, 128, 3, padding=1), nn.GroupNorm(8, 128), nn.GELU(),
@@ -143,7 +166,7 @@ class OneShotJointSliceModel(nn.Module):
             x = layer(x)
             pyramid.append(x)
         z = self.pose(torch.cat((F.adaptive_avg_pool2d(x, 4).flatten(1), context), -1))
-        z = z.reshape(-1, self.modes, 21)
+        z = z.reshape(-1, self.base_modes, 21)
         center = self.center_origin + z[..., :3] * self.center_scale
         state = torch.cat((center, z[..., 3:9],
                            math.log(12000.) + z[..., 9:11].clamp(-2.5, 2.),
@@ -153,12 +176,38 @@ class OneShotJointSliceModel(nn.Module):
             feature = self.lateral[level](pyramid[level]) + F.interpolate(
                 feature, size=pyramid[level].shape[-2:], mode='bilinear', align_corners=False
             )
+        if self.normal_anchor_count:
+            anchors = self.anchor_pose(torch.cat((
+                F.adaptive_avg_pool2d(feature, 8).flatten(1), context), -1)).reshape(
+                    -1, self.normal_anchor_count, 18)
+            tilt = torch.cat((.65 * anchors[..., 3:5].tanh(),
+                              torch.zeros_like(anchors[..., 5:6])), -1)
+            roll = torch.cat((torch.zeros_like(anchors[..., 3:5]),
+                              math.pi * anchors[..., 5:6].tanh()), -1)
+            frame = (self.normal_anchor_frames[None] @ so3_exp_map(tilt) @ so3_exp_map(roll))
+            anchor_state = torch.cat((
+                self.center_origin + anchors[..., :3] * self.center_scale,
+                frame_to_rotation_6d(frame),
+                math.log(12000.) + anchors[..., 6:8].clamp(-2.5, 2.),
+                anchors[..., 8:9]), -1)
+            state = torch.cat((state, anchor_state), 1)
+            std = torch.cat(((.005 + F.softplus(z[..., 12:18])).clamp_max(4.),
+                             (.005 + F.softplus(anchors[..., 9:15])).clamp_max(4.)), 1)
+            concentration = torch.cat(((.05 + F.softplus(z[..., 18])).clamp_max(500.),
+                                       (.05 + F.softplus(anchors[..., 15])).clamp_max(500.)), 1)
+            log_mass = torch.cat((z[..., 19], anchors[..., 16]), 1).log_softmax(-1)
+            reflection_logit = torch.cat((z[..., 20], anchors[..., 17]), 1)
+        else:
+            std = (.005 + F.softplus(z[..., 12:18])).clamp_max(4.)
+            concentration = (.05 + F.softplus(z[..., 18])).clamp_max(500.)
+            log_mass = z[..., 19].log_softmax(-1)
+            reflection_logit = z[..., 20]
         result = {
             'state': state,
-            'std': (.005 + F.softplus(z[..., 12:18])).clamp_max(4.),
-            'concentration': (.05 + F.softplus(z[..., 18])).clamp_max(500.),
-            'log_mass': z[..., 19].log_softmax(-1),
-            'reflection_logit': z[..., 20],
+            'std': std,
+            'concentration': concentration,
+            'log_mass': log_mass,
+            'reflection_logit': reflection_logit,
             'feature': self.warp_shared(feature),
             'global_feature': x.mean((-2, -1)),
             'calibrated': False,
