@@ -70,6 +70,8 @@ with np.load(real / 'geometry.npz', allow_pickle=False) as arrays:
     affines = arrays['model_pixel_to_ap_dv_ml_um'].copy()
     thickness = arrays['thickness_um'].copy()
 atlas = torch.from_numpy(_decode_and_preprocess_allen_v6()[0]).cuda()
+atlas_without_contrast = atlas.clone()
+atlas_without_contrast[0].zero_()
 model = OneShotJointSliceModel(modes=16, normal_anchor_count=64,
     atlas_conditioning=True, fit_quality=True, vector_refinement=True,
     candidate_ranking=True, fitted_ranking=True).cuda().eval()
@@ -143,6 +145,15 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                                   - target[valid]).norm(dim=-1).mean()
             mapped_selected_error = (mapped_selected['centre_surface_ccf_ap_dv_ml_um'][0, 0, valid]
                                      - target[valid]).norm(dim=-1).mean()
+            ablated_selected_error = None
+            if step == 6000:
+                ablated = head(prediction, image, states, reflection,
+                               atlas_without_contrast, offsets, weights)
+                ablated_score = prior.gather(1, choice) + ablated['score_delta']
+                ablated_index = int(ablated_score[0].argmax())
+                ablated_error = (points(ablated['state'], reflection, chart)
+                                 - truth[None, None]).norm(dim=-1).mean(-1)[0]
+                ablated_selected_error = float(ablated_error[ablated_index])
             row = {'set': 'synthetic', 'step': step,
                    **{key: record[key] for key in ('animal_id', 'specimen_id',
                        'experiment_id', 'section_id', 'synthetic_subject_plan_id',
@@ -154,6 +165,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                    'fitted_best14_um': float(after.min()),
                    'parent_mapped_um': float(mapped_prior_error),
                    'fitted_selected_mapped_um': float(mapped_selected_error),
+                   'contrast_ablated_selected_um': ablated_selected_error,
                    'prior_best_match_500': float(((match_error[best_prior] <= 500) &
                        valid_grid).sum() / denominator),
                    'prior_best_match_1500': float(((match_error[best_prior] <= 1500) &
@@ -226,6 +238,9 @@ for step in steps:
                   'prior_best_available_500', 'prior_best_available_1500',
                   'selected_match_500', 'selected_match_1500'):
         entry['synthetic_' + field] = equal_group_mean(syn, field, 'synthetic_subject_plan_id')
+    if step == 6000:
+        entry['synthetic_contrast_ablated_selected_um'] = equal_group_mean(
+            syn, 'contrast_ablated_selected_um', 'synthetic_subject_plan_id')
     entry['real_weak_by_donor'] = {animal: {
         field: float(np.mean([row[field] for row in acquired if row['animal_id'] == animal]))
         for field in ('parent_selected_um', 'fitted_selected_um')}
