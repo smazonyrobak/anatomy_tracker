@@ -4,6 +4,7 @@ The optional atlas-conditioned warp compares the slice with a rendered candidate
 plane; the original image-only path remains the default. Mixture scores and
 uncertainty outputs are uncalibrated.
 """
+import copy
 import math
 
 import torch
@@ -24,9 +25,10 @@ from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 class OneShotJointSliceModel(nn.Module):
     def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
                  vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
-                 dense_coordinate=False, normal_anchor_count=0):
+                 dense_coordinate=False, normal_anchor_count=0, anchor_specific_features=False):
         super().__init__()
         self.base_modes, self.normal_anchor_count = modes, normal_anchor_count
+        self.anchor_specific_features = anchor_specific_features
         self.modes, self.uncertainty_rank = modes + normal_anchor_count, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
         widths = (64, 128, 256, 320)
@@ -77,6 +79,10 @@ class OneShotJointSliceModel(nn.Module):
                 ResidualBlock(128), nn.Conv2d(128, 4, 1),
             )
         self.lateral = nn.ModuleList(nn.Conv2d(width, 64, 1) for width in widths)
+        if anchor_specific_features:
+            assert normal_anchor_count
+            self.anchor_encoder = copy.deepcopy(self.encoder)
+            self.anchor_lateral = copy.deepcopy(self.lateral)
         self.warp_shared = nn.Sequential(
             nn.Conv2d(64, 64, 3, padding=1, groups=64),
             nn.Conv2d(64, 64, 1), nn.GroupNorm(8, 64), nn.GELU(),
@@ -183,10 +189,22 @@ class OneShotJointSliceModel(nn.Module):
                 feature, size=pyramid[level].shape[-2:], mode='bilinear', align_corners=False
             )
         if self.normal_anchor_count:
+            if self.anchor_specific_features:
+                anchor_pyramid, anchor_x = [], inputs
+                for layer in self.anchor_encoder:
+                    anchor_x = layer(anchor_x)
+                    anchor_pyramid.append(anchor_x)
+                anchor_feature = self.anchor_lateral[-1](anchor_pyramid[-1])
+                for level in (2, 1, 0):
+                    anchor_feature = self.anchor_lateral[level](anchor_pyramid[level]) + F.interpolate(
+                        anchor_feature, size=anchor_pyramid[level].shape[-2:],
+                        mode='bilinear', align_corners=False)
+            else:
+                anchor_feature, anchor_x = feature, x
             anchors = (self.anchor_pose(torch.cat((
-                F.adaptive_avg_pool2d(feature, 8).flatten(1), context), -1))
+                F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
                 + self.anchor_global(torch.cat((
-                    F.adaptive_avg_pool2d(x, 4).flatten(1), context), -1))).reshape(
+                    F.adaptive_avg_pool2d(anchor_x, 4).flatten(1), context), -1))).reshape(
                         -1, self.normal_anchor_count, 18)
             tilt = torch.cat((.65 * anchors[..., 3:5].tanh(),
                               torch.zeros_like(anchors[..., 5:6])), -1)
