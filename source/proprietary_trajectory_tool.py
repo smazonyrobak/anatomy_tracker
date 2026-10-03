@@ -8615,7 +8615,8 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         mode, reflection = prediction["selected_component"]
         surface = arrays["surface"][mode, reflection]
         ouv = full_frame_state_to_physical_ouv(torch.as_tensor(arrays["state"][mode, reflection]))
-        if reflection:
+        source_mode, source_reflection = prediction.get("source_selected_component", (mode, reflection))
+        if source_reflection:
             ouv = horizontal_flip_quicknii_ouv(ouv, surface.shape[1])
         raw_to_model = prepared["raw_to_model_xy"]
         transform = SliceAtlasTransform2D(raw_to_model @ np.linalg.inv(session.slice_transform),
@@ -8624,6 +8625,7 @@ class TrajectoryTrackerWindow(QtWidgets.QMainWindow):
         run_id = f"joint-{version}-{time.time_ns()}"
         diagnostics = {"joint_model": {"checkpoint_sha256": checkpoint_sha256,
             "selected_component": [int(mode), int(reflection)], "raw_to_model_xy": raw_to_model.tolist(),
+            "source_selected_component": [int(source_mode), int(source_reflection)],
             "selection_method": prediction.get("selection_method"),
             "raw_shape_h_w": list(prepared["raw_shape_h_w"]), "model_shape_h_w": list(surface.shape[:2]),
             "brush_available": prepared["brush_available"], "probabilities_calibrated": False,

@@ -56,8 +56,10 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     model, config = load_checkpoint(path, device=device)
     if version == 'one-shot':
         image_side = config.get('resolution', config.get('image_side', config.get('side')))
-        if image_side != 256 or model.modes not in (8, 16):
-            raise ValueError('Experimental one-shot GUI inference requires 256 pixels and 8 or 16 modes.')
+        if image_side is None and config.get('normal_anchors') == model.normal_anchor_count == 64:
+            image_side = 256  # Frozen 059 training source samples at side=256.
+        if image_side != 256 or model.modes not in (8, 16, 80):
+            raise ValueError('Experimental one-shot GUI inference requires 256 pixels and a supported mode count.')
         if hasattr(model, 'fitted_matcher'):
             name = 'arbitrary_plane_one_shot_model.py'
             expected = config['source_sha256'][name]
@@ -97,7 +99,9 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     weights /= weights.sum(-1, keepdim=True)
     if cancel_event.is_set():
         raise InterruptedError
-    operation = (f'Refining atlas fits and mapping {2 * model.modes} pose/warp candidates'
+    operation = (f'Refining eight atlas fits and mapping the selected pose/warp candidate'
+                 if version == 'one-shot' and model.normal_anchor_count and hasattr(model, 'pose_refiner') else
+                 f'Refining atlas fits and mapping {2 * model.modes} pose/warp candidates'
                  if version == 'one-shot' and hasattr(model, 'pose_refiner') else
                  f'Mapping {2 * model.modes} one-pass pose/warp candidates'
                  if version == 'one-shot' else 'Fitting all predicted locations')

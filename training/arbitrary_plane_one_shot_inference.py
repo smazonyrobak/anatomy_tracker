@@ -8,8 +8,10 @@ from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 
 def load_one_shot_checkpoint(path, device='cuda'):
     checkpoint = torch.load(path, map_location='cpu', weights_only=True)
+    anchors = checkpoint['model'].get('normal_anchor_frames')
     model = OneShotJointSliceModel(
         modes=checkpoint['model']['pose.2.bias'].numel() // 21,
+        normal_anchor_count=0 if anchors is None else len(anchors),
         atlas_conditioning=any(key.startswith('atlas_encoder.') for key in checkpoint['model']),
         fit_quality=any(key.startswith('fit_quality_head.') for key in checkpoint['model']),
         candidate_ranking=any(key.startswith('candidate_matcher.') for key in checkpoint['model']),
@@ -34,7 +36,13 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
             log_reflection = torch.stack((F.logsigmoid(-prediction['reflection_logit']),
                                           F.logsigmoid(prediction['reflection_logit'])), -1)
             prior_score = (prediction['log_mass'][..., None] + log_reflection).flatten(1)
-            top = prior_score.topk(min(8, 2 * model.modes), -1).indices
+            if model.normal_anchor_count:
+                old = prior_score[:, :2 * model.base_modes].topk(2, -1).indices
+                anchor = (prior_score[:, 2 * model.base_modes:].topk(6, -1).indices
+                          + 2 * model.base_modes)
+                top = torch.cat((old, anchor), -1)
+            else:
+                top = prior_score.topk(min(8, 2 * model.modes), -1).indices
             selected = {**prediction,
                         'state': prediction['state'].gather(1, (top // 2)[..., None].expand(-1, -1, 12)),
                         'log_mass': prediction['log_mass'].gather(1, top // 2),
@@ -68,10 +76,14 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
                                                      image_shape=inputs.shape[-2:])
         else:
             candidate_score = None
-        for first in range(0, len(mode), chunk):
-            chosen = (torch.arange(first, first + min(chunk, len(mode) - first), device=inputs.device)[None]
-                      if hasattr(model, 'pose_refiner') else mode[first:first + chunk][None])
-            flags = reflection[first:first + chunk][None]
+        compact = bool(model.normal_anchor_count and hasattr(model, 'pose_refiner'))
+        branches = (torch.tensor([int(candidate_score[0].argmax())], device=inputs.device)
+                    if compact else torch.arange(2 * model.modes, device=inputs.device))
+        for first in range(0, len(branches), chunk):
+            selected_branches = branches[first:first + chunk]
+            chosen = (selected_branches[None] if hasattr(model, 'pose_refiner')
+                      else mode[selected_branches][None])
+            flags = reflection[selected_branches][None]
             mapped = model.map(mapped_prediction, offsets_um, chosen, flags,
                                inputs.shape[-2:], atlas, weights)
             count = chosen.shape[1]
@@ -85,7 +97,8 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
                       (rendered[:, 0] / rendered[:, 1].clamp_min(1e-4)).clamp(0, 1))
             for name, value in zip(output, values):
                 output[name].append(value.cpu())
-    result = {name: torch.cat(values).reshape(model.modes, 2, *values[0].shape[1:])
+    result = {name: torch.cat(values).reshape(*(1, 1) if compact else (model.modes, 2),
+                                              *values[0].shape[1:])
               for name, values in output.items()}
     prior = prediction['log_mass'][0, :, None] + torch.stack((
         F.logsigmoid(-prediction['reflection_logit'][0]),
@@ -93,7 +106,9 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
     result['prior_log_weight'] = prior.cpu()
     result['component_log_weight'] = prior.cpu()
     selected = prior.flatten() if candidate_score is None else candidate_score[0]
-    result['selected_component'] = divmod(int(selected.argmax()), 2)
+    result['selected_component'] = (0, 0) if compact else divmod(int(selected.argmax()), 2)
+    if compact:
+        result['source_selected_component'] = divmod(int(selected.argmax()), 2)
     result['selection_method'] = ('joint_rerender_refinement' if hasattr(model, 'pose_refiner') else
                                   'postfit_atlas_candidate_score' if hasattr(model, 'fitted_matcher') else
                                   'image_prior' if candidate_score is None else
