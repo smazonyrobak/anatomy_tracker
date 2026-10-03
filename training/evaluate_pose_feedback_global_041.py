@@ -126,6 +126,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             normal_angle = torch.rad2deg(torch.acos((normal * true_normal).sum(-1).abs().clamp(0, 1)))
             score = prior.gather(1, choice) + result['score_delta']
             picked = int(score[0].argmax())
+            picked4 = int(score[0, :4].argmax())
             truth_grid = target[8::16, 8::16].reshape(256, 3)
             valid_grid = valid[8::16, 8::16].reshape(256)
             key_distance = torch.cdist(truth_grid[None].expand(beam, -1, -1),
@@ -139,9 +140,12 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                    **{key: record[key] for key in ('animal_id', 'specimen_id', 'experiment_id',
                        'section_id', 'synthetic_subject_plan_id', 'appearance_mode', 'sha256')},
                    'prior_top1_um': float(before[0]), 'prior_best8_um': float(before.min()),
+                   'prior_best4_um': float(before[:4].min()),
                    'raw_top1_um': float(raw[0]), 'raw_best8_um': float(raw.min()),
                    'refined_top1_um': float(after[0]), 'refined_best8_um': float(after.min()),
                    'refined_selected_um': float(after[picked]),
+                   'refined_best4_um': float(after[:4].min()),
+                   'refined_selected4_um': float(after[picked4]),
                    'normal_angle_top1_deg': float(normal_angle[0]),
                    'normal_angle_selected_deg': float(normal_angle[picked]),
                    'top1_correction_gate': float(result['correction_gate'][0, 0]),
@@ -174,13 +178,17 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                      ).norm(dim=-1).mean(-1)[0]
             score = prior.gather(1, choice) + result['score_delta']
             picked = int(score[0].argmax())
+            picked4 = int(score[0, :4].argmax())
             row = {'set': 'real_weak_allen', 'step': step,
                    **{key: record[key] for key in ('animal_id', 'specimen_id',
                        'experiment_id', 'section_id')},
                    'prior_top1_um': float(before[0]), 'prior_best8_um': float(before.min()),
+                   'prior_best4_um': float(before[:4].min()),
                    'raw_top1_um': float(raw[0]), 'raw_best8_um': float(raw.min()),
                    'refined_top1_um': float(after[0]), 'refined_best8_um': float(after.min()),
                    'refined_selected_um': float(after[picked]),
+                   'refined_best4_um': float(after[:4].min()),
+                   'refined_selected4_um': float(after[picked4]),
                    'top1_correction_gate': float(result['correction_gate'][0, 0]),
                    'selected_correction_gate': float(result['correction_gate'][0, picked]),
                    'prior_branch': int(choice[0, 0]), 'refined_branch': int(choice[0, picked])}
@@ -203,8 +211,10 @@ for step in steps:
     real_rows = [row for row in rows if row['step'] == step and row['set'] == 'real_weak_allen']
     entry = {'step': step, 'synthetic_sections': len(synthetic_rows),
              'real_weak_sections': len(real_rows)}
-    for field in ('prior_top1_um', 'prior_best8_um', 'raw_top1_um', 'raw_best8_um',
-                  'refined_top1_um', 'refined_best8_um', 'refined_selected_um',
+    for field in ('prior_top1_um', 'prior_best4_um', 'prior_best8_um',
+                  'raw_top1_um', 'raw_best8_um', 'refined_top1_um',
+                  'refined_best4_um', 'refined_best8_um',
+                  'refined_selected4_um', 'refined_selected_um',
                   'top1_correction_gate', 'selected_correction_gate'):
         entry['synthetic_' + field] = equal_group_mean(synthetic_rows, field,
                                                        'synthetic_subject_plan_id')
@@ -216,13 +226,17 @@ for step in steps:
     entry['real_weak_by_donor_selected_um'] = {animal: float(np.mean([
         row['refined_selected_um'] for row in real_rows if row['animal_id'] == animal]))
         for animal in sorted({row['animal_id'] for row in real_rows})}
+    entry['real_weak_by_donor_selected4_um'] = {animal: float(np.mean([
+        row['refined_selected4_um'] for row in real_rows if row['animal_id'] == animal]))
+        for animal in sorted({row['animal_id'] for row in real_rows})}
     entry['real_weak_by_donor_prior_top1_um'] = {animal: float(np.mean([
         row['prior_top1_um'] for row in real_rows if row['animal_id'] == animal]))
         for animal in sorted({row['animal_id'] for row in real_rows})}
     entry['synthetic_by_appearance'] = {appearance: {field: float(np.mean([
         row[field] for row in synthetic_rows if row['appearance_mode'] == appearance]))
-        for field in ('prior_top1_um', 'prior_best8_um', 'refined_top1_um',
-                      'refined_best8_um', 'refined_selected_um')}
+        for field in ('prior_top1_um', 'prior_best4_um', 'prior_best8_um',
+                      'refined_top1_um', 'refined_best4_um', 'refined_best8_um',
+                      'refined_selected4_um', 'refined_selected_um')}
         for appearance in sorted({row['appearance_mode'] for row in synthetic_rows})}
     near = [row for row in synthetic_rows if row['prior_best8_um'] <= 1000]
     entry['near_true_best8_sections'] = len(near)

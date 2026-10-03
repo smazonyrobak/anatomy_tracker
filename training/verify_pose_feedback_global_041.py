@@ -101,8 +101,10 @@ for entry in saved['checkpoints']:
         assert len(selected) == count and len({row[group] for row in selected}) == groups
         assert len({(row['animal_id'], row['specimen_id'], row['experiment_id'],
                      row['section_id']) for row in selected}) == count
-        fields = ('prior_top1_um', 'prior_best8_um', 'raw_top1_um', 'raw_best8_um',
-                  'refined_top1_um', 'refined_best8_um', 'refined_selected_um',
+        fields = ('prior_top1_um', 'prior_best4_um', 'prior_best8_um',
+                  'raw_top1_um', 'raw_best8_um', 'refined_top1_um',
+                  'refined_best4_um', 'refined_best8_um',
+                  'refined_selected4_um', 'refined_selected_um',
                   'top1_correction_gate', 'selected_correction_gate')
         if subset == 'synthetic':
             fields += ('normal_angle_top1_deg', 'normal_angle_selected_deg',
@@ -116,6 +118,9 @@ for entry in saved['checkpoints']:
     for donor in entry['real_weak_by_donor_selected_um']:
         assert math.isclose(entry['real_weak_by_donor_selected_um'][donor],
             np.mean([row['refined_selected_um'] for row in real_rows
+                     if str(row['animal_id']) == donor]), abs_tol=1e-5)
+        assert math.isclose(entry['real_weak_by_donor_selected4_um'][donor],
+            np.mean([row['refined_selected4_um'] for row in real_rows
                      if str(row['animal_id']) == donor]), abs_tol=1e-5)
         assert math.isclose(entry['real_weak_by_donor_prior_top1_um'][donor],
             np.mean([row['prior_top1_um'] for row in real_rows
