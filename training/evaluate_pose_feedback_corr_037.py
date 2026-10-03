@@ -40,10 +40,23 @@ def sha(path):
 
 completed = json.loads((run / 'completed.json').read_text())
 assert completed['updates'] == 4000
-synthetic = [row for row in map(json.loads, (panel / 'records.jsonl').open()) if row['eligible']]
+panel_records = list(map(json.loads, (panel / 'records.jsonl').open()))
+synthetic = [row for row in panel_records if row['eligible']]
 real_records = [row for row in map(json.loads, (real / 'records.jsonl').open())
                 if row['training_split'] == 'development']
-assert len(synthetic) == 256 and len({row['synthetic_subject_plan_id'] for row in synthetic}) == 8
+assert len(panel_records) == 256
+panel_groups = {row['synthetic_subject_plan_id'] for row in panel_records}
+assert len(panel_groups) == 8
+assert all(sum(row['synthetic_subject_plan_id'] == identity for row in panel_records) == 32
+           for identity in panel_groups)
+assert {row['synthetic_subject_plan_id'] for row in synthetic} == panel_groups
+assert len({row['panel_physical_section_id'] for row in panel_records}) == 256
+assert len({row['subject_ouv_sha256'] for row in panel_records}) == 256
+panel_animals = {row['synthetic_animal_id'] for row in panel_records}
+assert len(panel_animals) == 8
+train_animals = {row['base_lineage']['synthetic_animal_id']
+                 for row in map(json.loads, (run / 'draws.jsonl').open())}
+assert panel_animals.isdisjoint(train_animals)
 assert len(real_records) == 64 and len({row['animal_id'] for row in real_records}) == 6
 real_images = np.load(real / 'images.npy', mmap_mode='r')
 with np.load(real / 'geometry.npz', allow_pickle=False) as arrays:
@@ -64,7 +77,13 @@ config = {'run_completed_sha256': sha(run / 'completed.json'),
           'panel_records_sha256': sha(panel / 'records.jsonl'),
           'real_records_sha256': sha(real / 'records.jsonl'),
           'checkpoints_sha256': {str(step): sha(run / f'joint_step_{step:05d}.pt') for step in steps},
-          'steps': steps, 'synthetic_sections': 256, 'synthetic_subjects': 8,
+          'steps': steps, 'synthetic_panel_sections': len(panel_records),
+          'synthetic_eligible_sections': len(synthetic),
+          'synthetic_ineligible_sections': len(panel_records) - len(synthetic),
+          'synthetic_eligible_by_subject': {identity: sum(
+              row['synthetic_subject_plan_id'] == identity for row in synthetic)
+              for identity in sorted(panel_groups)},
+          'synthetic_subjects': 8,
           'real_weak_sections': 64, 'real_weak_donors': 6,
           'synthetic_label': 'dense observed tissue-to-CCF truth on new synthetic deformation identities',
           'real_label': 'inherited Allen five-point affine, not expert-oblique truth',
@@ -178,7 +197,9 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 rows.append(row)
                 stream.write(json.dumps(row) + '\n')
         stream.flush()
-        print(json.dumps({'step': step, 'synthetic': 256, 'real_weak': 64, 'arms': 2}), flush=True)
+        print(json.dumps({'step': step, 'synthetic_eligible': len(synthetic),
+                          'synthetic_ineligible': len(panel_records) - len(synthetic),
+                          'real_weak': 64, 'arms': 2}), flush=True)
 
 
 def equal_group_mean(records, field, group):
@@ -226,6 +247,9 @@ for entry in summary:
         entry['atlas_advantage_selected_um'] >= 150 and
         entry['max_donor_refined_selected_regression_um'] <= 200)
 (out / 'summary.json').write_text(json.dumps({'checkpoints': summary,
+    'synthetic_panel_sections': len(panel_records),
+    'synthetic_eligible_sections': len(synthetic),
+    'synthetic_ineligible_sections': len(panel_records) - len(synthetic),
     'any_development_gate': any(row['development_gate'] for row in summary),
     'scope': 'new synthetic deformation identity DEV and weak-real donor DEV only; not qualification'}, indent=2))
 (out / 'completed.json').write_text(json.dumps({name + '_sha256': sha(out / f'{name}.json')
