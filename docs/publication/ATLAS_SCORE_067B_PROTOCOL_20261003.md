@@ -1,0 +1,3 @@
+# 067b: is the correct transform high-scoring?
+
+For the frozen 067 pilot and truth-only 067a fits, score each 067a fitted transform using exactly the 067 finite-thickness atlas rendering and **fine-resolution raw-intensity similarity**. Compare its score with 067's blind maximum for the same candidate, without changing either prediction. If a low-error fitted transform is usually outscored by wrong matches, the similarity objective is unsuitable; if it scores higher, the coarse-to-fine search failed to find its own good basin. This is a diagnostic use of synthetic truth, not an inference procedure, model update, or public/real-animal evaluation. Preserve exact inputs and hashes; do not display images.
