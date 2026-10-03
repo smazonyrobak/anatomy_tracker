@@ -103,6 +103,11 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             chosen_distance = distance.gather(-1, choice.clamp_max(15)[..., None]).squeeze(-1)
             correct = (choice < 16) & (chosen_distance < 500)
             false_match = (choice < 16) & ~available
+            grouped_choice = torch.where(torch.logsumexp(logits[..., :16], -1) > logits[..., 16],
+                                         logits[..., :16].argmax(-1), 16)
+            grouped_distance = distance.gather(-1, grouped_choice.clamp_max(15)[..., None]).squeeze(-1)
+            grouped_correct = (grouped_choice < 16) & (grouped_distance < 500)
+            grouped_false = (grouped_choice < 16) & ~available
             coefficients = model.fit_plane(logits, pixel.float(), location)[0].cpu().numpy()
             mapped = (coefficients[0] + (x[:, None] / 256 - .5) * coefficients[1]
                       + (y[:, None] / 256 - .5) * coefficients[2])
@@ -112,8 +117,11 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             row.update(step=step, available_count=int(available.sum()),
                        correct_available_count=int((correct & available).sum()),
                        false_unavailable_count=int(false_match.sum()),
+                       grouped_correct_available_count=int((grouped_correct & available).sum()),
+                       grouped_false_unavailable_count=int(grouped_false.sum()),
                        unavailable_count=int((~available).sum()),
                        selected_match_rank=choice[0].cpu().tolist(),
+                       grouped_selected_match_rank=grouped_choice[0].cpu().tolist(),
                        selected_distance_um=chosen_distance[0].cpu().tolist(),
                        match_logits=logits[0].cpu().tolist(),
                        affine_coefficient_normalized_xy_um=coefficients.tolist(),
@@ -139,9 +147,19 @@ for step in steps:
         for subject in subjects]))
     mean_error = float(np.mean([np.mean([row['rigid_mean_error_um'] for row in selected
         if row['synthetic_subject_plan_id'] == subject]) for subject in subjects]))
+    grouped_recall = float(np.mean([sum(row['grouped_correct_available_count'] for row in selected
+        if row['synthetic_subject_plan_id'] == subject) /
+        sum(row['available_count'] for row in selected if row['synthetic_subject_plan_id'] == subject)
+        for subject in subjects]))
+    grouped_false_rate = float(np.mean([sum(row['grouped_false_unavailable_count'] for row in selected
+        if row['synthetic_subject_plan_id'] == subject) /
+        sum(row['unavailable_count'] for row in selected if row['synthetic_subject_plan_id'] == subject)
+        for subject in subjects]))
     summaries.append({'step': step, 'sections': len(selected),
                       'available_match_recall500': recall,
                       'unavailable_false_match_rate': false_rate,
+                      'grouped_available_match_recall500_secondary': grouped_recall,
+                      'grouped_unavailable_false_match_rate_secondary': grouped_false_rate,
                       'weighted_fit_rigid_mean_um': mean_error,
                       'necessary_gate': recall >= .5 and false_rate <= .2 and mean_error < 2500})
 summary = {'rows': len(rows), 'sections_per_checkpoint': len(retrieved_rows),
