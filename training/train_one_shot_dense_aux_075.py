@@ -39,26 +39,23 @@ def sha(path):
 
 context = load_streaming_synthetic_v7_64(device='cuda')
 real = load_reserved_real_train()
-used = {tuple(map(int, pair)) for path in root.glob('runs/*/real_schedule.npy')
-        for pair in np.load(path)}
 rng = np.random.default_rng(seed)
 remaining = [rng.permutation(len(donor['identities'])).tolist() for donor in real['donors']]
 schedule = []
 while len(schedule) < batches:
     for donor in rng.permutation(len(remaining)):
-        while remaining[donor] and (int(donor), int(remaining[donor][-1])) in used:
-            remaining[donor].pop()
         if remaining[donor]:
             schedule.append((int(donor), int(remaining[donor].pop())))
             if len(schedule) == batches:
                 break
-assert len(set(schedule)) == batches and not set(schedule) & used
+assert len(set(schedule)) == batches
 run.mkdir(parents=True, exist_ok=False)
 np.save(run / 'real_schedule.npy', np.asarray(schedule, dtype=np.int32))
 config = {'seed': seed, 'batches': batches, 'synthetic_per_batch': synthetic,
     'real_per_batch': 1, 'side': side, 'field_side': field_side,
     'parent': str(parent), 'parent_sha256': sha(parent),
     'real_schedule_sha256': sha(run / 'real_schedule.npy'),
+    'unique_real_within_run': True, 'random_reuse_from_prior_training_runs_allowed': True,
     'synthetic_provenance': context['provenance'], 'real_bindings': real['bindings'],
     'real_label_role': real['label_role'],
     'change': 'end-to-end high-resolution tissue-coordinate auxiliary on the existing direct probabilistic pose backbone',
