@@ -17,7 +17,9 @@ import torch.nn.functional as F
 
 from training.arbitrary_plane_allen_atlas_binding_v6 import _decode_and_preprocess_allen_v6
 from training.arbitrary_plane_full_frame_primitives import (
-    full_frame_state_to_components, render_finite_thickness_coordinate_grid)
+    full_frame_state_from_components, full_frame_state_to_components,
+    render_finite_thickness_coordinate_grid)
+from training.arbitrary_plane_geometry import physical_ouv_to_frame
 from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 from training.arbitrary_plane_whole_correlation_073 import WholePlaneCorrelationHead
 
@@ -26,8 +28,8 @@ panel = root / 'data/pose_feedback_061_fresh_synthetic_dev_panel_001'
 control = root / 'runs/normal_fixed_066_development_audit/rows.jsonl'
 real_control_path = root / 'runs/joint_pose_correction_072_development_eval/rows.jsonl'
 real = root / 'data/joint_v7_allen_fullcanvas_192_001'
-out = root / 'runs/whole_plane_correlation_073_development_eval_001'
-steps = (0, 250, 750, 1500, 2500)
+out = root / 'runs/whole_plane_correlation_073_fit_ranking_diagnostic_002'
+steps = (2500,)
 side = 256
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -50,6 +52,7 @@ assert len(real_records) == 64 and len({r['animal_id'] for r in real_records}) =
 real_images = np.load(real / 'images.npy', mmap_mode='r')
 with np.load(real / 'geometry.npz', allow_pickle=False) as arrays:
     real_affines = arrays['model_pixel_to_ap_dv_ml_um'].copy()
+    real_thickness = arrays['thickness_um'].copy()
 atlas = torch.from_numpy(_decode_and_preprocess_allen_v6()[0]).cuda()
 model = OneShotJointSliceModel(modes=16, normal_anchor_count=64,
     atlas_conditioning=True, fit_quality=True, vector_refinement=True,
@@ -143,7 +146,39 @@ def predict(image, xy):
     logits = torch.cat(scores, 0)
     positions, values = candidate_peaks(logits, centre, edge, normal)
     mapped = map_points(positions, xy, centre, edge, normal)
-    return prior, choice, positions, values, mapped, centre, edge, normal
+    return prediction, mask_logits, prior, choice, positions, values, mapped, centre, edge, normal
+
+
+def fit_diagnostics(image, prediction, mask_logits, positions, centre, edge, normal,
+                    offsets, weights, valid=None):
+    branch, zi, ai, si, tyi, txi = decode(positions)
+    co, sn = rolls[ai].cos(), rolls[ai].sin()
+    rotation = torch.stack((co, -sn, sn, co), -1).reshape(-1, 2, 2)
+    new_edge = edge[branch] @ (scales[si, None, None] * rotation)
+    translation = torch.stack((shifts[txi], shifts[tyi]), -1)
+    new_centre = (centre[branch] + normal[branch] * normal_shifts[zi, None]
+                  + torch.einsum('nij,nj->ni', edge[branch], translation))
+    origin = new_centre - .5 * new_edge.sum(-1)
+    ouv = torch.stack((origin, new_edge[:, :, 0], new_edge[:, :, 1]), 1)
+    state = full_frame_state_from_components(*physical_ouv_to_frame(ouv))
+    check_centre, check_frame, check_basis = full_frame_state_to_components(state)
+    check_edge = check_frame[:, :, :2] @ check_basis
+    reconstructed = check_centre[:, None] + torch.einsum(
+        'nij,kj->nki', check_edge, corners - .5)
+    assert float((reconstructed - map_points(positions, corners, centre, edge, normal)).abs().max()) < 1
+    candidate_prediction = {**prediction, 'state': state[None]}
+    mapped = model.map(candidate_prediction, offsets,
+        torch.arange(len(positions), device='cuda')[None],
+        torch.zeros((1, len(positions)), device='cuda', dtype=torch.long),
+        (64, 64), atlas, weights, feature_side=64, source_shape=(side, side))
+    local = mapped['local_displacement_um'][0] / 1000
+    warp_cost = local.square().mean((1, 2, 3))
+    image_mask = F.interpolate(mask_logits.sigmoid(), (side, side),
+                               mode='bilinear', align_corners=False)[:, 0]
+    image_fit = model.atlas_fit_loss(image, mapped, atlas, weights, image_mask)[0]
+    truth_fit = None if valid is None else model.atlas_fit_loss(
+        image, mapped, atlas, weights, valid[None])[0]
+    return mapped, mapped['fit_energy'][0], warp_cost, image_fit, truth_fit
 
 
 out.mkdir(parents=True, exist_ok=False)
@@ -162,14 +197,31 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 image = torch.from_numpy(arrays['inputs'][None].copy()).cuda()
                 tissue = torch.from_numpy(arrays['target_centre_um'].copy()).cuda()
                 valid = torch.from_numpy(arrays['valid_mask'].copy()).cuda().bool()
+                offsets = torch.from_numpy(arrays['offsets_um'][None].copy()).cuda()
+                weights = torch.from_numpy(arrays['weights'][None].copy()).cuda()
             ids = valid.flatten().nonzero().flatten()
             ids = ids[torch.linspace(0, len(ids) - 1, 256, device='cuda').round().long()]
             xy = torch.stack((ids.remainder(side), ids.div(side, rounding_mode='floor')), -1).float() / side
             target = tissue.reshape(-1, 3)[ids]
-            prior, choice, positions, values, mapped, centre, edge, normal = predict(image, xy)
+            prediction, mask_logits, prior, choice, positions, values, mapped, centre, edge, normal = predict(image, xy)
             error = (mapped - target[None]).norm(dim=-1).mean(-1)
+            fitted, fit_energy, warp_cost, image_fit, truth_fit = fit_diagnostics(
+                image, prediction, mask_logits, positions, centre, edge, normal,
+                offsets, weights, valid.float())
+            grid = (torch.stack((ids.remainder(side),
+                                 ids.div(side, rounding_mode='floor')), -1).float() + .5) * (2 / side) - 1
+            surface = fitted['centre_surface_ccf_ap_dv_ml_um'][0].permute(0, 3, 1, 2)
+            projected = F.grid_sample(surface, grid[None, None].expand(len(positions), -1, -1, -1),
+                                      mode='bilinear', padding_mode='border', align_corners=False)
+            mapped_error = (projected[:, :, 0].transpose(1, 2) - target[None]).norm(dim=-1).mean(-1)
             baseline = control_rows[record['section_id']]
-            best_branch = decode(positions)[0]
+            candidate_branch = decode(positions)[0]
+            candidates = [{'branch': int(candidate_branch[i]),
+                'score': float(values[i]), 'prior_log_mass': float(prior[0, choice[candidate_branch[i]]]),
+                'rigid_um': float(error[i]), 'mapped_um': float(mapped_error[i]),
+                'fit_energy': float(fit_energy[i]), 'warp_cost': float(warp_cost[i]),
+                'image_fit': float(image_fit[i]), 'truth_mask_fit': float(truth_fit[i])}
+                for i in range(len(positions))]
             row = {'set': 'synthetic', 'step': step,
                 **{key: record[key] for key in ('animal_id', 'specimen_id',
                     'experiment_id', 'section_id', 'synthetic_subject_plan_id',
@@ -178,8 +230,8 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 'selected_rigid_um': float(error[0]), 'best8_rigid_um': float(error.min()),
                 'prior_selected_rigid_um': baseline['selected_rigid_um'],
                 'prior_best14_rigid_um': baseline['best14_rigid_um'],
-                'selected_branch': int(best_branch[0]), 'selected_score': float(values[0]),
-                'candidate_count': len(positions)}
+                'selected_branch': int(candidate_branch[0]), 'selected_score': float(values[0]),
+                'candidate_count': len(positions), 'candidates': candidates}
             rows.append(row)
             stream.write(json.dumps(row) + '\n')
         for record in real_records:
@@ -188,19 +240,31 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                                     np.zeros((4, 192, 192), np.float32)))[None]
             image = F.interpolate(torch.from_numpy(image).cuda(), (side, side),
                                   mode='bilinear', align_corners=False)
+            offsets = torch.linspace(-.5, .5, 9, device='cuda')[None] * float(real_thickness[index])
+            weights = torch.ones_like(offsets)
+            weights[:, [0, -1]] = .5
+            weights /= weights.sum(-1, keepdim=True)
             xy = corners
             affine = torch.as_tensor(real_affines[index], device='cuda', dtype=torch.float32)
             target = affine[:, 2] + 192 * xy[:, :1] * affine[:, 0] + 192 * xy[:, 1:] * affine[:, 1]
-            prior, choice, positions, values, mapped, centre, edge, normal = predict(image, xy)
+            prediction, mask_logits, prior, choice, positions, values, mapped, centre, edge, normal = predict(image, xy)
             error = (mapped - target[None]).norm(dim=-1).mean(-1)
-            best_branch = decode(positions)[0]
+            fitted, fit_energy, warp_cost, image_fit, _ = fit_diagnostics(
+                image, prediction, mask_logits, positions, centre, edge, normal,
+                offsets, weights)
+            candidate_branch = decode(positions)[0]
+            candidates = [{'branch': int(candidate_branch[i]),
+                'score': float(values[i]), 'prior_log_mass': float(prior[0, choice[candidate_branch[i]]]),
+                'rigid_five_um': float(error[i]), 'fit_energy': float(fit_energy[i]),
+                'warp_cost': float(warp_cost[i]), 'image_fit': float(image_fit[i])}
+                for i in range(len(positions))]
             row = {'set': 'real_weak_allen', 'step': step,
                 **{key: record[key] for key in ('animal_id', 'specimen_id',
                     'experiment_id', 'section_id')},
                 'selected_five_um': float(error[0]), 'best8_five_um': float(error.min()),
                 'prior_selected_five_um': real_control[record['section_id']]['prior_five_um'],
-                'selected_branch': int(best_branch[0]), 'selected_score': float(values[0]),
-                'candidate_count': len(positions)}
+                'selected_branch': int(candidate_branch[0]), 'selected_score': float(values[0]),
+                'candidate_count': len(positions), 'candidates': candidates}
             rows.append(row)
             stream.write(json.dumps(row) + '\n')
         stream.flush()
