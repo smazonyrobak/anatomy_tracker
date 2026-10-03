@@ -25,7 +25,8 @@ from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
 class OneShotJointSliceModel(nn.Module):
     def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
                  vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
-                 dense_coordinate=False, normal_anchor_count=0, anchor_specific_features=False):
+                 dense_coordinate=False, normal_anchor_count=0, anchor_specific_features=False,
+                 dense_coordinate_pyramid=False):
         super().__init__()
         self.base_modes, self.normal_anchor_count = modes, normal_anchor_count
         self.anchor_specific_features = anchor_specific_features
@@ -73,7 +74,12 @@ class OneShotJointSliceModel(nn.Module):
             nn.init.zeros_(self.anchor_global[-1].bias)
             with torch.no_grad():
                 self.anchor_pose[-1].bias.view(normal_anchor_count, 18)[:, 16] = -2
-        if dense_coordinate:
+        if dense_coordinate_pyramid:
+            self.dense_coordinate_pyramid_head = nn.Sequential(
+                nn.Conv2d(66, 64, 3, padding=1), nn.GroupNorm(8, 64), nn.GELU(),
+                nn.Conv2d(64, 4, 1),
+            )
+        elif dense_coordinate:
             self.dense_coordinate_head = nn.Sequential(
                 nn.Conv2d(2 * widths[-1] + 2, 128, 3, padding=1), nn.GroupNorm(8, 128), nn.GELU(),
                 ResidualBlock(128), nn.Conv2d(128, 4, 1),
@@ -163,6 +169,9 @@ class OneShotJointSliceModel(nn.Module):
         if hasattr(self, 'dense_coordinate_head'):
             nn.init.normal_(self.dense_coordinate_head[-1].weight, std=.001)
             nn.init.zeros_(self.dense_coordinate_head[-1].bias)
+        if hasattr(self, 'dense_coordinate_pyramid_head'):
+            nn.init.normal_(self.dense_coordinate_pyramid_head[-1].weight, std=.001)
+            nn.init.zeros_(self.dense_coordinate_pyramid_head[-1].bias)
         with torch.no_grad():
             rotations, _ = torch.linalg.qr(torch.randn(modes, 3, 3))
             rotations[:, :, 2] *= torch.linalg.det(rotations)[:, None]
@@ -228,17 +237,28 @@ class OneShotJointSliceModel(nn.Module):
             concentration = (.05 + F.softplus(z[..., 18])).clamp_max(500.)
             log_mass = z[..., 19].log_softmax(-1)
             reflection_logit = z[..., 20]
+        shared_feature = self.warp_shared(feature)
         result = {
             'state': state,
             'std': std,
             'concentration': concentration,
             'log_mass': log_mass,
             'reflection_logit': reflection_logit,
-            'feature': self.warp_shared(feature),
+            'feature': shared_feature,
             'global_feature': x.mean((-2, -1)),
             'calibrated': False,
         }
-        if hasattr(self, 'dense_coordinate_head'):
+        if hasattr(self, 'dense_coordinate_pyramid_head'):
+            height, width = shared_feature.shape[-2:]
+            yy, xx = torch.meshgrid(
+                (torch.arange(height, device=x.device, dtype=x.dtype) + .5) / height
+                - .5 / inputs.shape[-2],
+                (torch.arange(width, device=x.device, dtype=x.dtype) + .5) / width
+                - .5 / inputs.shape[-1], indexing='ij')
+            position = torch.stack((xx, yy), 0)[None].expand(len(x), -1, -1, -1)
+            result['dense_coordinate'] = self.dense_coordinate_pyramid_head(
+                torch.cat((shared_feature, position), 1))
+        elif hasattr(self, 'dense_coordinate_head'):
             yy, xx = torch.meshgrid(
                 (torch.arange(x.shape[-2], device=x.device, dtype=x.dtype) + .5) / x.shape[-2]
                 - .5 / inputs.shape[-2],
