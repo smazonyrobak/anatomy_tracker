@@ -24,7 +24,7 @@ from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_sy
 from training.pose_feedback_3d_039 import PoseFeedback3D039
 
 parent = root / 'runs/one_shot_exposure_019/joint_step_18000.pt'
-run = root / 'runs/pose_feedback_3d_039_pilot'
+run = root / 'runs/pose_feedback_3d_039_pilot_v2'
 seed, updates, sections, side, beam = 2026103900, 500, 2, 256, 4
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -139,12 +139,13 @@ with (run / 'training.jsonl').open('w') as log, (run / 'draws.jsonl').open('w') 
                              nearest.flatten(), reduction='none').reshape_as(in_range)
         correspondence_loss = (ce * in_range).sum() / in_range.sum().clamp_min(1)
         expected_error = F.smooth_l1_loss(result['matched_world'] / 1000,
-            truth_grid[:, None] / 1000, beta=.5, reduction='none').sum(-1)
+            truth_grid[:, None].expand(-1, beam + 3, -1, -1) / 1000,
+            beta=.5, reduction='none').sum(-1)
         expected_loss = (expected_error * in_range).sum() / in_range.sum().clamp_min(1)
         spatial = (points(result['state'], reflection, chart128) - truth128[:, None]
                    ).norm(dim=-1).mean(-1)
         pose_loss = F.smooth_l1_loss(spatial / 1000, torch.zeros_like(spatial),
-                                     beta=1.)
+                                     beta=1., reduction='none')
         pose_loss = pose_loss[:, :beam].mean() + .5 * pose_loss[:, beam:].mean()
         visibility_loss = F.binary_cross_entropy_with_logits(result['visibility_logit'],
                                                               valid_grid.float())
