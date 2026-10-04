@@ -3,7 +3,11 @@
 ## Why this experiment
 
 On the frozen 061 development panel, the 059 model's 14-branch selected
-visible-tissue CCF error is 2.656 mm, while its truth-best branch is 1.022 mm.
+visible-tissue *rigid* CCF error is 2.656 mm, while its truth-best *rigid*
+branch is 1.022 mm. These historical 061 numbers describe the prior-selected
+plane before the fitted branch selector and local map; they are not the matched
+mapped 059 comparator for the 081 gate. The matched comparator is measured in
+the frozen 081 evaluation on the identical beam and panel.
 The pose candidate and its actual atlas fit therefore contain information that
 the current selector fails to exploit. The 077 atlas-context updater trained on
 physical pose correction alone did not materially improve selection; the 079
