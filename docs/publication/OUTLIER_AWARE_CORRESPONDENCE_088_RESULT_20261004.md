@@ -1,0 +1,32 @@
+# 088 no-match atlas correspondence: synthetic-development result
+
+## Decision
+
+**Do not promote the 088 no-match head or its scalar matchability as the atlas-plane selector.** It learned to reject invalid correspondences, but did not improve the anatomical ranking enough to close the large selection gap. On the same blind 14-plane beam, the final head's within-section Spearman correlation between matchability and *lower* first-pass physical rigid error is 0.116; the frozen 085 fitted selector's correlation with *lower mapped* error was 0.140 in the matched 086 diagnostic. These are related but not identical targets, so the comparison is directional, not an exact paired test of a common score. The 088 matchability-selected 96-grid mapped error is 2.610 mm, slightly worse than 085's 2.587 mm fitted selection. The physical best of the 14 remains 0.992 mm. No pose or deformation weights were improved in 088.
+
+The no-match idea was motivated by [SuperGlue's rejection of nonmatchable features](https://openaccess.thecvf.com/content_CVPR_2020/html/Sarlin_SuperGlue_Learning_Feature_Matching_With_Graph_Neural_Networks_CVPR_2020_paper.html) and [Tward et al.'s explicit missing-tissue alternatives](https://pmc.ncbi.nlm.nih.gov/articles/PMC7027169/). The synthetic result tests only this implementation, not those papers' methods generally.
+
+## Frozen-panel comparison
+
+Eight synthetic-deformation-plan-equal means on the same 246 eligible arbitrary-plane sections. Mapped errors are mean 3-D CCF distance on the same 1,024 surviving pixels per section; best-of-14 uses truth only as a diagnostic. The full 088 map retains the 085 map/scorer weights, so replacing the old confidence map with matchability also changes their input distribution.
+
+| 088 training batch | Matchability vs lower rigid error, rho | Matchability-selected mapped error | Frozen fitted-score-selected mapped error with 088 head | Best of same 14 mapped |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 0.049 | 2.929 mm | 2.583 mm | 0.992 mm |
+| 2,000 | 0.123 | 2.912 mm | 2.607 mm | 0.992 mm |
+| 10,000 | 0.121 | 2.652 mm | 2.596 mm | 0.992 mm |
+| 20,000 | **0.116** | **2.610 mm** | **2.582 mm** | **0.992 mm** |
+
+The 085 fitted selector was 2.587 mm at the same 96-grid endpoint. The final 088 matchability error varies strongly by appearance: 2.933 mm on exact-black exteriors, 2.405 mm on raw backgrounds, and 2.404 mm with an imperfect brush. The exact-black regression prevents claiming a robust input-condition improvement. These strata have different randomly drawn geometries; they are not a paired causal background experiment.
+
+The no-match classification itself did learn. On DEV, fine visible-null cross-entropy fell from 4.721 to 1.386, coarse visible-null from 4.859 to 0.994, and background-null from 1.509/2.461 to 0.038/0.038. But valid-match cross-entropy **worsened** from 4.115 to 4.218 fine and 4.637 to 4.705 coarse. Thus lower total training loss is not evidence of improved anatomical localization. In TRAIN, the mean loss over the first versus last 2,000 batches was 2.529 versus 2.361; the corresponding fine valid-match CE was 4.314 versus 4.057. The TRAIN trend and DEV valid-match regression differ, and the cause is not established by this experiment.
+
+## Integrity and scope
+
+The 20,000-batch run exited normally: 22,057 attempts yielded 20,000 accepted, distinct physical-section IDs from all 64 synthetic TRAIN deformation bases; none used DEV/final biological animals. The training config, draw log, training log, and four checkpoints independently rehashed exactly to the completion receipt (config `fe2532e981b344592dcaee61fba0b0a1059e3c59639131c0ca516e49266be32f`; final checkpoint `68d26e39dc0c60d306cf73de0f4ff9b4782ca63ff81444b6642fb38598270d89`). The evaluator verified every input/checkpoint hash, the frozen 061 panel, and exact ordered equality of each 14-branch beam with 086. It produced 13,776 candidate rows and 984 section rows over the four prespecified checkpoints. Independent recomputation from every raw candidate row reproduced each section's selection, truth-best error and two Spearman metrics, then all eight-plan-equal summary metrics exactly. Output hashes matched its completion receipt (candidate rows `1b9931cc6298aa95c4d247c7ce70627196a9a322f648da98a872ab46168fbf4c`; sections `f563657ebe6bf0194eb52d6712e209498a6103f695aff89fceff9cd522b8c573`; summary `e495d848ac8f937ef9cc29b74b2480014d1b1585b8e1fbd3ac8f6308d25277b7`). All work and artifacts are on I:. No image was reopened for this decision.
+
+## Next targeted change
+
+The persistent gap is **selecting the physically good plane**, not a lack of local warp capacity or a probability threshold. Do not train longer on the same no-match cross-entropy or tune a scalar mixture of 085/088 scores on this DEV panel. Advance to a joint training pass that gives the spatial atlas comparison a direct 3-D pose target *and* propagates the final mapped physical error back through both the pose updater and the bounded local tissue map. Preserve the 083 valid-match descriptor initialization; if using 088 matchability, treat it as an input feature to be jointly retrained, not a calibrated confidence score. Include a small, gradient-scaled atlas-image fit loss only near plausible candidate planes, because 008 showed that an unscaled fit gradient can overwhelm pose supervision. This follows the joint affine/deformable principle of [SynthMorph](https://pmc.ncbi.nlm.nih.gov/articles/PMC11247402/) and iterative transform revision of [SVoRT](https://pmc.ncbi.nlm.nih.gov/articles/PMC10129054/), but neither proves success for a single damaged mouse section.
+
+This is synthetic development, not biological pose validation. The output is not a 90% electrode-region probability, a calibrated trajectory cloud, a GUI-ready replacement, or a basis for public DeepSlice benchmarking. Animal-separated real calibration and untouched final-test animals remain reserved.
