@@ -87,7 +87,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 valid = torch.from_numpy(arrays['valid_mask'][None].copy()).cuda().bool()
                 offsets = torch.from_numpy(arrays['offsets_um'][None].copy()).cuda()
                 weights = torch.from_numpy(arrays['weights'][None].copy()).cuda()
-                true_state = torch.from_numpy(arrays['target_state'][None].copy()).cuda()
+                true_state = torch.from_numpy(arrays['target_state'][None].copy()).cuda().float()
             prediction = model.predict(image)
             prior = (prediction['log_mass'][..., None] + torch.stack((
                 F.logsigmoid(-prediction['reflection_logit']),
