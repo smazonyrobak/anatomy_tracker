@@ -31,7 +31,9 @@ candidate. At visible 16×16 and 32×32 query centres with the exact synthetic
 observed-pixel-to-CCF target inside the search window, supervise the nearest
 normal/lateral atlas cell with a local categorical match loss. Do not replace
 a blind candidate with the true pose. Mask out-of-window points rather than
-assigning false local targets. Keep the full-angle generator and independently
+assigning false local targets, and require atlas support of at least 0.5 at
+the quantized target cell; report how many visible points remain trainable.
+Keep the full-angle generator and independently
 randomized tissue plane, deformation, artifact, and background draw; never
 make deliberate paired variants of one slice. Preserve every accepted and
 rejected draw's provenance and source identity.
