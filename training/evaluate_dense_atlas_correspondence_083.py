@@ -50,13 +50,17 @@ assert sha(pilot / 'draws.jsonl') == receipt['draws_sha256']
 assert sha(pilot / 'training.jsonl') == receipt['training_sha256']
 for name, digest in config['source_sha256'].items():
     assert sha(Path(__file__).parent / name) == digest
+for name, digest in config['synthetic_provenance']['source_sha256'].items():
+    assert sha(Path(__file__).parent / name) == digest
 for step, digest in receipt['checkpoint_sha256'].items():
     assert sha(pilot / f'match_step_{int(step):05d}.pt') == digest
+assert sha(panel / 'records.jsonl') == json.loads((panel / 'completed.json').read_text())['records_sha256']
 records = [row for row in map(json.loads, (panel / 'records.jsonl').open()) if row['eligible']]
 assert len(records) == 246 and len({row['synthetic_subject_plan_id'] for row in records}) == 8
 out.mkdir(parents=True, exist_ok=False)
 eval_config = {'pilot': str(pilot), 'pilot_completed_sha256': sha(pilot / 'completed.json'),
                'panel_records_sha256': sha(panel / 'records.jsonl'),
+               'evaluator_sha256': sha(__file__),
                'sections': len(records), 'synthetic_plans': 8,
                'checkpoints': config['checkpoints'], 'support_threshold': .5,
                'candidate_roles': ['physical_best_existing', 'uniform_other_fixed'],
