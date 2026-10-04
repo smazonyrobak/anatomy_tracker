@@ -1,5 +1,7 @@
 # 095: whole-slice match-fraction readout result
 
+**Subsequent correction (096):** the high truth-scored fraction/error association inherited from 094 was mostly explained by the candidate plane's own geometry, not learned match displacements. See [the 096 geometry-null result](GEOMETRY_NULL_096_RESULT_20261005.md). This strengthens the decision not to train another head on the current match field.
+
 The prespecified synthetic development gate **failed**. Keep 095 as an audited diagnostic, not a model for the GUI. A whole-field head trained to estimate the fraction of anatomically correct matches did not reliably distinguish good atlas-plane candidates from bad ones. More of this head-only training is not justified by these results.
 
 ## Frozen run and provenance

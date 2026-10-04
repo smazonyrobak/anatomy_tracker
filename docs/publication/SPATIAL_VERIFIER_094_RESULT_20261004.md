@@ -1,5 +1,7 @@
 # 094: spatial-verifier development result
 
+**Subsequent correction (096):** the truth-scored correct-match fraction's strong candidate ordering below was mostly reproduced, and slightly exceeded, by leaving points at the fitted plane without using learned match displacements. Its high correlation therefore did **not** demonstrate that the correspondence field contained usable anatomical evidence. See [the 096 geometry-null result](GEOMETRY_NULL_096_RESULT_20261005.md). The frozen 094 measurements remain unchanged.
+
 The prespecified synthetic advancement gate **failed**. Keep the 094 weights as an audited development lineage, not a GUI replacement or calibrated model. The result is informative: training a spatial correspondence head and bounded fit improved the *best available* atlas match, but did not teach the model to choose that match reliably.
 
 ## Frozen experiment and audit
