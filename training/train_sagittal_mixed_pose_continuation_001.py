@@ -68,7 +68,7 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 context = load_streaming_synthetic_v7_64(device="cuda")
 coronal = load_reserved_real_train()
-prior_schedules = sorted([*root.glob("runs/*/real_schedule.npy"), *root.glob("runs/*/new_real_schedule.npy")])
+prior_schedules = [root / "runs/one_shot_exposure_019/real_schedule.npy"]
 prior_real = {tuple(map(int, pair)) for path in prior_schedules for pair in np.load(path)}
 rng = np.random.default_rng(seed)
 sagittal_schedule = rng.permutation(updates).astype(np.int32)
