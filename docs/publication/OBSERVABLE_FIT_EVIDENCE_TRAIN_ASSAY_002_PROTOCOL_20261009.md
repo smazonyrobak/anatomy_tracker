@@ -1,0 +1,5 @@
+# Corrected observable-fit evidence assay
+
+The first frozen HOG assay completed and its raw results/hashes were audited, but code inspection found that adding `1e-8` **inside** gradient magnitude assigned small nonzero orientation histograms to perfectly flat pixels. This can create artificial evidence in exact-black areas. Preserve the first run unchanged in its Git revision and output directory; do not base an architecture decision on its HOG result.
+
+Rerun the same frozen checkpoint, 96 *new* independently randomized eligible TRAIN v2 physical planes (seed `2026100904`), the same eight top image-prior branches, and the same prespecified outputs/strata and go/no-go thresholds as [assay 001](OBSERVABLE_FIT_EVIDENCE_TRAIN_ASSAY_001_PROTOCOL_20261009.md). The sole descriptor correction is `magnitude = sqrt(gx² + gy²)`, so truly flat pixels have zero histogram mass; the later per-cell normalization still uses an epsilon. No output is overwritten, no repeated physical plane is deliberately generated, and there is still no training, DEV, public benchmark, calibration or GUI action.

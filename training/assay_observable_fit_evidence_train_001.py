@@ -23,9 +23,9 @@ from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_sy
 
 
 checkpoint_path = root / "runs/sagittal_mixed_pose_continuation_001_retry1/joint_step_0653.pt"
-out = root / "runs/observable_fit_evidence_train_assay_001"
-protocol = Path(__file__).resolve().parents[1] / "docs/publication/OBSERVABLE_FIT_EVIDENCE_TRAIN_ASSAY_001_PROTOCOL_20261009.md"
-seed, side, grid_side, beam, accepted_target = 2026100903, 256, 96, 8, 96
+out = root / "runs/observable_fit_evidence_train_assay_002"
+protocol = Path(__file__).resolve().parents[1] / "docs/publication/OBSERVABLE_FIT_EVIDENCE_TRAIN_ASSAY_002_PROTOCOL_20261009.md"
+seed, side, grid_side, beam, accepted_target = 2026100904, 256, 96, 8, 96
 checkpoint_sha = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
 assert checkpoint_sha == "94b9c86f3a9cc15cd5b061acc6b67df4e0690ccdf5f9637a03c9cddd79f73ed8"
 torch.set_num_threads(4)
@@ -43,7 +43,7 @@ model.load_state_dict(checkpoint["model"], strict=True)
 del checkpoint
 rng = np.random.default_rng(seed)
 out.mkdir(parents=True, exist_ok=False)
-config = {"version": "observable-fit-evidence-train-assay-001", "seed": seed,
+config = {"version": "observable-fit-evidence-train-assay-002", "seed": seed,
           "eligible_target": accepted_target, "grid_side": grid_side,
           "top_prior_branches": beam, "checkpoint_sha256": checkpoint_sha,
           "protocol_sha256": hashlib.sha256(protocol.read_bytes()).hexdigest(),
@@ -106,7 +106,7 @@ with torch.inference_mode(), (out / "attempts.jsonl").open("w", encoding="utf-8"
         pictures = torch.cat((source, atlas_images), 0)
         gx = F.pad(pictures[..., 1:] - pictures[..., :-1], (0, 1, 0, 0))
         gy = F.pad(pictures[..., 1:, :] - pictures[..., :-1, :], (0, 0, 0, 1))
-        magnitude = torch.sqrt(gx.square() + gy.square() + 1e-8)
+        magnitude = torch.sqrt(gx.square() + gy.square())
         angle = torch.remainder(torch.atan2(gy, gx), math.pi)
         centres = torch.arange(8, device="cuda", dtype=angle.dtype)[None, :, None, None] * (math.pi / 8)
         distance = torch.remainder(angle - centres + math.pi / 2, math.pi) - math.pi / 2
