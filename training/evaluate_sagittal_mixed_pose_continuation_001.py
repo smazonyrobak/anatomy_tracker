@@ -28,7 +28,7 @@ def sha(path):
 run = root / "runs/sagittal_mixed_pose_continuation_001_retry1"
 panel = root / "data/one_shot_fresh_synthetic_dev_panel_001"
 coronal = root / "data/joint_v7_allen_fullcanvas_192_001"
-sagittal = root / "data/allen_sagittal_ish_expansion_002_dev2_inputs_20261008"
+sagittal = root / "data/allen_sagittal_ish_expansion_002_dev2_inputs_available_20261008"
 catalogue_path = root / "data/allen_sagittal_ish_expansion_002_20261008/manifest.json"
 availability_path = root / "data/allen_sagittal_ish_expansion_002_dev2_availability_20261008/manifest.json"
 out = root / "runs/sagittal_mixed_pose_continuation_001_eval"
