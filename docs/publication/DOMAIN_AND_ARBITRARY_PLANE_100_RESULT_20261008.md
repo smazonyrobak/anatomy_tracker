@@ -1,0 +1,23 @@
+# 100: active-generator audit and arbitrary-plane readout
+
+This is a development diagnosis, not a deployment, biological-validation, calibration, or public-benchmark result. The frozen protocol is `DOMAIN_AND_ARBITRARY_PLANE_100_PROTOCOL_20261008.md`. The exploratory readout is `I:/AnatomyTracker/runs/arbitrary_plane_100_exploratory_readout`; its `completed.json` binds 242 eligible sections, the 099 panel/evaluation, and SHA-256 `c1daf694d4685c103383a367539dcc0402fdf6cf564e0947cf758c329d2bbd08` for `summary.json`. Each section is a distinct independently drawn physical plane from one of eight held-out synthetic deformation plans of the *same* Allen template.
+
+## What the current experiment says
+
+The score-selected 094 model is not accurate at arbitrary angles. Plan-equal mean mapped visible-tissue error is **2.580 mm** and normal error is **31.26°**. Among its *same frozen 14 candidates*, the physically best candidate has **0.832 mm** mapped error and **13.16°** normal error. Thus the observed 1.748-mm selection gap is real on this synthetic panel. It is not evidence that all-angle plane recovery is intrinsically impossible; the model frequently has a materially better candidate but selects another. The oracle is diagnostic and cannot be used in deployment.
+
+| True plane's nearest normal axis | Eligible sections | Best candidate mapped error | Score-selected mapped error | Best / selected normal error |
+| --- | ---: | ---: | ---: | ---: |
+| AP | 89 | 0.797 mm | 2.150 mm | 12.87° / 26.68° |
+| DV | 81 | 0.855 mm | 3.012 mm | 13.28° / 31.44° |
+| ML | 72 | 0.800 mm | 2.500 mm | 12.87° / 35.60° |
+
+The result is not a simple near-coronal-versus-oblique split. For 0–15°, 15–30°, 30–45°, and 45–54.7° from the nearest cardinal axis, selected mapped errors are respectively **2.174, 2.325, 2.609, and 3.454 mm**; the best candidates stay **0.847, 0.813, 0.858, and 0.930 mm**. The extreme bin has only 24 sections; these crossed strata are exploratory, not precise operating limits. Restricting the model to one cut family would not repair its demonstrated ranking problem and would undermine the requested cutting freedom.
+
+The panel contains many small/partial observations: 57 sections have <10% valid visible tissue, 170 have 10–30%, and only 15 have ≥30%. The full 099 panel uses box-slab offsets whereas the TRAIN sampler puts 75% of planes through a tissue support point, so the panel also probes an acquisition/coverage shift. Artifact-count trends are not monotonic; the present evidence cannot blame missing artifact augmentations alone. A tiny or heavily damaged section can genuinely be ambiguous, but this diagnostic does not establish which individual images are ambiguous under a bounded, correctly specified image model.
+
+## Generator verdict and decision
+
+The active 099 sampler supports arbitrary normals and independently randomizes each section's geometry and appearance. It is nevertheless a limited simulator: all virtual subjects come from one Allen template; a bright ridge stands in for a fold, a ring for a bubble, missing areas and tears are simple shapes, a seam changes brightness without tile displacement, and explicit focus/scanner defects and independently shifted fragments are absent. Half of TRAIN frames borrow near-coronal acquisition geometry for arbitrary normals, a potential framing cue. Border-padded local warping can copy edge pixels into otherwise invalid locations. The old v2 generator's richer artifact list is **not** active in 099. These are credible domain-gap mechanisms, not yet measured causes of the 2.580-mm synthetic error.
+
+Keep full-sphere plane representation. The immediate model diagnosis is a matched swap of the improved 099 descriptor into the existing 094 fit/rank path on fixed candidates, with physical mapped error as the decision metric. In parallel, compare active synthetic observations with acquired TRAIN images and revise only demonstrably missing appearance/physical mechanisms; preserve versioned sources and a pre-revision confirmation panel. Do not equate more backgrounds or repeated views of one plane with more independent training sections. For real arbitrary-angle claims, obtain deliberately cardinal and steep-oblique sections with independent geometry/landmark references from held-out animals. If an operating boundary emerges, retain broad oblique support and use optional rough cut orientation, neighboring serial sections, and abstention for unresolved cases; do not silently emit precise coordinates or probabilities. GUI promotion, numerical electrode-region probabilities, and DeepSlice benchmarking remain closed.
