@@ -1,6 +1,7 @@
 """Fresh-panel 099 descriptor readout on fixed 094 beam and fitted geometry."""
 import hashlib
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -224,6 +225,7 @@ with torch.inference_mode():
             (branch // 2)[..., None].expand(-1, -1, 12))
         section_candidates = {step: [] for step in steps}
         mapped_errors = []
+        parent_scores, fit_energies, warp_costs = [], [], []
         for start in range(0, 14, 2):
             pair = branch[:, start:start + 2]
             reflected = pair % 2
@@ -240,6 +242,19 @@ with torch.inference_mode():
             mapped_errors.extend((at_chart(
                 mapped['centre_surface_ccf_ap_dv_ml_um'], chart)
                 - reference[None]).norm(dim=-1).mean(-1).tolist())
+            local_warp_mm = mapped['local_displacement_um'] / 1000
+            dx = local_warp_mm[..., 1:] - local_warp_mm[..., :-1]
+            dy = local_warp_mm[..., 1:, :] - local_warp_mm[..., :-1, :]
+            warp_cost = (local_warp_mm.square().mean((-3, -2, -1)) + .1 *
+                (dx.square().mean((-3, -2, -1)) +
+                 dy.square().mean((-3, -2, -1))))
+            fit_temperature = teacher.log_fit_temperature.clamp(
+                math.log(.5), math.log(5.)).exp()
+            parent_score = prior.gather(1, pair) - \
+                fitted['fit_energy'] / fit_temperature - .05 * warp_cost
+            parent_scores.extend(parent_score[0].tolist())
+            fit_energies.extend(fitted['fit_energy'][0].tolist())
+            warp_costs.extend(warp_cost[0].tolist())
 
             geometry = {}
             for name, grid, radius, positive_um, negative_um in (
@@ -339,7 +354,10 @@ with torch.inference_mode():
                         'prior_score': float(prior[0, pair[0, local]]),
                         'initial_state': state[0, local].tolist(),
                         'fitted_state': fitted['state'][0, local].tolist(),
-                        'mapped96_error_um': mapped_errors[start + local]}
+                        'mapped96_error_um': mapped_errors[start + local],
+                        'parent_score': parent_scores[start + local],
+                        'fit_energy': fit_energies[start + local],
+                        'warp_cost': warp_costs[start + local]}
                     for name in ('fine', 'coarse'):
                         result = readout[name]
                         mask = result['mask'][0, local]
@@ -373,7 +391,8 @@ with torch.inference_mode():
                         'middle_0.5_to_0.7' if fraction < .7 else 'high_>=0.7')
                     section_candidates[step].append(row)
         best_slot = int(np.argmin(mapped_errors))
-        assert len(mapped_errors) == 14
+        parent_selected_slot = int(np.argmax(parent_scores))
+        assert len(mapped_errors) == len(parent_scores) == 14
         for step in steps:
             rows = section_candidates[step]
             assert len(rows) == 14
@@ -389,6 +408,8 @@ with torch.inference_mode():
                 'beam_branch_ids': branch[0].tolist(),
                 'best_physical_beam_slot': best_slot,
                 'best_physical_mapped96_error_um': mapped_errors[best_slot],
+                'parent_selected_beam_slot': parent_selected_slot,
+                'parent_selected_mapped96_error_um': mapped_errors[parent_selected_slot],
                 'mean_fine_raw_top1_fraction': mean(
                     [row['fine_raw_top1_fraction'] for row in rows]),
                 'best_fine_raw_top1_fraction': rows[best_slot]['fine_raw_top1_fraction'],
@@ -411,6 +432,7 @@ for section in (row['section_id'] for row in records):
         zero = by_key[(section, slot, 0)]
         final = by_key[(section, slot, 4000)]
         for key in ('branch_id', 'initial_state', 'fitted_state', 'mapped96_error_um',
+                    'parent_score', 'fit_energy', 'warp_cost',
                     'best_physical_candidate', 'fine_atlas_support_fraction',
                     'coarse_atlas_support_fraction', 'fine_oracle_fraction',
                     'coarse_oracle_fraction', 'fine_centre_fraction'):
@@ -513,6 +535,7 @@ config = {'protocol_sha256': sha(protocol),
     'panel_records_sha256': sha(panel / 'records.jsonl'),
     'fixed_geometry': '094 parent step20000 predictor; prior top 8 of branch IDs 0:31 plus top 6 of 32:63; parent 094 teacher fits every pair once; coarse 099 uses initial state and fine uses frozen fitted state at both steps',
     'physical_best': 'minimum parent094 mapped96 point error on 1024 deterministic linearly spaced valid pixels, as in evaluate_spatial_verifier_094.py; first beam slot on tie',
+    'parent_selection': 'frozen 094 prior - fit_energy / clamped fit temperature - 0.05 warp_cost, unchanged for 099 descriptor steps',
     'candidate_geometry_frozen_in': 'candidates.jsonl: beam ID, initial state, fitted state, parent mapped96 error, support, and source/sample hashes at both descriptor steps',
     'synthetic_truth': 'panel target_centre_um at bilinearly sampled visible cell centres; readout only, never passed to predictor, teacher fit, matcher or mapper',
     'atlas_available': 'any match bin support >= 0.5',
