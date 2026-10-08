@@ -30,8 +30,10 @@ panel = root / "data/one_shot_fresh_synthetic_dev_panel_001"
 coronal = root / "data/joint_v7_allen_fullcanvas_192_001"
 sagittal = root / "data/allen_sagittal_ish_expansion_002_dev2_inputs_20261008"
 catalogue_path = root / "data/allen_sagittal_ish_expansion_002_20261008/manifest.json"
+availability_path = root / "data/allen_sagittal_ish_expansion_002_dev2_availability_20261008/manifest.json"
 out = root / "runs/sagittal_mixed_pose_continuation_001_eval"
 protocol = Path(__file__).resolve().parents[1] / "docs/publication/SAGITTAL_MIXED_POSE_CONTINUATION_001_PROTOCOL_20261008.md"
+amendment = Path(__file__).resolve().parents[1] / "docs/publication/SAGITTAL_MIXED_POSE_DEV2_SOURCE_AMENDMENT_20261008.md"
 steps, side = (0, 326, 653), 256
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -44,6 +46,7 @@ assert completed["unique_coronal_train_donors"] == 653 and not completed["calibr
 assert sha(run / "config.json") == completed["config_sha256"]
 assert config["parent_sha256"] == "70edfaa53fcd84a2d20be5a246948e17a7eeb0406e054cf65535e381f5895ab8"
 assert config["protocol_sha256"] == sha(protocol)
+assert sha(amendment) == "8701942ea162c7b0b35d38a4d165267c8a5a8e50f5bb2da788fd94739edc5e4b"
 assert config["sagittal_frozen_catalogue_sha256"] == sha(catalogue_path)
 for name, expected in config["source_sha256"].items():
     assert sha(Path(__file__).parent / name) == expected, name
@@ -72,20 +75,31 @@ with np.load(coronal / "geometry.npz", allow_pickle=False) as arrays:
 
 sagittal_summary = json.loads((sagittal / "summary.json").read_text())
 assert sagittal_summary["source_metadata_manifest_sha256"] == sha(catalogue_path) == "b4f77e00325273f937e4327b52d8b3f7db95458c130d4f88f682a8a08323f7bd"
+assert sha(availability_path) == "8cec8d29c4d177073e58b8bc2871e849c1051620a4d00eb88d636017f402066d"
+assert sagittal_summary["source_availability_manifest_sha256"] == sha(availability_path)
 for name, expected in sagittal_summary["output_sha256"].items():
     assert sha(sagittal / name) == expected, name
 sagittal_records = [json.loads(line) for line in (sagittal / "geometry.jsonl").read_text().splitlines()]
 dev2_donors = {10422, 10405, 10355, 10347, 10430, 10248, 10443, 10354}
 catalogue = json.loads(catalogue_path.read_text())
-expected_dev2 = {(row["donor_id"], row["specimen_id"], row["experiment_id"], row["section_id"])
+availability = json.loads(availability_path.read_text())
+assert availability["source_manifest_sha256"] == sha(catalogue_path)
+intended_dev2 = {(row["donor_id"], row["specimen_id"], row["experiment_id"], row["section_id"])
                  for row in catalogue["sections"] if row["donor_id"] in dev2_donors}
+inventory_dev2 = {(row["donor_id"], row["specimen_id"], row["experiment_id"], row["section_id"])
+                  for row in availability["sections"]}
+assert len(intended_dev2) == len(inventory_dev2) == 159 and intended_dev2 == inventory_dev2
+unavailable = [row for row in availability["sections"] if not row["available_decoded_jpeg"]]
+assert [(row["donor_id"], row["section_id"]) for row in unavailable] == [(10430, 101345593)]
+expected_dev2 = {(row["donor_id"], row["specimen_id"], row["experiment_id"], row["section_id"])
+                 for row in availability["sections"] if row["available_decoded_jpeg"]}
 actual_dev2 = {(row["donor_id"], row["specimen_id"], row["experiment_id"], row["section_id"])
                for row in sagittal_records}
-assert len(sagittal_records) == len(expected_dev2) == len(actual_dev2) == 159
+assert len(sagittal_records) == len(expected_dev2) == len(actual_dev2) == 158
 assert expected_dev2 == actual_dev2 and {row["donor_id"] for row in sagittal_records} == dev2_donors
-assert [row["array_row_index"] for row in sagittal_records] == list(range(159))
+assert [row["array_row_index"] for row in sagittal_records] == list(range(158))
 sagittal_images = np.load(sagittal / "model_input.npy", mmap_mode="r")
-assert sagittal_images.shape == (159, 1, side, side)
+assert sagittal_images.shape == (158, 1, side, side)
 
 atlas = torch.from_numpy(_decode_and_preprocess_allen_v6()[0]).cuda()
 model = OneShotJointSliceModel(modes=16, atlas_conditioning=True, fit_quality=True,
@@ -187,7 +201,7 @@ with torch.inference_mode(), (out / "rows.jsonl").open("w", encoding="utf-8") as
                 stream.write(json.dumps(row) + "\n")
         stream.flush()
         print(json.dumps({"checkpoint_batch": step, "synthetic_eligible": 185,
-                          "coronal_weak": 64, "sagittal_weak_dev2": 159}), flush=True)
+                          "coronal_weak": 64, "sagittal_weak_dev2_available": 158}), flush=True)
 
 metrics = {"synthetic": ("selected_mapped_um", "oracle_best_predicted_branch_mapped_um",
                          "selected_rigid_um", "oracle_best_predicted_branch_rigid_um"),
@@ -234,6 +248,9 @@ selected_step = (min(qualified, key=lambda step: (
     summary[str(step)]["sagittal"]["identity_equal"]["selected_five_point_um"], step))
                  if qualified else 0)
 result = {"version": "sagittal-mixed-pose-continuation-001-eval", "summary": summary,
+          "sagittal_weak_dev2_original_sections": 159,
+          "sagittal_weak_dev2_source_available_sections": 158,
+          "sagittal_weak_dev2_source_unavailable_section_ids": [101345593],
           "predeclared_gate": gate, "qualified_nonzero_steps": qualified,
           "selected_step": selected_step, "selected_step_rule": "lowest sagittal donor-equal selected normal among qualified, then five-point, then earliest; otherwise batch 0",
           "reference": "synthetic dense atlas truth; inherited weak Allen real affines, not independent expert labels",
@@ -248,7 +265,9 @@ result = {"version": "sagittal-mixed-pose-continuation-001-eval", "summary": sum
                            "sagittal_dev2_summary": sha(sagittal / "summary.json"),
                            "sagittal_dev2_outputs": sagittal_summary["output_sha256"],
                            "sagittal_frozen_catalogue": sha(catalogue_path),
-                           "protocol": sha(protocol), "script": sha(Path(__file__))},
+                           "sagittal_dev2_source_availability": sha(availability_path),
+                           "protocol": sha(protocol), "source_amendment": sha(amendment),
+                           "script": sha(Path(__file__))},
           "rows_sha256": sha(out / "rows.jsonl"), "calibrated": False,
           "public_benchmark_used": False}
 (out / "summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
