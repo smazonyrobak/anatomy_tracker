@@ -125,6 +125,7 @@ protocol = {
                                                text=True).strip(),
     'source_sha256': source_hashes,
     'atlas_template_sha256': allen.TEMPLATE_RAW_SHA256_V6,
+    'atlas_annotation_sha256': allen.ANNOTATION_RAW_SHA256_V6,
     'atlas_normalized_receipt': allen.ATLAS_FLOAT32_RECEIPT_V6,
     'numpy': np.__version__, 'torch': str(torch.__version__),
     'eligibility': 'frozen before checkpoint evaluation: source visible support mass and observed valid pixels each >= side^2/144; retain and report ineligible sections',
