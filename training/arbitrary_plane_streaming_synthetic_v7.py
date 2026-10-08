@@ -149,7 +149,7 @@ def load_streaming_synthetic_v7(device='cuda'):
             'donor_rows': donor_rows, 'nuisance': nuisance, 'provenance': provenance}
 
 
-def sample_streaming_synthetic_v7(context, subject_indices, seed, side=192):
+def sample_streaming_synthetic_v7(context, subject_indices, seed, side=192, mode_probs=None):
     """Generate fresh physical sections from512 virtual subject indices.
 
     No output files or hidden retries. `seed`, row order, virtual IDs, side and
@@ -208,7 +208,7 @@ def sample_streaming_synthetic_v7(context, subject_indices, seed, side=192):
                 'source_identity': {key: context['geometry'][geometry_row][key] for key in ('animal_id', 'specimen_id', 'experiment_id', 'section_id')},
                 'shift_u_v_length_u_v_shear': [shift_u, shift_v, lu, lv, shear]}
         reflection = bool(rng.integers(2))
-        mode = int(appearance.integers(3))
+        mode = int(appearance.integers(3) if mode_probs is None else appearance.choice(3, p=mode_probs))
         p = {'gain': float(appearance.uniform(.6, 1.4)), 'gamma': float(np.exp(appearance.uniform(np.log(.6), np.log(1.6)))),
             'invert': bool(appearance.integers(2)), 'noise_std': float(appearance.uniform(.005, .05)),
             'background_mean': float(appearance.uniform(0, .8)), 'background_slope_yx': appearance.uniform(-.15, .15, 2).tolist(),
