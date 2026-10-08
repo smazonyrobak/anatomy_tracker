@@ -148,8 +148,21 @@ for key in ('animal_id', 'subject_id', 'specimen_id', 'experiment_id'):
     assert not {row[key] for row in all_records} & {row[key] for row in prior_records}
 assert not {row['plan_receipt_sha256'] for row in all_records} & \
     {row['plan_receipt_sha256'] for row in prior_records}
+old_train_plans = root / 'data/joint_v6_coherent_subject_plans_002'
+new_train_plans = root / 'data/joint_v7_independent_subject_maps_001'
+assert sha(old_train_plans / 'completed.json') == \
+    plans_protocol['prior_plan_completed_sha256'][old_train_plans.name]
+assert sha(new_train_plans / 'completed.json') == \
+    plans_protocol['train_maps_completed_sha256']
+train_plan_rows = [row for row in json.loads(
+    (old_train_plans / 'completed.json').read_text())['subjects']
+    if row['split'] == 'train'] + json.loads(
+    (new_train_plans / 'completed.json').read_text())['new_train_subjects']
+assert len(train_plan_rows) == 64
 assert not {row['synthetic_subject_plan_id'] for row in all_records} & \
-    {row['base_lineage']['subject_deformation_plan_id'] for row in train_draws}
+    {row['subject_deformation_plan_id'] for row in train_plan_rows}
+assert not {row['plan_receipt_sha256'] for row in all_records} & \
+    {row['subject_plan_receipt_sha256'] for row in train_plan_rows}
 assert not {row['panel_physical_section_id'] for row in all_records} & \
     {row['physical_section_id'] for row in train_draws}
 assert sum(row['eligible'] for row in all_records) == panel_receipt['eligible']
