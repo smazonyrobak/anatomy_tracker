@@ -90,7 +90,7 @@ student = WholeSliceAtlasFeedback099().cuda().train().requires_grad_(False)
 descriptor_checkpoint = torch.load(descriptor, map_location='cpu', weights_only=True)
 assert descriptor_checkpoint['step'] == 4000 and not descriptor_checkpoint['calibrated']
 student.load_state_dict(descriptor_checkpoint['matcher'], strict=True)
-assert all(torch.equal(student.state_dict()[key], descriptor_checkpoint['matcher'][key])
+assert all(torch.equal(student.state_dict()[key].cpu(), descriptor_checkpoint['matcher'][key])
     for key in student.state_dict())
 del descriptor_checkpoint
 del saved
