@@ -26,7 +26,7 @@ from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_sy
 sagittal = root / "data/allen_sagittal_ish_expansion_002_train_inputs_20261008"
 catalogue_path = root / "data/allen_sagittal_ish_expansion_002_20261008/manifest.json"
 parent = root / "runs/one_shot_exposure_019/joint_step_18000.pt"
-run = root / "runs/sagittal_mixed_pose_continuation_001"
+run = root / "runs/sagittal_mixed_pose_continuation_001_retry1"
 protocol = Path(__file__).resolve().parents[1] / "docs/publication/SAGITTAL_MIXED_POSE_CONTINUATION_001_PROTOCOL_20261008.md"
 seed, updates, side, synthetic_count = 2026100801, 653, 256, 2
 gain = 4.259364821544654
@@ -160,7 +160,7 @@ with (run / "training.jsonl").open("w") as log, (run / "draws.jsonl").open("w") 
                 draws.write(json.dumps({**identity, "step": step, "slot": slot, "used": used}) + "\n")
                 if used:
                     accepted[slot] = {key: sample[key][row:row + 1] for key in
-                                      ("inputs", "state", "reflection", "centre", "valid_mask")}
+                                      ("inputs", "state", "reflection", "centre", "masks")}
             pending = [slot for slot in pending if slot not in accepted]
         synthetic = {key: torch.cat([accepted[slot][key] for slot in range(synthetic_count)])
                      for key in accepted[0]}
@@ -187,7 +187,7 @@ with (run / "training.jsonl").open("w") as log, (run / "draws.jsonl").open("w") 
         branch_flags = flags[None, None].expand(len(inputs), model.modes, 2)
         reference = points(truth, truth_reflection, pixels)
         five = (points(branches, branch_flags, pixels) - reference[:, None, None]).norm(dim=-1).mean(-1)
-        indices = torch.multinomial(synthetic["valid_mask"].flatten(1).float(), 128, replacement=True)
+        indices = torch.multinomial(synthetic["masks"].flatten(1).float(), 128, replacement=True)
         target = synthetic["centre"].reshape(synthetic_count, -1, 3).gather(
             1, indices[..., None].expand(-1, -1, 3))
         chart = torch.stack((indices.remainder(side), indices.div(side, rounding_mode="floor")), -1).float() / side
