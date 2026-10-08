@@ -143,13 +143,13 @@ def load_streaming_synthetic_v7_64(device='cuda'):
     return context
 
 
-def sample_streaming_synthetic_v7_64(context, subject_indices, seed, side=192, mode_probs=None):
+def sample_streaming_synthetic_v7_64(context, subject_indices, seed, side=192):
     selected = sorted({context['subjects'][int(i)]['base_index'] for i in subject_indices})
     device = context['atlas'].device
     for index in selected:
         base = context['bases'][index]
         base['displacement'] = base['displacement_cpu'].to(device)
-    batch = sample_streaming_synthetic_v7(context, subject_indices, seed, side, mode_probs=mode_probs)
+    batch = sample_streaming_synthetic_v7(context, subject_indices, seed, side)
     for index in selected:
         context['bases'][index].pop('displacement')
     return batch

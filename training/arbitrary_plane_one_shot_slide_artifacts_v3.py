@@ -10,21 +10,22 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from training.arbitrary_plane_streaming_synthetic_v7 import sample_streaming_synthetic_v7
-from training.arbitrary_plane_streaming_synthetic_v7_64 import sample_streaming_synthetic_v7_64
+from training.arbitrary_plane_streaming_synthetic_v7_appearance_v3 import (
+    MODE_PROBS, sample_streaming_synthetic_v7_appearance_v3,
+    sample_streaming_synthetic_v7_64_appearance_v3,
+)
 
 
 VERSION = 'one_shot_slide_artifacts_v3'
-MODE_PROBS = (.7, .15, .15)
 EVENT_PROBS = {'fragment': .22, 'fold': .20, 'bubble': .15, 'tile_seam': .25}
 RAW_EXTERIOR_PROBS = (.8, .1, .1)
 
 
 def sample_one_shot_slide_artifacts_v3(context, subject_indices, seed, side=192, source_sample=None):
     if source_sample is None:
-        sampler = (sample_streaming_synthetic_v7_64 if 'displacement_cpu' in context['bases'][0]
-                   else sample_streaming_synthetic_v7)
-        source = sampler(context, subject_indices, seed, side, mode_probs=MODE_PROBS)
+        sampler = (sample_streaming_synthetic_v7_64_appearance_v3 if 'displacement_cpu' in context['bases'][0]
+                   else sample_streaming_synthetic_v7_appearance_v3)
+        source = sampler(context, subject_indices, seed, side)
     else:
         source = source_sample
     device = source['inputs'].device

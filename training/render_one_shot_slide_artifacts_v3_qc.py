@@ -8,10 +8,11 @@ from PIL import Image, ImageDraw
 import torch
 
 from training.arbitrary_plane_one_shot_slide_artifacts_v3 import (
-    MODE_PROBS, VERSION, sample_one_shot_slide_artifacts_v3,
+    VERSION, sample_one_shot_slide_artifacts_v3,
 )
-from training.arbitrary_plane_streaming_synthetic_v7_64 import (
-    load_streaming_synthetic_v7_64, sample_streaming_synthetic_v7_64,
+from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_synthetic_v7_64
+from training.arbitrary_plane_streaming_synthetic_v7_appearance_v3 import (
+    sample_streaming_synthetic_v7_64_appearance_v3,
 )
 
 
@@ -25,7 +26,7 @@ with torch.inference_mode():
     for draw in range(12):
         subjects = rng.integers(len(context['subjects']), size=3).tolist()
         seed = 2026100900 + draw
-        source = sample_streaming_synthetic_v7_64(context, subjects, seed, side=192, mode_probs=MODE_PROBS)
+        source = sample_streaming_synthetic_v7_64_appearance_v3(context, subjects, seed, side=192)
         batch = sample_one_shot_slide_artifacts_v3(context, subjects, seed, side=192, source_sample=source)
         for row, record in enumerate(batch['provenance']):
             eligible = bool(batch['eligible'][row])

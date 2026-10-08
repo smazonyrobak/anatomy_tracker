@@ -1,155 +1,17 @@
-"""Fresh, replayable physical sections; no finite image-bank training ceiling.
-
-Load only after joint_v7_training_data_001 finishes. The frozen inverse-map
-interpolation is an explicit approximation, not exact anatomical ground truth.
-Virtual animals add coherent global size/aspect variation, not new local anatomy
-or independent biological animals. No learned model or automatic segmentation.
-"""
-import hashlib
-import json
-from pathlib import Path
+"""Frozen v3 appearance draw on the v7 arbitrary-plane geometry; old v7 stays immutable."""
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from training import arbitrary_plane_allen_atlas_binding_v6 as allen
-from training.arbitrary_plane_full_frame_primitives import (
-    full_frame_state_from_components, render_finite_thickness_coordinate_grid,
-)
+from training.arbitrary_plane_full_frame_primitives import full_frame_state_from_components, render_finite_thickness_coordinate_grid
 from training.arbitrary_plane_geometry import physical_ouv_to_frame
-from training.arbitrary_plane_subject_sampling_v6 import subject_support_bounds_um
-from training.arbitrary_plane_subject_torch_v6 import map_accepted_subject_points_torch_v6
-from training.subject_deformed_slab_multiresolution_bundle_v2 import _read_raw_artifact
+from training.arbitrary_plane_streaming_synthetic_v7 import MODES
 
-ROOT = Path('I:/AnatomyTracker')
-MAP_ROOT = ROOT / 'data/joint_v7_training_data_001'
-PLAN_ROOT = ROOT / 'data/joint_v6_coherent_subject_plans_002'
-VIRTUAL_SEED, SUPPORT_SEED, VARIANTS = 2026093011, 2026093012, 64
-MODES = ('raw', 'exact_black', 'imperfect_brush')
+MODE_PROBS = (.7, .15, .15)
 
 
-def load_streaming_synthetic_v7(device='cuda'):
-    """Bind completed maps, accepted plans and atlas; prepare512 virtual IDs.
-
-    Returns GPU atlas/maps and CPU sampling records. Preserve `provenance` in the
-    training run. Sampling itself does not write files. No checkpoint is loaded.
-    """
-    completed = json.loads((MAP_ROOT / 'completed.json').read_text())
-    protocol = json.loads((MAP_ROOT / 'protocol.json').read_text())
-    bindings = {}
-    for path, expected in ((MAP_ROOT / 'completed.json', None),
-            (MAP_ROOT / 'protocol.json', completed['protocol_sha256']),
-            (PLAN_ROOT / 'completed.json', protocol['plan_completion_sha256'])):
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        assert expected is None or digest == expected
-        bindings[str(path)] = digest
-    assert completed['section_count'] == 4096 and len(completed['shards']) == 8
-    plans = json.loads((PLAN_ROOT / 'completed.json').read_text())
-    training_plans = {r['animal_index']: r for r in plans['subjects'] if r['split'] == 'train'}
-    geometry_path = MAP_ROOT / 'train_acquisition_geometry.jsonl'
-    content = geometry_path.read_bytes()
-    assert hashlib.sha256(content).hexdigest() == protocol['geometry_source']['sha256']
-    bindings[str(geometry_path)] = protocol['geometry_source']['sha256']
-    geometry = [json.loads(line) for line in content.decode().splitlines()]
-    assert all(r['split'] == 'development_train' for r in geometry)
-    donors = sorted({r['animal_id'] for r in geometry})
-    donor_rows = [np.array([i for i, r in enumerate(geometry) if r['animal_id'] == donor]) for donor in donors]
-    affine = np.array([r['model_pixel_to_ap_dv_ml_um'] for r in geometry])
-    u, v = affine[:, :, 0] * 96, affine[:, :, 1] * 96
-    lu = np.linalg.norm(u, axis=1)
-    u /= lu[:, None]
-    along = (u * v).sum(1)
-    v -= along[:, None] * u
-    lv = np.linalg.norm(v, axis=1)
-    v /= lv[:, None]
-    atlas_centre = np.array(allen.ATLAS_SHAPE_AP_DV_ML_V6) * 25. / 2
-    image_centre = affine[:, :, 2] + 48 * (affine[:, :, 0] + affine[:, :, 1])
-    nuisance = np.column_stack(((u * (image_centre - atlas_centre)).sum(1),
-        (v * (image_centre - atlas_centre)).sum(1), lu, lv, along / lv))
-    atlas_array, annotation = allen._decode_and_preprocess_allen_v6()
-    del annotation
-    support = np.flatnonzero(atlas_array[1] > 0)
-    rng = np.random.default_rng(SUPPORT_SEED)
-    selected = rng.choice(support, 4096, replace=False)
-    support_ccf = (np.array(np.unravel_index(selected, atlas_array.shape[1:])).T.astype(np.float64) + .5) * 25.
-    del support
-    atlas = torch.from_numpy(atlas_array).to(device)
-    bases, virtual_subjects = [], []
-    tensor_keys = ('accepted_coarse_coefficients_um', 'coarse_origin_um', 'coarse_spacing_um',
-        'accepted_fine_coefficients_um', 'fine_origin_um', 'fine_spacing_um', 'global_scale', 'frozen_center_um')
-    for shard in completed['shards']:
-        directory = MAP_ROOT / shard['directory']
-        for name, expected in (('completed.json', shard['completed_sha256']), ('subject.json', shard['subject_sha256'])):
-            path = directory / name
-            bindings[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-            assert bindings[str(path)] == expected
-        subject = json.loads((directory / 'subject.json').read_text())
-        base_index = subject['parent_plan']['animal_index']
-        assert subject['lineage']['split'] == 'train' and base_index == len(bases)
-        path = directory / 'inverse_map.npz'
-        with path.open('rb') as stream:
-            bindings[str(path)] = hashlib.file_digest(stream, 'sha256').hexdigest()
-        assert bindings[str(path)] == subject['inverse_map_sha256']
-        with np.load(path) as a:
-            displacement = torch.from_numpy(np.moveaxis(a['displacement_um'], -1, 0).copy()).to(device)
-            lower, upper = a['lower_unscaled_um'].copy(), a['upper_unscaled_um'].copy()
-            map_centre, map_scale = a['global_centre_um'].copy(), a['global_scale'].copy()
-        plan_record = training_plans[base_index]
-        plan_dir = PLAN_ROOT / plan_record['directory']
-        for name, expected in plan_record['artifact_sha256'].items():
-            path = plan_dir / name
-            with path.open('rb') as stream:
-                bindings[str(path)] = hashlib.file_digest(stream, 'sha256').hexdigest()
-            assert bindings[str(path)] == expected
-        plan = _read_raw_artifact(plan_dir, plan_record['plan_files'])
-        parameters = [torch.as_tensor(plan['state'][key], device=device, dtype=torch.float64) for key in tensor_keys]
-        forward_support = map_accepted_subject_points_torch_v6(torch.as_tensor(support_ccf, device=device, dtype=torch.float64),
-            *parameters, inverse=False, steps=int(plan['resolved_config']['flow']['steps']), batch_size=8192).cpu().numpy()
-        anchor = np.array(subject['mapped_atlas_centre_um'])
-        base = {'lineage': subject['lineage'], 'displacement': displacement,
-            'lower': torch.as_tensor(lower, device=device, dtype=torch.float32),
-            'upper': torch.as_tensor(upper, device=device, dtype=torch.float32),
-            'map_centre': torch.as_tensor(map_centre, device=device, dtype=torch.float32),
-            'map_scale': torch.as_tensor(map_scale, device=device, dtype=torch.float32),
-            'bounds': subject_support_bounds_um(plan), 'anchor': anchor, 'support_points': forward_support,
-            'plan_receipt': plan['receipt_sha256'], 'mapping_check': subject['mapping_checks'][-1],
-            'support_points_sha256': hashlib.sha256(forward_support.tobytes()).hexdigest()}
-        assert base['mapping_check']['passed'] and base['mapping_check']['max_error_um'] <= 5
-        bases.append(base)
-        for variant in range(VARIANTS):
-            vrng = np.random.default_rng(np.random.SeedSequence([VIRTUAL_SEED, base_index, variant]))
-            scale = np.exp(vrng.uniform(-.1, .1, 3))
-            virtual_subjects.append({'virtual_index': len(virtual_subjects), 'base_index': base_index, 'variant': variant,
-                'virtual_subject_id': f"{subject['lineage']['subject_id']}-virtual-affine-v7-{variant:03d}",
-                'base_lineage': subject['lineage'], 'anchor_um': anchor.tolist(), 'scale_ap_dv_ml': scale.tolist(),
-                'bounds_um': (anchor + scale * (base['bounds'] - anchor)).tolist(),
-                'scope': 'derived TRAIN synthetic subject; fixed global affine, no independent local anatomy or biology'})
-    provenance = {'input_sha256': bindings, 'base_subjects': [
-        {'lineage': b['lineage'], 'plan_receipt': b['plan_receipt'], 'mapping_check': b['mapping_check'],
-         'forward_support_points_sha256': b['support_points_sha256']} for b in bases],
-        'virtual_subjects': virtual_subjects, 'virtual_seed': VIRTUAL_SEED, 'support_seed': SUPPORT_SEED,
-        'support_ccf_points_sha256': hashlib.sha256(support_ccf.tobytes()).hexdigest(),
-        'atlas_binding': {'template_path': str(allen.TEMPLATE_PATH_V6), 'template_sha256': allen.TEMPLATE_RAW_SHA256_V6,
-            'annotation_path': str(allen.ANNOTATION_PATH_V6), 'annotation_sha256': allen.ANNOTATION_RAW_SHA256_V6,
-            'normalized_array_receipt': allen.ATLAS_FLOAT32_RECEIPT_V6, 'axes': ['AP', 'DV', 'ML'], 'physical_units': 'um'},
-        'virtual_map': 'Fvirtual^-1(x)=Fbase^-1(c+A^-1(x-c)); c fixed mapped atlas centre, A fixed positive diagonal per virtual subject',
-        'psf': 'unit normal in virtual physical coordinates,9 finite offsets in virtual um, globally normalized trapezoid weights; never renormalize inverse-transformed normal',
-        'plane_sampling': 'uniform RP2 normal and roll;75% plane through a cached exactly forward-mapped atlas support point,25% conservative virtual-box-uniform slab offsets; no hidden retries',
-        'target_precision': 'all streamed centres, slab targets, state fits and renders use interpolated inverse maps in FP32; not the frozen exact sparse targets; saved map checks are sampled errors, not global mathematical bounds',
-        'appearance': 'synthetic gamma/inversion/gain, smooth illumination, background texture/gradient, pixel noise, optional missing ellipse, optional exact/imperfect brush; not a calibrated stain or acquisition simulator',
-        'counting': 'one call row is one physical plane; exactly one selected background/brush mode, not three extra geometries; caller must count attempted and eligible used planes separately',
-        'replay': 'per-row seed vector and virtual index regenerate all parameters/noise; retain this provenance, row records, source and package versions',
-        'numpy': np.__version__, 'torch': str(torch.__version__), 'calibrated': False,
-        'source_sha256': {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in
-            (Path(__file__).name, 'arbitrary_plane_subject_torch_v6.py', 'arbitrary_plane_full_frame_primitives.py',
-             'arbitrary_plane_geometry.py', 'arbitrary_plane_allen_atlas_binding_v6.py', 'arbitrary_plane_subject_sampling_v6.py',
-             'subject_deformed_slab_multiresolution_bundle_v2.py')}}
-    return {'atlas': atlas, 'bases': bases, 'subjects': virtual_subjects, 'bindings': bindings, 'geometry': geometry,
-            'donor_rows': donor_rows, 'nuisance': nuisance, 'provenance': provenance}
-
-
-def sample_streaming_synthetic_v7(context, subject_indices, seed, side=192):
+def sample_streaming_synthetic_v7_appearance_v3(context, subject_indices, seed, side=192):
     """Generate fresh physical sections from512 virtual subject indices.
 
     No output files or hidden retries. `seed`, row order, virtual IDs, side and
@@ -208,7 +70,7 @@ def sample_streaming_synthetic_v7(context, subject_indices, seed, side=192):
                 'source_identity': {key: context['geometry'][geometry_row][key] for key in ('animal_id', 'specimen_id', 'experiment_id', 'section_id')},
                 'shift_u_v_length_u_v_shear': [shift_u, shift_v, lu, lv, shear]}
         reflection = bool(rng.integers(2))
-        mode = int(appearance.integers(3))
+        mode = int(appearance.choice(3, p=MODE_PROBS))
         p = {'gain': float(appearance.uniform(.6, 1.4)), 'gamma': float(np.exp(appearance.uniform(np.log(.6), np.log(1.6)))),
             'invert': bool(appearance.integers(2)), 'noise_std': float(appearance.uniform(.005, .05)),
             'background_mean': float(appearance.uniform(0, .8)), 'background_slope_yx': appearance.uniform(-.15, .15, 2).tolist(),
@@ -330,3 +192,15 @@ def sample_streaming_synthetic_v7(context, subject_indices, seed, side=192):
         'clean': clean, 'support': support, 'retained': retained, 'masks': masks, 'visible': visible, 'field': field,
         'centre': observed_slab[:, 4], 'slab': observed_slab[:, :, pixel[:, None], pixel[None, :], :],
         'psf_pixel_y': pixel, 'psf_pixel_x': pixel, 'eligible': eligible, 'provenance': records}
+
+
+def sample_streaming_synthetic_v7_64_appearance_v3(context, subject_indices, seed, side=192):
+    selected = sorted({context["subjects"][int(i)]["base_index"] for i in subject_indices})
+    device = context["atlas"].device
+    for index in selected:
+        base = context["bases"][index]
+        base["displacement"] = base["displacement_cpu"].to(device)
+    batch = sample_streaming_synthetic_v7_appearance_v3(context, subject_indices, seed, side)
+    for index in selected:
+        context["bases"][index].pop("displacement")
+    return batch

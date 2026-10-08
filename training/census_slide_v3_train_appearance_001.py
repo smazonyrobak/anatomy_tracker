@@ -74,6 +74,7 @@ summary = {"version": "slide-v3-train-appearance-census-001", "seed": seed,
            "source_sha256": {name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                              for name in ("census_slide_v3_train_appearance_001.py",
                                           "arbitrary_plane_one_shot_slide_artifacts_v3.py",
+                                          "arbitrary_plane_streaming_synthetic_v7_appearance_v3.py",
                                           "arbitrary_plane_streaming_synthetic_v7.py",
                                           "arbitrary_plane_streaming_synthetic_v7_64.py")}}
 (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
