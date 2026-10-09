@@ -1,7 +1,8 @@
 """TRAIN-only v3 appearance mix on independently sampled arbitrary physical planes.
 
-The source state remains the cutting-plane pose. Dense CCF coordinates follow the
-observed pixels; no artifact-selected affine refit is used as a pose label.
+The source state is the pre-artifact affine CCF gauge fitted to the virtual
+subject's warped section. V3 adds no artifact-selected affine refit. Dense CCF
+coordinates follow the observed pixels, including displaced valid fragments.
 """
 import hashlib
 from pathlib import Path
@@ -65,7 +66,7 @@ def sample_one_shot_slide_artifacts_v3(context, subject_indices, seed, side=192,
             'raw_exterior_probabilities_black_near_gray': RAW_EXTERIOR_PROBS,
             'calibration': 'TRAIN appearance mixture, not measured physical-slide prevalence',
             'warp_strength': strength, 'warp_grid_sizes': [4, 8, 16], 'events': events, 'parameters': p,
-            'pose_gauge': 'unchanged source state: physical cutting plane, never fitted from artifact-selected pixels',
+            'pose_gauge': 'unchanged source affine CCF gauge fitted before v3 artifacts; not the pristine virtual-subject cutting plane and not fitted from artifact-selected pixels',
             'dense_target': 'observed pixel to CCF AP/DV/ML um; displaced single-layer fragment valid; overlap, fold, blur, background and out-of-frame invalid',
             'source_sampling': 'zero padding plus explicit background fill; no copied edge tissue',
             'raw_exterior_codes': {'0': 'exact black', '1': 'near-black without added noise',
