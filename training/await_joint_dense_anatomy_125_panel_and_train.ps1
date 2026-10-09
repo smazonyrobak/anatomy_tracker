@@ -8,7 +8,9 @@ if ($process) {
         throw 'Panel PID was reused.'
     }
     $process.WaitForExit()
-    if ($process.ExitCode -ne 0) { throw "Panel process exited $($process.ExitCode)." }
+    if ($null -ne $process.ExitCode -and $process.ExitCode -ne 0) {
+        throw "Panel process exited $($process.ExitCode)."
+    }
 }
 
 $done = Get-Content -LiteralPath (Join-Path $panel 'completed.json') -Raw | ConvertFrom-Json
