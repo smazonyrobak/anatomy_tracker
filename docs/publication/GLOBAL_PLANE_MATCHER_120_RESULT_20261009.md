@@ -1,6 +1,6 @@
 # 120: whole-plane atlas matcher did not improve blind pose
 
-The paired head-only pilot and its frozen synthetic DEV gate completed. **Do not promote the matcher or extend this unchanged head-only training.** At the DEV-selected step 256, the atlas-aware arm changed prior-selected mean rigid pose error from 3.311 to **3.306 mm** (0.0048 mm improvement), while the otherwise identical support-only arm reached 3.306 mm. The atlas-specific paired advantage was **0.0003 mm**. The required gain against each was 0.20 mm; the gate failed. These are 64 synthetic sections balanced across eight deformation plans, not independent biological animals.
+The paired head-only pilot and its frozen synthetic DEV gate completed. **Do not promote the matcher or extend this unchanged head-only training.** At the DEV-selected step 256, the atlas-aware arm changed prior-selected mean rigid pose error from 3.311 to **3.306 mm** (0.0048 mm improvement), while the otherwise identical support-only arm reached 3.306 mm. The atlas-specific paired advantage was **0.0003 mm**. The required gain against each was 0.20 mm; the gate failed. These are 64 synthetic sections balanced across eight deformation plans, not independent biological animals. Here `target_state` is the generator's observed-image affine gauge fitted to its warped coordinate field, not the pristine pre-warp cutting plane; mapped-site error is listed separately.
 
 | Step / arm | Prior-selected rigid | Joint-selected rigid | Physically best original 14 | Physically best corrected 16 |
 | --- | ---: | ---: | ---: | ---: |
