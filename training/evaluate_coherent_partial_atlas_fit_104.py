@@ -108,7 +108,7 @@ for step, path in checkpoint_files.items():
     fitter = CoherentPartialAtlasFit(WholeSliceAtlasFeedback083()).cuda().eval().requires_grad_(False)
     fitter.load_state_dict(checkpoint['spatial_fit'], strict=True)
     fitters[step] = fitter
-assert all(torch.equal(fitters[0].state_dict()[key], value)
+assert all(torch.equal(fitters[0].state_dict()[key].cpu(), value)
     for key, value in fit_checkpoint['spatial_fit'].items())
 del pose_checkpoint, fit_checkpoint
 atlas = torch.from_numpy(_decode_and_preprocess_allen_v6()[0]).cuda()
