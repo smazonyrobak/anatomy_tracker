@@ -78,6 +78,21 @@ illumination, tiling, vignette, blur, noise, speck, blowout, bubble, tear,
 missing-tissue and occlusion conditions. Exact real animal/specimen/experiment
 identifiers remain attached to every real descendant.
 
+**Current addendum, 2026-10-09:** The active v7/v3 one-shot sampler now draws
+independent full-sphere planes, one appearance per physical draw, finite
+thickness, 64 synthetic deformation bases, and records source pose plus
+surviving-pixel 3-D correspondence and artifact provenance. Its fragment,
+fold, bubble and seam effects are stylized engineering approximations with
+unmeasured event frequencies, not validated replicas of laboratory slides.
+The principal image source is one Allen atlas with originally anisotropic
+sampling, so synthetic held-out deformation identities are not biological
+animals. The 263,754 reserved acquired TRAIN images from 1,885 donors are
+almost all near-coronal and have weak automated pose labels; a smaller
+physically sagittal Allen cohort also has weak labels. Neither source supplies
+expert-verified steep-oblique test truth. See the
+[feasibility/data audit](docs/publication/ARBITRARY_PLANE_FEASIBILITY_AND_DATA_DECISION_20261009.md)
+and [v3 census](docs/publication/SLIDE_V3_APPEARANCE_CENSUS_001_RESULT_20261009.md).
+
 The exact synthetic test uses independent transformation/artifact implementations. Different random seeds alone are insufficient independence.
 
 The existing 8,192-case AtlasPose synthetic test has already been inspected and is development/regression evidence. The legacy dense-registration v2 sealed generator remains unconsumed and may be run once as a warp-only benchmark after candidate freezing, provided its generator and evaluator remain byte-identical. A new end-to-end joint locked test receives a separately versioned generator/evaluator contract and a hidden seed generated only after model freezing.
