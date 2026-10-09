@@ -36,6 +36,9 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     elif version == 'one-shot':
         from training.arbitrary_plane_one_shot_inference import load_one_shot_checkpoint as load_checkpoint
         from training.arbitrary_plane_one_shot_inference import infer_one_shot as infer_joint
+    elif version == 'joint-121':
+        from training.joint_pose_map_inference_121 import load_joint_pose_map_121_checkpoint as load_checkpoint
+        from training.joint_pose_map_inference_121 import infer_joint_pose_map_121 as infer_joint
     else:
         raise ValueError(f'Unsupported joint-model version: {version}')
 
@@ -54,12 +57,12 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     with path.open('rb') as stream:
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     model, config = load_checkpoint(path, device=device)
-    if version == 'one-shot':
+    if version in ('one-shot', 'joint-121'):
         image_side = config.get('resolution', config.get('image_side', config.get('side')))
         if image_side is None and config.get('normal_anchors') == model.normal_anchor_count == 64:
             image_side = 256  # Frozen 059 training source samples at side=256.
         if image_side != 256 or model.modes not in (8, 16, 80):
-            raise ValueError('Experimental one-shot GUI inference requires 256 pixels and a supported mode count.')
+            raise ValueError('Experimental whole-model inference requires 256 pixels and a supported mode count.')
         if hasattr(model, 'fitted_matcher'):
             name = 'arbitrary_plane_one_shot_model.py'
             expected = config['source_sha256'][name]
@@ -90,7 +93,7 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     intensity = np.clip((atlas_volume.astype(np.float32) - np.float32(9)) / np.float32(264), 0, 1)
     intensity[annotation_volume == 0] = 0
     atlas_channels = (np.stack((intensity, (annotation_volume != 0).astype(np.float32)))
-                      if version == 'one-shot' else intensity[None])
+                      if version in ('one-shot', 'joint-121') else intensity[None])
     atlas = torch.from_numpy(atlas_channels).to(device)
     inputs = torch.from_numpy(prepared['channels'][None]).to(device)
     offsets = torch.linspace(-thickness_um / 2, thickness_um / 2, 9, device=device)[None]
@@ -99,7 +102,9 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     weights /= weights.sum(-1, keepdim=True)
     if cancel_event.is_set():
         raise InterruptedError
-    operation = (f'Refining eight atlas fits and mapping the selected pose/warp candidate'
+    operation = ('Comparing 16 arbitrary-plane candidates with original/corrected actions and mapping the selection'
+                 if version == 'joint-121' else
+                 f'Refining eight atlas fits and mapping the selected pose/warp candidate'
                  if version == 'one-shot' and model.normal_anchor_count and hasattr(model, 'pose_refiner') else
                  f'Refining atlas fits and mapping {2 * model.modes} pose/warp candidates'
                  if version == 'one-shot' and hasattr(model, 'pose_refiner') else
@@ -112,7 +117,7 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
     prediction['runtime'] = {'device': device, 'section_thickness_um': float(thickness_um),
                              'psf': 'assumed uniform through-plane profile; nine-node trapezoidal integration',
                              'checkpoint_path': str(path),
-                             'training_scope': prediction['scope'] if version == 'one-shot' else config['scope'],
+                             'training_scope': prediction['scope'] if version in ('one-shot', 'joint-121') else config['scope'],
                              'model_version': version, 'constraints_used': False,
                              'probabilities_calibrated': False}
     return prepared, prediction, digest
