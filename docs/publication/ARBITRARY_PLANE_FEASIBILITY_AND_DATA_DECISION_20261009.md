@@ -6,6 +6,16 @@ The newer [103 v3-input DEV gate](CROSS_CANDIDATE_MATCH_103_RESULT_20261009.md) 
 
 A further descriptive read of that *same frozen* 103 panel separated visible-tissue support, without changing any checkpoint or selecting a new one. Among 67 sections with under 8% valid pixels, step-1,000 selected/best-of-14 mapped errors were 5.370/2.850 mm; among the other 170 they were lower. The under-8% group includes 52 raw sections, where selected/best errors were 6.050/3.190 mm, compared with 3.880/2.520 mm for 124 raw sections with at least 8% support. These are unequal, unpaired groups, so they do not prove a causal support threshold. They do show why an all-angle *single-image* guarantee must be conditioned on enough identifiable tissue, not merely on its plane angle.
 
+The user's fallback need not prohibit any cut direction: every unoriented
+plane normal is within `arccos(1/sqrt(3)) = 54.7°` of at least one of the AP,
+DV or ML axes. Three overlapping, wide coronal/horizontal/sagittal pose
+families therefore cover the **entire** sphere, including heavy obliques; an
+optional researcher-supplied rough family would narrow the search without
+silently changing the supported geometry. This is a possible inference prior,
+not a demonstrated accuracy gain. An unsupported claim that such a hint makes
+every damaged section uniquely recoverable would be just as wrong as claiming
+the unconstrained model already does so.
+
 There is nevertheless a hard information limit to the *single-section* promise. If a section is tiny, mostly featureless, missing landmarks, blurred, folded, or displaced, several 3-D planes can produce nearly the same visible image; a partial hemisphere can also leave a left/right reflection ambiguity. A flexible deformation can disguise a wrong plane by forcing a superficial fit. Thus no model can guarantee a unique exact pose on **every** possible image from image pixels alone; this is an inference from non-unique inverse geometry, not an experimental claim that arbitrary-plane recovery is generally impossible. A safe output must retain plausible alternatives and ask for a rough orientation or adjacent section, or abstain, when the image is insufficient. The researcher's rough cut direction, section order/range, insertion site/angle, and optional smart-brush mask should be *optional evidence*, not mandatory restrictions or labels silently treated as truth.
 
 The literature is narrower than the requested guarantee. [DeepSlice](https://pmc.ncbi.nlm.nih.gov/articles/PMC10514056/) was assessed on coronal slide-mounted sections and explicitly recommends grouping sections from the same block; pooled angle and cutting-order information improve its estimates. [AMBIA](https://pmc.ncbi.nlm.nih.gov/articles/PMC10406728/) estimates AP position and two tilts for single sections and then deformably registers them, but does not establish unrestricted all-plane accuracy. [QuickNII](https://pmc.ncbi.nlm.nih.gov/articles/PMC6541252/) propagates anchor information across a serial section set. These results support an optional multi-section/prior route for ambiguous cases; they do not justify banning heavy obliques.
