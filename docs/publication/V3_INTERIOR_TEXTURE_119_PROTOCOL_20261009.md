@@ -1,0 +1,7 @@
+# 119: TRAIN-only within-tissue appearance audit
+
+Revisit the frozen 512-donor Allen TRAIN sample (one acquired section per donor) and compare it with 256 newly drawn, independent arbitrary-plane v3 synthetic TRAIN sections. Downsample synthetic images from 256² to the acquired images' 192² before measuring. Keep raw/exact-black synthetic images separate from other synthetic backgrounds and optional-brush cases; never make paired copies of one plane. Use only disk I:.
+
+For both sources, derive the same rough tissue proxy by thresholding intensity above 0.03, closing and filling holes, retaining the largest connected component, and eroding six pixels. Report proxy area and the count with at least 1,024 interior pixels. On those interiors, record 10th–90th percentile contrast and 1- and 3-pixel high-pass RMS, both raw and normalized by contrast. For synthetic images only, report overlap between the proxy and simulator-valid tissue; no acquired segmentation ground truth exists here.
+
+This is a descriptive domain-gap measurement, not a classifier, model-selection target, prevalence estimate, or permission to tune on held-out animals. The threshold proxy may miss dark tissue and scalar frequency metrics cannot prove anatomical realism. An observed texture gap would justify a *small, measured* generator change and an animal-separated test; similarity in these metrics would not certify realistic tears, folds, staining or arbitrary-angle transfer.
