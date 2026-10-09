@@ -1,0 +1,5 @@
+# 114: matched atlas-support-only fitting control
+
+Replay the 112 TRAIN-only fitting pilot for the same 512 batches from the same frozen 111 checkpoint, seed, candidate selection, optimizer, and losses. Generate each synthetic input from the unchanged original atlas. For fitting and scoring only, replace atlas intensity with exact zeros while preserving its support channel. This also applies to support-matched hard-candidate selection, swapped-image scoring, and pose-gradient probes. The control can use tissue outline, plane state, image features, and deformation cost, but cannot compare internal atlas intensity anatomy with the observed section.
+
+The 114 draw log must hash identically to frozen 112 before a completion receipt is written. Compare 112 and 114 on the same identity-disjoint synthetic development panel, including equal-support wrong planes. A full-intensity advantage in *held-out* rank separation is necessary before claiming that the fitting stage supplies useful anatomical evidence to pose estimation. This is not real-animal validation, calibration, a public benchmark, or a deployable model.
