@@ -1,5 +1,16 @@
 # Proposed unified architecture
 
+**Status, 2026-10-09:** The recurrent render--compare design below is a research
+hypothesis, not the current qualified model or an established advantage over
+direct prediction. The active evidence-led line is the scratch-trained 094
+one-pass joint pose/local-map model and the predeclared
+[v3 direct pose-capture pilot](V3_ONE_PASS_POSE_CAPTURE_PILOT_001_PROTOCOL_20261009.md).
+That pilot changes only pose capture to isolate the measured bottleneck; it
+does not by itself qualify a joint model. Recurrent atlas feedback would need
+a small matched one-pass comparison using both correct and predicted planes,
+followed by improvement on blind selected mapping error, before adoption.
+No current checkpoint is a GUI replacement or a calibrated all-angle model.
+
 ## Design decision
 
 The release candidate is trained from random initialization as one model with
