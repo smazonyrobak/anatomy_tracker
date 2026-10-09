@@ -241,7 +241,7 @@ with torch.inference_mode():
                     atlas, weights, feature_side=96, source_shape=(side, side),
                     spatial_evidence=fitted['spatial_evidence'])
                 mapped_error = (at_chart(mapped['centre_surface_ccf_ap_dv_ml_um'], chart)
-                    - reference[None]).norm(dim=-1).mean(-1)[0]
+                    - reference[None]).norm(dim=-1).mean(-1)
                 local_warp = mapped['local_displacement_um'] / 1000
                 dx = local_warp[..., 1:] - local_warp[..., :-1]
                 dy = local_warp[..., 1:, :] - local_warp[..., :-1, :]
