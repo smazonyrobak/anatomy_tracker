@@ -1,0 +1,17 @@
+# 116: tissue-only metric and direct-atlas source control
+
+The frozen 115 step-1,306 model was evaluated on the same 32 virtual cuts from eight TRAIN-subset donors. The evaluator regenerated each donor cut and the frozen atlas-serial control, checked their input hashes and five-point errors against the completed 115 paired run, and added a direct finite-thickness Allen-atlas render at each frozen physical plane. All three sources used the same orientation, slab offsets and weights, appearance settings, artifact seed, and optional-brush channel. This is a diagnostic of weakly labelled virtual cuts, **not** unseen-animal validation or a true acquired oblique-slide test.
+
+The old error averages atlas-coordinate discrepancies at four fixed image corners plus the centre. Much of that canvas can be outside the brain. A new paired measure uses the *same donor-valid tissue points* for all three sources: 16×16 image bins whose bilinearly reduced donor valid-mask value is exactly one. Those bins cover 36.7% of the canvas on average. This is still rigid pose error against a weak affine-derived reference, not a landmark or anatomy-registration error.
+
+| Source, donor-equal mean | Five canvas points: selected / best 14 / best 160 | Donor-tissue points: selected / best 14 / best 160 |
+| --- | ---: | ---: |
+| Donor virtual | 7.925 / 5.267 / 3.976 mm | 4.137 / 2.551 / 2.054 mm |
+| Atlas serial | 7.793 / 5.120 / 3.949 mm | 4.029 / 2.450 / 2.067 mm |
+| Direct atlas slab | 7.661 / 4.999 / 3.864 mm | 3.973 / 2.446 / 1.959 mm |
+
+The previous five-point metric substantially overstated error at the actual visible tissue (7.925 versus 4.137 mm for the selected donor-virtual branch), but the tissue-only error remains unacceptable for brain-region/electrode claims. Even an oracle picking among all 160 current branches cannot get below 2.054 mm on these virtual cuts, so branch ranking alone cannot fix this model. The direct atlas slab improves selected donor-tissue error only 0.165 mm over donor virtual and 0.057 mm over atlas serial; its best-160 tissue error is 0.095–0.108 mm lower. This weak paired effect does not support sparse serial interpolation as the *main* source of the current error. It also does not prove donor appearance harmless: both atlas controls are simulated and evaluated against the atlas-derived weak labels.
+
+The next controlled work should separate pose-label geometry/framing and candidate coverage from image ambiguity, then change the training representation or sampling only where evidence points. Do not promote 115; no expert-oblique truth, strict animal-separated test, uncertainty calibration, public DeepSlice comparison, or GUI replacement has been completed. Arbitrary-plane capability remains the target, but feature-poor or damaged slices may require multiple plausible solutions and an explicit unreliable result rather than a forced confident plane.
+
+Frozen output: `I:\AnatomyTracker\runs\v3_high_virtual_oblique_116_direct_atlas_eval` (96 rows, three sources × 32 cuts). Independently checked SHA-256: config `82a5c8a4a9a929e0d892e0c970fa47b9f6151f077a2fd50370ba955b39436883`, rows `29c7dd85edc63c9364307973729bf7893b18d453f5d0fe77d6f09055f36882ba`, summary `3190b5fa736efcddad16e297fdde2c38cc974c68df5df4a914e220e1a41a716a`, evaluator `485c73bab9b261efe5d22a3a46cba0724a5ac74f3de3d28c4fad5055ba83ada2`. The completed receipt records `calibrated=false`, `public_benchmark_used=false`, `expert_real_truth_used=false`, and `final_animals_used=false`.
