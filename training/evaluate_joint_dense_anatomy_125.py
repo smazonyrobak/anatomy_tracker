@@ -356,6 +356,9 @@ with torch.inference_mode():
             'physical_section_id': record['panel_physical_section_id'],
             'synthetic_subject_plan_id': record['synthetic_subject_plan_id'],
             'appearance_mode': record['appearance_mode'],
+            'nearest_cardinal_angle_deg': float(np.degrees(np.arccos(
+                np.clip(np.max(np.abs(record['plane_normal_ap_dv_ml'])), 0, 1)))),
+            'valid_tissue_fraction': float(valid.float().mean()),
             'panel_file_sha256': record['sha256'],
             'swap_section_id': swap_record[record['section_id']]['section_id'],
             'shuffle_seed': shuffle_seed,
@@ -484,6 +487,25 @@ synthetic_summary['plans_full_mapped_not_worse_than_frozen122'] = sum(
     synthetic_summary['by_plan'][plan]['selected']['full']['mapped_tissue_mm'] <=
     synthetic_summary['by_plan'][plan]['selected']['frozen122']['mapped_tissue_mm']
     for plan in plans)
+synthetic_summary['descriptive_strata'] = {}
+for name, groups in {
+    'nearest_cardinal_angle_deg': {f'[{low},{high})': [row for row in synthetic_rows
+        if low <= row['nearest_cardinal_angle_deg'] < high]
+        for low, high in ((0, 15), (15, 30), (30, 45), (45, 55))},
+    'appearance_mode': {mode: [row for row in synthetic_rows
+        if row['appearance_mode'] == mode]
+        for mode in ('raw', 'exact_black', 'imperfect_brush')}
+}.items():
+    synthetic_summary['descriptive_strata'][name] = {key: {
+        'sections': len(group),
+        'near_candidate_count': sum(row['pair']['near_candidate'] for row in group),
+        'best_corrected_mapped_mm': float(np.mean([row['pair']['best_mapped_mm']
+            for row in group])) if group else None,
+        'selected_mapped_mm': {arm: float(np.mean([row['selected'][arm]['mapped_tissue_mm']
+            for row in group])) if group else None for arm in ('frozen122', 'full', 'support')},
+        'mean_valid_tissue_fraction': float(np.mean([row['valid_tissue_fraction']
+            for row in group])) if group else None}
+        for key, group in groups.items()}
 
 real_summary = {}
 for family in ('coronal', 'sagittal'):
