@@ -79,8 +79,10 @@ def in_path_correspondence_ce_128(match, state, reflection, target_centre,
     with torch.no_grad():
         target = F.interpolate(target_centre.permute(0, 3, 1, 2),
             (side, side), mode='bilinear', align_corners=False).permute(0, 2, 3, 1)
-        intact = F.adaptive_avg_pool2d(valid_mask[:, None].float(),
-            (side, side))[:, None, 0] >= .95
+        validity = valid_mask[:, None].float()
+        intact = ((F.adaptive_avg_pool2d(validity, (side, side))[:, None, 0] >= .95)
+            & (F.interpolate(validity, (side, side), mode='bilinear',
+                align_corners=False)[:, None, 0] >= 1 - 1e-6))
         center, frame, basis = full_frame_state_to_components(state.detach())
         delta = target[:, None] - center[:, :, None, None]
         local = torch.einsum('bkhwi,bkij->bkhwj', delta, frame[..., :, :2])

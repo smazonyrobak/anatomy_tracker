@@ -36,7 +36,7 @@ def sha(path):
 source = Path(__file__).resolve().parent
 parent_dir = root / 'runs/joint_pose_map_122'
 parent_path = parent_dir / 'joint_step_02000.pt'
-out = root / 'runs/joint_in_path_ce_128_train_mask_jitter_audit'
+out = root / 'runs/joint_in_path_ce_128_train_mask_jitter_strict_audit'
 seed, draw_seed, accepted_target = 2026101012801, 2026101012802000000, 100
 side, grid_side = 256, 24
 torch.set_num_threads(4)
@@ -78,8 +78,10 @@ def mask_counts(section, state, reflection):
     target = F.interpolate(section['centre'].permute(0, 3, 1, 2),
                            (grid_side, grid_side), mode='bilinear',
                            align_corners=False).permute(0, 2, 3, 1)
-    intact = F.adaptive_avg_pool2d(section['valid_mask'][:, None].float(),
-                                   (grid_side, grid_side))[:, 0] >= .95
+    validity = section['valid_mask'][:, None].float()
+    intact = ((F.adaptive_avg_pool2d(validity, (grid_side, grid_side))[:, 0] >= .95)
+        & (F.interpolate(validity, (grid_side, grid_side), mode='bilinear',
+            align_corners=False)[:, 0] >= 1 - 1e-6))
     delta = target - centre[:, None, None]
     local = torch.einsum('bhwi,bij->bhwj', delta, frame[:, :, :2])
     raster = .5 + torch.linalg.solve(basis[:, None, None], local[..., None]).squeeze(-1)
@@ -201,7 +203,7 @@ config = {'seed': seed, 'first_draw_seed': 2026101012802000000,
     'accepted_target': accepted_target, 'source_sha256': sha(source / Path(__file__).name),
     'parent_checkpoint_sha256': sha(parent_path),
     'synthetic_provenance': context['provenance'],
-    'mask': '24-grid: adaptive-valid>=.95, four in-grid keys, bilinear support>=.8, normal residual<=sample PSF halfwidth+12.5um',
+    'mask': '24-grid: footprint-valid>=.95 AND bilinear valid-centre>=1-1e-6, four in-grid keys, bilinear support>=.8, normal residual<=sample PSF halfwidth+12.5um',
     'jitter': 'uniform independent local in-plane x/y shifts +/-750um and roll +/-0.05rad; zero normal shift'}
 out.mkdir(parents=True, exist_ok=False)
 (out / 'config.json').write_text(json.dumps(config, indent=2))
