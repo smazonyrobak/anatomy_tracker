@@ -1,0 +1,22 @@
+# 114 matched support-only fitting control: anatomical-score gate not passed
+
+Pilot 114 replayed the 512 TRAIN batches of 112 from the same 111 checkpoint. Its 1,024 accepted synthetic physical sections and 1,200 draw attempts have the **same draw-log SHA-256** as 112 (`3a0dec8ecb933a6e4d189635d3e45319e195470ad239b830447ed2bad33fee2a`). Input images were generated from the unchanged atlas, but fitting and scoring received an atlas whose intensity channel was identically zero and whose support channel was unchanged. The frozen paired evaluator used identical images, candidate states, swaps and perturbations for both models at steps 0, 128 and 512. All receipts, source hashes, checkpoints and panel records passed the evaluator's preflight; the run and evaluator exited successfully. These are synthetic DEV sections from eight separate generation plans, **not** independent biological animals.
+
+The first 16 sections were already inspected in pilot 112, so the decisive comparison is the additional 48. At step 512:
+
+| Additional 48 DEV sections | Full atlas intensity (112) | Support-only atlas (114) |
+| --- | ---: | ---: |
+| Correct plane outranks hard wrong plane | 48/48 | 48/48 |
+| Correct image outranks swapped image at exact plane | 48/48 | 48/48 |
+| Near plane outranks farther plane | 48/48 | 47/48 |
+| Local score gradient points toward exact plane | 41/48 | 43/48 |
+| Mean exact-plane mapped tissue error | 0.1641 mm | 0.1739 mm |
+| Exact mapped tissue better than rigid, per section | 39/48 | 28/48 |
+
+The unchanged rigid exact-plane error was 0.1789 mm. Full atlas intensity therefore helped **local mapping** by about 0.0098 mm against the support-only control, and its exact-versus-hard score margin was 4.752 versus 4.510 uncalibrated logit units. But the two scorers were identical on the primary hard-plane ranking count. Moreover, a non-deployable analytic baseline using the oracle surviving-tissue mask and atlas **support silhouette alone** ranked exact above hard on 48/48 and near above far on 47/48. The hard-negative filter only matched mean support fraction (41/48 within 0.10), not spatial silhouette. The apparent fitted-plane score can therefore be explained by outline/pose cues; this experiment does **not** establish that internal anatomy supplies a useful global pose-correction signal. The step-512 scorer must not be promoted or described as calibrated probability.
+
+This does not invalidate the model's local mapper: on the additional 48 exact supplied planes, full-intensity mapping improved from its step-0 mean 0.2164 mm to 0.1641 mm. It does not show that a blind image can find the correct plane. The pose encoder remained frozen in 112/114, and no fitting-to-pose training has occurred in this lineage yet. Thus the central joint-learning goal remains open.
+
+The next work should address two concrete gaps, rather than scale this scorer blindly: (1) expose it to spatially silhouette-matched *nearby* wrong sections if a tissue-texture score is to be used for feedback, and (2) repair arbitrary-angle proposal capture on real-looking inputs. For (2), the frozen 113 result has 8.475 mm selected and 5.348 mm best-of-14 held-out virtual-oblique error, with virtual TRAIN similarly poor. Its virtual term contributes only roughly 0.125 nominal loss weight averaged over batches, while coronal teacher and risk terms have coefficient 2 each. A fixed-plane paired acquisition positive control—same poses and labels rendered as donor virtual sections versus atlas-derived serial reslices, with the full 160-branch oracle and synthetic/cardinal guardrails—can separate source-domain failure from candidate generation and ranking before committing to larger training. The virtual cuts are visibly striped ~96–100 µm serial-stack reslices, not actual acquired obliques; weak Allen affine locations are not blinded expert truth.
+
+Frozen artifacts: `I:\AnatomyTracker\runs\v3_fitting_support_control_114_pilot` and `I:\AnatomyTracker\runs\v3_fitting_112_vs_114_matched_dev_eval`. The evaluation receipt records 384 raw rows, config SHA-256 `25cde1743b1ce815cff61bdd58d6d0ae59b2b56d7f956859ce3d647d2ca76198`, rows SHA-256 `604ee2d859cace69d3d68fd2d9f4302dc7a2089bd852a56d44f5f7ef1ee101da`, and summary SHA-256 `f39168c94ded78d0b3fe06e3245545f11d15ecb580b5370683cf7f1ee0139a1a`. No public benchmark, calibration animals, expert final truth or GUI deployment was used or achieved.
