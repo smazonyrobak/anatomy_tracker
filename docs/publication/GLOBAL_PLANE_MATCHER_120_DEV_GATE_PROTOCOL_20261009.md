@@ -1,6 +1,6 @@
 # 120 global plane matcher: predeclared synthetic DEV gate
 
-Status: specified before execution. This is a head-only feasibility gate, not deployment, calibration, untouched confirmation, real-animal validation, or a public benchmark.
+Status: specified before execution; measurement-site amendment after the first evaluator stopped before generating output. The original fully-valid 16×16-cell rule left zero sites on at least one artifact-heavy section. No checkpoint outcome was read or selected. This is a head-only feasibility gate, not deployment, calibration, untouched confirmation, real-animal validation, or a public benchmark.
 
 ## Frozen inputs and selection
 
@@ -10,7 +10,7 @@ Status: specified before execution. This is a head-only feasibility gate, not de
 
 ## Measurements
 
-- On the same 16×16 grid and fully valid tissue sites, primary rigid pose error is mean CCF Euclidean distance to `target_state`; separately report observed-pixel mapped-site error to `target_centre_um`. Also report mean rigid CCF error at the fixed four corners and centre. All reported errors are millimetres.
+- At 256 valid observed pixels per section, sampled with replacement only if necessary by a SHA256(section_id)-seeded generator, primary rigid pose error is mean CCF Euclidean distance to `target_state`; separately report rigid-only observed-pixel error to `target_centre_um` (not the predicted deformable map). The same frozen pixels are used for every checkpoint, arm and action. Also report mean rigid CCF error at the fixed four corners and centre. All reported errors are millimetres.
 - At each checkpoint and arm, report the original 111 prior-selected action on the first 14 slots, the same-beam input-16 selected action, corrected-16 selected action, and joint two-action selected action. Also report physically best corrected-16 as a truth-only oracle diagnostic, never as a selectable action. Compare full atlas intensity with zero-intensity/support-only at the same checkpoint, section, beam, and parent features.
 - Give per-plan and plan-equal means; stratify raw, imperfect-brush, exact-black, angle (<15, 15–30, 30–45, ≥45 degrees; also ≥30), and truth-plane atlas support fraction (<.25, .25–.50, ≥.50). Support strata use truth only for diagnostic grouping, never selection. Define a near case as original-14 best five-point rigid error ≤1.5 mm, and report joint-action nonregression relative to the 111 prior at +.20 mm tolerance for rigid-grid and five-point error.
 

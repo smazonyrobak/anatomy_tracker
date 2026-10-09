@@ -135,9 +135,6 @@ for step, path in checkpoints.items():
         heads[(step, arm)] = head.eval().requires_grad_(False)
     del checkpoint
 
-axis = (torch.arange(16, device='cuda') + .5) / 16 - .5 / side
-yy, xx = torch.meshgrid(axis, axis, indexing='ij')
-chart16 = torch.stack((xx, yy), -1).reshape(-1, 2)
 five_chart = torch.tensor([[0., 0.], [255., 0.], [0., 255.], [255., 255.],
     [127.5, 127.5]], device='cuda') / side
 candidate_rows, section_rows = [], []
@@ -154,13 +151,17 @@ with torch.inference_mode():
             offsets = torch.from_numpy(arrays['offsets_um'][None].copy()).cuda()
             weights = torch.from_numpy(arrays['weights'][None].copy()).cuda()
         assert int(valid.sum()) == record['valid_pixels']
-        valid16 = (F.interpolate(valid[:, None].float(), (16, 16), mode='area')[0, 0]
-            == 1).flatten()
-        assert int(valid16.sum()) > 0
-        target_rigid = rigid_points_090(truth, truth_reflection, chart16)[0]
+        valid_pixels = valid[0].flatten().nonzero()[:, 0].cpu().numpy()
+        assert len(valid_pixels) > 0
+        site_rng = np.random.default_rng(int.from_bytes(
+            hashlib.sha256(record['section_id'].encode()).digest()[:8], 'little'))
+        site_indices = torch.as_tensor(site_rng.choice(valid_pixels, size=256,
+            replace=len(valid_pixels) < 256), device='cuda')
+        chart_sites = torch.stack((site_indices.remainder(side),
+            site_indices.div(side, rounding_mode='floor')), -1).float() / side
+        target_rigid = rigid_points_090(truth, truth_reflection, chart_sites)[0]
         target_five = rigid_points_090(truth, truth_reflection, five_chart)[0]
-        target_mapped = F.interpolate(centre.permute(0, 3, 1, 2), (16, 16),
-            mode='bilinear', align_corners=False).permute(0, 2, 3, 1).reshape(-1, 3)
+        target_mapped = centre.reshape(-1, 3)[site_indices]
         atlas_support = float(render_atlas_planes_090(context['atlas'], truth[:, None],
             truth_reflection[:, None], offsets, weights, candidate_chunk=1)[0, 0, 1].mean())
         prediction = model.predict(image)
@@ -199,9 +200,9 @@ with torch.inference_mode():
             'support_bin': ('<0.25' if atlas_support < .25 else '0.25-0.50'
                 if atlas_support < .5 else '>=0.50'),
             'valid_fraction': record['valid_pixels'] / (side * side),
-            'valid16_sites': int(valid16.sum()),
-            'valid16_mask_sha256': hashlib.sha256(
-                valid16.cpu().numpy().astype('|u1').tobytes()).hexdigest(),
+            'valid_sampled_sites': 256,
+            'valid_site_indices_sha256': hashlib.sha256(
+                site_indices.cpu().numpy().tobytes()).hexdigest(),
             'panel_file': record['file'], 'panel_file_sha256': record['sha256'],
             'plan_receipt_sha256': record['plan_receipt_sha256']}
 
@@ -212,13 +213,13 @@ with torch.inference_mode():
                     support_only=arm == 'support_only', matcher=heads[(step, arm)])
                 assert torch.equal(output['input_score'][0], prior_beam)
                 input_rigid = (rigid_points_090(output['input_state'], reflection,
-                    chart16) - target_rigid[None, None]).norm(dim=-1)[..., valid16].mean(-1)[0] / 1000
+                    chart_sites) - target_rigid[None, None]).norm(dim=-1).mean(-1)[0] / 1000
                 corrected_rigid = (rigid_points_090(output['state'], reflection,
-                    chart16) - target_rigid[None, None]).norm(dim=-1)[..., valid16].mean(-1)[0] / 1000
+                    chart_sites) - target_rigid[None, None]).norm(dim=-1).mean(-1)[0] / 1000
                 input_mapped = (rigid_points_090(output['input_state'], reflection,
-                    chart16) - target_mapped[None, None]).norm(dim=-1)[..., valid16].mean(-1)[0] / 1000
+                    chart_sites) - target_mapped[None, None]).norm(dim=-1).mean(-1)[0] / 1000
                 corrected_mapped = (rigid_points_090(output['state'], reflection,
-                    chart16) - target_mapped[None, None]).norm(dim=-1)[..., valid16].mean(-1)[0] / 1000
+                    chart_sites) - target_mapped[None, None]).norm(dim=-1).mean(-1)[0] / 1000
                 input_five = (rigid_points_090(output['input_state'], reflection,
                     five_chart) - target_five[None, None]).norm(dim=-1).mean(-1)[0] / 1000
                 corrected_five = (rigid_points_090(output['state'], reflection,
@@ -308,8 +309,8 @@ def aggregate(rows, metric_fields=fields):
 
 
 summary = {'role': 'predeclared 64-case synthetic DEV, disjoint from 118; not confirmation',
-    'primary': 'rigid full-frame CCF error against target_state on fully valid 16x16 tissue sites',
-    'secondary': 'mapped-site CCF error against target_centre_um on the same sites; separately labeled',
+    'primary': 'rigid full-frame CCF error against target_state at 256 frozen valid observed pixels',
+    'secondary': 'rigid-only observed-pixel CCF error against target_centre_um at the same sites; separately labeled',
     'five_point': 'rigid CCF error at the fixed four corners and centre',
     'near_case': 'original14 minimum five-point rigid error <=1.5 mm, diagnostic stratum only',
     'nonregression': 'joint blind selected error <= parent111 prior-selected error +0.2 mm',
