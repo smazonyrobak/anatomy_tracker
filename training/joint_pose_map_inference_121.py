@@ -115,6 +115,8 @@ def infer_joint_pose_map_121(model, inputs, atlas, offsets_um, weights, context=
             'surface': mapped['centre_surface_ccf_ap_dv_ml_um'].cpu(),
             'local_displacement_um': mapped['local_displacement_um'].cpu(),
             'correspondence_logit': mapped['correspondence_logit'].cpu(),
+            'joint_std': mapped['joint_std'].cpu(),
+            'joint_factor': mapped['joint_factor'].cpu(),
             'atlas_image': (rendered[:, :1] / rendered[:, 1:2].clamp_min(1e-4))
                            .clamp(0, 1).cpu(),
             'prior_log_weight': prior[0].reshape(80, 2).cpu(),
@@ -131,7 +133,7 @@ def infer_joint_pose_map_121(model, inputs, atlas, offsets_um, weights, context=
             'provenance': model.joint_121_provenance,
             'calibrated': False,
             'scope': '121 blind 14+2 atlas-conditioned pose/action selection and selected '
-                     'full-resolution CCF map; raw uncalibrated scores; no constraints or '
+                     'full-resolution CCF map; raw uncalibrated scores and uncertainty factors; no constraints or '
                      'qualified anatomical accuracy',
         }
         return result
