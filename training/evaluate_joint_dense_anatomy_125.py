@@ -33,6 +33,7 @@ def sha(path):
 
 source = Path(__file__).resolve().parent
 protocol = source.parent / 'docs/publication/JOINT_DENSE_ANATOMY_125_PROTOCOL_20261009.md'
+action_addendum = source.parent / 'docs/publication/JOINT_DENSE_ANATOMY_125_ACTION_CONSISTENCY_ADDENDUM_20261009.md'
 parent_run = root / 'runs/joint_pose_map_122'
 parent_path = parent_run / 'joint_step_02000.pt'
 prior_ranker_run = root / 'runs/joint_anatomy_ranker_124'
@@ -312,6 +313,13 @@ with torch.inference_mode():
             'mapped_tissue_mm': original_map[slot] if action == 0
                 else float(corrected_map[slot])}
             for arm, (slot, action) in choices.items()}
+        corrected_only_slot = {'frozen122': int(match['score'][0].argmax()),
+            **{arm: int((match['score'] + fitted[arm]['evidence'])[0].argmax())
+               for arm in arms[1:]}}
+        corrected_only = {arm: {'slot': slot,
+            'rigid_gauge_mm': float(corrected_rigid[slot]),
+            'mapped_tissue_mm': float(corrected_map[slot])}
+            for arm, slot in corrected_only_slot.items()}
 
         best = int(corrected_map.argmin())
         pair = {'best_slot': best, 'best_mapped_mm': float(corrected_map[best]),
@@ -351,7 +359,8 @@ with torch.inference_mode():
             'panel_file_sha256': record['sha256'],
             'swap_section_id': swap_record[record['section_id']]['section_id'],
             'shuffle_seed': shuffle_seed,
-            'beam_branch_ids': beam[0].tolist(), 'pair': pair, 'selected': selected})
+            'beam_branch_ids': beam[0].tolist(), 'pair': pair, 'selected': selected,
+            'corrected_only_selected': corrected_only})
 
     for family, records_family in (('coronal', coronal_records),
                                    ('sagittal', sagittal_records)):
@@ -426,7 +435,8 @@ synthetic_summary = {'sections': len(synthetic_rows), 'plans': len(plans),
     'common_pixels_median': float(np.median([row['pair']['common_pixels']
         for row in scored])) if scored else None,
     'by_plan': {}, 'section_weighted': {}, 'plan_equal': {},
-    'support_dice_area_common_strata': {}, 'selected_changes': {}}
+    'support_dice_area_common_strata': {}, 'selected_changes': {},
+    'corrected_only_plan_equal': {}}
 for metric, limits in (('mapped_support_dice', (.85, .90, .95, 1.000001)),
                        ('mapped_support_area_gap', (0., .02, .05, .080001)),
                        ('common_pixels', (32, 64, 128, 1025))):
@@ -467,6 +477,9 @@ for arm in arms:
     synthetic_summary['plan_equal'][arm] = {metric: float(np.mean([
         synthetic_summary['by_plan'][plan]['selected'][arm][metric] for plan in plans]))
         for metric in ('rigid_gauge_mm', 'mapped_tissue_mm')}
+    synthetic_summary['corrected_only_plan_equal'][arm] = {metric: float(np.mean([
+        np.mean([row['corrected_only_selected'][arm][metric] for row in by_plan[plan]])
+        for plan in plans])) for metric in ('rigid_gauge_mm', 'mapped_tissue_mm')}
 synthetic_summary['plans_full_mapped_not_worse_than_frozen122'] = sum(
     synthetic_summary['by_plan'][plan]['selected']['full']['mapped_tissue_mm'] <=
     synthetic_summary['by_plan'][plan]['selected']['frozen122']['mapped_tissue_mm']
@@ -525,14 +538,28 @@ for family in ('coronal', 'sagittal'):
         donor['selected_weak_five_point_mm']['full'] <=
         donor['selected_weak_five_point_mm']['frozen122'] + .50
         for donor in real['by_donor'].values())
+corrected = synthetic_summary['corrected_only_plan_equal']
+action_conditions = {
+    'mapped_gain_ge_0p30_vs_corrected_frozen122':
+        corrected['frozen122']['mapped_tissue_mm'] - corrected['full']['mapped_tissue_mm'] >= .30,
+    'mapped_gain_ge_0p15_vs_corrected_support':
+        corrected['support']['mapped_tissue_mm'] - corrected['full']['mapped_tissue_mm'] >= .15,
+    'rigid_no_regression_vs_corrected_frozen122':
+        corrected['full']['rigid_gauge_mm'] <= corrected['frozen122']['rigid_gauge_mm']}
 summary = {'scope': 'fresh sections on reused synthetic DEV plans, plus existing weak-real DEV; development evidence only',
     'fixed_psf_um': 62.5, 'psf_samples': 9,
     'label_sampling_note': 'TRAIN uses dense valid-interior correspondence labels and a sampled-site approximation for blind pair labels; DEV pair labels use all valid original pixels.',
     'blind_selection': 'frozen 122 blind16 beam and matcher; candidate evidence added equally '
         'to original/corrected action logits; unsupported pairs give zero evidence',
+    'corrected_only_sensitivity': 'same blinded candidates and corrected maps, but only corrected '
+        'actions compete; fitting evidence is scored against the exact map used for the error',
     'synthetic': synthetic_summary, 'real_weak_affine': real_summary,
     'stage1_anatomical_evidence_gate': {'conditions': conditions,
         'passed': all(conditions.values()), 'development_only': True},
+    'action_consistency_sensitivity': {'conditions': action_conditions,
+        'passed': all(action_conditions.values()), 'development_only': True,
+        'continuation_126_allowed_only_if_both_gates_pass':
+            all(conditions.values()) and all(action_conditions.values())},
     'calibrated': False, 'expert_real_truth_used': False,
     'final_animals_used': False, 'public_benchmark_used': False}
 output_config = {'ranker_final_step': 10000, 'parent_step': 2000,
@@ -555,6 +582,7 @@ output_config = {'ranker_final_step': 10000, 'parent_step': 2000,
     'sagittal_train_summary_sha256': sha(sagittal_train / 'summary.json'),
     'sagittal_train_geometry_sha256': sha(sagittal_train / 'geometry.jsonl'),
     'protocol_sha256': sha(protocol), 'evaluator_source_sha256': sha(__file__),
+    'action_consistency_addendum_sha256': sha(action_addendum),
     'ranker_module_sha256': sha(source / 'atlas_anatomy_ranker_125.py'),
     'fixed_psf_um': 62.5, 'panel_eligible_sections': len(eligible),
     'real_coronal_sections': len(coronal_records),
