@@ -1,4 +1,4 @@
-# 115: virtual-oblique loss weight was not the main failure
+# 115: eightfold virtual-oblique loss weight did not rescue pose
 
 Run 115 was a matched continuation of frozen 111 step 1959, compared with the first 1,306 batches of 113. Its draw log matched the corresponding 113 prefix byte-for-byte (SHA-256 `1c4fc4dee01d4816f7e3ab9643ab82763468dda3d1ee9a70c3c1cfaa90d316f6`). It saw 2,612 accepted independent synthetic planes, 653 independently sampled virtual oblique TRAIN-donor planes and 653 distinct sagittal images. The random coronal stream incidentally selected two sections twice; there was no deliberate paired-background replay. Only the virtual pose-loss coefficient changed, from 0.25 to 2.0 on even batches. The 4,000-batch learning-rate denominator and all other losses were kept for the matched step-1,000 comparison. Training exited successfully and all frozen evaluation preflights and source hashes passed.
 
