@@ -151,7 +151,7 @@ with torch.inference_mode():
     for step in steps:
         checkpoint = torch.load(run / f'joint_step_{step:05d}.pt',
             map_location='cpu', weights_only=True)
-        assert checkpoint['step'] == step and checkpoint['config'] == config
+        assert checkpoint['step'] == step and json.loads(json.dumps(checkpoint['config'])) == config
         model.load_state_dict(checkpoint['model'], strict=True)
         del checkpoint
         for item in synthetic_panel + virtual_panel:
