@@ -18,7 +18,8 @@ import torch
 import torch.nn.functional as F
 
 from training.arbitrary_plane_full_frame_primitives import (
-    full_frame_state_to_components, render_finite_thickness_coordinate_grid)
+    compose_full_frame_state, full_frame_state_to_components,
+    render_finite_thickness_coordinate_grid)
 from training.arbitrary_plane_geometry import normalized_raster_to_ccf
 from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 from training.arbitrary_plane_one_shot_slide_artifacts_v3 import sample_one_shot_slide_artifacts_v3
@@ -35,7 +36,7 @@ def sha(path):
 source = Path(__file__).resolve().parent
 parent_dir = root / 'runs/joint_pose_map_122'
 parent_path = parent_dir / 'joint_step_02000.pt'
-out = root / 'runs/joint_in_path_ce_128_train_mask_audit'
+out = root / 'runs/joint_in_path_ce_128_train_mask_jitter_audit'
 seed, draw_seed, accepted_target = 2026101012801, 2026101012802000000, 100
 side, grid_side = 256, 24
 torch.set_num_threads(4)
@@ -55,6 +56,7 @@ attach_global_plane_matcher(model, enabled=True)
 model.load_state_dict(checkpoint['model'], strict=True)
 del checkpoint
 subject_rng = torch.Generator().manual_seed(seed)
+jitter_rng = torch.Generator().manual_seed(seed + 1)
 axis = (torch.arange(grid_side, device='cuda') + .5) / grid_side - .5 / side
 yy, xx = torch.meshgrid(axis, axis, indexing='ij')
 corners = torch.tensor([[0., 0.], [255., 0.], [0., 255.], [255., 255.],
@@ -143,14 +145,22 @@ with torch.inference_mode():
                     + .25 * (corners_pred - fixed).norm(dim=-1).mean(-1)) / 1000
         physical += 4 * (1 - (chosen_normal * true_normal).sum(-1).abs().clamp_max(1))
         best = int(physical.argmin())
+        jitter = torch.zeros(1, 9, device='cuda')
+        random = 2 * torch.rand(3, generator=jitter_rng).cuda() - 1
+        jitter[0, 2] = .05 * random[0]
+        jitter[0, 3:5] = 750 * random[1:]
+        jitter_state = compose_full_frame_state(section['state'], jitter)
         exact = mask_counts(section, section['state'], section['reflection'])
+        jittered = mask_counts(section, jitter_state, section['reflection'])
         predicted = (mask_counts(section, states[best:best + 1], flags[best:best + 1])
                      if float(physical[best]) <= 1.5 else None)
         rows.append({'draw_seed': draw_seed - 1, 'virtual_subject_index': virtual,
             'physical_section_id': section['provenance'][0]['physical_section_id'],
             'appearance_mode': section['provenance'][0]['mode'],
             'valid_fraction': float(section['valid_mask'].float().mean()),
-            'exact': exact, 'predicted_near_rigid_cost_mm': float(physical[best]),
+            'exact': exact, 'jittered': jittered,
+            'jitter_local_update': jitter[0].tolist(),
+            'predicted_near_rigid_cost_mm': float(physical[best]),
             'predicted': predicted})
         if len(rows) % 25 == 0:
             print(json.dumps({'event': 'accepted', 'count': len(rows),
@@ -162,6 +172,11 @@ summary = {'accepted': len(rows), 'attempts': attempts,
     'exact_total_in_grid': sum(row['exact']['intact_in_grid'] for row in rows),
     'exact_total_in_support': sum(row['exact']['intact_in_grid_support'] for row in rows),
     'exact_total_final': sum(row['exact']['final'] for row in rows),
+    'jittered_sections_with_any': sum(row['jittered']['final'] > 0 for row in rows),
+    'jittered_total_intact': sum(row['jittered']['intact'] for row in rows),
+    'jittered_total_in_grid': sum(row['jittered']['intact_in_grid'] for row in rows),
+    'jittered_total_in_support': sum(row['jittered']['intact_in_grid_support'] for row in rows),
+    'jittered_total_final': sum(row['jittered']['final'] for row in rows),
     'predicted_near_sections': sum(row['predicted'] is not None for row in rows),
     'predicted_sections_with_any': sum(row['predicted'] is not None
         and row['predicted']['final'] > 0 for row in rows),
@@ -169,10 +184,16 @@ summary = {'accepted': len(rows), 'attempts': attempts,
         if row['predicted'] is not None),
     'mean_exact_final_per_section': float(np.mean([row['exact']['final'] for row in rows])),
     'median_exact_final_per_section': float(np.median([row['exact']['final'] for row in rows])),
+    'mean_jittered_final_per_section': float(np.mean([row['jittered']['final'] for row in rows])),
+    'median_jittered_final_per_section': float(np.median([row['jittered']['final'] for row in rows])),
     'by_mode': {mode: {'sections': sum(row['appearance_mode'] == mode for row in rows),
         'exact_with_any': sum(row['appearance_mode'] == mode and row['exact']['final'] > 0
             for row in rows),
         'exact_total_final': sum(row['exact']['final'] for row in rows
+            if row['appearance_mode'] == mode),
+        'jittered_with_any': sum(row['appearance_mode'] == mode
+            and row['jittered']['final'] > 0 for row in rows),
+        'jittered_total_final': sum(row['jittered']['final'] for row in rows
             if row['appearance_mode'] == mode)}
         for mode in ('raw', 'exact_black', 'imperfect_brush')},
     'role': 'TRAIN-only physical-label feasibility; no optimization or DEV access'}
@@ -180,7 +201,8 @@ config = {'seed': seed, 'first_draw_seed': 2026101012802000000,
     'accepted_target': accepted_target, 'source_sha256': sha(source / Path(__file__).name),
     'parent_checkpoint_sha256': sha(parent_path),
     'synthetic_provenance': context['provenance'],
-    'mask': '24-grid: adaptive-valid>=.95, four in-grid keys, bilinear support>=.8, normal residual<=sample PSF halfwidth+12.5um'}
+    'mask': '24-grid: adaptive-valid>=.95, four in-grid keys, bilinear support>=.8, normal residual<=sample PSF halfwidth+12.5um',
+    'jitter': 'uniform independent local in-plane x/y shifts +/-750um and roll +/-0.05rad; zero normal shift'}
 out.mkdir(parents=True, exist_ok=False)
 (out / 'config.json').write_text(json.dumps(config, indent=2))
 with (out / 'rows.jsonl').open('w') as stream:
