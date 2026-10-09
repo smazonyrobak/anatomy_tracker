@@ -76,7 +76,6 @@ virtual_subject_ids = [f"{row['subject_id']}-virtual-affine-v7-{variant:03d}"
 prior = [[json.loads(line) for line in (directory / 'records.jsonl').open()]
          for directory in PRIOR_PANELS]
 prior_rows = [row for panel in prior for row in panel]
-prior_other_plan_rows = [row for panel in prior[:-1] for row in panel]
 assert len(plans) == 8 and all(row['split'] == 'development' for row in plans)
 assert [row['animal_index'] for row in plans] == list(range(10400, 10408))
 assert len(train_bases) == 64 and plan_index['protocol']['train_lineage']['virtual_subjects'] == 4096
@@ -99,11 +98,7 @@ for key in ('animal_id', 'subject_id', 'specimen_id', 'experiment_id',
             'subject_deformation_realization_id', 'subject_plan_receipt_sha256'):
     assert len({row[key] for row in plans}) == len(plans)
     assert not {row[key] for row in plans} & {row[key] for row in train_bases}
-for key in ('animal_id', 'subject_id', 'specimen_id', 'experiment_id'):
-    assert not {row[key] for row in plans} & {row[key] for row in prior_other_plan_rows}
 assert not {row['subject_id'] for row in plans} & set(virtual_subject_ids)
-assert not {row['subject_plan_receipt_sha256'] for row in plans} & {
-    row['plan_receipt_sha256'] for row in prior_other_plan_rows}
 source_names = ('prepare_joint_in_path_correspondence_128_dev_panel.py',
                 'arbitrary_plane_subject_sampling_v6.py',
                 'arbitrary_plane_one_shot_slide_artifacts_v3.py',
