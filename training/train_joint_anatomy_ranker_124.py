@@ -210,7 +210,7 @@ with (run / 'training.jsonl').open('w') as train_stream, (run / 'draws.jsonl').o
             scored += 1
 
         row = {'presentation': presentation, 'physical_section_id': record['physical_section_id'],
-            'base_subject_plan_id': record['base_lineage']['subject_deformation_plan_id'],
+            'base_subject_id': record['base_lineage']['subject_id'],
             'draw_seed': draw_seed - 1, 'best_slot': best,
             'best_mapped_mm': float(mapped_error[best]),
             'best_rigid_mm': float(rigid_error[best]),
