@@ -1,0 +1,34 @@
+# 140: teacher-forced atlas correspondence does not clear the blind-fit gate
+
+The predeclared 140 mechanism gate **failed**. Keep the frozen 132 one-shot parent; do not extend this same 139-style head, use its fit score to retrain the pose predictor, promote it to the GUI, or call its raw probabilities calibrated. This was a synthetic-development mechanism test, not a physical arbitrary-angle validation or a public benchmark.
+
+## Frozen setup and numerical run
+
+The 132 step-2,000 parent was frozen. Two newly initialized, initially identical 139 correspondence/analytic-fit heads saw the same independently drawn sections and optimization schedule: one rendered Allen atlas intensity plus support, the other support with intensity zeroed. The analytic fit gate was fixed near one and the score residual at zero, so only geometric correction was being tested. Each of 4,000 updates used two fresh v4 and one fresh v3 synthetic physical sections, with one exact and one approximately 0.9-mm perturbed *training-only* candidate per section. No synthetic section was replayed with a second background; the diagnostic truth candidates never entered the blind development beam. The first launch failed before update one with nonfinite scaled gradients and its step-0-only output was preserved at `I:/AnatomyTracker/runs/atlas_correspondence_curriculum_140_failed_step0_20261010`. The lower-AMP-scale restart completed all 4,000 updates in 2,946 seconds without skipping a nonfinite gradient.
+
+Independent post-exit audit matched all 26 recorded config, protocol, source, log and checkpoint SHA-256 values, all 4,000 training rows, 12,000 distinct accepted physical-section IDs (8,000 v4, 4,000 v3), and 12,000 near-candidate rows. There were 1,189 ineligible draws and no fallback jitter. The near-candidate initial error range was 0.816–0.967 mm. The completed evaluator also matched its own config, rows, summary and source hashes, produced 7,856 unique row keys, and reproduced the 132 parent beam IDs and rigid errors exactly for all 248 v4 and 243 v3 eligible DEV sections. No output was opened while its runner was active.
+
+## Blind development result
+
+The unchanged frozen parent's blind 16 contained a ≤1.5-mm branch for 179/248 v4 and 197/243 v3 sections. The table compares the *truth-best original branch within that unchanged blind 16* before and after fitting. That branch is an oracle diagnostic, **not** a branch selected by the model. Plan-equal means each synthetic subject plan receives equal weight.
+
+| DEV cohort / head | Eligible near branches | Original ≤0.5 mm | Fitted ≤0.5 mm | Original plan-equal error | Fitted plan-equal error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v4 / atlas intensity | 179 | 25 | 32 | 0.837 mm | 0.843 mm |
+| v4 / support only | 179 | 25 | 29 | 0.837 mm | 0.852 mm |
+| v3 / atlas intensity | 197 | 42 | 44 | 0.762 mm | 0.764 mm |
+| v3 / support only | 197 | 42 | 46 | 0.762 mm | 0.776 mm |
+
+On v4, the full head gained only **7/179 = 3.9 percentage points** of conditional ≤0.5-mm capture, below the required ten points, and its plan-equal mean worsened by 0.006 mm instead of falling by at least 0.20 mm. Its three-section capture advantage over support-only was **1.7 points**, below five, and its plan-equal error advantage was only 0.009 mm, below 0.10 mm. The v3 ≤1.5-mm whole-beam availability did not regress (197 original versus 209 after either fitted head), but this retention cannot rescue the failed primary and anatomy-specific gates.
+
+Giving an oracle the choice of the *best corrected* branch increased v4 ≤0.5-mm availability from 25/248 original to 40/248 for atlas intensity (33/248 support only). That is not deployable selection. Keeping the frozen prior-selected branch gave only 8/248 corrected v4 sections ≤0.5 mm, versus 5/248 before correction; support-only gave 9/248. An exact-truth-pose candidate, excluded from the blind beam, fitted to 0.404-mm plan-equal error for the full head and 0.431 mm for support-only. This confirms learning near a supplied correct plane, not recovery of an unknown plane.
+
+The training objective did move: the full head's first-200 versus last-200-update coarse loss fell 2.898→1.395, fine loss 2.617→1.658 and teacher-forced fit error 1.179→0.479 mm; the support-only trajectory was almost identical. On the v4 blind near branch, 8,497 fixed tissue sites had an atlas key within 1 mm. The trained full head put a close key first for 3,574 (42.1%), in its top four for 6,760 (79.6%), but produced a final fine match within 0.5 mm for only 938 (11.0%). Support-only produced 3,473, 6,740 and 907 respectively. On exact truth poses, fine hits were still only 2,375/9,877 accessible sites (24.0%). The hard top-one coarse choice and weak fine precision are measured bottlenecks; an atlas-intensity-dependent anatomical signal has **not** been established.
+
+The v4 panel's angle bins relative to the nearest cardinal axis contained 20 (<15°), 90 (15–30°), 106 (30–45°) and 32 (≥45°) sections. In the steepest bin, 25 had a ≤1.5-mm blind candidate and only six of those fitted within 0.5 mm. These small descriptive cells do not imply either an angle-specific impossibility or all-angle competence. The generator samples independent brain-intersecting normals and roll, but its texture remains atlas-derived, only 64 deformation bases supply anatomy variation, and artifact frequencies are not measured on the deployment laboratory's physical slides. The existing TRAIN-only acquired-image audit found a substantial appearance gap. Synthetic v4/v3 success would not establish physical steep-oblique performance even if this gate had passed.
+
+## Decision
+
+Stop this exact head and any direct-pose feedback from it. The next bounded design decision should attack the measured loss of plausible correspondences between coarse top-four and hard top-one/fine fitting, while requiring a matched support-only control and source/atlas-content ablations to demonstrate that tissue anatomy—not outline or pose prior—drives any gain. Do not simply add updates or synthetic presentations. Independently, bring the TRAIN generator's contrast, background and artifact mixture toward representative acquired slides before large-scale training; preserve arbitrary-plane sampling and the uncalibrated stress distribution as a separate check. None of these steps removes the need for animal-separated, independently annotated physical steep-oblique validation before region-probability calibration or a claim that the GUI can replace the present models.
+
+Frozen outputs: `I:/AnatomyTracker/runs/atlas_correspondence_curriculum_140` and `I:/AnatomyTracker/runs/atlas_correspondence_curriculum_140_dev_eval`. No prior/external trained weights, public DeepSlice benchmark, final test animals, expert physical-oblique truth or numerical uncertainty calibration were used.
