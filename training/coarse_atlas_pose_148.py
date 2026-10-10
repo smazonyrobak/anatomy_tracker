@@ -18,7 +18,11 @@ class CoarseAtlasPose148(nn.Module):
     def __init__(self):
         super().__init__()
         self.source = nn.Sequential(
-            nn.Conv2d(5, 32, 3, padding=1), nn.GroupNorm(8, 32), nn.GELU(),
+            nn.Conv2d(5, 16, 5, stride=2, padding=2), nn.GroupNorm(4, 16), nn.GELU(),
+            nn.Conv2d(16, 32, 3, stride=2, padding=1), nn.GroupNorm(8, 32), nn.GELU(),
+        )
+        self.source_low = nn.Conv2d(5, 32, 1)
+        self.source_grid = nn.Sequential(
             nn.Conv2d(32, 32, 3, padding=1), nn.GroupNorm(8, 32), nn.GELU(),
         )
         # Support is only a key-validity mask; it never enters the feature score.
@@ -35,7 +39,10 @@ class CoarseAtlasPose148(nn.Module):
         batch, candidates = state.shape[:2]
         count, side, depths = batch * candidates, 24, 9
         height, width = source.shape[-2:]
-        image = self.source(F.adaptive_avg_pool2d(source, (side, side)))
+        image = self.source_grid(
+            F.adaptive_avg_pool2d(self.source(source), (side, side))
+            + self.source_low(F.adaptive_avg_pool2d(source, (side, side)))
+        )
         query = F.normalize(image.flatten(2).transpose(1, 2), dim=-1)
         visibility_logits = self.visibility(image).flatten(1)
         source_visibility = visibility_logits.sigmoid()
