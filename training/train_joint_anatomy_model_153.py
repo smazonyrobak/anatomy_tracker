@@ -40,7 +40,7 @@ seed, side, updates = 20261011153, 256, 1800
 stage_a_end, stage_b_end = 800, 1300
 checkpoints = (800, 1300, 1550, 1800)
 source = Path(__file__).resolve().parent
-run = root / 'runs/joint_anatomy_model_153_train151_001'
+run = root / 'runs/joint_anatomy_model_153_train151_002'
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -271,9 +271,8 @@ def inner_score(measure_gate=False):
                 F.logsigmoid(prediction['reflection_logit'])), -1)).flatten(1)
             branch = prior.topk(2, -1).indices
             modes, reflections = branch.div(2, rounding_mode='floor'), branch.remainder(2)
-            with torch.autocast('cuda', dtype=torch.float16):
-                output = model(sample['inputs'], context['atlas'], sample['offsets'],
-                               sample['weights'], modes, reflections)
+            output = model(sample['inputs'], context['atlas'], sample['offsets'],
+                           sample['weights'], modes, reflections)
             choice = int(output['score_uncalibrated'][0].argmax())
             truth = rigid_points_090(sample['state'], sample['reflection'], chart)
             direct = rigid_points_090(prediction['state'][:, modes[0, 0]],
@@ -294,10 +293,9 @@ def inner_score(measure_gate=False):
             if measure_gate:
                 states = torch.cat((sample['state'], item['near']))[None]
                 known_reflection = sample['reflection'][:, None].expand(1, 2)
-                with torch.autocast('cuda', dtype=torch.float16):
-                    fitted = model(sample['inputs'], context['atlas'], sample['offsets'],
-                        sample['weights'], torch.zeros(1, 2, device='cuda', dtype=torch.long),
-                        known_reflection, state_override=states)
+                fitted = model(sample['inputs'], context['atlas'], sample['offsets'],
+                    sample['weights'], torch.zeros(1, 2, device='cuda', dtype=torch.long),
+                    known_reflection, state_override=states)
                 exact = rigid_points_090(fitted['corrected_state'][:, 0].float(),
                     sample['reflection'], chart)
                 near = rigid_points_090(fitted['corrected_state'][:, 1].float(),
@@ -410,9 +408,8 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
                 reflections = branch.remainder(2)
                 states = None
                 near = torch.ones(branch.shape[1], device='cuda', dtype=torch.bool)
-            with torch.autocast('cuda', dtype=torch.float16):
-                output = model(sample['inputs'], context['atlas'], sample['offsets'],
-                    sample['weights'], modes, reflections, state_override=states)
+            output = model(sample['inputs'], context['atlas'], sample['offsets'],
+                sample['weights'], modes, reflections, state_override=states)
             joint, rigid_value, dense_value, ranking_value, reach_fraction = joint_loss(
                 sample, output, chart, stage, reflections, near)
             joint_reachable_count = int((reach_fraction >= .5).sum())
@@ -442,14 +439,15 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
             draws.flush()
             print(json.dumps({'event': 'train_milestone', **row}), flush=True)
         if step in checkpoints:
+            save(step, feedback_enabled)
             metrics, inner_rows = inner_score(measure_gate=step == stage_b_end)
             if step == stage_b_end:
                 feedback_enabled = metrics['feedback_gate_passed']
+                save(step, feedback_enabled)
             scores[step] = metrics['selection_score_mm']
             selections.write(json.dumps({'step': step, 'metrics': metrics,
                 'rows': inner_rows}, allow_nan=False) + '\n')
             selections.flush()
-            save(step, feedback_enabled)
             print(json.dumps({'event': 'inner_checkpoint', 'step': step,
                               'metrics': metrics}), flush=True)
         del sample, direct
