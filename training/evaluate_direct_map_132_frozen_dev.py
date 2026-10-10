@@ -63,7 +63,7 @@ assert sha(train132 / 'draws.jsonl') == done132['draws_sha256']
 assert sha(train132 / 'training.jsonl') == done132['training_sha256']
 assert sha(checkpoint) == done132['checkpoint_sha256']['2000'] == \
     done132eval['checkpoint_sha256']['2000'] == config143['parent_checkpoint_sha256'] == \
-    config145['pose_parent_checkpoint_sha256'] == done145eval['parent132_checkpoint_sha256']
+    config145['pose_parent_checkpoint_sha256'] == config145eval['parent132_checkpoint_sha256']
 assert sha(train132 / 'completed.json') == config143['parent_completion_sha256']
 assert sha(source.parent / 'docs/publication/V4_POSE_ADAPTATION_132_PROTOCOL_20261010.md') == \
     config132['protocol_sha256'] == done132['protocol_sha256']
@@ -73,14 +73,14 @@ assert sha(source / 'coherent_anatomy_geometry_143.py') == \
 assert all(sha(eval132 / name) == digest for name, digest in done132eval['output_sha256'].items())
 assert sha(source / 'evaluate_v4_pose_adaptation_132.py') == done132eval['evaluator_source_sha256']
 assert sha(eval132 / 'completed.json') == config143eval['parent_evaluation_completion_sha256'] == \
-    done145eval['parent132_eval_completion_sha256']
+    config145eval['parent132_eval_completion_sha256']
 assert config143eval['parent_checkpoint_sha256'] == config145eval['parent132_checkpoint_sha256'] == \
     sha(checkpoint)
 assert sha(train143 / 'config.json') == done143['config_sha256']
 assert sha(train143 / 'completed.json') == done143eval['train_completion_sha256'] == \
     config145['parent_completion_sha256']
 assert sha(train143 / 'full_step_10000.pt') == done143['checkpoint_sha256']['full']['10000'] == \
-    config145['parent_checkpoint_sha256'] == done145eval['parent143_checkpoint_sha256']
+    config145['parent_checkpoint_sha256'] == config145eval['parent143_checkpoint_sha256']
 assert sha(train145 / 'config.json') == done145['config_sha256']
 assert sha(train145 / 'completed.json') == done145eval['train_completion_sha256']
 for folder, receipt, names in (
@@ -93,7 +93,7 @@ for folder, receipt, names in (
     assert all(sha(folder / name) == receipt[key] for name, key in names.items())
 assert sha(source / 'evaluate_coherent_anatomy_field_143.py') == done143eval['evaluator_sha256']
 assert sha(source / 'evaluate_common_support_field_145.py') == done145eval['evaluator_sha256']
-assert sha(eval143 / 'completed.json') == done145eval['parent143_eval_completion_sha256']
+assert sha(eval143 / 'completed.json') == config145eval['parent143_eval_completion_sha256']
 assert all(not receipt.get(key, False) for receipt in
            (done132, done132eval, done143, done143eval, done145, done145eval)
            for key in ('calibrated', 'public_benchmark_used', 'expert_real_truth_used',
@@ -131,7 +131,7 @@ for cohort, panel in panels.items():
         for row in records[cohort])
     panel_hashes[cohort] = sha(panel / 'completed.json')
 assert panel_hashes == config143eval['panel_receipt_sha256'] == \
-    config145eval['panel_receipt_sha256'] == done145eval['panel_receipt_sha256']
+    config145eval['panel_receipt_sha256']
 train_plans = {row['plan_receipt'] for row in config143['synthetic_provenance']['base_subjects']}
 dev_plans = {row['plan_receipt_sha256'] for cohort in records for row in records[cohort]}
 assert len(train_plans) == 64 and len(dev_plans) == 8 and not train_plans & dev_plans
