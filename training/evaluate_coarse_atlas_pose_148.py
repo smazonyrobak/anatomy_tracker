@@ -72,7 +72,8 @@ assert train_config['protocol_sha256'] == sha(protocol)
 assert train_config['source_sha256'] == train_done['source_sha256']
 assert all(sha(source / name) == digest for name, digest in train_config['source_sha256'].items())
 assert train_done['steps'] == train_config['steps'] == checkpoints[-1]
-assert train_done['accepted_synthetic_physical_sections'] == 3 * checkpoints[-1]
+assert train_done['accepted_synthetic_presentations'] == 3 * checkpoints[-1]
+assert 0 < train_done['distinct_synthetic_physical_sections'] <= train_done['accepted_synthetic_presentations']
 assert train_done['v4_presentations'] == 2 * checkpoints[-1]
 assert train_done['v3_presentations'] == checkpoints[-1]
 assert not train_done['pose_unfrozen'] and not train_done['joint_feedback_trained']

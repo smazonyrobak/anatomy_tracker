@@ -19,13 +19,11 @@ import torch
 import torch.nn.functional as F
 
 from training.arbitrary_plane_full_frame_primitives import compose_full_frame_state
-from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 from training.arbitrary_plane_one_shot_slide_artifacts_v3 import sample_one_shot_slide_artifacts_v3
 from training.arbitrary_plane_one_shot_slide_artifacts_v4 import sample_one_shot_slide_artifacts_v4
 from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_synthetic_v7_64
 from training.coarse_atlas_pose_148 import CoarseAtlasPose148
 from training.global_atlas_contrast_090 import rigid_points_090
-from training.global_plane_matcher_120 import attach_global_plane_matcher
 
 
 def sha(path):
@@ -51,11 +49,6 @@ context = load_streaming_synthetic_v7_64(device='cuda')
 assert len(context['bases']) == 64 and len(context['subjects']) == 4096
 assert all(base['lineage']['split'] == 'train' for base in context['bases'])
 
-parent_model = OneShotJointSliceModel(modes=16, normal_anchor_count=64,
-    atlas_conditioning=True, fit_quality=True, vector_refinement=True,
-    candidate_ranking=True, fitted_ranking=True).eval().requires_grad_(False)
-attach_global_plane_matcher(parent_model, enabled=True)
-parent_model.load_state_dict(torch.load(parent, map_location='cpu', weights_only=True)['model'])
 torch.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 rng = np.random.default_rng(seed)
@@ -86,7 +79,7 @@ config = {'seed': seed, 'steps': steps, 'side': side, 'arms': arms,
     'key_reachable_um': 900,
     'loss_weights': {'key_ce': 1., 'expected_ccf_huber': .5,
                      'corrected_plane_huber': 1., 'image_only_visibility_bce': .2},
-    'training_stage': 'coarse matcher warmup; 132 pose frozen',
+    'training_stage': 'independent coarse matcher warmup; frozen 132 supplies DEV beam only',
     'pose_unfreeze_after_development_gate': True,
     'pose_unfrozen_in_this_run': False, 'joint_feedback_trained': False,
     'same_initial_matcher_weights_and_draws': True,
@@ -137,8 +130,7 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
                 used = (bool(sample['eligible'][0])
                     and bool(sample['valid_mask'][0, 2::4, 2::4].any())
                     and bool((F.grid_sample(sample['valid_mask'][:, None].float(),
-                        query_grid24, mode='bilinear', align_corners=False) > .99).any())
-                    and record['physical_section_id'] not in accepted_ids)
+                        query_grid24, mode='bilinear', align_corners=False) > .99).any()))
                 draws.write(json.dumps({'step': step, 'slot': slot, 'appearance': appearance,
                     'attempt': attempted, 'used': used, **record}, allow_nan=False) + '\n')
                 if used:
@@ -189,6 +181,8 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
                             query_grid, mode='bilinear', align_corners=False).flatten(1)
                         truth = F.grid_sample(sample['centre'].permute(0, 3, 1, 2),
                             query_grid, mode='bilinear', align_corners=False).flatten(2).transpose(1, 2)
+                        target_rigid = rigid_points_090(sample['state'], sample['reflection'],
+                            output['source_grid'][0] - .5 / side)
                         valid_query = valid_weight > .99
                         distance = torch.cdist(truth.expand(3, -1, -1), output['key_ccf'][0].float())
                         distance.masked_fill_(~torch.isfinite(output['logits'][0, :, :, :-1]), torch.inf)
@@ -202,11 +196,12 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
                 ce_weight = torch.where(reachable[query_mask], 1., .3)
                 key_ce = (ce * ce_weight).sum() / ce_weight.sum()
                 displacement = (output['expected_ccf'][0] - truth.expand(3, -1, -1)) / 1000
-                expected = F.smooth_l1_loss(displacement[reachable],
+                expected = (F.smooth_l1_loss(displacement[reachable],
                     torch.zeros_like(displacement[reachable]), beta=.25)
+                    if bool(reachable.any()) else displacement.sum() * 0)
                 mapped = rigid_points_090(output['corrected_state'], reflection,
                                           output['source_grid'][0] - .5 / side)
-                rigid_mm = (mapped[0] - truth.expand(3, -1, -1)).norm(dim=-1) / 1000
+                rigid_mm = (mapped[0] - target_rigid.expand(3, -1, -1)).norm(dim=-1) / 1000
                 corrected = F.smooth_l1_loss(rigid_mm[query_mask],
                     torch.zeros_like(rigid_mm[query_mask]), beta=.25)
                 visibility = F.binary_cross_entropy_with_logits(
@@ -232,14 +227,15 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
                'elapsed_seconds': time.perf_counter() - started, 'arms': totals,
                'candidate_initial_error_mm': candidate_errors}
         logs.write(json.dumps(row, allow_nan=False) + '\n')
-        if step % 1000 == 0:
+        if step == 1 or step % 1000 == 0:
             logs.flush()
             draws.flush()
             print(json.dumps({'event': 'milestone', **row}), flush=True)
         if step in checkpoints:
             save(step)
 (run / 'completed.json').write_text(json.dumps({'steps': steps,
-    'accepted_synthetic_physical_sections': len(accepted_ids), 'attempted': attempted,
+    'accepted_synthetic_presentations': 3 * steps,
+    'distinct_synthetic_physical_sections': len(accepted_ids), 'attempted': attempted,
     'v4_presentations': 2 * steps, 'v3_presentations': steps,
     'config_sha256': sha(run / 'config.json'), 'draws_sha256': sha(run / 'draws.jsonl'),
     'training_sha256': sha(run / 'training.jsonl'),

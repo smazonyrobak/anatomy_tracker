@@ -88,8 +88,10 @@ class CoarseAtlasPose148(nn.Module):
         key_support = support.reshape(count, depths * side * side)
 
         query = query[:, None].expand(-1, candidates, -1, -1).reshape(count, side * side, 32)
-        valid = ((torch.cdist(query_ccf, key_ccf) <= 3000.) &
-                 (key_support[:, None] > .5))
+        with torch.autocast(device_type=source.device.type, enabled=False):
+            valid = ((torch.cdist(query_ccf.float() / 1000.,
+                                  key_ccf.float() / 1000.) <= 3.) &
+                     (key_support[:, None] > .5))
         match_logits = (self.log_temperature.exp() * query @ key.transpose(-2, -1))
         match_logits = match_logits.masked_fill(~valid, -torch.inf)
         dustbin = self.dustbin(query) + valid.sum(-1, keepdim=True).clamp_min(1).log()
@@ -97,8 +99,9 @@ class CoarseAtlasPose148(nn.Module):
         probability_all = logits.float().softmax(-1)
         probability = probability_all[..., :-1]
         match_mass = probability.sum(-1)
-        expected_ccf = ((probability / match_mass.clamp_min(1e-6)[..., None])
-                        @ key_ccf.float())
+        with torch.autocast(device_type=source.device.type, enabled=False):
+            expected_ccf = ((probability / match_mass.clamp_min(1e-6)[..., None])
+                            @ key_ccf.float())
         confidence = source_visibility[:, None].expand(-1, candidates, -1).reshape(
             count, side * side) * match_mass
 
@@ -114,11 +117,7 @@ class CoarseAtlasPose148(nn.Module):
             fitted = torch.linalg.solve(lhs, rhs)
             fitted_ouv = torch.stack((fitted[:, 0] - .5 * (fitted[:, 1] + fitted[:, 2]),
                                       fitted[:, 1], fitted[:, 2]), -2)
-            prior_ouv = torch.stack((prior[:, 0] - .5 * (prior[:, 1] + prior[:, 2]),
-                                     prior[:, 1], prior[:, 2]), -2)
-            corrected = full_frame_state_from_components(*physical_ouv_to_frame(fitted_ouv))
-            baseline = full_frame_state_from_components(*physical_ouv_to_frame(prior_ouv))
-            corrected_state = state.reshape(count, 12).float() + corrected - baseline
+            corrected_state = full_frame_state_from_components(*physical_ouv_to_frame(fitted_ouv))
 
         return {
             'corrected_state': corrected_state.reshape(batch, candidates, 12),
