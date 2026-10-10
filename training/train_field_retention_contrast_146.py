@@ -35,6 +35,7 @@ def sha(path):
 
 
 source = Path(__file__).resolve().parent
+protocol = source.parent / 'docs/publication/RETENTION_FIELD_146_PROTOCOL_20261010.md'
 parent = root / 'runs/coherent_anatomy_field_143/full_step_10000.pt'
 parent_done = root / 'runs/coherent_anatomy_field_143/completed.json'
 pose_parent = root / 'runs/v4_pose_adaptation_132/joint_step_02000.pt'
@@ -84,6 +85,7 @@ config = {'seed': seed, 'steps': steps, 'side': side, 'radius': radius,
     'checkpoints': [0, 500, 2000], 'arms': arms,
     'parent_checkpoint_sha256': sha(parent), 'parent_completion_sha256': sha(parent_done),
     'pose_parent_checkpoint_sha256': sha(pose_parent),
+    'protocol_sha256': sha(protocol),
     'source_sha256': {name: sha(source / name) for name in source_names},
     'synthetic_provenance': context['provenance'],
     'same_initial_weights_optimizer_scaler': True,
