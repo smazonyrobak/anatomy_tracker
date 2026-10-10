@@ -138,6 +138,8 @@ config = {'protocol_sha256': sha(protocol), 'evaluator_sha256': sha(__file__),
           'arms': arms, 'step': 4000, 'threshold_um': thresholds,
           'role': 'oracle truth-best original branch within unchanged blind16; only if original error <=1.5mm',
           'support': 'fractional atlas support >0.5; no label is passed to model',
+          'scored_hit': 'reproduces 140: fine argmax not dustbin, globally supported key <=1mm, selected world distance <=threshold; no selected support gate',
+          'supported_scored_hit': 'scored_hit plus selected fine-key support >0.5',
           'key_lattice': '7x32x32, depth-major then row then column; top4 exclude dustbin',
           'local_offsets': '3x5x5 clamped as frozen head; duplicate keys allowed only in geometry ceiling',
           'gate': 'v4 full-intensity top4 minus top1 >=10 percentage points among globally <=500um sites and top4 >=60% of global ceiling',
@@ -213,7 +215,9 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 fine_supported = fine_support[torch.arange(len(truth), device=device),
                                               fine_index.clamp_max(74)]
                 scored_distance = (fine_position - truth).norm(dim=-1).masked_fill(
-                    (fine_index == 75) | ~fine_supported, float('inf'))
+                    (fine_index == 75) | (global_distance > 1000), float('inf'))
+                supported_scored_distance = scored_distance.masked_fill(
+                    ~fine_supported, float('inf'))
                 counts = {'valid_fixed_sites': len(truth),
                           'top4_supported_seed_count': int(support[top].sum()),
                           'top4_seed_count': 4 * len(truth)}
@@ -223,8 +227,12 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                     counts[f'top1_le_{label}_um'] = int((top1_distance <= threshold).sum())
                     counts[f'top4_le_{label}_um'] = int((top4_distance <= threshold).sum())
                     counts[f'scored_le_{label}_um'] = int((scored_distance <= threshold).sum())
+                    counts[f'supported_scored_le_{label}_um'] = int(
+                        (supported_scored_distance <= threshold).sum())
                 assert all(counts[f'top1_le_{t}_um'] <= counts[f'top4_le_{t}_um']
                            <= counts[f'global_le_{t}_um'] for t in thresholds)
+                if arm == arms[0]:
+                    assert counts['scored_le_500_um'] == previous['fine_hit']
                 row_out = {'cohort': cohort, 'arm': arm,
                     'section_id': record['section_id'],
                     'physical_section_id': record['panel_physical_section_id'],
