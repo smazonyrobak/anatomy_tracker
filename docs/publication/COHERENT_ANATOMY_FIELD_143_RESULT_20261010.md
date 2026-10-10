@@ -1,0 +1,35 @@
+# Coherent anatomy field 143 held-out result
+
+The 143 field attains high scored mapping accuracy when the correct atlas plane is supplied, but it does **not** pass the anatomy-specific matching gate. At 10,000 updates, its full-atlas arm is no better than the otherwise matched arm that sees atlas tissue support without atlas intensity. Neither arm reliably repairs a nearby incorrect plane. Therefore, its fit energy must not yet be used to train the direct pose predictor or to claim a working joint pose-and-deformation model.
+
+## Frozen training and evaluation
+
+The run accepted 30,000 independently sampled synthetic physical sections in 10,000 updates: 20,000 with v4 appearance and 10,000 with v3 appearance. It attempted 32,994 draws; all physical-section IDs were distinct. The sections came from 64 synthetic TRAIN deformation plans, not 64 biological animals. Both arms started with identical field weights and received the same section and candidate-state draws. The pose parent was the frozen internal, randomly initialized lineage 132 checkpoint; no external pretrained model or pseudolabels were used.
+
+The independent evaluator verified the training receipt, source and protocol hashes, all eight field checkpoints, the parent checkpoint, and the two frozen synthetic DEV panels before producing 7,856 unique section–arm–checkpoint–role rows. The panels comprise 248 eligible v4 and 243 eligible v3 sections from eight deformation plans disjoint from TRAIN. Exact pose and the truth-best branch among the frozen blind candidates are diagnostic oracles, not deployable inference. The nearby-branch percentage below is restricted to branches whose rigid error is at most 1.5 mm. A scored hit means a nondustbin correspondence within 0.5 mm of dense CCF truth; the main denominator is observed valid tissue whose truth point lies inside the rendered atlas grid and on atlas tissue. Atlas support coverage was 97.6% for v4 and 97.8% for v3.
+
+| Frozen v4 DEV measure at step 10,000 | Full atlas | Tissue support only | Required gate |
+| --- | ---: | ---: | ---: |
+| Correct-plane scored hits, globally supported sites | 96.7% | 96.9% | Full ≥50% and ≥10 points better |
+| Truth-best nearby branch scored hits, globally supported sites | 29.5% | 29.8% | Full ≥35% |
+| Correct plane ranked below support-fraction-matched wrong plane | 99.6% | 99.6% | Full ≥75% and ≥10 points better |
+| Plan-equal mean point error, correct plane | 0.183 mm | 0.179 mm | Diagnostic |
+| Plan-equal mean point error, nearby branch | 0.815 mm | 0.814 mm | Diagnostic |
+
+All 248 v4 sections had a support-fraction-matched wrong plane for ranking, at a targeted rigid error near 2.2 mm. Full-atlas minus support-only was **−0.20 percentage points** on correct-plane scored hits and **0.0 points** on plane ranking. On v3 DEV, the full/support correct-plane rates were 96.2%/96.3%; nearby-branch rates were 35.3%/36.8%; matched-plane ranking was 100.0%/99.2%. The v4 gate decision is **fail**. Correct-plane mapping success must not be described as a gain over a rigid-map baseline, which this evaluation did not measure.
+
+The result is consistent across the sampled orientation range: v4 correct-plane hits were 96.3%, 97.4%, 96.0%, and 97.1% in the <15°, 15–30°, 30–45°, and ≥45° nearest-cardinal-angle bins. Nearby-branch hits in those bins were only 25.3%, 26.7%, 32.0%, and 32.2%. The generator samples unoriented normals across the sphere and full-turn roll, with no explicit coronal restriction; its offset mixture and valid-tissue rejection mean the *accepted* planes are not uniformly distributed over all brain-intersecting planes. These synthetic bins do not validate physical heavy-oblique sections.
+
+## Interpretation and next decision
+
+The field's high correct-plane score does not establish a gain over rigid mapping, and the matched control shows that this experiment has **not** established use of atlas interior anatomy. Near-perfect exact-versus-wrong energy ranking is not enough: tissue-support geometry alone yields the same ranking. A fit-loss feedback loop trained from this energy could reward an anatomically wrong but similarly shaped plane. Longer training of the unchanged objective is not justified as the immediate next action by these held-out controls.
+
+The next targeted experiment should teach source and atlas *interior* features to correspond at known synthetic CCF points, with contrastive hard negatives selected among planes of similar tissue support and outline. Keep the matched support-only control and exact/near/all-angle DEV readout. Before allowing fit energy to update the pose head, verify both an anatomy-specific held-out gain and that the fit gradient locally points toward the true plane. The current field and the direct-pose bridge remain research components, not a GUI replacement. Real donor-separated coronal/sagittal retention, expert physical oblique truth, calibrated electrode-site and region probabilities, and the final DeepSlice comparison remain outstanding.
+
+## Frozen evidence
+
+- Training: `I:/AnatomyTracker/runs/coherent_anatomy_field_143/completed.json`; `training.jsonl` SHA-256 `ef4ddce7a79daa7b9675c16662a50650ac93c9bd04cbb3c9c5396ca878a056a2`; `draws.jsonl` SHA-256 `97cc4d0203953427be1857008988dec1626decd04e9ab93ac9ebfbd32df170de`.
+- Independent evaluation: `I:/AnatomyTracker/runs/coherent_anatomy_field_143_dev_eval/completed.json`; 7,856 raw rows SHA-256 `af7700f0da5ce3a8cc8bcc3ae673095308319ef1600994b5161a8f4050bd16bd`; summary SHA-256 `018683ca462be1c7b700d18bd0450d1fb0274f3f9f2d3953a3894729dbb2c232`.
+- Frozen protocol: `docs/publication/COHERENT_ANATOMY_FIELD_143_PROTOCOL_20261010.md`; independent evaluator: `training/evaluate_coherent_anatomy_field_143.py`.
+
+Dense cross-modal contrastive representations are a targeted next mechanism, not a demonstrated fix here: [CoMIR](https://proceedings.neurips.cc/paper_files/paper/2020/file/d6428eecbe0f7dff83fc607c5044b2b9-Paper.pdf) learned paired dense features for registration of different image modalities. DeepSlice's published evaluation concerns coronal sections, so it cannot substitute for our planned physical arbitrary-plane validation: [DeepSlice](https://www.nature.com/articles/s41467-023-41645-4).
