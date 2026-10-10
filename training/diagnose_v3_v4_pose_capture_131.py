@@ -32,7 +32,7 @@ def sha(path):
 
 
 source = Path(__file__).resolve().parent
-out = root / 'runs/v3_v4_pose_capture_131'
+out = root / 'runs/v3_v4_pose_capture_131b'
 parent = root / 'runs/joint_in_path_correspondence_128_treatment'
 checkpoint = parent / 'joint_step_06000.pt'
 parent_done = json.loads((parent / 'completed.json').read_text())
@@ -43,7 +43,7 @@ assert sha(parent / 'config.json') == parent_done['config_sha256']
 assert all(sha(source / name) == digest for name, digest in parent_config['source_sha256'].items())
 
 side = 256
-seeds = {'v3': 2026101013101, 'v4': 2026101013102}
+seeds = {'v3': 2026101013103, 'v4': 2026101013104}
 samplers = {'v3': sample_one_shot_slide_artifacts_v3,
             'v4': sample_one_shot_slide_artifacts_v4}
 torch.set_num_threads(4)
@@ -68,18 +68,20 @@ chart = torch.stack((xx, yy), -1).reshape(-1, 2)
 rows, draws = [], []
 with torch.inference_mode():
     for cohort, sampler in samplers.items():
-        for base in range(64):
+        for sample_index in range(256):
+            base, repeat = sample_index % 64, sample_index // 64
             attempt = 0
             while True:
                 draw_seed = int(np.random.SeedSequence(
-                    [seeds[cohort], base, attempt, 0]).generate_state(1, dtype=np.uint64)[0])
+                    [seeds[cohort], base, repeat, attempt, 0]).generate_state(1, dtype=np.uint64)[0])
                 variant = int(np.random.default_rng(np.random.SeedSequence(
-                    [seeds[cohort], base, attempt, 1])).integers(64))
+                    [seeds[cohort], base, repeat, attempt, 1])).integers(64))
                 virtual_index = 64 * base + variant
                 sample = sampler(context, [virtual_index], draw_seed, side=side)
                 provenance = sample['provenance'][0]
                 eligible = bool(sample['eligible'][0])
-                draws.append({'cohort': cohort, 'base_index': base, 'attempt': attempt,
+                draws.append({'cohort': cohort, 'base_index': base, 'repeat': repeat,
+                    'attempt': attempt,
                     'seed': draw_seed, 'virtual_index': virtual_index,
                     'physical_section_id': provenance['physical_section_id'],
                     'eligible': eligible, 'provenance': provenance})
@@ -119,7 +121,7 @@ with torch.inference_mode():
             angle = float(np.degrees(np.arccos(np.clip(np.abs(normal).max(), 0, 1))))
             exposure = (provenance['one_shot_slide_artifacts_v4']['exposure']
                         if cohort == 'v4' else 1.0)
-            rows.append({'cohort': cohort, 'base_index': base,
+            rows.append({'cohort': cohort, 'base_index': base, 'repeat': repeat,
                 'synthetic_subject_id': provenance['base_lineage']['subject_id'],
                 'physical_section_id': provenance['physical_section_id'],
                 'virtual_index': virtual_index, 'seed': draw_seed,
@@ -137,11 +139,14 @@ with torch.inference_mode():
                                           'rigid_mm': costs[selected_slot]},
                 'provenance': provenance})
         print(json.dumps({'event': 'cohort_completed', 'cohort': cohort,
-                          'eligible_sections': 64}), flush=True)
+                          'eligible_sections': 256}), flush=True)
 
-assert len(rows) == 128 and len({r['physical_section_id'] for r in rows}) == 128
+assert len(rows) == 512 and len({r['physical_section_id'] for r in rows}) == 512
+assert len({r['physical_plane_sha256'] for r in rows}) == 512
 assert all(len({r['synthetic_subject_id'] for r in rows if r['cohort'] == cohort}) == 64
            for cohort in samplers)
+assert all(len([r for r in rows if r['cohort'] == cohort and r['base_index'] == base]) == 4
+           for cohort in samplers for base in range(64))
 assert all(r['top_prior']['branch_id'] == r['selected_direct_prior']['branch_id']
            for r in rows)
 
@@ -182,7 +187,7 @@ config = {'checkpoint_sha256': sha(checkpoint),
     'checkpoint_config_sha256': sha(parent / 'config.json'),
     'source_sha256': {name: sha(source / name) for name in names},
     'synthetic_context_provenance': context['provenance'], 'cohort_seed_prefixes': seeds,
-    'cohort_design': 'one eligible independent draw per TRAIN local-deformation base and cohort;'
+    'cohort_design': 'four eligible independent draws per TRAIN local-deformation base and cohort;'
                      ' disjoint v3/v4 seeds, independently sampled virtual variants and planes;'
                      ' no deliberate paired appearances or geometry deduplication',
     'metric': 'mean 3D rigid-gauge error over observed valid tissue pixels, mm;'
