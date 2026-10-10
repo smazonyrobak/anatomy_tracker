@@ -74,6 +74,17 @@ assert train_config['source_sha256'] == train_done['source_sha256']
 assert all(sha(source / name) == digest for name, digest in train_config['source_sha256'].items())
 assert not any(train_done.get(key, False) for key in ('calibrated', 'expert_real_truth_used',
     'final_animals_used', 'public_benchmark_used', 'external_pretrained_weights_used'))
+assert train_done['updates'] == 2000 and train_done['synthetic_presentations'] == 6000
+draws = [json.loads(line) for line in (train / 'draws.jsonl').open()]
+presentations = [row for row in draws if row['kind'] == 'synthetic_train' and row['used']]
+selections = [row for row in draws if row['kind'] == 'blind_beam_selection']
+assert len(presentations) == len(selections) == 6000
+assert len({row['physical_section_id'] for row in presentations}) == 6000
+assert len({(row['update'], row['slot']) for row in presentations}) == 6000
+assert all(len(row['beam_ids']) == 16 and len(row['selected_ids']) <= 4 and
+    set(row['selected_ids']) <= set(row['beam_ids']) for row in selections)
+training_log = [json.loads(line) for line in (train / 'training.jsonl').open()]
+assert len(training_log) == 2000
 checkpoints = {arm: {str(step): train / arm / f'head_step_{step:05d}.pt'
                      for step in (0, 2000)} for arm in arms}
 assert all(sha(path) == train_done['checkpoint_sha256'][arm][step]
