@@ -20,6 +20,7 @@ from training.arbitrary_plane_streaming_synthetic_v7_appearance_v3 import (
 VERSION = 'one_shot_slide_artifacts_v3'
 EVENT_PROBS = {'fragment': .22, 'fold': .20, 'bubble': .15, 'tile_seam': .25}
 RAW_EXTERIOR_PROBS = (.8, .1, .1)
+TISSUE_PLACEMENT_PROB = .8
 
 
 def sample_one_shot_slide_artifacts_v3(context, subject_indices, seed, side=192, source_sample=None):
@@ -59,10 +60,26 @@ def sample_one_shot_slide_artifacts_v3(context, subject_indices, seed, side=192,
              'seam_gain': float(rng.uniform(.78, 1.2)), 'seam_offset': float(rng.uniform(-.07, .07)),
              'seam_defocus': float(rng.uniform(.3, .75)),
              'raw_exterior_code': float(rng.choice((0, 1, 2), p=RAW_EXTERIOR_PROBS))}
+        visible_yx = torch.nonzero(source['visible'][row] > .25).cpu().numpy()
+        tissue_placed = {name: False for name in EVENT_PROBS}
+        if len(visible_yx):
+            for name in ('fragment', 'fold', 'bubble'):
+                if events[name] and rng.random() < TISSUE_PLACEMENT_PROB:
+                    y, x = visible_yx[rng.integers(len(visible_yx))]
+                    p[f'{name}_x'] = float(2 * x / (side - 1) - 1)
+                    p[f'{name}_y'] = float(2 * y / (side - 1) - 1)
+                    tissue_placed[name] = True
+            if events['tile_seam'] and rng.random() < TISSUE_PLACEMENT_PROB:
+                y, x = visible_yx[rng.integers(len(visible_yx))]
+                p['seam_position'] = float(2 * (x if p['seam_vertical'] else y) / (side - 1) - 1)
+                tissue_placed['tile_seam'] = True
         parameters.append((events, p))
         records.append({**original, VERSION: {'seed_branch': 28, 'code_sha256': code_sha256,
             'mode_probabilities_raw_black_brush': MODE_PROBS,
             'event_probabilities': EVENT_PROBS,
+            'tissue_placement_probability': TISSUE_PLACEMENT_PROB,
+            'tissue_placement_visible_threshold': .25,
+            'tissue_placed': tissue_placed,
             'raw_exterior_probabilities_black_near_gray': RAW_EXTERIOR_PROBS,
             'calibration': 'TRAIN appearance mixture, not measured physical-slide prevalence',
             'warp_strength': strength, 'warp_grid_sizes': [4, 8, 16], 'events': events, 'parameters': p,
