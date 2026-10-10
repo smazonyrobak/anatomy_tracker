@@ -92,3 +92,11 @@ batches per arm, 243 synthetic DEV rows and 222 weak-real DEV rows. An
 independent read-only audit additionally matched every TRAIN update/slot and
 weak-real identity to the shared manifest, all 256 panel files to their
 recorded hashes, and the raw-row gate arithmetic.
+
+One provenance exception should remain visible: 1,704/13,247 attempt rows
+(1,530/12,000 accepted) from eight independent TRAIN bases omit a direct
+`base_lineage.subject_deformation_plan_id` field. The manifest configuration
+contains a plan receipt for all 64 bases, and each draw's virtual/base index
+links back to it, so the lineage is recoverable. Nevertheless, the protocol's
+literal promise of an explicit plan ID on every attempt was not met. This
+does not change the matched-draw comparison or its failed gate.
