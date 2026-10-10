@@ -194,7 +194,7 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
             sagittal_images[sag_index:sag_index + 1]).copy()).to('cuda')
         coronal_identity = real_coronal['identities'][0]
         sagittal_identity = {key: sagittal_records[sag_index][key] for key in
-            ('donor_id', 'specimen_id', 'experiment_id', 'section_id')}
+            ('donor_id', 'specimen_id', 'experiment_id', 'section_id', 'image_sha256')}
         draws.write(json.dumps({'kind': 'coronal_weak_train', 'update': step,
             'slot': 3, 'used': True, **coronal_identity}, allow_nan=False) + '\n')
         draws.write(json.dumps({'kind': 'sagittal_weak_train', 'update': step,
