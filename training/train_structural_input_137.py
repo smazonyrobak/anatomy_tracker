@@ -205,8 +205,9 @@ with (control_dir / 'draws.jsonl').open() as frozen_draws, \
                 row = {'kind': 'synthetic_train', 'update': step, 'slot': slot,
                     'appearance_version': appearance, 'draw_attempt': draw_count,
                     'used': eligible, **record}
-                assert row == json.loads(next(frozen_draws))
-                draws.write(json.dumps(row, allow_nan=False) + '\n')
+                encoded = json.dumps(row, allow_nan=False)
+                assert json.loads(encoded) == json.loads(next(frozen_draws))
+                draws.write(encoded + '\n')
                 if eligible:
                     assert record['physical_section_id'] not in accepted_ids
                     accepted_ids.add(record['physical_section_id'])
@@ -224,7 +225,7 @@ with (control_dir / 'draws.jsonl').open() as frozen_draws, \
         sagittal_inputs = torch.zeros(1, 5, side, side, device='cuda')
         sagittal_inputs[:, :1] = torch.from_numpy(np.asarray(
             sagittal_images[sag_index:sag_index + 1]).copy()).to('cuda')
-        coronal_identity = real_coronal['identities'][0]
+        coronal_identity = json.loads(json.dumps(real_coronal['identities'][0]))
         sagittal_identity = {key: sagittal_records[sag_index][key] for key in
             ('donor_id', 'specimen_id', 'experiment_id', 'section_id', 'image_sha256')}
         for row in ({'kind': 'coronal_weak_train', 'update': step, 'slot': 3,
@@ -308,6 +309,7 @@ with (control_dir / 'draws.jsonl').open() as frozen_draws, \
             'gradient_norm': float(gradient),
             'seconds_since_process_start': time.perf_counter() - started}
         control_row = json.loads(next(frozen_training))
+        row = json.loads(json.dumps(row, allow_nan=False))
         assert all(row[key] == control_row[key] for key in
             ('update', 'synthetic_section_ids', 'coronal_identity', 'sagittal_identity'))
         if step == 1:
