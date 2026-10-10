@@ -171,6 +171,7 @@ config = {'parent_checkpoint_sha256': sha(parent_path),
           'truth_best_roles': 'diagnostic oracle within the unchanged blind16, never selection',
           'oracle_branch': 'exact target physical pose injected for correspondence diagnostic only, never selection',
           'matched_key': 'within 1mm of observed valid dense CCF coordinate on 16x16 fixed query grid',
+          'descriptive_strata': 'angle, observed tissue fraction, input mode, raw exterior, exposure, and artifact events; not additional decision gates',
           'calibrated': False, 'public_benchmark_used': False,
           'expert_real_truth_used': False, 'final_animals_used': False}
 (out / 'config.json').write_text(json.dumps(config, indent=2))
@@ -206,6 +207,11 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             assert abs(float(errors[selected_slot]) - frozen['top1_rigid_mm']) < 1e-4
             truth_fixed = dense[fixed_y, fixed_x]
             valid_fixed = valid[fixed_y, fixed_x]
+            provenance = record['provenance']
+            artifacts = provenance['one_shot_slide_artifacts_v3']
+            angle = float(np.degrees(np.arccos(np.clip(
+                np.max(np.abs(record['plane_normal_ap_dv_ml'])), 0., 1.))))
+            assert int(valid.sum()) == record['valid_pixels']
             for arm in arms:
                 for step in steps:
                     corrected_parts = []
@@ -247,6 +253,12 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                             'animal_id': record['animal_id'], 'specimen_id': record['specimen_id'],
                             'experiment_id': record['experiment_id'],
                             'appearance_mode': record['appearance_mode'],
+                            'nearest_cardinal_angle_deg': angle,
+                            'observed_valid_tissue_fraction': record['valid_pixels'] / (side * side),
+                            'raw_exterior_code': (int(artifacts['parameters']['raw_exterior_code'])
+                                if record['appearance_mode'] == 'raw' else None),
+                            'exposure': provenance.get('one_shot_slide_artifacts_v4', {}).get('exposure'),
+                            'artifact_events': artifacts['events'],
                             'arm': arm, 'step': step, 'role': role,
                             'branch_id': int(ids[slot]) if slot is not None else None,
                             'blind_best_available_1p5mm': bool(errors[near_slot] <= 1.5),
