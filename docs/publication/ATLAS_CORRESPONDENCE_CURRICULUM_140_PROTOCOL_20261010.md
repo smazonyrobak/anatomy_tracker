@@ -71,6 +71,12 @@ completed receipt with config/draw/log/checkpoint hashes. The frozen 132
 parent already failed a weak-real coronal guard, so 140 remains an
 experimental mechanism test even if its own head improves synthetic fit.
 
+The first launch stopped before its first optimizer update because the default
+AMP loss scale of 65,536 produced nonfinite gradients. Preserve that partial
+step-0 output separately; it contains no trained head or outcome. Restart the
+same frozen protocol with AMP initial scale 256 and growth interval 4,001,
+still rejecting any nonfinite gradient rather than silently skipping it.
+
 ## Frozen development decision
 
 Before opening 140 results, reproduce the 132/139 parent errors and blind

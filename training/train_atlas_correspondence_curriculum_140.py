@@ -84,7 +84,8 @@ for head in heads.values():
 optimizers = {arm: torch.optim.AdamW(
     [parameter for parameter in heads[arm].parameters() if parameter.requires_grad],
     lr=2e-4, weight_decay=1e-4) for arm in arms}
-scalers = {arm: torch.amp.GradScaler('cuda') for arm in arms}
+scalers = {arm: torch.amp.GradScaler('cuda', init_scale=256., growth_interval=4001)
+    for arm in arms}
 source_files = ('train_atlas_correspondence_curriculum_140.py', 'atlas_spatial_fit_139.py',
     'arbitrary_plane_one_shot_model.py', 'arbitrary_plane_one_shot_slide_artifacts_v3.py',
     'arbitrary_plane_one_shot_slide_artifacts_v4.py',
@@ -98,6 +99,7 @@ config = {'seed': seed, 'updates': updates, 'side': side,
     'arms': arms, 'checkpoints': checkpoints, 'warmup_updates': 1000,
     'near_jitter_limits': [.07, .07, .07, 850., 850., 850., .04, .04, .03],
     'near_target_mm': .9, 'near_accepted_mm': [.35, 1.5],
+    'amp_grad_scale': {'initial': 256., 'growth_interval': 4001},
     'loss_weights': {'coarse': 1., 'fine': .5, 'visibility': .2,
         'analytic_fit_after_warmup': .25},
     'gate': 'frozen zero weight, bias 2.65, tanh gain 0.990; score frozen zero',
