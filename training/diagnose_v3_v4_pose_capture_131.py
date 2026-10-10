@@ -120,7 +120,7 @@ with torch.inference_mode():
             exposure = (provenance['one_shot_slide_artifacts_v4']['exposure']
                         if cohort == 'v4' else 1.0)
             rows.append({'cohort': cohort, 'base_index': base,
-                'synthetic_subject_plan_receipt_sha256': provenance['base_lineage']['subject_plan_receipt_sha256'],
+                'synthetic_subject_id': provenance['base_lineage']['subject_id'],
                 'physical_section_id': provenance['physical_section_id'],
                 'virtual_index': virtual_index, 'seed': draw_seed,
                 'attempts_before_eligible': attempt, 'appearance_mode': provenance['mode'],
@@ -140,7 +140,7 @@ with torch.inference_mode():
                           'eligible_sections': 64}), flush=True)
 
 assert len(rows) == 128 and len({r['physical_section_id'] for r in rows}) == 128
-assert all(len({r['synthetic_subject_plan_receipt_sha256'] for r in rows if r['cohort'] == cohort}) == 64
+assert all(len({r['synthetic_subject_id'] for r in rows if r['cohort'] == cohort}) == 64
            for cohort in samplers)
 assert all(r['top_prior']['branch_id'] == r['selected_direct_prior']['branch_id']
            for r in rows)
@@ -163,7 +163,7 @@ for dimension, partition in groups.items():
     summary[dimension] = {}
     for name, group in partition.items():
         summary[dimension][name] = {'sections': len(group),
-            'distinct_plan_receipts': len({r['synthetic_subject_plan_receipt_sha256'] for r in group}),
+            'distinct_subject_ids': len({r['synthetic_subject_id'] for r in group}),
             'mean_mm': {key: float(np.mean([r[key]['rigid_mm'] for r in group])) if group else None
                 for key in ('beam_best', 'top_prior', 'selected_direct_prior')},
             'capture_le_1p5': {key: float(np.mean([r[key]['rigid_mm'] <= 1.5 for r in group]))
