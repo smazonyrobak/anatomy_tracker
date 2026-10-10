@@ -132,7 +132,7 @@ config = {'seed': seed, 'updates': updates, 'side': side, 'valid_sites': sites,
     'sagittal_summary_sha256': sha(sagittal_dir / 'summary.json'),
     'sagittal_output_sha256': sagittal_summary['output_sha256'],
     'optimised': 'shared encoder/lateral and probabilistic direct pose heads only',
-    'frozen': 'atlas matcher, local mapper, fitted score, uncertainty and all other weights',
+    'frozen': 'atlas matcher, local mapper, fitted score and all other non-pose/non-encoder weights; uncertainty heads receive no direct loss',
     'loss': '128 synthetic physical-pose mixture loss on independent v4/v4/v3; 0.5 weak-real five-point mixture loss',
     'calibrated': False, 'public_benchmark_used': False,
     'expert_real_truth_used': False, 'external_pretrained_weights_used': False}
