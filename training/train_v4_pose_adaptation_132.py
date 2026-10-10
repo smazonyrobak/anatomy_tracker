@@ -262,11 +262,11 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
             'synthetic_section_ids': [sample['provenance'][0]['physical_section_id']
                 for sample in samples], 'coronal_identity': coronal_identity,
             'sagittal_identity': sagittal_identity,
-            'v4_best160_train_mm': float(physical[:2].detach().min(-1).values.mean()),
-            'v4_direct_top1_train_mm': float(physical[:2].detach().gather(
+            'v4_best160_train_pose_cost': float(physical[:2].detach().min(-1).values.mean()),
+            'v4_direct_top1_train_pose_cost': float(physical[:2].detach().gather(
                 1, prior[:2].detach().argmax(-1)[:, None]).mean()),
-            'v3_best160_train_mm': float(physical[2].detach().min()),
-            'v3_direct_top1_train_mm': float(physical[2].detach()[prior[2].detach().argmax()]),
+            'v3_best160_train_pose_cost': float(physical[2].detach().min()),
+            'v3_direct_top1_train_pose_cost': float(physical[2].detach()[prior[2].detach().argmax()]),
             'coronal_weak_top1_mm': float(real_cost[0].detach()[prior[3].detach().argmax()]),
             'sagittal_weak_top1_mm': float(real_cost[1].detach()[prior[4].detach().argmax()]),
             'synthetic_loss': float(synthetic_loss.detach()),
@@ -278,7 +278,7 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
             log.flush()
             draws.flush()
             milestone = {key: row[key] for key in
-                ('update', 'v4_direct_top1_train_mm', 'v3_direct_top1_train_mm',
+                ('update', 'v4_direct_top1_train_pose_cost', 'v3_direct_top1_train_pose_cost',
                  'coronal_weak_top1_mm', 'sagittal_weak_top1_mm', 'loss')}
             print(json.dumps({'event': 'train_milestone', **milestone}), flush=True)
         if step in checkpoints:
