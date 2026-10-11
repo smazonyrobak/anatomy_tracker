@@ -47,10 +47,11 @@ class OneShotJointSliceModel(nn.Module):
                 ResidualBlock(width), ResidualBlock(width),
             ))
             channels = width
-        self.pose = nn.Sequential(
-            nn.Linear(widths[-1] * 4 * 4 + 12, 768), nn.GELU(),
-            nn.Linear(768, modes * 21),
-        )
+        if modes:
+            self.pose = nn.Sequential(
+                nn.Linear(widths[-1] * 4 * 4 + 12, 768), nn.GELU(),
+                nn.Linear(768, modes * 21),
+            )
         if normal_anchor_count:
             generator = torch.Generator().manual_seed(20261003)
             candidates = F.normalize(torch.randn(4096, 3, generator=generator), dim=-1)
@@ -181,8 +182,9 @@ class OneShotJointSliceModel(nn.Module):
         self.register_buffer('center_scale', torch.tensor([6600., 4000., 5700.]))
         self.register_buffer('euclidean_scale', torch.tensor([6600., 4000., 5700., 1., 1., 1.]))
         self.register_buffer('rotation_grid', torch.linspace(0, math.pi, 257))
-        nn.init.normal_(self.pose[-1].weight, std=.001)
-        nn.init.zeros_(self.pose[-1].bias)
+        if modes:
+            nn.init.normal_(self.pose[-1].weight, std=.001)
+            nn.init.zeros_(self.pose[-1].bias)
         nn.init.normal_(self.warp[-1].weight, std=1e-4)
         nn.init.zeros_(self.warp[-1].bias)
         nn.init.normal_(self.uncertainty.weight, std=.001)
@@ -202,12 +204,13 @@ class OneShotJointSliceModel(nn.Module):
         if hasattr(self, 'dense_coordinate_pyramid_head'):
             nn.init.normal_(self.dense_coordinate_pyramid_head[-1].weight, std=.001)
             nn.init.zeros_(self.dense_coordinate_pyramid_head[-1].bias)
-        with torch.no_grad():
-            rotations, _ = torch.linalg.qr(torch.randn(modes, 3, 3))
-            rotations[:, :, 2] *= torch.linalg.det(rotations)[:, None]
-            self.pose[-1].bias.view(modes, 21)[:, 3:9].copy_(
-                rotations[:, :, :2].transpose(1, 2).reshape(modes, 6)
-            )
+        if modes:
+            with torch.no_grad():
+                rotations, _ = torch.linalg.qr(torch.randn(modes, 3, 3))
+                rotations[:, :, 2] *= torch.linalg.det(rotations)[:, None]
+                self.pose[-1].bias.view(modes, 21)[:, 3:9].copy_(
+                    rotations[:, :, :2].transpose(1, 2).reshape(modes, 6)
+                )
 
     def predict(self, inputs, context=None):
         if context is None:
@@ -216,8 +219,9 @@ class OneShotJointSliceModel(nn.Module):
         for layer in self.encoder:
             x = layer(x)
             pyramid.append(x)
-        z = self.pose(torch.cat((F.adaptive_avg_pool2d(x, 4).flatten(1), context), -1))
-        z = z.reshape(-1, self.base_modes, 21)
+        z = (self.pose(torch.cat((F.adaptive_avg_pool2d(x, 4).flatten(1), context), -1))
+             if self.base_modes else x.new_empty(len(inputs), 0))
+        z = z.reshape(len(inputs), self.base_modes, 21)
         center = self.center_origin + z[..., :3] * self.center_scale
         state = torch.cat((center, z[..., 3:9],
                            math.log(12000.) + z[..., 9:11].clamp(-2.5, 2.),
