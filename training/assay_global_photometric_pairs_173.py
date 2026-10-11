@@ -50,8 +50,8 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 context = load_streaming_synthetic_v7_64(device='cuda')
 atlas = context['atlas']
-with torch.serialization.safe_globals([torch.torch_version.TorchVersion]):
-    panel = torch.load(parent / 'panel.pt', map_location='cpu', weights_only=True)
+# The hash-verified local panel contains NumPy provenance scalars, not just tensors.
+panel = torch.load(parent / 'panel.pt', map_location='cpu', weights_only=False)
 records = [json.loads(line) for line in (parent / 'rows.jsonl').open()]
 assert len(panel) == len(records) == 240
 axis = (torch.arange(48, device='cuda') + .5) / 48 - .5 / 256
