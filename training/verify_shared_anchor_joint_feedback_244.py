@@ -21,7 +21,8 @@ def sha(path):
 
 config = json.loads((run / 'config.json').read_text())
 done = json.loads((run / 'completed.json').read_text())
-assert config['initialization'].startswith('all model weights random') and 'parent' not in config
+assert config['initialization'] == 'all model weights random from seed; no parent weights/features/pseudolabels'
+assert 'torch.load(' not in (source / 'train_shared_anchor_joint_feedback_244.py').read_text()
 assert not config['calibrated'] and not config['public_benchmark_used']
 assert not done['calibrated'] and not done['public_benchmark_used']
 assert done['batches'] == config['batches'] == 6000
@@ -75,7 +76,8 @@ groups = defaultdict(list)
 for row in rows:
     groups[(row['step'], row['set'], row['animal_id'])].append(row)
     assert all(math.isfinite(value) for key, value in row.items() if key.endswith('_um'))
-for item in json.loads((readout / 'summary.json').read_text()):
+summary = json.loads((readout / 'summary.json').read_text())
+for item in summary:
     step, split = item['step'], item['set']
     donors = [group for (s, name, _), group in groups.items() if s == step and name == split]
     assert len(donors) == item['identities']
@@ -83,6 +85,28 @@ for item in json.loads((readout / 'summary.json').read_text()):
     for metric, recorded in item['identity_equal_mean_um'].items():
         actual = np.mean([np.mean([row[metric] for row in group]) for group in donors])
         assert math.isclose(actual, recorded, abs_tol=1e-6)
+by_step = {(item['step'], item['set']): item['identity_equal_mean_um'] for item in summary}
+synthetic_zero = by_step[0, 'synthetic']
+real_zero = by_step[0, 'real_weak_allen']
+decisions = {}
+for step in (0, 1000, 3000, 6000):
+    synthetic_metrics = by_step[step, 'synthetic']
+    real_metrics = by_step[step, 'real_weak_allen']
+    score = (.45 * synthetic_metrics['fitted_selected_rigid_um'] / synthetic_zero['fitted_selected_rigid_um']
+             + .35 * synthetic_metrics['fitted_selected_mapped_um'] / synthetic_zero['fitted_selected_mapped_um']
+             + .20 * real_metrics['refined_five_um'] / real_zero['refined_five_um'])
+    gates = {
+        'atlas_specific_selection': synthetic_metrics['fitted_selected_rigid_um'] < synthetic_metrics['null_selected_rigid_um'],
+        'real_weak_retention': real_metrics['refined_five_um'] <= 1.2 * real_zero['refined_five_um'],
+        'exact_pose_map_at_most_1mm': synthetic_metrics['exact_pose_mapped_um'] <= 1000,
+    }
+    decisions[str(step)] = {'score': score, 'gates': gates, 'eligible': all(gates.values())}
+assert report['checkpoint_decision'] == decisions
+assert report['diagnostic_best_step'] == min((0, 1000, 3000, 6000),
+                                              key=lambda step: decisions[str(step)]['score'])
+eligible = [step for step in (0, 1000, 3000, 6000) if decisions[str(step)]['eligible']]
+assert report['best_eligible_step'] == (min(eligible, key=lambda step: decisions[str(step)]['score'])
+                                        if eligible else None)
 print(json.dumps({'verified': True, 'training_batches': len(training),
                   'synthetic_draws': len(synthetic), 'real_train_sections': len(real),
                   'readout_rows': len(rows)}))

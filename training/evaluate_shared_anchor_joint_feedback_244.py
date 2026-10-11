@@ -159,7 +159,9 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             weights[:, [0, -1]] = .5
             weights /= weights.sum(-1, keepdim=True)
             affine = torch.as_tensor(affines[index], device='cuda', dtype=torch.float32)
-            reference = affine[:, 2] + 192 * corners[:, :1] * affine[:, 0] + 192 * corners[:, 1:] * affine[:, 1]
+            source_corners = (corners * side + .5) * (192 / side) - .5
+            reference = (affine[:, 2] + source_corners[:, :1] * affine[:, 0]
+                         + source_corners[:, 1:] * affine[:, 1])
             prediction, prior, choice, reflection, refined_state, fitted = infer(image, offsets, weights, atlas)
             flags = torch.tensor([0, 1], device='cuda')[None, None].expand(1, model.modes, 2)
             all_states = prediction['state'][:, :, None].expand(-1, -1, 2, -1)
@@ -191,6 +193,26 @@ for step in steps:
                         'case_median_um': {metric: float(np.median([row[metric] for row in group]))
                                            for metric in metrics}})
 (out / 'summary.json').write_text(json.dumps(summary, indent=2))
+by_step = {(item['step'], item['set']): item['identity_equal_mean_um'] for item in summary}
+baseline_synthetic = by_step[0, 'synthetic']
+baseline_real = by_step[0, 'real_weak_allen']
+decision = {}
+for step in steps:
+    synthetic_metrics = by_step[step, 'synthetic']
+    real_metrics = by_step[step, 'real_weak_allen']
+    score = (
+        .45 * synthetic_metrics['fitted_selected_rigid_um'] / baseline_synthetic['fitted_selected_rigid_um']
+        + .35 * synthetic_metrics['fitted_selected_mapped_um'] / baseline_synthetic['fitted_selected_mapped_um']
+        + .20 * real_metrics['refined_five_um'] / baseline_real['refined_five_um'])
+    gates = {
+        'atlas_specific_selection': synthetic_metrics['fitted_selected_rigid_um'] < synthetic_metrics['null_selected_rigid_um'],
+        'real_weak_retention': real_metrics['refined_five_um'] <= 1.2 * baseline_real['refined_five_um'],
+        'exact_pose_map_at_most_1mm': synthetic_metrics['exact_pose_mapped_um'] <= 1000,
+    }
+    decision[str(step)] = {'score': float(score), 'gates': gates, 'eligible': all(gates.values())}
+diagnostic_best = min(steps, key=lambda step: decision[str(step)]['score'])
+eligible = [step for step in steps if decision[str(step)]['eligible']]
+best_eligible = min(eligible, key=lambda step: decision[str(step)]['score']) if eligible else None
 (out / 'completed.json').write_text(json.dumps({
     'steps': steps, 'rows': len(rows), 'synthetic_per_step': len(synthetic),
     'weak_real_per_step': len(weak_real),
@@ -205,6 +227,8 @@ for step in steps:
         Path(__file__).name, 'arbitrary_plane_one_shot_model.py',
         'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_allen_atlas_binding_v6.py')},
     'rows_sha256': sha(out / 'rows.jsonl'), 'summary_sha256': sha(out / 'summary.json'),
+    'checkpoint_decision': decision, 'diagnostic_best_step': diagnostic_best,
+    'best_eligible_step': best_eligible,
     'calibrated': False, 'public_benchmark_used': False,
     'scope': 'TRAIN-inner synthetic development; donor-separated weak Allen development, not physical truth',
 }, indent=2))
