@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree
@@ -21,7 +22,9 @@ root = Path('I:/AnatomyTracker')
 archive = root / 'data/lupori_joint_185/rawData.zip'
 split_path = Path(__file__).with_name('lupori_animal_split_185.json')
 split = json.loads(split_path.read_text())
-run = root / 'runs/lupori_fluorescence_pose_187_inner_AL1A'
+development = os.environ.get('ANATOMY_LUPORI_DEV_EVAL') == '1'
+run = root / 'runs' / ('lupori_fluorescence_pose_188_all_train' if development
+                       else 'lupori_fluorescence_pose_187_inner_AL1A')
 parent = root / 'runs/v4_pose_adaptation_132/joint_step_02000.pt'
 checkpoints = {'132_parent': parent}
 finished = (run / 'completed.json').exists()
@@ -29,9 +32,10 @@ if finished:
     checkpoints.update({f'187_step_{step:04d}': run / f'joint_step_{step:05d}.pt'
                         for step in (0, 400, 800, 1200)})
 
-assert split['train'][0] == 'AL1A' and archive.stat().st_size == split['archive_bytes']
+assert archive.stat().st_size == split['archive_bytes']
 torch.set_num_threads(4)
-animal = 'AL1A'
+animal = split['development'][0] if development else 'AL1A'
+assert animal == ('CC1B' if development else 'AL1A')
 chart = torch.tensor([[0., 0.], [255., 0.], [0., 255.], [255., 255.],
                       [127.5, 127.5]], device='cuda') / 256
 records, images, targets = [], [], []
@@ -55,7 +59,7 @@ with ZipFile(archive) as source:
         images.append(gray)
         records.append({'animal_id': animal, 'source_section_id': section_id})
 
-assert len(records) == 52
+assert len(records) > 0 and (development or len(records) == 52)
 targets = torch.from_numpy(np.stack(targets)).cuda()
 images = np.stack(images)
 flags = torch.arange(2, device='cuda')[None, None]
@@ -86,20 +90,34 @@ for checkpoint_id, path in checkpoints.items():
             chosen = prior.argmax(-1)
             top16 = prior.topk(16, -1).indices
             for j in range(len(batch)):
+                mapped_selected = mapped.flatten(1, 2)[j, chosen[j]]
+                target_selected = targets[start + j]
+                mapped_normal = torch.linalg.cross(
+                    mapped_selected[1] - mapped_selected[0],
+                    mapped_selected[2] - mapped_selected[0])
+                target_normal = torch.linalg.cross(
+                    target_selected[1] - target_selected[0],
+                    target_selected[2] - target_selected[0])
+                cosine = F.cosine_similarity(mapped_normal[None],
+                    target_normal[None]).abs().clamp_max(1)
                 results.append({**records[start + j], 'checkpoint': checkpoint_id,
                     'checkpoint_sha256': checkpoint_sha256,
                     'selected_five_point_mm': float(errors[j, chosen[j]]),
+                    'selected_center_mm': float((mapped_selected[4] - target_selected[4]).norm() / 1000),
+                    'selected_plane_normal_angle_deg': float(torch.rad2deg(torch.acos(cosine))[0]),
                     'oracle_top16_five_point_mm': float(errors[j, top16[j]].min()),
                     'oracle_all160_five_point_mm': float(errors[j].min())})
     del model
 
 output = root / 'data/lupori_joint_185' / (
+    'development_pose_188.json' if development else
     'inner_guard_candidate_187.json' if finished else 'inner_guard_parent_187.json')
 output.write_text(json.dumps({'source_doi': split['source_doi'],
     'split_sha256': hashlib.sha256(split_path.read_bytes()).hexdigest(),
     'archive_md5': split['archive_md5'],
     'input': 'whole RGB thumbnail resized 256, max(red,green)/255, image-wide p99 normalized, other channels zero',
-    'label_role': 'reserved TRAIN animal human VisuAlign weak reference',
+    'label_role': ('official DEV animal human VisuAlign weak reference' if development
+                   else 'reserved TRAIN animal human VisuAlign weak reference'),
     'rows': results}, indent=2))
 for checkpoint_id in checkpoints:
     rows = [row for row in results if row['checkpoint'] == checkpoint_id]

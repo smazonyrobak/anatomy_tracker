@@ -43,16 +43,20 @@ def sha(path):
 
 
 source = Path(__file__).resolve().parent
-protocol = source.parent / 'docs/publication/LUPORI_FLUORESCENCE_POSE_ADAPTATION_187_PROTOCOL_20261011.md'
+full_training = os.environ.get('ANATOMY_LUPORI_FULL_TRAIN') == '1'
+protocol_name = ('LUPORI_FLUORESCENCE_POSE_ALL_TRAIN_188_PROTOCOL_20261011.md'
+    if full_training else 'LUPORI_FLUORESCENCE_POSE_ADAPTATION_187_PROTOCOL_20261011.md')
+protocol = source.parent / 'docs/publication' / protocol_name
 split_path = source / 'lupori_animal_split_185.json'
 split = json.loads(split_path.read_text())
 archive = root / 'data/lupori_joint_185/rawData.zip'
 parent_dir = root / 'runs/v4_pose_adaptation_132'
 parent = parent_dir / 'joint_step_02000.pt'
-run = root / 'runs/lupori_fluorescence_pose_187_inner_AL1A'
+run = root / 'runs' / ('lupori_fluorescence_pose_188_all_train'
+    if full_training else 'lupori_fluorescence_pose_187_inner_AL1A')
 sagittal_dir = root / 'data/allen_sagittal_ish_expansion_002_train_inputs_20261008'
-guard_animal = 'AL1A'
-seed, side, updates, sites = 20261011187, 256, 1200, 128
+guard_animal = None if full_training else 'AL1A'
+seed, side, updates, sites = (20261011188 if full_training else 20261011187), 256, 1200, 128
 checkpoints = (0, 400, 800, 1200)
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
@@ -60,7 +64,8 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 assert source.drive.upper() == root.drive.upper() == run.drive.upper() == 'I:'
 assert not run.exists() and archive.stat().st_size == split['archive_bytes']
-assert split['train'] == ['AL1A', 'CC2B', 'CC4B', 'CC4A'] and guard_animal in split['train']
+assert split['train'] == ['AL1A', 'CC2B', 'CC4B', 'CC4A']
+assert guard_animal is None or guard_animal in split['train']
 parent_done = json.loads((parent_dir / 'completed.json').read_text())
 parent_config = json.loads((parent_dir / 'config.json').read_text())
 assert sha(parent) == parent_done['checkpoint_sha256']['2000']
@@ -130,8 +135,9 @@ with ZipFile(archive) as source_zip:
                 'source_thumbnail': thumbnail, 'source_thumbnail_sha256':
                 hashlib.sha256(image_bytes).hexdigest(), 'source_doi': split['source_doi'],
                 'specimen_id': animal, 'experiment_id': None})
-assert len(lupori_records) == 188 and len({(r['animal_id'], r['source_section_id'])
-    for r in lupori_records}) == 188
+expected_sections = 240 if full_training else 188
+assert len(lupori_records) == expected_sections and len({
+    (r['animal_id'], r['source_section_id']) for r in lupori_records}) == expected_sections
 lupori_images = torch.from_numpy(np.stack(lupori_images)).to('cuda', dtype=torch.float32)
 lupori_masks = torch.from_numpy(np.stack(lupori_masks)).to('cuda')
 lupori_ouv = torch.stack(lupori_ouv).to('cuda', dtype=torch.float32)
@@ -169,6 +175,7 @@ source_files = ('train_lupori_fluorescence_pose_187.py', 'arbitrary_plane_one_sh
     'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_geometry.py',
     'global_atlas_contrast_090.py', 'global_plane_matcher_120.py')
 config = {'seed': seed, 'updates': updates, 'side': side, 'sites': sites,
+    'training_phase': 'all_four_train_animals' if full_training else 'inner_animal_pilot',
     'lupori_archive_bytes': split['archive_bytes'],
     'lupori_archive_md5': split['archive_md5'],
     'synthetic_per_update': {'v4': 2, 'v3': 1},

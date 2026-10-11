@@ -28,16 +28,21 @@ def sha(path):
 
 
 source = Path(__file__).resolve().parent
-protocol = source.parent / 'docs/publication/LUPORI_FLUORESCENCE_POSE_ADAPTATION_187_PROTOCOL_20261011.md'
+full_training = os.environ.get('ANATOMY_LUPORI_FULL_TRAIN') == '1'
+protocol = source.parent / 'docs/publication' / (
+    'LUPORI_FLUORESCENCE_POSE_ALL_TRAIN_188_PROTOCOL_20261011.md' if full_training
+    else 'LUPORI_FLUORESCENCE_POSE_ADAPTATION_187_PROTOCOL_20261011.md')
 parent_dir = root / 'runs/v4_pose_adaptation_132'
 parent_path = parent_dir / 'joint_step_02000.pt'
-train = root / 'runs/lupori_fluorescence_pose_187_inner_AL1A'
+train = root / 'runs' / ('lupori_fluorescence_pose_188_all_train' if full_training
+                         else 'lupori_fluorescence_pose_187_inner_AL1A')
 panels = {'v4': root / 'data/fresh_v4_pose_dev_panel_132',
           'v3': root / 'data/joint_in_path_correspondence_128_dev_panel'}
 coronal = root / 'data/joint_v7_allen_fullcanvas_192_001'
 sagittal = root / 'data/allen_sagittal_ish_expansion_002_dev2_inputs_available_20261008'
 sagittal_train = root / 'data/allen_sagittal_ish_expansion_002_train_inputs_20261008'
-out = root / 'runs/lupori_fluorescence_pose_187_retention_eval'
+out = root / 'runs' / ('lupori_fluorescence_pose_188_retention_eval' if full_training
+                       else 'lupori_fluorescence_pose_187_retention_eval')
 arms = ('parent', '0', '400', '800', '1200')
 side = 256
 torch.set_num_threads(4)
@@ -58,8 +63,9 @@ assert sha(train / 'training.jsonl') == train_done['training_sha256']
 assert train_config['parent_checkpoint_sha256'] == train_done['parent_checkpoint_sha256'] == sha(parent_path)
 assert train_config['protocol_sha256'] == train_done['protocol_sha256'] == sha(protocol)
 assert tuple(train_config['checkpoints']) == (0, 400, 800, 1200)
-assert train_config['inner_guard_animal'] == 'AL1A'
-assert set(train_config['lupori_gradient_animals']) == {'CC2B', 'CC4B', 'CC4A'}
+assert train_config['inner_guard_animal'] == (None if full_training else 'AL1A')
+assert set(train_config['lupori_gradient_animals']) == (
+    {'AL1A', 'CC2B', 'CC4B', 'CC4A'} if full_training else {'CC2B', 'CC4B', 'CC4A'})
 assert all(sha(source / name) == digest for name, digest in train_config['source_sha256'].items())
 parent_source_deltas = {name for name, digest in parent_config['source_sha256'].items()
     if sha(source / name) != digest}
