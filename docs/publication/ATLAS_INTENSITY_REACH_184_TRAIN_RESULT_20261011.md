@@ -1,0 +1,14 @@
+# 184 atlas intensity reaches the local mapper, not a bad plane
+
+The [prespecified 184 assay](ATLAS_INTENSITY_REACH_184_TRAIN_PROTOCOL_20261011.md) completed on all 128 frozen 182 inner-TRAIN synthetic physical sections. It replayed each model input and the 300-update `full` checkpoint exactly, then compared the supplied-correct-plane mapping with intact atlas intensity versus zero intensity while retaining atlas support. The exact-intact errors matched every frozen 182 row within 1e-5 mm. No weights, DEV/final animals, or public benchmark were used.
+
+| Appearance | Sections | Correct-plane intact / zero map error (mm) | Correct-plane zero penalty (mm) | Blind top-one zero penalty (mm) | Blind penalty when rigid error ≥1.5 mm (mm; n) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v3 | 64 | 0.153 / 0.188 | 0.0348 | 0.0154 | 0.0025 (41) |
+| v4 | 64 | 0.163 / 0.197 | 0.0339 | 0.0173 | 0.0053 (37) |
+
+At top-one rigid error 0.5–1.5 mm, the zero penalty was 0.0383 mm on v3 (20 sections) and 0.0333 mm on v4 (22); at <0.5 mm it was 0.0378/0.0354 mm (only 3/5 sections). The supplied-plane penalty was positive in 59/64 v3 and 56/64 v4 sections, and the mean was positive for all eight synthetic deformation bases in each appearance. Thus intensity affects local mapping when pose is near correct, but the effect nearly disappears for the majority of badly placed top-one planes. It is **small** even at the correct plane—roughly 34 µm, not the millimetres needed to rescue blind localization.
+
+This supports a structural reach diagnosis, not a successful fit-feedback model. In 182, atlas intensities do not enter the direct pose prior's top-one selection at inference. The local mapper cannot make a multi-millimetre pose correction, and no observable fitting-difficulty score has been shown to rank its blind candidate planes reliably; the previous 178/181 selector trials failed. Zero intensity is also out of distribution, so this assay is mechanistic rather than a performance gate, and 182's matched support-only continuation remains the stronger control. The next architecture change must make atlas-based *candidate evidence* compete before pose selection while retaining direct pose, a local map, and the capacity to abstain. Do not scale the current 182 model, calibrate probabilities, or place it in the GUI on this evidence.
+
+The 184 row and summary hashes match its completion receipt, as do the committed source and protocol hashes. Receipt SHA-256: `eebf5fce0b422a027272a830a667ba4a832dd146eaf9124a121780976fbefe8e` at `I:/AnatomyTracker/runs/atlas_intensity_reach_184_train_001`. These sections arise from synthetic deformations of one atlas, not distinct biological animals, and the result says nothing definitive about physically oblique acquired sections or calibrated electrode-region probability.
