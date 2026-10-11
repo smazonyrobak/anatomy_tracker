@@ -30,6 +30,8 @@ def sha(path):
 
 def score(x, y, mask):
     a, b = x[mask], y[mask]
+    if a.numel() < 2:
+        return None
     a, b = a - a.mean(), b - b.mean()
     return float(((a * b).mean() / (a.square().mean() * b.square().mean()).sqrt()
                   .clamp_min(1e-8)).abs())
@@ -38,7 +40,7 @@ def score(x, y, mask):
 torch.set_num_threads(4)
 source = Path(__file__).resolve()
 protocol = source.parents[1] / 'docs/publication/ALLEN_NISSL_ACQUIRED_SIGNAL_225_PROTOCOL_20261011.md'
-out = root / 'runs/allen_nissl_acquired_signal_225_train_001'
+out = root / 'runs/allen_nissl_acquired_signal_225_train_001_retry1'
 assert source.drive.upper() == out.drive.upper() == 'I:' and not out.exists()
 
 sources = [
