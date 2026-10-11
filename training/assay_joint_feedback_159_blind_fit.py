@@ -53,8 +53,10 @@ atlas = torch.from_numpy(atlas_array).cuda()
 atlas_zero = atlas.clone()
 atlas_zero[0].zero_()
 model = JointAnatomyModel156().cuda().eval().requires_grad_(False)
-checkpoints = [('baseline', 'feedback', 0), ('feedback_1000', 'feedback', 1000),
-               ('control_1000', 'detached_control', 1000)]
+checkpoints = [('baseline', 'feedback', 0),
+               ('feedback_selected', 'feedback', done['arms']['feedback']['selected_step']),
+               ('control_selected', 'detached_control',
+                done['arms']['detached_control']['selected_step'])]
 config = {'training_completion_sha256': sha(train / 'completed.json'),
           'panel_completion_sha256': sha(panel / 'completed.json'),
           'section_ids': [record['section_id'] for record in selected],
@@ -119,8 +121,8 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 'synthetic_plan_id': record['synthetic_subject_plan_id'],
                 'appearance_mode': record['appearance_mode'],
                 'valid_fraction': float(valid.float().mean()),
-                'obliquity_deg': float(np.degrees(np.arccos(
-                    np.max(np.abs(record['plane_normal_ap_dv_ml']))))),
+                'obliquity_deg': float(np.degrees(np.arccos(np.clip(
+                    np.max(np.abs(record['plane_normal_ap_dv_ml'])), 0, 1)))),
                 'branch_ids': branch.tolist(), 'prior_log_mass': prior[branch].tolist(),
                 'original_error_mm': original_error.tolist(),
                 'corrected_error_mm': postfit.tolist(),

@@ -44,8 +44,10 @@ for plan in plans:
     selected += sorted(eligible, key=lambda r:
         hashlib.sha256(r['section_id'].encode()).hexdigest())[:8]
 assert len(plans) == 8 and config['section_ids'] == [r['section_id'] for r in selected]
-checkpoints = [('baseline', 'feedback', 0), ('feedback_1000', 'feedback', 1000),
-               ('control_1000', 'detached_control', 1000)]
+checkpoints = [('baseline', 'feedback', 0),
+               ('feedback_selected', 'feedback', train_done['arms']['feedback']['selected_step']),
+               ('control_selected', 'detached_control',
+                train_done['arms']['detached_control']['selected_step'])]
 for label, arm, step in checkpoints:
     checkpoint = train / arm / f'joint_feedback_step_{step:05d}.pt'
     assert sha(checkpoint) == config['checkpoints'][label] == \
