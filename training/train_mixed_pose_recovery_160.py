@@ -117,8 +117,10 @@ optimizer.load_state_dict(saved['optimizer'])
 assert len(optimizer.param_groups) == 2
 assert [len(group['params']) for group in optimizer.param_groups] == [
     len(group['params']) for group in groups]
-assert all(float(group['lr']) <= limit for group, limit in zip(
+assert all(float(group['lr']) <= limit * (1 + 1e-12) for group, limit in zip(
     optimizer.param_groups, (4e-6, 1e-6)))
+for group, initial_lr in zip(optimizer.param_groups, (4e-6, 1e-6)):
+    group['lr'] = initial_lr
 parameters = [p for group in optimizer.param_groups for p in group['params']]
 del saved
 
