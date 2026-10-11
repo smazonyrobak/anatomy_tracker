@@ -37,7 +37,9 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
             log_reflection = torch.stack((F.logsigmoid(-prediction['reflection_logit']),
                                           F.logsigmoid(prediction['reflection_logit'])), -1)
             prior_score = (prediction['log_mass'][..., None] + log_reflection).flatten(1)
-            if model.normal_anchor_count:
+            if model.shared_anchor_pose:
+                top = prior_score.topk(min(8, 2 * model.modes), -1).indices
+            elif model.normal_anchor_count:
                 old = prior_score[:, :2 * model.base_modes].topk(2, -1).indices
                 anchor = (prior_score[:, 2 * model.base_modes:].topk(6, -1).indices
                           + 2 * model.base_modes)
@@ -56,7 +58,9 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
             refined = {**selected, 'state': refined_state}
             fitted_map = model.map(refined, offsets_um, index, top % 2, (96, 96), atlas,
                                    weights, feature_side=96, source_shape=inputs.shape[-2:])
-            fitted = model.score_fitted_candidates(inputs, refined, fitted_map, atlas, weights) + delta
+            fitted = model.score_fitted_candidates(inputs, refined, fitted_map, atlas, weights)
+            if not model.shared_anchor_pose:
+                fitted = fitted + delta
             candidate_score = torch.full_like(prior_score, -torch.inf).scatter_(1, top, fitted)
             branch_state = prediction['state'].repeat_interleave(2, dim=1)
             branch_state = branch_state.scatter(1, top[..., None].expand(-1, -1, 12), refined_state)

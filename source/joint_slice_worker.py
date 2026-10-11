@@ -61,7 +61,8 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
         image_side = config.get('resolution', config.get('image_side', config.get('side')))
         if image_side is None and config.get('normal_anchors') == model.normal_anchor_count == 64:
             image_side = 256  # Frozen 059 training source samples at side=256.
-        if image_side != 256 or model.modes not in (8, 16, 80):
+        supported_side = (192, 256) if getattr(model, 'shared_anchor_pose', False) else (256,)
+        if image_side not in supported_side or model.modes not in (8, 16, 80):
             raise ValueError('Experimental whole-model inference requires 256 pixels and a supported mode count.')
         if hasattr(model, 'fitted_matcher'):
             name = 'arbitrary_plane_one_shot_model.py'
