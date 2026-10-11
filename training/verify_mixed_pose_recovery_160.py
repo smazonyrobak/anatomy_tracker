@@ -32,6 +32,41 @@ mapping = [json.loads(line) for line in (out / 'map_rows.jsonl').open()]
 real = [json.loads(line) for line in (out / 'real_weak_rows.jsonl').open()]
 train_done = json.loads((train / 'completed.json').read_text())
 train_config = json.loads((train / 'config.json').read_text())
+draws = [json.loads(line) for line in (train / 'draws.jsonl').open()]
+curve = [json.loads(line) for line in (train / 'training.jsonl').open()]
+assert train_done['updates'] == len(curve) == 653
+assert [row['update'] for row in curve] == list(range(1, 654))
+assert all(row['synthetic_presentations'] == 3 * row['update'] for row in curve)
+assert all(math.isfinite(row[key]) for row in curve for key in (
+    'synthetic_loss', 'real_weak_loss', 'loss', 'gradient_norm'))
+synthetic_draws = [row for row in draws if row['kind'] == 'synthetic_train']
+used = [row for row in synthetic_draws if row['used']]
+coronal_draws = [row for row in draws if row['kind'] == 'coronal_weak_train']
+sagittal_draws = [row for row in draws if row['kind'] == 'sagittal_weak_train']
+assert len(synthetic_draws) == train_done['synthetic_draw_attempts'] == 2471
+assert len(used) == train_done['synthetic_presentations'] == 1959
+assert len({row['physical_section_id'] for row in used}) == \
+    train_done['unique_synthetic_physical_sections'] == 1959
+assert len({tuple(row['seed_prefix']) for row in synthetic_draws}) == len(synthetic_draws)
+assert [row['draw_attempt'] for row in synthetic_draws] == list(range(1, 2472))
+assert all(row['split'] == 'train' and row['base_lineage']['split'] == 'train'
+           for row in synthetic_draws)
+assert len(coronal_draws) == len(sagittal_draws) == 653
+assert len({row['animal_id'] for row in coronal_draws}) == \
+    train_done['distinct_coronal_train_donors'] == 653
+assert len({row['section_id'] for row in sagittal_draws}) == \
+    train_done['distinct_sagittal_train_sections'] == 653
+for step, row in enumerate(curve, 1):
+    selected = [item for item in used if item['update'] == step]
+    assert [item['slot'] for item in selected] == [0, 1, 2]
+    assert [item['physical_section_id'] for item in selected] == row['synthetic_section_ids']
+    assert [item['geometry'] for item in selected] == ['v7', 'v7', 'full_box']
+    assert [item['appearance_version'] for item in selected] == ['v3', 'v4', 'v4']
+    assert coronal_draws[step - 1]['update'] == sagittal_draws[step - 1]['update'] == step
+    assert all(coronal_draws[step - 1][key] == row['coronal_identity'][key]
+               for key in row['coronal_identity'])
+    assert all(sagittal_draws[step - 1][key] == row['sagittal_identity'][key]
+               for key in row['sagittal_identity'])
 assert sha(source / 'evaluate_mixed_pose_recovery_160.py') == \
     done['evaluator_sha256'] == config['evaluator_sha256']
 assert sha(train / 'completed.json') == done['training_completion_sha256'] == \
