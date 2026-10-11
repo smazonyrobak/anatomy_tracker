@@ -245,7 +245,8 @@ al1a_rows, synthetic_rows, old_real_rows = [], [], []
 with torch.inference_mode():
     for step in steps:
         for arm in arms:
-            saved = torch.load(checkpoints[arm, step], map_location='cpu', weights_only=True)
+            # The locally produced, SHA-verified checkpoint includes NumPy RNG arrays.
+            saved = torch.load(checkpoints[arm, step], map_location='cpu', weights_only=False)
             assert saved['step'] == step and saved['arm'] == arm
             assert saved['config'] == training_config and saved['calibrated'] is False
             model.load_state_dict(saved['model'], strict=True)
