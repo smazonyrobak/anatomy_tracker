@@ -51,11 +51,15 @@ assert committed_protocol == protocol_bytes.replace(b'\r\n', b'\n'), (
     '212 protocol must be committed unchanged before readout')
 protocol_sha = hashlib.sha256(protocol_bytes).hexdigest()
 assert (acquired / 'completed.json').is_file() and (maps / 'completed.json').is_file()
+assert (train / 'completed.json').is_file()
 assert all((train / arm / 'completed.json').is_file() for arm in arms)
 
 acquisition_done = json.loads((acquired / 'completed.json').read_text())
 map_done = json.loads((maps / 'completed.json').read_text())
 train_config = json.loads((train / 'config.json').read_text())
+train_done = json.loads((train / 'completed.json').read_text())
+assert all(train_done[f'{arm}_completion_sha256'] == hashlib.sha256(
+    (train / arm / 'completed.json').read_bytes()).hexdigest() for arm in arms)
 assert acquisition_done['donors'] == map_done['donors'] == 8
 assert set(donors) <= set(acquisition_done['donor_ids']) == set(map_done['donor_ids'])
 assert tuple(train_config['checkpoints']) == steps

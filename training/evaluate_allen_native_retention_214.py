@@ -42,6 +42,7 @@ archive = root / 'data/lupori_joint_185/rawData.zip'
 arms, steps, side = ('control', 'native'), (0, 200, 400), 256
 assert source.drive.upper() == root.drive.upper() == out.drive.upper() == 'I:'
 assert not out.exists()
+assert (train / 'completed.json').is_file()
 assert all((train / arm / 'completed.json').is_file() for arm in arms)
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
@@ -49,6 +50,9 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
 completion = {arm: json.loads((train / arm / 'completed.json').read_text()) for arm in arms}
+train_done = json.loads((train / 'completed.json').read_text())
+assert all(train_done[f'{arm}_completion_sha256'] == sha(train / arm / 'completed.json')
+           for arm in arms)
 checkpoints = {(arm, step): train / arm / f'joint_step_{step:05d}.pt'
                for arm in arms for step in steps}
 assert all(sha(path) == completion[arm]['checkpoint_sha256'][str(step)]
