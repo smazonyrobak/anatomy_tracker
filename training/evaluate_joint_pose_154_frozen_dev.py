@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.global_atlas_contrast_090 import rigid_points_090
 from training.joint_anatomy_model_153 import JointAnatomyModel153
 
@@ -107,6 +108,11 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                                    .mean(-1) / 1000).flatten())
                 error = torch.cat(errors)
                 order = log_prior.argsort(descending=True)
+                proposed_normals = full_frame_state_to_components(
+                    prediction['state'].float())[1][0, :, :, 2]
+                true_normal = full_frame_state_to_components(target)[1][0, :, 2]
+                normal_error = torch.rad2deg(torch.acos(
+                    (proposed_normals @ true_normal).abs().clamp(0, 1)))
                 normal = np.abs(case['plane_normal_ap_dv_ml'])
                 row = {'arm': arm, 'cohort': cohort, 'section_id': case['section_id'],
                     'physical_section_id': case['panel_physical_section_id'],
@@ -120,7 +126,9 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                     'top1_mm': float(error[order[0]]),
                     'top2_best_mm': float(error[order[:2]].min()),
                     'top16_best_mm': float(error[order[:16]].min()),
-                    'oracle_best_mm': float(error.min())}
+                    'oracle_best_mm': float(error.min()),
+                    'top1_normal_deg': float(normal_error[order[0] // 2]),
+                    'oracle_normal_deg': float(normal_error[error.argmin() // 2])}
                 rows.append(row)
                 stream.write(json.dumps(row, allow_nan=False) + '\n')
         stream.flush()
@@ -132,13 +140,15 @@ for arm in checkpoints:
         group = [row for row in rows if row['arm'] == arm and row['cohort'] == cohort]
         plans = sorted({row['synthetic_plan_id'] for row in group})
         summary[f'{arm}/{cohort}'] = {'n': len(group), 'synthetic_plans': len(plans)}
-        for metric in ('top1_mm', 'top2_best_mm', 'top16_best_mm', 'oracle_best_mm'):
+        for metric in ('top1_mm', 'top2_best_mm', 'top16_best_mm', 'oracle_best_mm',
+                       'top1_normal_deg', 'oracle_normal_deg'):
             summary[f'{arm}/{cohort}'][metric] = float(np.mean([
                 np.mean([row[metric] for row in group if row['synthetic_plan_id'] == plan])
                 for plan in plans]))
-            summary[f'{arm}/{cohort}'][metric.replace('_mm', '_within1p5')] = float(np.mean([
-                np.mean([row[metric] <= 1.5 for row in group
-                         if row['synthetic_plan_id'] == plan]) for plan in plans]))
+            if metric.endswith('_mm'):
+                summary[f'{arm}/{cohort}'][metric.replace('_mm', '_within1p5')] = float(np.mean([
+                    np.mean([row[metric] <= 1.5 for row in group
+                             if row['synthetic_plan_id'] == plan]) for plan in plans]))
 (out / 'summary.json').write_text(json.dumps(summary, indent=2))
 (out / 'completed.json').write_text(json.dumps({'config_sha256': sha(out / 'config.json'),
     'rows_sha256': sha(out / 'rows.jsonl'), 'summary_sha256': sha(out / 'summary.json'),
