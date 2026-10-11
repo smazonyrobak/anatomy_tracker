@@ -29,7 +29,8 @@ parent = root / 'runs/v4_pose_adaptation_132/joint_step_02000.pt'
 checkpoints = {'132_parent': parent}
 finished = (run / 'completed.json').exists()
 if finished:
-    checkpoints.update({f'187_step_{step:04d}': run / f'joint_step_{step:05d}.pt'
+    checkpoints.update({f'{188 if development else 187}_step_{step:04d}':
+                        run / f'joint_step_{step:05d}.pt'
                         for step in (0, 400, 800, 1200)})
 
 assert archive.stat().st_size == split['archive_bytes']
