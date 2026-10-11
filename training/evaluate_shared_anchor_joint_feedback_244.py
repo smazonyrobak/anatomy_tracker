@@ -62,6 +62,7 @@ with np.load(real / 'geometry.npz', allow_pickle=False) as arrays:
     affines = arrays['model_pixel_to_ap_dv_ml_um'].copy()
     thickness = arrays['thickness_um'].copy()
 atlas = torch.from_numpy(allen._decode_and_preprocess_allen_v6()[0]).cuda()
+atlas_null = torch.stack((torch.roll(atlas[0], 80, 0), atlas[1]))
 model = OneShotJointSliceModel(modes=16, normal_anchor_count=64, shared_anchor_pose=True,
                               atlas_conditioning=True, vector_refinement=True,
                               fitted_ranking=True).cuda().eval()
@@ -70,7 +71,7 @@ corners = torch.tensor([[0., 0.], [side - 1., 0.], [0., side - 1.],
                        device='cuda') / side
 
 
-def infer(image, offsets, weights):
+def infer(image, offsets, weights, atlas_image):
     prediction = model.predict(image)
     prior = (prediction['log_mass'][0, :, None] + torch.stack((
         F.logsigmoid(-prediction['reflection_logit'][0]),
@@ -83,13 +84,13 @@ def infer(image, offsets, weights):
                 'reflection_logit': prediction['reflection_logit'][:, choice // 2]}
     index = torch.arange(beam, device='cuda')[None]
     first = model.map(selected, offsets, index, reflection, (first_side, first_side),
-                      atlas, weights, return_refinement_feature=True,
+                      atlas_image, weights, return_refinement_feature=True,
                       feature_side=first_side, source_shape=image.shape[-2:])
     refined_state, delta, _ = model.refine(first['refinement_feature'], state)
     refined = {**selected, 'state': refined_state}
     mapped = model.map(refined, offsets, index, reflection, (fit_side, fit_side),
-                       atlas, weights, feature_side=fit_side, source_shape=image.shape[-2:])
-    fitted = model.score_fitted_candidates(image, refined, mapped, atlas, weights)[0] + delta[0]
+                       atlas_image, weights, feature_side=fit_side, source_shape=image.shape[-2:])
+    fitted = model.score_fitted_candidates(image, refined, mapped, atlas_image, weights)[0] + delta[0]
     return prediction, prior, choice, reflection, refined_state, fitted
 
 
@@ -110,7 +111,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                 true_reflection = int(arrays['reflection'])
                 offsets = torch.from_numpy(arrays['offsets_um'][None].copy()).cuda()
                 weights = torch.from_numpy(arrays['weights'][None].copy()).cuda()
-            prediction, prior, choice, reflection, refined_state, fitted = infer(image, offsets, weights)
+            prediction, prior, choice, reflection, refined_state, fitted = infer(image, offsets, weights, atlas)
             indices = valid.flatten().nonzero().flatten()
             chart = torch.stack((indices.remainder(side), indices.div(side, rounding_mode='floor')), -1).float() / side
             target = reference.reshape(-1, 3)[indices]
@@ -119,6 +120,12 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             refined_rigid = (points(refined_state, reflection, chart)
                              - target).norm(dim=-1).mean(-1)[0]
             selected_branch = int(fitted.argmax())
+            _, _, null_choice, null_reflection, null_refined_state, null_fitted = infer(
+                image, offsets, weights, atlas_null)
+            assert torch.equal(choice, null_choice)
+            null_rigid = (points(null_refined_state, null_reflection, chart)
+                          - target).norm(dim=-1).mean(-1)[0]
+            null_selected_rigid = float(null_rigid[int(null_fitted.argmax())])
             selected_states = torch.cat((refined_state[:, selected_branch:selected_branch + 1], truth[:, None]), 1)
             selected_reflections = torch.tensor([[int(reflection[0, selected_branch]), true_reflection]], device='cuda')
             mapped = model.map({**prediction, 'state': selected_states}, offsets,
@@ -135,6 +142,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                    'prior_top8_best_rigid_um': float(prior_rigid.min()),
                    'refined_top8_best_rigid_um': float(refined_rigid.min()),
                    'fitted_selected_rigid_um': float(refined_rigid[selected_branch]),
+                   'null_selected_rigid_um': null_selected_rigid,
                    'fitted_selected_mapped_um': float(mapped_error[0]),
                    'exact_pose_mapped_um': float(mapped_error[1]),
                    'prior_branch': int(choice[0]), 'fitted_branch': int(choice[selected_branch])}
@@ -152,7 +160,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             weights /= weights.sum(-1, keepdim=True)
             affine = torch.as_tensor(affines[index], device='cuda', dtype=torch.float32)
             reference = affine[:, 2] + 192 * corners[:, :1] * affine[:, 0] + 192 * corners[:, 1:] * affine[:, 1]
-            prediction, prior, choice, reflection, refined_state, fitted = infer(image, offsets, weights)
+            prediction, prior, choice, reflection, refined_state, fitted = infer(image, offsets, weights, atlas)
             flags = torch.tensor([0, 1], device='cuda')[None, None].expand(1, model.modes, 2)
             all_states = prediction['state'][:, :, None].expand(-1, -1, 2, -1)
             prior_five = (points(all_states, flags, corners) - reference).norm(dim=-1).mean(-1).flatten()
@@ -171,7 +179,8 @@ summary = []
 for step in steps:
     for split, metrics in (('synthetic', ('prior_top1_rigid_um', 'prior_top8_best_rigid_um',
                                          'refined_top8_best_rigid_um', 'fitted_selected_rigid_um',
-                                         'fitted_selected_mapped_um', 'exact_pose_mapped_um')),
+                                         'null_selected_rigid_um', 'fitted_selected_mapped_um',
+                                         'exact_pose_mapped_um')),
                            ('real_weak_allen', ('prior_five_um', 'refined_five_um'))):
         group = [row for row in rows if row['set'] == split and row['step'] == step]
         identities = sorted({row['animal_id'] for row in group})
@@ -191,6 +200,7 @@ for step in steps:
     'real_sha256': {name: sha(real / name) for name in ('records.jsonl', 'geometry.npz', 'images.npy')},
     'atlas_template_sha256': allen.TEMPLATE_RAW_SHA256_V6,
     'atlas_normalized_receipt': allen.ATLAS_FLOAT32_RECEIPT_V6,
+    'null_atlas': 'roll atlas intensity 80 voxels along AP; preserve support and all image/pose inputs',
     'source_sha256': {name: sha(Path(__file__).parent / name) for name in (
         Path(__file__).name, 'arbitrary_plane_one_shot_model.py',
         'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_allen_atlas_binding_v6.py')},
