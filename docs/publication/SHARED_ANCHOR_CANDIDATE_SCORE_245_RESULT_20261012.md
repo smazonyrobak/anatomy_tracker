@@ -68,6 +68,39 @@ all 245 hashes to the frozen source, checkpoints and panel, reproduced all
 192 case selections and pairwise scores from the 1,056 candidate rows, and
 found no gross pixel-chart or reflection arithmetic error.
 
+## Pose-branch collapse and fresh generator illustration
+
+Inspecting the frozen per-candidate rows exposed a more basic selection
+failure: at batch 6,000, **all 32** DEV sections select branch 29 after
+fitting. The image-only prior selects branch 29 on 29/32; the fitted score
+overrides it in three cases and still returns branch 29. At batch 3,000,
+fitting selects branch 29 on 29/32. This is a collapse to one of the 16
+free-frame *modes*, not proof that its continuous pose state is literally
+identical on every image. The mean prior top-one margin over the second
+branch is 3.37 logits at batch 6,000.
+
+The 64 normal-anchor modes are nearly absent from the blind beam: at batch
+6,000 they occupy 26/256 eight-beam slots and **0/96** slots in the
+training-matched three-beam control. Where anchors do enter the eight-beam
+panel, their best rigid error averages 4.635 mm across six sections versus
+3.470 mm for the best free-frame branch on those same sections. An anchor is
+the best candidate on only 2/32 DEV sections at this checkpoint. Thus
+the claimed arbitrary-normal bank is not currently helping candidate
+capture; the feedback loss trained on top-three blind proposals cannot
+teach its use if that blind set excludes anchors. This is a direct finding
+from 245, not a reason to force low-quality anchors into deployment.
+
+The [fresh v7 illustration](../../training/render_shared_anchor_v7_grid_246.py)
+uses the first six eligible independently sampled physical sections from
+the current generator, with no selection by error. The saved image is at
+`I:\AnatomyTracker\previews\shared_anchor_v7_true_input_guessed_246.png`:
+true atlas plane, generated input, then blind fitted atlas plane. Their
+nearest-cardinal angles span 5.7–45.5°, and their blind rigid errors span
+2.44–4.34 mm. All six again select branch 29. This is an illustrative
+TRAIN-generator check, not another animal-level validation panel or a
+prevalence estimate. It makes the failure visually unambiguous: the guessed
+plane often fills much more of the field than the true section.
+
 The local field's mean RMS across blind candidates is 5.13 µm at batch
 3,000 and 4.74 µm at batch 6,000 in readout geometry. Its score-penalty SD
 is only about 0.000005 and 0.000003 logits, respectively, versus learned
