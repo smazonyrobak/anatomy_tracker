@@ -52,14 +52,19 @@ def local_3d_patch_match(source, state, reflection, atlas, offsets, weights, nul
     key_patches = atlas_patches[:, :, key_index].permute(2, 0, 3, 1)
     correlation = torch.einsum('qp,qdkp->qdk', query_patches, key_patches).abs()
     available = (support > .5).flatten(1)[:, key_index].permute(1, 0, 2)
-    local_scores = correlation.flatten(1).masked_fill(~available.flatten(1), -torch.inf)
+    displacement_cost = (.04 * (dx.square() + dy.square()).flatten()[None] / 36
+                         + .04 * depth.abs()[:, None] / 2500)
+    local_scores = (correlation - displacement_cost[None]).flatten(1).masked_fill(
+        ~available.flatten(1), -torch.inf)
     matched = local_scores.argmax(-1)
     supported = available.flatten(1).any(-1)
     best = local_scores.gather(1, matched[:, None])[:, 0]
     best = torch.where(supported, best, torch.zeros_like(best))
+    raw_score = correlation.flatten(1).gather(1, matched[:, None])[:, 0]
+    raw_score = torch.where(supported, raw_score, torch.zeros_like(raw_score))
     median = local_scores.masked_fill(~available.flatten(1), torch.nan).nanmedian(-1).values
     median = torch.nan_to_num(median, nan=0.)
-    confidence = (best - median).clamp_min(0) * best * (texture / .1).clamp(0, 1)
+    confidence = (best - median).clamp_min(0) * raw_score * (texture / .1).clamp(0, 1)
     confidence = torch.where(supported, confidence, torch.zeros_like(confidence))
 
     depth_index, local_index = matched.div(169, rounding_mode='floor'), matched.remainder(169)
@@ -70,5 +75,6 @@ def local_3d_patch_match(source, state, reflection, atlas, offsets, weights, nul
     query_world = rigid_points_090(state, reflection, query_chart)[0]
     matched_world = torch.where(supported[:, None], matched_world, query_world)
     return {'matched_world': matched_world, 'query_chart': query_chart,
-            'query_world': query_world, 'score': best, 'confidence': confidence,
+            'query_world': query_world, 'score': best, 'raw_score': raw_score,
+            'confidence': confidence,
             'support': supported}
