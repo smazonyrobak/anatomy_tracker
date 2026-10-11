@@ -1,4 +1,4 @@
-"""Paired TRAIN-inner pose-selection readout; run only after both 222 arms exit."""
+"""Paired TRAIN-inner pose readout; run only after both selected arms exit."""
 
 import hashlib
 import json
@@ -39,11 +39,16 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 source = Path(__file__).resolve().parent
 frozen = root / 'runs/pose_framing_221_inner_readout_001'
-out = root / 'runs/pose_selection_222_paired_readout_001'
+anchor_223 = os.environ.get('ANATOMY_POSE_ANCHOR_CONDITIONAL_223_EVAL') == '1'
+tag = '223' if anchor_223 else '222'
+run_name = 'pose_anchor_conditional_223' if anchor_223 else 'pose_selection_222'
+out = root / 'runs' / f'{run_name}_paired_readout_001'
 parent = root / 'runs/pose_framing_221_framed_train_001/joint_step_00400.pt'
-arms = {arm: root / f'runs/pose_selection_222_{arm}_train_001'
+arms = {arm: root / f'runs/{run_name}_{arm}_train_001'
         for arm in ('control', 'intervention')}
-protocol = source.parent / 'docs/publication/POSE_SELECTION_222_PROTOCOL_20261011.md'
+protocol = source.parent / 'docs/publication' / (
+    'POSE_ANCHOR_CONDITIONAL_223_PROTOCOL_20261011.md' if anchor_223 else
+    'POSE_SELECTION_222_PROTOCOL_20261011.md')
 assert source.drive.upper() == root.drive.upper() == out.drive.upper() == 'I:'
 assert not out.exists()
 frozen_done = json.loads((frozen / 'completed.json').read_text())
@@ -79,9 +84,9 @@ for arm, directory in arms.items():
     assert arm_done[arm]['public_benchmark_used'] is False
     for step in (0, 200, 400):
         path = directory / f'joint_step_{step:05d}.pt'
-        checkpoints[f'222_{arm}_{step}'] = path
+        checkpoints[f'{tag}_{arm}_{step}'] = path
 checkpoint_sha256 = {label: sha(path) for label, path in checkpoints.items()}
-assert all(checkpoint_sha256[f'222_{arm}_{step}'] ==
+assert all(checkpoint_sha256[f'{tag}_{arm}_{step}'] ==
            arm_done[arm]['checkpoint_sha256'][str(step)]
            for arm in arms for step in (0, 200, 400))
 
@@ -113,10 +118,11 @@ for row in fixed:
         'dense': sample['centre'][0].reshape(-1, 3)[pixels].cpu(),
         'state': sample['state'].cpu(), 'reflection': sample['reflection'].cpu()})
 
+fresh_seed_prefix = 202610112340000 if anchor_223 else 202610112240000
 for base in (60, 61, 62, 63):
     accepted = attempt = 0
     while accepted < 16:
-        seed = 202610112240000 + 10000 * base + 1009 * attempt
+        seed = fresh_seed_prefix + 10000 * base + 1009 * attempt
         appearance = 'v4' if accepted % 2 == 0 else 'v3'
         sampler = sample_one_shot_slide_artifacts_v4 if appearance == 'v4' else sample_one_shot_slide_artifacts_v3
         with torch.no_grad():
@@ -178,6 +184,7 @@ with torch.inference_mode():
             deformed = (proposed - dense).norm(dim=-1).mean(-1) / 1000
             first, top16 = int(prior.argmax()), prior.topk(16).indices
             anchor_start = 2 * model.base_modes
+            top_anchor = anchor_start + int(prior[anchor_start:].argmax())
             rows.append({'checkpoint': label, 'checkpoint_sha256': checkpoint_sha256[label],
                 'panel': case['panel'], 'base': case['base'], 'seed': case['seed'],
                 'appearance': case['appearance'],
@@ -190,6 +197,13 @@ with torch.inference_mode():
                 'top1_dense_mm': float(deformed[first]),
                 'best160_affine_mm': float(affine.min()),
                 'best160_dense_mm': float(deformed.min()),
+                'top_anchor_affine_mm': float(affine[top_anchor]),
+                'top_anchor_dense_mm': float(deformed[top_anchor]),
+                'best_anchor_affine_mm': float(affine[anchor_start:].min()),
+                'best_anchor_dense_mm': float(deformed[anchor_start:].min()),
+                'top_anchor_dense_capture_2mm': bool(deformed[top_anchor] < 2),
+                'free_minus_anchor_max_log_prob_nats': float(
+                    prior[:anchor_start].max() - prior[anchor_start:].max()),
                 'top16_affine_capture_2mm': bool((affine[top16] < 2).any()),
                 'top16_dense_capture_2mm': bool((deformed[top16] < 2).any()),
                 'anchor_probability_mass': float(prediction['log_mass'][0,
@@ -200,7 +214,7 @@ with torch.inference_mode():
         print(json.dumps({'event': 'readout', 'checkpoint': label,
             'cases': len(cases)}), flush=True)
 for arm in arms:
-    zero = [row for row in rows if row['checkpoint'] == f'222_{arm}_0']
+    zero = [row for row in rows if row['checkpoint'] == f'{tag}_{arm}_0']
     baseline = [row for row in rows if row['checkpoint'] == '221_framed_400']
     assert all(a['input_sha256'] == b['input_sha256'] and
         abs(a['top1_affine_mm'] - b['top1_affine_mm']) < 1e-5 and
@@ -216,7 +230,13 @@ for panel in ('framed', 'unframed', 'legacy', 'fresh_framed'):
             **{metric.replace('_mm', '') + '_median_mm': float(np.median([
                 row[metric] for row in group]))
                for metric in ('top1_affine_mm', 'top1_dense_mm',
-                              'best160_affine_mm', 'best160_dense_mm')},
+                              'best160_affine_mm', 'best160_dense_mm',
+                              'top_anchor_affine_mm', 'top_anchor_dense_mm',
+                              'best_anchor_affine_mm', 'best_anchor_dense_mm')},
+            'top_anchor_dense_capture_2mm': sum(row['top_anchor_dense_capture_2mm']
+                for row in group),
+            'free_minus_anchor_max_log_prob_median_nats': float(np.median([
+                row['free_minus_anchor_max_log_prob_nats'] for row in group])),
             'top16_affine_capture_2mm': sum(row['top16_affine_capture_2mm'] for row in group),
             'top16_dense_capture_2mm': sum(row['top16_dense_capture_2mm'] for row in group),
             'top1_base_count': sum(row['top1_family'] == 'base' for row in group),
@@ -227,16 +247,21 @@ for panel in ('framed', 'unframed', 'legacy', 'fresh_framed'):
                 row['base_probability_mass'] for row in group]))}
 summary['paired_400'] = {}
 for panel in ('framed', 'unframed', 'legacy', 'fresh_framed'):
-    control = summary[panel]['222_control_400']
-    intervention = summary[panel]['222_intervention_400']
+    control = summary[panel][f'{tag}_control_400']
+    intervention = summary[panel][f'{tag}_intervention_400']
     summary['paired_400'][panel] = {
         key + '_intervention_minus_control': intervention[key] - control[key]
         for key in ('top1_affine_median_mm', 'top1_dense_median_mm',
                     'best160_affine_median_mm', 'best160_dense_median_mm',
+                    'top_anchor_affine_median_mm', 'top_anchor_dense_median_mm',
+                    'best_anchor_affine_median_mm', 'best_anchor_dense_median_mm',
+                    'top_anchor_dense_capture_2mm',
+                    'free_minus_anchor_max_log_prob_median_nats',
                     'top16_affine_capture_2mm', 'top16_dense_capture_2mm')}
 
 out.mkdir(parents=True, exist_ok=False)
 config = {'evaluator_source_sha256': sha(source / 'evaluate_pose_selection_222.py'),
+    'experiment': run_name,
     'evaluation_source_sha256': {name: sha(source / name) for name in (
         'arbitrary_plane_one_shot_model.py',
         'arbitrary_plane_streaming_synthetic_v7_64.py',
@@ -252,7 +277,7 @@ config = {'evaluator_source_sha256': sha(source / 'evaluate_pose_selection_222.p
     'checkpoint_sha256': checkpoint_sha256,
     'training_completion_sha256': {arm: sha(directory / 'completed.json')
         for arm, directory in arms.items()},
-    'fresh_framed_seed_rule': '202610112240000 + 10000*base + 1009*attempt; 16 eligible per base 60-63; no deduplication',
+    'fresh_framed_seed_rule': f'{fresh_seed_prefix} + 10000*base + 1009*attempt; 16 eligible per base 60-63; no deduplication',
     'metric': 'mean 3D CCF distance at up to 128 fixed tissue sites, mm; affine target from true plane, dense target from synthetic deformation',
     'scope': 'TRAIN-inner only; no independent animal truth',
     'development_calibration_final_used': False,

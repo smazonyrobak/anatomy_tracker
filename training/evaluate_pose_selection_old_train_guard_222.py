@@ -1,4 +1,4 @@
-"""Fixed old-coronal/sagittal TRAIN weak-affine guard for both 222 arms."""
+"""Fixed old-coronal/sagittal TRAIN weak-affine guard for paired pose arms."""
 
 import hashlib
 import json
@@ -33,10 +33,15 @@ def sha(path):
 
 
 source = Path(__file__).resolve()
-protocol = source.parents[1] / 'docs/publication/POSE_SELECTION_222_PROTOCOL_20261011.md'
-out = root / 'runs/pose_selection_222_old_train_guard_001'
+anchor_223 = os.environ.get('ANATOMY_POSE_ANCHOR_CONDITIONAL_223_EVAL') == '1'
+tag = '223' if anchor_223 else '222'
+run_name = 'pose_anchor_conditional_223' if anchor_223 else 'pose_selection_222'
+protocol = source.parents[1] / 'docs/publication' / (
+    'POSE_ANCHOR_CONDITIONAL_223_PROTOCOL_20261011.md' if anchor_223 else
+    'POSE_SELECTION_222_PROTOCOL_20261011.md')
+out = root / 'runs' / f'{run_name}_old_train_guard_001'
 parent = root / 'runs/pose_framing_221_framed_train_001/joint_step_00400.pt'
-arms = {arm: root / f'runs/pose_selection_222_{arm}_train_001'
+arms = {arm: root / f'runs/{run_name}_{arm}_train_001'
         for arm in ('control', 'intervention')}
 sagittal_dir = root / 'data/allen_sagittal_ish_expansion_002_train_inputs_20261008'
 frozen_guard = root / 'runs/pose_framing_221_old_train_guard_001'
@@ -62,9 +67,9 @@ for arm, directory in arms.items():
     assert sha(directory / 'config.json') == done['config_sha256']
     assert done['calibrated'] is False and done['public_benchmark_used'] is False
     for step in (0, 200, 400):
-        checkpoints[f'222_{arm}_{step}'] = directory / f'joint_step_{step:05d}.pt'
+        checkpoints[f'{tag}_{arm}_{step}'] = directory / f'joint_step_{step:05d}.pt'
 checkpoint_sha256 = {label: sha(path) for label, path in checkpoints.items()}
-assert all(checkpoint_sha256[f'222_{arm}_{step}'] ==
+assert all(checkpoint_sha256[f'{tag}_{arm}_{step}'] ==
            json.loads((directory / 'completed.json').read_text())['checkpoint_sha256'][str(step)]
            for arm, directory in arms.items() for step in (0, 200, 400))
 
@@ -170,7 +175,7 @@ with torch.inference_mode():
         print(json.dumps({'event': 'old_train_guard', 'checkpoint': label,
             'cases': len(cases)}), flush=True)
 for arm in arms:
-    zero = [row for row in rows if row['checkpoint'] == f'222_{arm}_0']
+    zero = [row for row in rows if row['checkpoint'] == f'{tag}_{arm}_0']
     baseline = [row for row in rows if row['checkpoint'] == '221_framed_400']
     assert all(a['section_id'] == b['section_id'] and
         abs(a['top1_weak_five_point_mm'] - b['top1_weak_five_point_mm']) < 1e-5
@@ -193,16 +198,17 @@ for cohort in ('old_coronal', 'old_sagittal'):
             'best160_mean_mm': float(np.mean([
                 row['best160_weak_five_point_mm'] for row in group]))}
     for arm in arms:
-        label = f'222_{arm}_400'
+        label = f'{tag}_{arm}_400'
         summary[cohort][label]['top1_donor_equal_minus_parent_mm'] = (
             summary[cohort][label]['top1_donor_equal_mean_mm'] -
             summary[cohort]['221_framed_400']['top1_donor_equal_mean_mm'])
-    summary[cohort]['222_intervention_400']['top1_donor_equal_minus_control_mm'] = (
-        summary[cohort]['222_intervention_400']['top1_donor_equal_mean_mm'] -
-        summary[cohort]['222_control_400']['top1_donor_equal_mean_mm'])
+    summary[cohort][f'{tag}_intervention_400']['top1_donor_equal_minus_control_mm'] = (
+        summary[cohort][f'{tag}_intervention_400']['top1_donor_equal_mean_mm'] -
+        summary[cohort][f'{tag}_control_400']['top1_donor_equal_mean_mm'])
 
 out.mkdir(parents=True, exist_ok=False)
-config = {'evaluator_source_sha256': sha(source), 'protocol_sha256': sha(protocol),
+config = {'evaluator_source_sha256': sha(source), 'experiment': run_name,
+    'protocol_sha256': sha(protocol),
     'checkpoint_sha256': checkpoint_sha256,
     'training_completion_sha256': {arm: sha(directory / 'completed.json')
         for arm, directory in arms.items()},

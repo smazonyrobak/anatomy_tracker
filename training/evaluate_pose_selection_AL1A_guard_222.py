@@ -1,4 +1,4 @@
-"""Reserved TRAIN-animal human-VisuAlign guard for both 222 arms."""
+"""Reserved TRAIN-animal human-VisuAlign guard for paired pose arms."""
 
 import hashlib
 import json
@@ -36,10 +36,15 @@ source = Path(__file__).resolve()
 split_path = source.with_name('lupori_animal_split_185.json')
 split = json.loads(split_path.read_text())
 archive = root / 'data/lupori_joint_185/rawData.zip'
-protocol = source.parents[1] / 'docs/publication/POSE_SELECTION_222_PROTOCOL_20261011.md'
-out = root / 'runs/pose_selection_222_AL1A_train_guard_001'
+anchor_223 = os.environ.get('ANATOMY_POSE_ANCHOR_CONDITIONAL_223_EVAL') == '1'
+tag = '223' if anchor_223 else '222'
+run_name = 'pose_anchor_conditional_223' if anchor_223 else 'pose_selection_222'
+protocol = source.parents[1] / 'docs/publication' / (
+    'POSE_ANCHOR_CONDITIONAL_223_PROTOCOL_20261011.md' if anchor_223 else
+    'POSE_SELECTION_222_PROTOCOL_20261011.md')
+out = root / 'runs' / f'{run_name}_AL1A_train_guard_001'
 parent = root / 'runs/pose_framing_221_framed_train_001/joint_step_00400.pt'
-arms = {arm: root / f'runs/pose_selection_222_{arm}_train_001'
+arms = {arm: root / f'runs/{run_name}_{arm}_train_001'
         for arm in ('control', 'intervention')}
 assert source.drive.upper() == root.drive.upper() == out.drive.upper() == 'I:'
 assert not out.exists() and archive.stat().st_size == split['archive_bytes']
@@ -65,9 +70,9 @@ for arm, directory in arms.items():
     assert configs[arm]['inner_guard_animal'] == 'AL1A'
     assert 'AL1A' not in configs[arm]['lupori_gradient_animals']
     for step in (0, 200, 400):
-        checkpoints[f'222_{arm}_{step}'] = directory / f'joint_step_{step:05d}.pt'
+        checkpoints[f'{tag}_{arm}_{step}'] = directory / f'joint_step_{step:05d}.pt'
 checkpoint_sha256 = {label: sha(path) for label, path in checkpoints.items()}
-assert all(checkpoint_sha256[f'222_{arm}_{step}'] ==
+assert all(checkpoint_sha256[f'{tag}_{arm}_{step}'] ==
            json.loads((directory / 'completed.json').read_text())['checkpoint_sha256'][str(step)]
            for arm, directory in arms.items() for step in (0, 200, 400))
 
@@ -153,7 +158,7 @@ with torch.inference_mode():
         print(json.dumps({'event': 'AL1A_guard', 'checkpoint': label,
             'sections': len(cases)}), flush=True)
 for arm in arms:
-    zero = [row for row in rows if row['checkpoint'] == f'222_{arm}_0']
+    zero = [row for row in rows if row['checkpoint'] == f'{tag}_{arm}_0']
     baseline = [row for row in rows if row['checkpoint'] == '221_framed_400']
     assert all(a['source_section_id'] == b['source_section_id'] and
         abs(a['top1_weak_five_point_mm'] - b['top1_weak_five_point_mm']) < 1e-5
@@ -172,15 +177,16 @@ for label in checkpoints:
         'best160_median_mm': float(np.median([
             row['best160_weak_five_point_mm'] for row in group]))}
 for arm in arms:
-    label = f'222_{arm}_400'
+    label = f'{tag}_{arm}_400'
     summary[label]['top1_median_minus_parent_mm'] = (
         summary[label]['top1_median_mm'] - summary['221_framed_400']['top1_median_mm'])
-summary['222_intervention_400']['top1_median_minus_control_mm'] = (
-    summary['222_intervention_400']['top1_median_mm'] -
-    summary['222_control_400']['top1_median_mm'])
+summary[f'{tag}_intervention_400']['top1_median_minus_control_mm'] = (
+    summary[f'{tag}_intervention_400']['top1_median_mm'] -
+    summary[f'{tag}_control_400']['top1_median_mm'])
 
 out.mkdir(parents=True, exist_ok=False)
-config = {'evaluator_source_sha256': sha(source), 'protocol_sha256': sha(protocol),
+config = {'evaluator_source_sha256': sha(source), 'experiment': run_name,
+    'protocol_sha256': sha(protocol),
     'split_sha256': sha(split_path), 'source_doi': split['source_doi'],
     'archive_bytes': split['archive_bytes'], 'archive_md5': split['archive_md5'],
     'AL1A_info_sha256': hashlib.sha256(info_bytes).hexdigest(),
