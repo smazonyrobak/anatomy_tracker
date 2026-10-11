@@ -40,8 +40,8 @@ for step, expected in done['checkpoint_sha256'].items():
     assert sha(run / f'joint_pose_step_{int(step):05d}.pt') == expected
 for name, expected in config['source_sha256'].items():
     assert sha(source / name) == expected == done['source_sha256'][name]
-assert sha(Path(protocol['parent_run']) / f"joint_step_{protocol['parent_step']:05d}.pt") == (
-    protocol['parent_checkpoint_sha256'] == done['parent_checkpoint_sha256'])
+assert sha(Path(protocol['parent_run']) / f"joint_step_{protocol['parent_step']:05d}.pt") == \
+    protocol['parent_checkpoint_sha256'] == done['parent_checkpoint_sha256']
 assert all(not protocol[key] for key in ('calibrated', 'pretrained_external_weights_used',
     'real_images_used', 'dev_or_public_benchmark_used', 'final_animals_used'))
 assert all(not done[key] for key in ('calibrated', 'real_images_used',
