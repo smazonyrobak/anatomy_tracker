@@ -19,7 +19,8 @@ from training.arbitrary_plane_full_frame_primitives import (
 from training.arbitrary_plane_geometry import normalized_raster_to_ccf, physical_ouv_to_frame
 from training.arbitrary_plane_joint_model_v7 import ResidualBlock
 from training.arbitrary_plane_recurrent_model import local_correlation
-from training.arbitrary_plane_ribbon_v6 import project_surface_affine_out
+from training.arbitrary_plane_ribbon_v6 import (
+    project_surface_affine_out, ribbon_derivative_frobenius_bound)
 
 
 class OneShotJointSliceModel(nn.Module):
@@ -369,7 +370,7 @@ class OneShotJointSliceModel(nn.Module):
 
     def map(self, prediction, offsets, mode_index, reflection, image_shape, atlas=None, weights=None,
             return_refinement_feature=False, feature_side=None, source_shape=None,
-            spatial_evidence=None):
+            spatial_evidence=None, max_derivative=None):
         batch, count = mode_index.shape
         row = torch.arange(batch, device=mode_index.device)[:, None]
         state = prediction['state'][row, mode_index].reshape(-1, 12)
@@ -434,6 +435,16 @@ class OneShotJointSliceModel(nn.Module):
         requested_local = 1000 * raw[:, :3].tanh()
         local, removed_affine = project_surface_affine_out(requested_local)
         center, frame, basis = full_frame_state_to_components(state)
+        if max_derivative is not None:
+            canonical = torch.where(reflected[:, None, None, None], local.flip(-1), local)
+            z_for_bound = torch.as_tensor(offsets, device=state.device, dtype=state.dtype)
+            if z_for_bound.ndim == 1:
+                z_for_bound = z_for_bound[None].expand(batch, -1)
+            z_for_bound = z_for_bound[:, None].expand(-1, count, -1).flatten(0, 1)
+            derivative_bound = ribbon_derivative_frobenius_bound(
+                canonical, torch.zeros_like(canonical), basis, z_for_bound)
+            derivative_scale = (max_derivative / derivative_bound.clamp_min(max_derivative)).clamp_max(1.)
+            local = local * derivative_scale[:, None, None, None]
         if source_shape is None:
             oy = torch.arange(height, device=state.device, dtype=state.dtype) / height
             ox = torch.arange(width, device=state.device, dtype=state.dtype) / width
@@ -472,6 +483,9 @@ class OneShotJointSliceModel(nn.Module):
         }
         if hasattr(self, 'fit_quality_head'):
             output['fit_energy'] = fit_energy.reshape(batch, count)
+        if max_derivative is not None:
+            output['prelimit_derivative_bound'] = derivative_bound.reshape(batch, count)
+            output['deformation_rescale'] = derivative_scale.reshape(batch, count)
         if return_refinement_feature:
             local_small = F.interpolate(local, evidence.shape[-2:], mode='bilinear',
                                         align_corners=False) / 1000
