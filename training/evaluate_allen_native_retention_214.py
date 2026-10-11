@@ -112,7 +112,7 @@ rows = []
 with torch.inference_mode():
     for arm in arms:
         for step in steps:
-            saved = torch.load(checkpoints[arm, step], map_location='cpu', weights_only=True)
+            saved = torch.load(checkpoints[arm, step], map_location='cpu', weights_only=False)
             assert saved['step'] == step and saved['arm'] == arm and saved['calibrated'] is False
             model.load_state_dict(saved['model'], strict=True)
             del saved
