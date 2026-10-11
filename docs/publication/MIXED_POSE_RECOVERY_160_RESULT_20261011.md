@@ -1,0 +1,21 @@
+# 160: acquired-image retention held, but direct pose recovery missed its gate
+
+The bounded continuation of the scratch-trained 132 joint model finished all 653 updates. Its raw ledger contains 2,471 attempted synthetic draws, 1,959 accepted independently sampled physical sections (653 v3, 1,306 v4), 653 distinct coronal TRAIN donors and 653 distinct sagittal TRAIN sections. The continuation loaded the exact 132 step-2,000 model and AdamW moments, updated only the direct pose heads and shared image encoder, and left the local mapper and atlas matcher frozen. The independent verifier checked the ledger, source and checkpoint hashes, TRAIN/DEV identities, all raw evaluation rows, arithmetic, and the predeclared gate.
+
+| Readout | Parent step 0 | Step 326 | Final step 653 |
+| --- | ---: | ---: | ---: |
+| Fresh v4 DEV blind first-choice rigid error, plan-equal | 2.993 mm | 2.970 mm | **2.873 mm** |
+| Fresh v4 DEV near plane in blind top 16, plan-equal | 74.60% | 76.66% | **76.26%** |
+| v3 DEV blind first-choice rigid error, plan-equal | 3.149 mm | 3.144 mm | **3.129 mm** |
+| Coronal weak-real DEV five-point discrepancy, donor-equal | 0.904 mm | 0.881 mm | **0.917 mm** |
+| Sagittal weak-real DEV five-point discrepancy, donor-equal | 1.242 mm | 1.232 mm | **1.218 mm** |
+| Supplied exact-plane local-map error, v4 plan-equal | 0.167 mm | 0.167 mm | **0.167 mm** |
+| Supplied baseline-near-plane local-map error, v4 plan-equal | 0.878 mm | 0.878 mm | **0.875 mm** |
+
+The v4 first-choice gain is only **0.120 mm**, short of the predeclared **0.250-mm** minimum; the development gate **fails**. On the same 243 eligible v4 sections, final step wins 124 and loses 119 first-choice pairwise comparisons (median gain 0.002 mm), so the mean is not evidence of a consistent improvement. The first and last 100 TRAIN updates had mean total loss 9.055 versus 9.215, and v4 first-choice TRAIN cost 5.214 versus 5.029 mm; individual TRAIN examples are random and neither curve establishes a learning trend. The 243 eligible v3 sections show only a 0.019-mm plan-equal change. The parent step-0 checkpoint remains the research baseline; do **not** promote step 653 or extend this unchanged direct-pose continuation.
+
+Real-domain retention is the useful limited result: the six coronal and eight sagittal development donor families stayed within the predeclared 0.20-mm donor-equal and 0.50-mm per-donor regression guards. The shared-encoder update did not break the frozen local mapper on supplied exact or near synthetic planes. These real references are inherited Allen affines, **not** expert anatomical ground truth; the 243/243 synthetic DEV sections in each cohort arise from eight reused synthetic deformation plans, not independent animals. No physical steep-oblique animal test, calibrated electrode-region probability, GUI replacement or DeepSlice comparison is established here.
+
+The next model change must address the measured bottleneck: most synthetic cases have a near plane in the blind top 16, yet direct first-choice selection remains around 3 mm. A trained atlas-fit score has not shown anatomy-specific selection (159), and this pose-only continuation has not materially moved it. Design a **matched** end-to-end experiment in which the rendered atlas and constrained local fit send a spatially grounded correction into the *same* pose distribution, with a detached-feedback control and atlas-intensity/source-swap/support-matched ablations. Require both a blind first-choice pose gain and an anatomical-evidence advantage before scaling. Independently acquired, registered animal volumes may improve specimen diversity, but interpolation of coronal stacks cannot count as physically oblique validation.
+
+Frozen artifacts on `I:`: `runs/mixed_pose_recovery_160_train_001` and `runs/mixed_pose_recovery_160_dev_eval_001`. Parent checkpoint SHA-256 `cc6acacafcbec99f64871cb3a263c9ce3e0b793e5aabd3ae372ed3218c297ee5`; step-653 checkpoint `8e2cc8349d9eafaa47327ef895ad8d3093f313a16aa5082792f13d98ce602cd8`; training completion `d9f3ae08d693ff20d8f77b8d363f4ea9d8d08ed49356a238c9558de590330202`; evaluation summary `c2006e435f1da28eef0a68166806ca5c00550e88d012880411c86b0b58323ba7`. Reproducers: `training/train_mixed_pose_recovery_160.py`, `training/evaluate_mixed_pose_recovery_160.py`, and `training/verify_mixed_pose_recovery_160.py`.
