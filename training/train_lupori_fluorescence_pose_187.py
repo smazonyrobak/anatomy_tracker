@@ -47,27 +47,36 @@ def sha(path):
 source = Path(__file__).resolve().parent
 full_training = os.environ.get('ANATOMY_LUPORI_FULL_TRAIN') == '1'
 framing_arm = os.environ.get('ANATOMY_POSE_FRAMING_221_ARM')
+selection_arm = os.environ.get('ANATOMY_POSE_SELECTION_222_ARM')
 assert framing_arm in (None, 'framed', 'unframed')
-assert not (full_training and framing_arm)
-protocol_name = ('POSE_FRAMING_221_PROTOCOL_20261011.md' if framing_arm else
+assert selection_arm in (None, 'control', 'intervention')
+assert sum((full_training, bool(framing_arm), bool(selection_arm))) <= 1
+new_geometry = bool(framing_arm or selection_arm)
+framed_geometry = framing_arm == 'framed' or bool(selection_arm)
+protocol_name = ('POSE_SELECTION_222_PROTOCOL_20261011.md' if selection_arm else
+    'POSE_FRAMING_221_PROTOCOL_20261011.md' if framing_arm else
     'LUPORI_FLUORESCENCE_POSE_ALL_TRAIN_188_PROTOCOL_20261011.md' if full_training else
     'LUPORI_FLUORESCENCE_POSE_ADAPTATION_187_PROTOCOL_20261011.md')
 protocol = source.parent / 'docs/publication' / protocol_name
 split_path = source / 'lupori_animal_split_185.json'
 split = json.loads(split_path.read_text())
 archive = root / 'data/lupori_joint_185/rawData.zip'
-parent_dir = root / ('runs/lupori_fluorescence_pose_187_inner_AL1A' if framing_arm
+parent_dir = root / ('runs/pose_framing_221_framed_train_001' if selection_arm else
+                     'runs/lupori_fluorescence_pose_187_inner_AL1A' if framing_arm
                      else 'runs/v4_pose_adaptation_132')
-parent_step = 800 if framing_arm else 2000
+parent_step = 400 if selection_arm else 800 if framing_arm else 2000
 parent = parent_dir / f'joint_step_{parent_step:05d}.pt'
-run = root / 'runs' / (f'pose_framing_221_{framing_arm}_train_001' if framing_arm else
+run = root / 'runs' / (f'pose_selection_222_{selection_arm}_train_001' if selection_arm else
+    f'pose_framing_221_{framing_arm}_train_001' if framing_arm else
     'lupori_fluorescence_pose_188_all_train' if full_training else
     'lupori_fluorescence_pose_187_inner_AL1A')
 sagittal_dir = root / 'data/allen_sagittal_ish_expansion_002_train_inputs_20261008'
 guard_animal = None if full_training else 'AL1A'
-seed, side, updates, sites = (20261011222 if framing_arm == 'framed' else
-    20261011221 if framing_arm else 20261011188 if full_training else 20261011187), 256, 400 if framing_arm else 1200, 128
-checkpoints = (0, 200, 400) if framing_arm else (0, 400, 800, 1200)
+seed, side, updates, sites = (202610112231 if selection_arm == 'intervention' else
+    202610112230 if selection_arm == 'control' else
+    20261011222 if framing_arm == 'framed' else
+    20261011221 if framing_arm else 20261011188 if full_training else 20261011187), 256, 400 if new_geometry else 1200, 128
+checkpoints = (0, 200, 400) if new_geometry else (0, 400, 800, 1200)
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -86,7 +95,7 @@ context = load_streaming_synthetic_v7_64(device='cuda')
 old_coronal = load_reserved_real_train()
 assert json.loads(json.dumps(context['provenance'])) == parent_config['synthetic_provenance']
 assert old_coronal['bindings'] == parent_config[
-    'old_coronal_bindings' if framing_arm else 'coronal_bindings']
+    'old_coronal_bindings' if new_geometry else 'coronal_bindings']
 sagittal_summary = json.loads((sagittal_dir / 'summary.json').read_text())
 assert sha(sagittal_dir / 'summary.json') == parent_config['sagittal_summary_sha256']
 assert all(sha(sagittal_dir / name) == digest
@@ -187,15 +196,16 @@ source_files = ('train_lupori_fluorescence_pose_187.py', 'arbitrary_plane_one_sh
     'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_geometry.py',
     'global_atlas_contrast_090.py', 'global_plane_matcher_120.py')
 config = {'seed': seed, 'updates': updates, 'side': side, 'sites': sites,
-    'training_phase': f'pose_framing_221_{framing_arm}' if framing_arm else
+    'training_phase': f'pose_selection_222_{selection_arm}' if selection_arm else
+        f'pose_framing_221_{framing_arm}' if framing_arm else
         'all_four_train_animals' if full_training else 'inner_animal_pilot',
     'lupori_archive_bytes': split['archive_bytes'],
     'lupori_archive_md5': split['archive_md5'],
     'synthetic_per_update': {'v4': 2, 'v3': 1},
-    'new_geometry_166_per_update': 2 if framing_arm else 0,
-    'support_aware_framing_217': framing_arm == 'framed',
-    'new_geometry_train_bases': list(range(60)) if framing_arm else [],
-    'new_geometry_draws_independent_between_arms': bool(framing_arm),
+    'new_geometry_166_per_update': 2 if new_geometry else 0,
+    'support_aware_framing_217': framed_geometry,
+    'new_geometry_train_bases': list(range(60)) if new_geometry else [],
+    'new_geometry_draws_independent_between_arms': new_geometry,
     'lupori_per_update': 1, 'old_weak_per_update': 1,
     'inner_guard_animal': guard_animal, 'lupori_gradient_animals':
     [animal for animal in split['train'] if animal != guard_animal],
@@ -209,7 +219,14 @@ config = {'seed': seed, 'updates': updates, 'side': side, 'sites': sites,
     'sagittal_summary_sha256': sha(sagittal_dir / 'summary.json'),
     'sagittal_output_sha256': sagittal_summary['output_sha256'],
     'input': 'max(red,green)/255, image-wide p99 normalized, other four channels zero',
-    'loss': '132 synthetic mixture + 1.0 Lupori tissue/five-point/normal mixture + 0.3 alternating old-real mixture',
+    'loss': ('132 synthetic mixture + 1.0 Lupori tissue/five-point/normal mixture '
+             '+ 0.3 alternating old-real mixture' +
+             (' + 0.5 synthetic top-good/top-bad selection hinge' if
+              selection_arm == 'intervention' else '')),
+    'selection_good_tolerance_mm': .5 if selection_arm else None,
+    'selection_log_margin_nats': .5 if selection_arm else None,
+    'selection_loss_weight': .5 if selection_arm == 'intervention' else 0.,
+    'selection_supervision': 'synthetic exact-affine 160-way top-good versus top-bad hinge' if selection_arm else None,
     'optimized': 'shared image encoder/lateral and probabilistic direct pose heads only',
     'calibrated': False, 'public_benchmark_used': False,
     'external_pretrained_weights_used': False, 'heldout_animal_used_in_training': False}
@@ -241,18 +258,18 @@ accepted_ids = set()
 with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w') as log:
     for step in range(1, updates + 1):
         samples = []
-        appearances = ('v4', 'v3', 'v4') if framing_arm else ('v4', 'v4', 'v3')
+        appearances = ('v4', 'v3', 'v4') if new_geometry else ('v4', 'v4', 'v3')
         for slot, appearance in enumerate(appearances):
             sampler = (sample_one_shot_slide_artifacts_v4 if appearance == 'v4'
                        else sample_one_shot_slide_artifacts_v3)
             while True:
                 draw_seed = int(rng.integers(0, 2**63 - 1, dtype=np.int64))
                 with torch.no_grad():
-                    if framing_arm and slot < 2:
+                    if new_geometry and slot < 2:
                         base = int(rng.integers(60))
                         source_sample = sample_panel_geometry_train_166(
                             context, [base], draw_seed, side=side)
-                        if framing_arm == 'framed':
+                        if framed_geometry:
                             source_sample = sample_support_aware_framing_217(
                                 source_sample, draw_seed)
                         sample = sampler(context, [base], draw_seed, side=side,
@@ -265,7 +282,8 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
                 draw_count += 1
                 draws.write(json.dumps({'kind': 'synthetic_train', 'update': step,
                     'slot': slot, 'appearance_version': appearance,
-                    'geometry_arm': framing_arm if framing_arm and slot < 2 else 'legacy_v7',
+                    'geometry_arm': ('framed' if framed_geometry else framing_arm)
+                        if new_geometry and slot < 2 else 'legacy_v7',
                     'draw_attempt': draw_count, 'used': eligible, **record},
                     allow_nan=False) + '\n')
                 if eligible:
@@ -378,6 +396,13 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
             + .5 * F.kl_div(prior[4:], old_mass, reduction='none').sum(-1)
             + .5 * old_cost.min(-1).values).mean()
         loss = synthetic_loss + lupori_loss + .3 * old_loss
+        selection_loss = physical.new_zeros(())
+        if selection_arm == 'intervention':
+            good = physical.detach() <= physical.detach().amin(-1, keepdim=True) + .5
+            good_score = prior[:3].masked_fill(~good, -1e9).amax(-1)
+            bad_score = prior[:3].masked_fill(good, -1e9).amax(-1)
+            selection_loss = F.relu(.5 + bad_score - good_score).mean()
+            loss = loss + .5 * selection_loss
         decay = .2 + .8 * .5 * (1 + math.cos(math.pi * step / updates))
         for group in optimizer.param_groups:
             group['lr'] = group['base_lr'] * decay
@@ -399,6 +424,7 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
             'synthetic_loss': float(synthetic_loss.detach()),
             'lupori_loss': float(lupori_loss.detach()),
             'old_weak_loss': float(old_loss.detach()),
+            'selection_loss': float(selection_loss.detach()),
             'loss': float(loss.detach()), 'gradient_norm': float(gradient),
             'seconds_since_process_start': time.perf_counter() - started}
         log.write(json.dumps(row, allow_nan=False) + '\n')
@@ -414,7 +440,7 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
 
 (run / 'completed.json').write_text(json.dumps({'updates': updates,
     'synthetic_presentations': 3 * updates,
-    'new_geometry_166_presentations': 2 * updates if framing_arm else 0,
+    'new_geometry_166_presentations': 2 * updates if new_geometry else 0,
     'synthetic_draw_attempts': draw_count,
     'unique_synthetic_physical_sections': len(accepted_ids),
     'lupori_presentations': updates,
