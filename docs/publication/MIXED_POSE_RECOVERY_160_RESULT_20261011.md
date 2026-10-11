@@ -2,6 +2,8 @@
 
 The bounded continuation of the scratch-trained 132 joint model finished all 653 updates. Its raw ledger contains 2,471 attempted synthetic draws, 1,959 accepted independently sampled physical sections (653 v3, 1,306 v4), 653 distinct coronal TRAIN donors and 653 distinct sagittal TRAIN sections. The continuation loaded the exact 132 step-2,000 model and AdamW moments, updated only the direct pose heads and shared image encoder, and left the local mapper and atlas matcher frozen. The independent verifier checked the ledger, source and checkpoint hashes, TRAIN/DEV identities, all raw evaluation rows, arithmetic, and the predeclared gate.
 
+Accepted synthetic plane normals span 1.5–53.8° from their nearest cardinal axis: 204/606/910/239 sections in the 0–15/15–30/30–45/45–55° bins. Input modes were 1,412 raw, 263 exact-black, and 284 imperfect-brush. Recorded artifact events were 439 displaced fragments, 392 folds, 308 bubbles and 468 tile seams (events may co-occur); 701 of the 1,306 v4 inputs had low-exposure treatment. This verifies sampled variability, **not** its prevalence or fidelity in physical histology, and all virtual subjects still descend from the same Allen reference.
+
 | Readout | Parent step 0 | Step 326 | Final step 653 |
 | --- | ---: | ---: | ---: |
 | Fresh v4 DEV blind first-choice rigid error, plan-equal | 2.993 mm | 2.970 mm | **2.873 mm** |
