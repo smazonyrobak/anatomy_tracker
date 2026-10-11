@@ -1,0 +1,31 @@
+# 234: individual registered STPT source preflight result
+
+The [frozen protocol](ALLEN_STPT_INDIVIDUAL_234_PREFLIGHT_PROTOCOL_20261011.md) was run without model training or access to DEV/CAL/FINAL animals or public benchmarking. Source selection was the first two distinct registered red-channel entries in the official TRAIN sheet, before image inspection: `MMS.training.001` and `.002`. The [official challenge page](https://alleninstitute.github.io/MapMySections/) describes 396 training and 100 test genetic-tool image series and says only coronal STPT sections were directly acquired; most image series were warped into 25-µm CCF volumes. Its [registered-volume tutorial](https://github.com/AllenInstitute/MapMySections/blob/main/ccf_and_registered_stpt_tutorial.ipynb) identifies the `resampled_red_25.nii.gz` files. The TRAIN and TEST sheet series-ID sets have no overlap; the sheet's split is by challenge record, **not** a proven animal-level split.
+
+## Frozen source identities
+
+| TRAIN row | Image-series ID | Red file bytes | SHA-256 | Allen S3 source |
+|---|---:|---:|---|---|
+| `MMS.training.001` | `1285852977` | 57,274,666 | `ca353cc10d0069939e584c986581c21a0e324dec427a4b52ae52e9db458aa36c` | [red NIfTI](https://map-my-sections-802451596237-us-west-2.s3.us-west-2.amazonaws.com/stpt-image-data/1285852977/resampled_red_25.nii.gz) |
+| `MMS.training.002` | `1283915380` | 57,464,791 | `cbf012893bbf7cb52a29cd2fd16e0df50fb5bc69e303f0b47aed9328a35ca411` | [red NIfTI](https://map-my-sections-802451596237-us-west-2.s3.us-west-2.amazonaws.com/stpt-image-data/1283915380/resampled_red_25.nii.gz) |
+
+The [source workbook](https://github.com/AllenInstitute/MapMySections/blob/main/MapMySections_EntrantData.xlsx) SHA-256 is `21535da73152821026fb57baef33474ef48ce96b9a81c8846c779b58984d696c`. Both files and the workbook were retrieved to `I:/AnatomyTracker/data/allen_stpt_individual_234/` on 2026-10-11. The NIfTIs are `uint16`, shape `(528,320,456)` in AP/DV/ML index order, with 25-µm affine axis magnitudes and equal affine matrices. This is CCF output sampling, **not** the physical distance between the original coronal STPT acquisitions.
+
+The official [Genetic Tools Atlas 2.0 data snapshot](https://allen-brain-map-cms-802451596237-us-west-2.s3.amazonaws.com/Genetic%20Tools/Genetic%20Tools%20Atlas%202.0%20data%20snapshot.zip) resolves the missing donor identity. Its 923,333-byte ZIP has SHA-256 `ed8df2dc2d294302086fe78f044adbd71819765ae473ba604b6ed62945a090eb`; `SpecimenMetadata.csv` inside has SHA-256 `e56fc12c0b4dd50190ef3c69a0d1dd9ad502977b725a34565ac83d35673fe0f0`. Series `1285852977` maps to donor `C57BL6J-689283` in all five metadata rows; series `1283915380` maps to donor `C57BL6J-685868` in all four. They are provably different donors. The metadata has multiple row-specific `Specimen ID` strings per series, so the donor and image-series IDs are the stable grouping keys; do not invent a unique whole-brain specimen ID. The snapshot's readme states 100-µm coronal STPT collection and a **CC BY-NC 4.0** dataset license, citing *Allen Institute for Brain Science (2024) Genetic Tools Atlas [dataset], RRID:SCR_025643*.
+
+## Image and geometry audit
+
+The [eight-plane preview](I:/AnatomyTracker/previews/allen_stpt_individual_full_sphere_234.png) and [machine-readable receipt](I:/AnatomyTracker/previews/allen_stpt_individual_full_sphere_234.json) preserve four independent full-sphere normals per series, sampled centers, a 125-µm five-tap slab, absolute global intensity scale, display-stretched image, and the matching Allen template plane. The preview SHA-256 is `2205edbbf9182abf8ed7e41e66d184cd3fee762b2f9f8bc86a4b6430b3d984d1`.
+
+Both volumes visibly contain whole-brain anatomy, with individual high-frequency texture and no obvious gross orientation mismatch in the sampled steep planes (10°–48° from the nearest cardinal normal). Downsampled, one-voxel-smoothed in-support correlation to Allen template was 0.839 and 0.862 in the native index orientation. That orientation ranked highest among the eight possible axis-flip states; ML reflection was close (0.807 and 0.830), so the correlation alone does not prove laterality. The same-voxel cross-source correlation after smoothing was 0.90 (raw 0.83): texture and expression differ, but these are strongly CCF-aligned images, not undeformed individual-brain geometry.
+
+| TRAIN row | In-support raw q01/q99 | AP mean absolute change, 25→100 µm | DV/ML change at 100 µm |
+|---|---:|---:|---:|
+| `.001` | 43 / 933 | 16.8 / 57.3 | 61.3 / 68.1 |
+| `.002` | 29 / 1188 | 21.8 / 73.3 | 77.4 / 84.9 |
+
+The small 25-µm AP differences relative to 100-µm differences are consistent with interpolated coronal data. The red channel is not guaranteed to be neutral autofluorescence: this challenge is about genetic-tool fluorescence, and reporter expression can dominate a channel or region. The public raw Zarr metadata describes native pixel scales but does not provide the specimen-to-CCF transformation. The registered-series S3 objects and official tutorial likewise do not expose a transform field or registration QC for these two brains. Thus the exact individual deformation cannot be independently recovered from these files. These preflight metrics and images establish **usable CCF-registered TRAIN appearance variation**, not physical arbitrary-angle truth, independent deformation labels, or likely gains in the current model.
+
+## Decision and next condition
+
+This source passes a *limited research appearance* feasibility check with two distinct known donors. A bounded matched TRAIN-only source ablation could test whether individual contrast helps the original-source gate that failed for the population-average light-sheet source in 233; it should not displace work on blind candidate localization. Do not use these already-warped volumes as independent pose/deformation validation, assume all-angle physical accuracy, or scale to a cohort. The specific dataset license is [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/), and the [Allen terms](https://alleninstitute.org/legal/terms-of-use) also restrict commercial Content/derivative use. Do not ship their data or derived weights for commercial use without rights review; repository-code licensing is not a data/weight license. The model, GUI, and probability claims remain unchanged.
