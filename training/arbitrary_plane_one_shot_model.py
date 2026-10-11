@@ -27,10 +27,12 @@ class OneShotJointSliceModel(nn.Module):
     def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
                  vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
                  dense_coordinate=False, normal_anchor_count=0, anchor_specific_features=False,
-                 dense_coordinate_pyramid=False, anchor_residual_arm=None):
+                 dense_coordinate_pyramid=False, anchor_residual_arm=None,
+                 shared_anchor_pose=False):
         super().__init__()
         self.base_modes, self.normal_anchor_count = modes, normal_anchor_count
         self.anchor_specific_features = anchor_specific_features
+        self.shared_anchor_pose = shared_anchor_pose
         assert anchor_residual_arm in (None, 'shared', 'untied')
         self.anchor_residual_arm = anchor_residual_arm
         self.modes, self.uncertainty_rank = modes + normal_anchor_count, uncertainty_rank
@@ -63,20 +65,33 @@ class OneShotJointSliceModel(nn.Module):
             horizontal = F.normalize(axis - (axis * normals).sum(-1, keepdim=True) * normals, dim=-1)
             vertical = torch.linalg.cross(normals, horizontal)
             self.register_buffer('normal_anchor_frames', torch.stack((horizontal, vertical, normals), -1))
-            self.anchor_pose = nn.Sequential(
-                nn.Linear(64 * 8 * 8 + 12, 768), nn.GELU(),
-                nn.Linear(768, normal_anchor_count * 18),
-            )
-            self.anchor_global = nn.Sequential(
-                nn.Linear(widths[-1] * 4 * 4 + 12, 384), nn.GELU(),
-                nn.Linear(384, normal_anchor_count * 18),
-            )
-            nn.init.normal_(self.anchor_pose[-1].weight, std=.001)
-            nn.init.zeros_(self.anchor_pose[-1].bias)
-            nn.init.zeros_(self.anchor_global[-1].weight)
-            nn.init.zeros_(self.anchor_global[-1].bias)
-            with torch.no_grad():
-                self.anchor_pose[-1].bias.view(normal_anchor_count, 18)[:, 16] = -2
+            if shared_anchor_pose:
+                self.shared_anchor_image = nn.Sequential(
+                    nn.Linear(64 * 8 * 8 + 12, 512), nn.GELU(),
+                    nn.Linear(512, 256), nn.GELU(),
+                )
+                self.shared_anchor_query = nn.Sequential(
+                    nn.Linear(256 + 9, 256), nn.GELU(), nn.Linear(256, 18),
+                )
+                nn.init.normal_(self.shared_anchor_query[-1].weight, std=.001)
+                nn.init.zeros_(self.shared_anchor_query[-1].bias)
+                with torch.no_grad():
+                    self.shared_anchor_query[-1].bias[16] = -2
+            else:
+                self.anchor_pose = nn.Sequential(
+                    nn.Linear(64 * 8 * 8 + 12, 768), nn.GELU(),
+                    nn.Linear(768, normal_anchor_count * 18),
+                )
+                self.anchor_global = nn.Sequential(
+                    nn.Linear(widths[-1] * 4 * 4 + 12, 384), nn.GELU(),
+                    nn.Linear(384, normal_anchor_count * 18),
+                )
+                nn.init.normal_(self.anchor_pose[-1].weight, std=.001)
+                nn.init.zeros_(self.anchor_pose[-1].bias)
+                nn.init.zeros_(self.anchor_global[-1].weight)
+                nn.init.zeros_(self.anchor_global[-1].bias)
+                with torch.no_grad():
+                    self.anchor_pose[-1].bias.view(normal_anchor_count, 18)[:, 16] = -2
             if anchor_residual_arm:
                 self.anchor_residual_image = nn.Sequential(
                     nn.Linear(64 * 8 * 8 + 12, 256), nn.GELU())
@@ -225,11 +240,19 @@ class OneShotJointSliceModel(nn.Module):
                         mode='bilinear', align_corners=False)
             else:
                 anchor_feature, anchor_x = feature, x
-            anchors = (self.anchor_pose(torch.cat((
-                F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
-                + self.anchor_global(torch.cat((
-                F.adaptive_avg_pool2d(anchor_x, 4).flatten(1), context), -1))).reshape(
-                        -1, self.normal_anchor_count, 18)
+            if self.shared_anchor_pose:
+                image = self.shared_anchor_image(torch.cat((
+                    F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
+                frames = self.normal_anchor_frames.reshape(1, self.normal_anchor_count, 9)
+                anchors = self.shared_anchor_query(torch.cat((
+                    image[:, None].expand(-1, self.normal_anchor_count, -1),
+                    frames.expand(len(image), -1, -1)), -1))
+            else:
+                anchors = (self.anchor_pose(torch.cat((
+                    F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
+                    + self.anchor_global(torch.cat((
+                    F.adaptive_avg_pool2d(anchor_x, 4).flatten(1), context), -1))).reshape(
+                            -1, self.normal_anchor_count, 18)
             if self.anchor_residual_arm:
                 image = self.anchor_residual_image(torch.cat((
                     F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
@@ -338,8 +361,14 @@ class OneShotJointSliceModel(nn.Module):
         batch = prediction['state'].shape[0]
         device = prediction['state'].device
         source = F.adaptive_avg_pool2d(prediction['feature'], (side, side))
-        y, x = torch.meshgrid(torch.arange(side, device=device) / side,
-                              torch.arange(side, device=device) / side, indexing='ij')
+        if self.shared_anchor_pose:
+            y, x = torch.meshgrid(
+                (torch.arange(side, device=device) + .5) / side - .5 / image_shape[0],
+                (torch.arange(side, device=device) + .5) / side - .5 / image_shape[1],
+                indexing='ij')
+        else:
+            y, x = torch.meshgrid(torch.arange(side, device=device) / side,
+                                  torch.arange(side, device=device) / side, indexing='ij')
         xy = torch.stack((x, y))[None]
         z = torch.as_tensor(offsets, device=device, dtype=source.dtype)
         w = torch.as_tensor(weights, device=device, dtype=source.dtype)
@@ -397,6 +426,8 @@ class OneShotJointSliceModel(nn.Module):
     def map(self, prediction, offsets, mode_index, reflection, image_shape, atlas=None, weights=None,
             return_refinement_feature=False, feature_side=None, source_shape=None,
             spatial_evidence=None, max_derivative=None):
+        if self.shared_anchor_pose and source_shape is None:
+            source_shape = image_shape
         batch, count = mode_index.shape
         row = torch.arange(batch, device=mode_index.device)[:, None]
         state = prediction['state'][row, mode_index].reshape(-1, 12)
@@ -513,6 +544,9 @@ class OneShotJointSliceModel(nn.Module):
             output['prelimit_derivative_bound'] = derivative_bound.reshape(batch, count)
             output['deformation_rescale'] = derivative_scale.reshape(batch, count)
         if return_refinement_feature:
+            if not hasattr(self, 'fit_quality_head'):
+                raw_small = F.interpolate(raw, evidence.shape[-2:], mode='bilinear',
+                                          align_corners=False)
             local_small = F.interpolate(local, evidence.shape[-2:], mode='bilinear',
                                         align_corners=False) / 1000
             dx = F.pad((local_small[..., 1:] - local_small[..., :-1]).square().sum(1, keepdim=True),
@@ -556,8 +590,14 @@ class OneShotJointSliceModel(nn.Module):
         condition = torch.cat(((state[:, :3] - self.center_origin) / self.center_scale,
                                state[:, 3:9], state[:, 9:11] - math.log(12000.),
                                state[:, 11:12], reflected[:, None]), -1)
-        yy, xx = torch.meshgrid(torch.arange(side, device=state.device) / side,
-                                torch.arange(side, device=state.device) / side, indexing='ij')
+        if self.shared_anchor_pose:
+            yy, xx = torch.meshgrid(
+                (torch.arange(side, device=state.device) + .5) / side - .5 / inputs.shape[-2],
+                (torch.arange(side, device=state.device) + .5) / side - .5 / inputs.shape[-1],
+                indexing='ij')
+        else:
+            yy, xx = torch.meshgrid(torch.arange(side, device=state.device) / side,
+                                    torch.arange(side, device=state.device) / side, indexing='ij')
         xy = torch.stack((xx, yy))[None].expand(batch * count, -1, -1, -1)
         evidence = torch.cat((image, target, (image - target).abs(),
                               local_correlation(image, target, 2), xy, source,

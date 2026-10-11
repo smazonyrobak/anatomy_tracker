@@ -12,6 +12,7 @@ def load_one_shot_checkpoint(path, device='cuda'):
     model = OneShotJointSliceModel(
         modes=checkpoint['model']['pose.2.bias'].numel() // 21,
         normal_anchor_count=0 if anchors is None else len(anchors),
+        shared_anchor_pose=any(key.startswith('shared_anchor_query.') for key in checkpoint['model']),
         atlas_conditioning=any(key.startswith('atlas_encoder.') for key in checkpoint['model']),
         fit_quality=any(key.startswith('fit_quality_head.') for key in checkpoint['model']),
         candidate_ranking=any(key.startswith('candidate_matcher.') for key in checkpoint['model']),
