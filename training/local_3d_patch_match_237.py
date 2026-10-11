@@ -62,9 +62,10 @@ def local_3d_patch_match(source, state, reflection, atlas, offsets, weights, nul
     best = torch.where(supported, best, torch.zeros_like(best))
     raw_score = correlation.flatten(1).gather(1, matched[:, None])[:, 0]
     raw_score = torch.where(supported, raw_score, torch.zeros_like(raw_score))
-    median = local_scores.masked_fill(~available.flatten(1), torch.nan).nanmedian(-1).values
+    median = correlation.flatten(1).masked_fill(
+        ~available.flatten(1), torch.nan).nanmedian(-1).values
     median = torch.nan_to_num(median, nan=0.)
-    confidence = (best - median).clamp_min(0) * raw_score * (texture / .1).clamp(0, 1)
+    confidence = (raw_score - median).clamp_min(0) * raw_score * (texture / .1).clamp(0, 1)
     confidence = torch.where(supported, confidence, torch.zeros_like(confidence))
 
     depth_index, local_index = matched.div(169, rounding_mode='floor'), matched.remainder(169)
