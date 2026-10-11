@@ -3,10 +3,18 @@
 import hashlib
 import json
 import os
+import sys
 from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree
 from zipfile import ZipFile
+
+root = Path('I:/AnatomyTracker')
+os.environ['TEMP'] = os.environ['TMP'] = str(root / 'tmp')
+os.environ['TORCH_HOME'] = str(root / 'cache/torch')
+os.environ['XDG_CACHE_HOME'] = str(root / 'cache')
+os.environ['CUDA_CACHE_PATH'] = str(root / 'cache/cuda')
+sys.dont_write_bytecode = True
 
 import numpy as np
 import torch
@@ -18,20 +26,23 @@ from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 from training.global_atlas_contrast_090 import rigid_points_090
 from training.global_plane_matcher_120 import attach_global_plane_matcher
 
-root = Path('I:/AnatomyTracker')
 archive = root / 'data/lupori_joint_185/rawData.zip'
 split_path = Path(__file__).with_name('lupori_animal_split_185.json')
 split = json.loads(split_path.read_text())
 development = os.environ.get('ANATOMY_LUPORI_DEV_EVAL') == '1'
-run = root / 'runs' / ('lupori_fluorescence_pose_188_all_train' if development
+framing_arm = os.environ.get('ANATOMY_POSE_FRAMING_221_ARM')
+assert framing_arm in (None, 'framed', 'unframed') and not (framing_arm and development)
+run = root / 'runs' / (f'pose_framing_221_{framing_arm}_train_001' if framing_arm else
+                       'lupori_fluorescence_pose_188_all_train' if development
                        else 'lupori_fluorescence_pose_187_inner_AL1A')
-parent = root / 'runs/v4_pose_adaptation_132/joint_step_02000.pt'
-checkpoints = {'132_parent': parent}
+parent = root / ('runs/lupori_fluorescence_pose_187_inner_AL1A/joint_step_00800.pt'
+                 if framing_arm else 'runs/v4_pose_adaptation_132/joint_step_02000.pt')
+checkpoints = {'187_step_0800' if framing_arm else '132_parent': parent}
 finished = (run / 'completed.json').exists()
 if finished:
-    checkpoints.update({f'{188 if development else 187}_step_{step:04d}':
+    checkpoints.update({f'{221 if framing_arm else 188 if development else 187}_step_{step:04d}':
                         run / f'joint_step_{step:05d}.pt'
-                        for step in (0, 400, 800, 1200)})
+                        for step in ((0, 200, 400) if framing_arm else (0, 400, 800, 1200))})
 
 assert archive.stat().st_size == split['archive_bytes']
 torch.set_num_threads(4)
@@ -110,9 +121,10 @@ for checkpoint_id, path in checkpoints.items():
                     'oracle_all160_five_point_mm': float(errors[j].min())})
     del model
 
-output = root / 'data/lupori_joint_185' / (
-    'development_pose_188.json' if development else
-    'inner_guard_candidate_187.json' if finished else 'inner_guard_parent_187.json')
+output = (run / 'inner_guard_AL1A.json' if framing_arm else
+    root / 'data/lupori_joint_185' / (
+        'development_pose_188.json' if development else
+        'inner_guard_candidate_187.json' if finished else 'inner_guard_parent_187.json'))
 output.write_text(json.dumps({'source_doi': split['source_doi'],
     'split_sha256': hashlib.sha256(split_path.read_bytes()).hexdigest(),
     'archive_md5': split['archive_md5'],
