@@ -51,16 +51,22 @@ framing_arm = os.environ.get('ANATOMY_POSE_FRAMING_221_ARM')
 selection_arm = os.environ.get('ANATOMY_POSE_SELECTION_222_ARM')
 anchor_conditional_arm = os.environ.get('ANATOMY_POSE_ANCHOR_CONDITIONAL_223_ARM')
 appearance_226 = os.environ.get('ANATOMY_POSE_APPEARANCE_226') == '1'
+kimlab_233 = os.environ.get('ANATOMY_KIMLAB_233') == '1'
 anchor_residual_arm = os.environ.get('ANATOMY_ANCHOR_RESIDUAL_227_ARM')
 assert framing_arm in (None, 'framed', 'unframed')
 assert selection_arm in (None, 'control', 'intervention')
 assert anchor_conditional_arm in (None, 'control', 'intervention')
 assert anchor_residual_arm in (None, 'shared', 'untied')
 assert sum((full_training, bool(framing_arm), bool(selection_arm),
-            bool(anchor_conditional_arm), appearance_226, bool(anchor_residual_arm))) <= 1
-new_geometry = bool(framing_arm or selection_arm or anchor_conditional_arm or appearance_226 or anchor_residual_arm)
-framed_geometry = framing_arm == 'framed' or bool(selection_arm or anchor_conditional_arm or appearance_226 or anchor_residual_arm)
+            bool(anchor_conditional_arm), appearance_226, kimlab_233,
+            bool(anchor_residual_arm))) <= 1
+new_geometry = bool(framing_arm or selection_arm or anchor_conditional_arm or appearance_226 or kimlab_233 or anchor_residual_arm)
+framed_geometry = framing_arm == 'framed' or bool(selection_arm or anchor_conditional_arm or appearance_226 or kimlab_233 or anchor_residual_arm)
+if kimlab_233:
+    from training.kimlab_lsfm_appearance_232 import (
+        bind_lsfm_appearance_232, select_atlas_appearance_232)
 protocol_name = ('ANCHOR_RESIDUAL_227_PROTOCOL_20261011.md' if anchor_residual_arm else
+    'KIMLAB_LSFM_SOURCE_ABLATION_233_PROTOCOL_20261011.md' if kimlab_233 else
     'POSE_APPEARANCE_EXPOSURE_226_PROTOCOL_20261011.md' if appearance_226 else
     'POSE_ANCHOR_CONDITIONAL_223_PROTOCOL_20261011.md' if anchor_conditional_arm else
     'POSE_SELECTION_222_PROTOCOL_20261011.md' if selection_arm else
@@ -72,12 +78,13 @@ split_path = source / 'lupori_animal_split_185.json'
 split = json.loads(split_path.read_text())
 archive = root / 'data/lupori_joint_185/rawData.zip'
 parent_dir = root / ('runs/pose_appearance_exposure_226_train_001' if anchor_residual_arm else
-                     'runs/pose_framing_221_framed_train_001' if selection_arm or anchor_conditional_arm or appearance_226 else
+                     'runs/pose_framing_221_framed_train_001' if selection_arm or anchor_conditional_arm or appearance_226 or kimlab_233 else
                      'runs/lupori_fluorescence_pose_187_inner_AL1A' if framing_arm
                      else 'runs/v4_pose_adaptation_132')
-parent_step = 1200 if anchor_residual_arm else 400 if selection_arm or anchor_conditional_arm or appearance_226 else 800 if framing_arm else 2000
+parent_step = 1200 if anchor_residual_arm else 400 if selection_arm or anchor_conditional_arm or appearance_226 or kimlab_233 else 800 if framing_arm else 2000
 parent = parent_dir / f'joint_step_{parent_step:05d}.pt'
 run = root / 'runs' / (f'pose_anchor_residual_227_{anchor_residual_arm}_train_001' if anchor_residual_arm else
+    'kimlab_lsfm_source_233_train_001' if kimlab_233 else
     'pose_appearance_exposure_226_train_001' if appearance_226 else
     f'pose_anchor_conditional_223_{anchor_conditional_arm}_train_001'
     if anchor_conditional_arm else f'pose_selection_222_{selection_arm}_train_001' if selection_arm else
@@ -86,12 +93,12 @@ run = root / 'runs' / (f'pose_anchor_residual_227_{anchor_residual_arm}_train_00
     'lupori_fluorescence_pose_187_inner_AL1A')
 sagittal_dir = root / 'data/allen_sagittal_ish_expansion_002_train_inputs_20261008'
 guard_animal = None if full_training else 'AL1A'
-seed, side, updates, sites = (20261011227 if anchor_residual_arm else 20261011226 if appearance_226 else 20261011223 if anchor_conditional_arm else
+seed, side, updates, sites = (20261011227 if anchor_residual_arm else 20261011226 if appearance_226 or kimlab_233 else 20261011223 if anchor_conditional_arm else
     202610112231 if selection_arm == 'intervention' else
     202610112230 if selection_arm == 'control' else
     20261011222 if framing_arm == 'framed' else
-    20261011221 if framing_arm else 20261011188 if full_training else 20261011187), 256, 1200 if appearance_226 or anchor_residual_arm else 400 if new_geometry else 1200, 128
-checkpoints = (0, 400, 800, 1200) if appearance_226 or anchor_residual_arm else (0, 200, 400) if new_geometry else (0, 400, 800, 1200)
+    20261011221 if framing_arm else 20261011188 if full_training else 20261011187), 256, 1200 if appearance_226 or kimlab_233 or anchor_residual_arm else 400 if new_geometry else 1200, 128
+checkpoints = (0, 400, 800, 1200) if appearance_226 or kimlab_233 or anchor_residual_arm else (0, 200, 400) if new_geometry else (0, 400, 800, 1200)
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -109,6 +116,8 @@ assert not any(parent_done.get(key, False) for key in
 context = load_streaming_synthetic_v7_64(device='cuda')
 old_coronal = load_reserved_real_train()
 assert json.loads(json.dumps(context['provenance'])) == parent_config['synthetic_provenance']
+if kimlab_233:
+    context = bind_lsfm_appearance_232(context)
 assert old_coronal['bindings'] == parent_config[
     'old_coronal_bindings' if new_geometry else 'coronal_bindings']
 sagittal_summary = json.loads((sagittal_dir / 'summary.json').read_text())
@@ -227,9 +236,11 @@ source_files = ('train_lupori_fluorescence_pose_187.py', 'arbitrary_plane_one_sh
     'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_geometry.py',
     'global_atlas_contrast_090.py', 'global_plane_matcher_120.py') + (
     ('arbitrary_plane_one_shot_slide_artifacts_v6.py',
-     'arbitrary_plane_one_shot_slide_artifacts_v7.py') if appearance_226 or anchor_residual_arm else ())
+     'arbitrary_plane_one_shot_slide_artifacts_v7.py') if appearance_226 or kimlab_233 or anchor_residual_arm else ()) + (
+    ('kimlab_lsfm_appearance_232.py',) if kimlab_233 else ())
 config = {'seed': seed, 'updates': updates, 'side': side, 'sites': sites,
     'training_phase': f'pose_anchor_residual_227_{anchor_residual_arm}' if anchor_residual_arm else
+        'kimlab_lsfm_source_233' if kimlab_233 else
         'pose_appearance_exposure_226' if appearance_226 else
         f'pose_anchor_conditional_223_{anchor_conditional_arm}'
         if anchor_conditional_arm else f'pose_selection_222_{selection_arm}' if selection_arm else
@@ -237,11 +248,16 @@ config = {'seed': seed, 'updates': updates, 'side': side, 'sites': sites,
         'all_four_train_animals' if full_training else 'inner_animal_pilot',
     'lupori_archive_bytes': split['archive_bytes'],
     'lupori_archive_md5': split['archive_md5'],
-    'synthetic_per_update': {'v4': 1, 'v7': 1, 'v3': 1} if appearance_226 or anchor_residual_arm else {'v4': 2, 'v3': 1},
+    'synthetic_per_update': {'v4': 1, 'v7': 1, 'v3': 1} if appearance_226 or kimlab_233 or anchor_residual_arm else {'v4': 2, 'v3': 1},
     'new_geometry_166_per_update': 2 if new_geometry else 0,
     'support_aware_framing_217': framed_geometry,
     'new_geometry_train_bases': list(range(60)) if new_geometry else [],
-    'new_geometry_draws_independent_between_arms': new_geometry and not anchor_conditional_arm and not appearance_226 and not anchor_residual_arm,
+    'new_geometry_draws_independent_between_arms': new_geometry and not anchor_conditional_arm and not appearance_226 and not kimlab_233 and not anchor_residual_arm,
+    **({'kimlab_lsfm_source_ablation_233': True,
+        'kimlab_lsfm_binding_232': context['lsfm_binding_232'],
+        'kimlab_lsfm_selection': 'first two framed slots, independent SeedSequence([draw_seed,232]), probability 1/2',
+        'matched_control_completion_sha256': sha(root / 'runs/pose_appearance_exposure_226_train_001/completed.json')}
+       if kimlab_233 else {}),
     'anchor_residual_arm': anchor_residual_arm,
     'anchor_residual_parent_projections_frozen': bool(anchor_residual_arm),
     'anchor_residual_parent_predictions_identical_at_step_zero': bool(anchor_residual_arm),
@@ -306,7 +322,7 @@ accepted_ids = set()
 with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w') as log:
     for step in range(1, updates + 1):
         samples = []
-        appearances = (('v4', 'v7', 'v3') if appearance_226 or anchor_residual_arm else
+        appearances = (('v4', 'v7', 'v3') if appearance_226 or kimlab_233 or anchor_residual_arm else
                        ('v4', 'v3', 'v4') if new_geometry else ('v4', 'v4', 'v3'))
         for slot, appearance in enumerate(appearances):
             sampler = (sample_one_shot_slide_artifacts_v4 if appearance == 'v4' else
@@ -316,13 +332,15 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
                 draw_seed = int(rng.integers(0, 2**63 - 1, dtype=np.int64))
                 with torch.no_grad():
                     if new_geometry and slot < 2:
+                        draw_context, source_label = (select_atlas_appearance_232(context, draw_seed)
+                            if kimlab_233 else (context, 'Allen average'))
                         base = int(rng.integers(60))
                         source_sample = sample_panel_geometry_train_166(
-                            context, [base], draw_seed, side=side)
+                            draw_context, [base], draw_seed, side=side)
                         if framed_geometry:
                             source_sample = sample_support_aware_framing_217(
                                 source_sample, draw_seed)
-                        sample = sampler(context, [base], draw_seed, side=side,
+                        sample = sampler(draw_context, [base], draw_seed, side=side,
                                          source_sample=source_sample)
                     else:
                         virtual = int(rng.integers(len(context['subjects'])))
@@ -332,6 +350,8 @@ with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w'
                 draw_count += 1
                 draws.write(json.dumps({'kind': 'synthetic_train', 'update': step,
                     'slot': slot, 'appearance_version': appearance,
+                    **({'atlas_appearance_source': source_label if slot < 2 else 'Allen average'}
+                       if kimlab_233 else {}),
                     'geometry_arm': ('framed' if framed_geometry else framing_arm)
                         if new_geometry and slot < 2 else 'legacy_v7',
                     'draw_attempt': draw_count, 'used': eligible, **record},
