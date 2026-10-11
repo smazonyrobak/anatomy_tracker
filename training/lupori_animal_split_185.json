@@ -1,0 +1,12 @@
+{
+  "source_doi": "10.5281/zenodo.7419283",
+  "archive_bytes": 48652184187,
+  "archive_md5": "c8c57aa74182207db67aa0b8072be3a7",
+  "source_metadata_sha256": "44aadc43906e5319d5d5dbd7d4297b4664d24507d3d93e03c15f7718dfb3e266",
+  "assignment": "Sex-stratified independent NumPy default_rng(20261011) permutations of alphabetically sorted animal IDs, before any section image or registration was inspected: first two female and first two male animals TRAIN; third female DEV; third male CALIBRATION; fourth female FINAL_TEST.",
+  "train": ["AL1A", "CC2B", "CC4B", "CC4A"],
+  "development": ["CC1B"],
+  "calibration": ["CC3A"],
+  "final_test": ["CC1A"],
+  "note": "Four TRAIN animals, one animal per other role; this small cohort cannot by itself support precise calibrated probabilities or broad acquired-angle claims. Human QuickNII/VisuAlign registrations are approximate references, not site-level truth. No section images were opened before this split."
+}
