@@ -38,7 +38,9 @@ def sha(path):
 source = Path(__file__).resolve()
 parent_run = root / 'runs/lupori_fluorescence_pose_187_inner_AL1A'
 parent = parent_run / 'joint_step_00800.pt'
-run = root / 'runs/blind_anatomy_feedback_219_train_001'
+uncentered = os.environ.get('JOINT219_ABLATION') == 'uncentered'
+run = root / ('runs/blind_anatomy_feedback_220_uncentered_train_001' if uncentered
+    else 'runs/blind_anatomy_feedback_219_train_001')
 seed, side, bank_side, updates = 20261011219, 256, 24, 300
 milestones = (0, 100, 300)
 assert source.drive.upper() == parent.drive.upper() == run.drive.upper() == 'I:'
@@ -60,7 +62,8 @@ saved = torch.load(parent, map_location='cpu', weights_only=True)
 model.load_state_dict(saved['model'], strict=True)
 assert saved['step'] == 800 and saved['calibrated'] is False
 del saved
-matcher = AnatomyCorrespondenceFeedback218(side=bank_side).cuda()
+matcher = AnatomyCorrespondenceFeedback218(side=bank_side,
+    center_similarity=not uncentered).cuda()
 optimizer = torch.optim.AdamW(matcher.parameters(), lr=2e-4, weight_decay=1e-4)
 axis = (torch.arange(bank_side, device='cuda') + .5) / bank_side - .5 / side
 yy, xx = torch.meshgrid(axis, axis, indexing='ij')
@@ -273,6 +276,7 @@ def inner_readout(step):
 
 
 config = {'seed': seed, 'updates': updates, 'milestones': milestones,
+    'center_similarity': not uncentered,
     'parent_checkpoint': str(parent), 'parent_sha256': sha(parent),
     'source_sha256': {name: sha(source.with_name(name)) for name in (
         source.name, 'anatomy_correspondence_feedback_218.py',

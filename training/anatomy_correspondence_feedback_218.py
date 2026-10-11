@@ -46,9 +46,11 @@ from training.arbitrary_plane_geometry import physical_ouv_to_frame
 
 
 class AnatomyCorrespondenceFeedback218(nn.Module):
-    def __init__(self, side=24, channels=24, search_um=3000., temperature=.12):
+    def __init__(self, side=24, channels=24, search_um=3000., temperature=.12,
+                 center_similarity=True):
         super().__init__()
         self.side, self.search_um, self.temperature = side, search_um, temperature
+        self.center_similarity = center_similarity
         self.source_encoder = nn.Sequential(
             nn.Conv2d(1, 32, 3, padding=1, padding_mode='replicate'), nn.GELU(),
             nn.Conv2d(32, 32, 3, padding=1, padding_mode='replicate'), nn.GELU(),
@@ -120,7 +122,8 @@ class AnatomyCorrespondenceFeedback218(nn.Module):
         valid = (distance2 <= self.search_um ** 2) & (support[:, :, None, :] > .01)
         support_key = support[:, :, None, :] * valid
         available_mass = support_key.sum((1, 3))
-        mean_similarity = (similarity * support_key).sum((1, 3)) / available_mass.clamp_min(1)
+        mean_similarity = ((similarity * support_key).sum((1, 3)) / available_mass.clamp_min(1)
+                           if self.center_similarity else similarity.new_zeros((n, sites)))
         key_logits = ((similarity - mean_similarity[:, None, :, None]) / self.temperature
                       + support[:, :, None, :].clamp_min(1e-6).log()
                       - available_mass[:, None, :, None].clamp_min(1).log())
