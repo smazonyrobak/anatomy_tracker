@@ -40,7 +40,7 @@ split = json.loads(split_path.read_text())
 archive = root / 'data/lupori_joint_185/rawData.zip'
 parent_run = root / 'runs/lupori_fluorescence_pose_187_inner_AL1A'
 parent = parent_run / 'joint_step_00800.pt'
-run = root / 'runs/lupori_crossmodal_matcher_191_inner_AL1A'
+run = root / 'runs/lupori_crossmodal_matcher_191_inner_AL1A_retry1'
 assert source.drive.upper() == run.drive.upper() == 'I:' and not run.exists()
 assert sha(parent) == json.loads((parent_run / 'completed.json').read_text())[
     'checkpoint_sha256']['800']
@@ -63,7 +63,7 @@ assert saved['step'] == 800 and saved['calibrated'] is False
 model.load_state_dict(saved['model'], strict=True)
 del saved
 model.requires_grad_(False)
-heads = {arm: copy.deepcopy(model.global_plane_matcher_120).cuda().train()
+heads = {arm: copy.deepcopy(model.global_plane_matcher_120).cuda().train().requires_grad_(True)
          for arm in ('full', 'support_only')}
 assert all(torch.equal(a, b) for a, b in zip(
     heads['full'].state_dict().values(), heads['support_only'].state_dict().values()))

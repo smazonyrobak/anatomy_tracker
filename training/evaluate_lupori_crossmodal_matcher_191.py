@@ -36,7 +36,7 @@ split_path = source.with_name('lupori_animal_split_185.json')
 split = json.loads(split_path.read_text())
 archive = root / 'data/lupori_joint_185/rawData.zip'
 parent = root / 'runs/lupori_fluorescence_pose_187_inner_AL1A/joint_step_00800.pt'
-train = root / 'runs/lupori_crossmodal_matcher_191_inner_AL1A'
+train = root / 'runs/lupori_crossmodal_matcher_191_inner_AL1A_retry1'
 checkpoint = train / 'matcher_step_00600.pt'
 out = root / 'runs/lupori_crossmodal_matcher_191_guard_AL1A'
 assert source.drive.upper() == out.drive.upper() == 'I:' and not out.exists()
