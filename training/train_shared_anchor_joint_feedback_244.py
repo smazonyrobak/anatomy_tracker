@@ -21,7 +21,7 @@ from training.arbitrary_plane_full_frame_primitives import (
     compose_full_frame_state, full_frame_state_to_components,
 )
 from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
-from training.arbitrary_plane_one_shot_stream import sample_one_shot_stream
+from training.arbitrary_plane_one_shot_slide_artifacts_v7 import sample_one_shot_slide_artifacts_v7
 from training.arbitrary_plane_reserved_real_stream_v8 import load_reserved_real_train, sample_reserved_real_train
 from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_synthetic_v7_64
 
@@ -60,6 +60,10 @@ RUN.mkdir(parents=True, exist_ok=False)
 np.save(RUN / 'real_schedule.npy', np.asarray(real_schedule, np.int32))
 source_names = (
     'train_shared_anchor_joint_feedback_244.py', 'arbitrary_plane_one_shot_model.py',
+    'arbitrary_plane_one_shot_slide_artifacts_v7.py',
+    'arbitrary_plane_one_shot_slide_artifacts_v6.py',
+    'arbitrary_plane_one_shot_slide_artifacts_v4.py',
+    'arbitrary_plane_one_shot_slide_artifacts_v3.py',
     'arbitrary_plane_one_shot_stream.py', 'arbitrary_plane_streaming_synthetic_v7_64.py',
     'arbitrary_plane_reserved_real_stream_v8.py', 'arbitrary_plane_full_frame_primitives.py',
 )
@@ -122,7 +126,7 @@ with (RUN / 'training.jsonl').open('w', encoding='utf8') as log, \
         while pending:
             subjects = torch.randint(len(context['subjects']), (len(pending),),
                                      generator=subjects_rng).tolist()
-            sampled = sample_one_shot_stream(context, subjects, draw_seed, side=SIDE)
+            sampled = sample_one_shot_slide_artifacts_v7(context, subjects, draw_seed, side=SIDE)
             draw_seed += 1
             for row, identity in enumerate(sampled['provenance']):
                 slot = pending[row]
