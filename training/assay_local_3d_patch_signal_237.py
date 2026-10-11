@@ -37,7 +37,7 @@ def sha(path):
 
 
 def truth_at_chart(sample, chart):
-    grid = (2 * chart - 1).reshape(1, 1, -1, 2)
+    grid = (2 * (chart + .5 / 256) - 1).reshape(1, 1, -1, 2)
     target = F.grid_sample(sample['centre'].permute(0, 3, 1, 2), grid,
                            mode='bilinear', align_corners=False)[0, :, 0].T
     valid = F.grid_sample(sample['valid_mask'][:, None].float(), grid,
