@@ -1,0 +1,18 @@
+# 188: all-TRAIN fluorescence adaptation and first official DEV readout
+
+The [frozen protocol](LUPORI_FLUORESCENCE_POSE_ALL_TRAIN_188_PROTOCOL_20261011.md) repeated the successful 187 pose adaptation from the same scratch-lineage 132 parent, now using all 240 valid sections from the four allowed Lupori TRAIN animals. The 1,200-batch run exited 0. Independent post-exit checks rehashed the config, draw log, training log and four checkpoints; counted 3,600 distinct synthetic physical sections, 1,200 acquired presentations with animal IDs limited to `AL1A,CC2B,CC4B,CC4A`, and 1,200 older weak-real presentations. The official Lupori CAL `CC3A` and FINAL `CC1A` remain unopened. Source DOI: [10.5281/zenodo.7419283](https://doi.org/10.5281/zenodo.7419283).
+
+First official development readout on all 59 valid sections of **one animal, `CC1B`**, against approximate human VisuAlign planes; exact same image-wide-p99 input for all checkpoints:
+
+| checkpoint | first-choice five-point median / p90 (mm) | centre median (mm) | unoriented plane-normal median | first-choice ≤1.5 mm | all-160 oracle ≤1.5 mm |
+|---|---:|---:|---:|---:|---:|
+| 132 parent / 188 step 0 | 6.753 / 10.128 | 2.530 | 73.60° | 0/59 | 3/59 |
+| 188 step 400 | 1.424 / 4.457 | 1.389 | 6.61° | 31/59 | 51/59 |
+| 188 step 800 | 1.087 / 4.188 | 0.950 | 5.71° | 42/59 | 53/59 |
+| **188 step 1200** | **1.050 / 4.123** | **0.835** | **5.75°** | **42/59** | **52/59** |
+
+The predeclared selection rule treats step-800 and step-1200 medians as tied (<0.1 mm apart) and selects **step 1200** by its lower p90. Both meet retention bounds. At step 1200, frozen synthetic v3/v4 plan-equal mean direct-pose errors are respectively 95.2% and 95.9% of their 132-parent values (improvements); donor-equal inherited-affine disagreements on older coronal and sagittal acquired DEV rise 0.176 and 0.086 mm, below the predeclared 0.2-mm family ceilings. Step 400 misses the older sagittal ceiling (+0.210 mm). The selected step-1200 checkpoint SHA-256 is `de2df7dc17eb815770d7ab0b51e011c261ad0fa5aaa318c1cbe210aeee702106`.
+
+The authoritative frozen records are `I:/AnatomyTracker/runs/lupori_fluorescence_pose_188_all_train/completed.json` (SHA-256 `3fa00a598f0c1a1ab7302c2c4a896f5fe74fc41995ac9af8afb8f752e760f0f7`), `I:/AnatomyTracker/data/lupori_joint_185/development_pose_188.json` (SHA-256 `17007f51759b5b6bb77e61b568af09e6d9835a4aa7a0ccf05cc40c226e1404e8`), and `I:/AnatomyTracker/runs/lupori_fluorescence_pose_188_retention_eval/summary.json` (SHA-256 `1e5c7d66483ea969f63a719e4868f9c6588848fad6aa07c7400ceff03c87a29c`). The retention receipt's output and evaluator-source hashes were independently verified. Historical 132 source drift was limited to an opt-in map derivative bound (unused here) and tissue-centred v3 artifact sampling; frozen panel files and direct `predict()` semantics were unchanged.
+
+Interpretation: acquired fluorescence pose capture improved sharply on a separate animal, but 4/59 first choices still exceed 5 mm and p90 remains 4.12 mm. One near-coronal DEV animal and approximate reference planes do not establish physical steep-oblique robustness or site-level regional correctness. This is the **pose-capture starting checkpoint**, not the requested completed joint model: the map head was frozen in 188, anatomical fitting difficulty has not yet improved pose learning, probabilities are uncalibrated, and the GUI has not shipped it. The next bounded experiment must show that a real-anatomy fitting score distinguishes correct from wrong *predicted* planes and supplies a useful gradient to the pose predictor before a larger joint continuation. CAL and FINAL remain sealed; independent acquired non-coronal animals are still needed for the arbitrary-plane claim.
