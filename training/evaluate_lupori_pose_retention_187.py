@@ -61,7 +61,12 @@ assert tuple(train_config['checkpoints']) == (0, 400, 800, 1200)
 assert train_config['inner_guard_animal'] == 'AL1A'
 assert set(train_config['lupori_gradient_animals']) == {'CC2B', 'CC4B', 'CC4A'}
 assert all(sha(source / name) == digest for name, digest in train_config['source_sha256'].items())
-assert all(sha(source / name) == digest for name, digest in parent_config['source_sha256'].items())
+parent_source_deltas = {name for name, digest in parent_config['source_sha256'].items()
+    if sha(source / name) != digest}
+# Since 132 froze, map() gained an opt-in derivative bound; predict() is unchanged.
+# The v3 sampler gained tissue-centred artifacts; these panels carry their frozen source copies.
+assert parent_source_deltas == {'arbitrary_plane_one_shot_model.py',
+                                'arbitrary_plane_one_shot_slide_artifacts_v3.py'}
 assert not any(train_done.get(key, False) or parent_done.get(key, False) for key in
     ('calibrated', 'expert_real_truth_used', 'final_animals_used',
      'public_benchmark_used', 'external_pretrained_weights_used'))
@@ -273,6 +278,7 @@ summary = {'scope': 'frozen synthetic v3/v4 DEV and donor-disjoint old weak-real
     'old_real_metric': 'mean 3D direct top1 five-frame-point disagreement from inherited weak Allen affine, mm; not expert truth',
     'top1': 'argmax of joint mode-and-reflection prior before atlas matching, fitting, or reranking',
     'comparison_reference': '132 step2000; 187 step0 must match exactly',
+    'parent_source_deltas': sorted(parent_source_deltas),
     'synthetic': synthetic, 'old_weak_real': real, 'comparison': comparison,
     'calibrated': False, 'expert_real_truth_used': False,
     'final_animals_used': False, 'public_benchmark_used': False}
