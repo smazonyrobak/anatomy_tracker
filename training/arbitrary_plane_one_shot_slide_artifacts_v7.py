@@ -12,8 +12,9 @@ from training.arbitrary_plane_one_shot_slide_artifacts_v6 import sample_one_shot
 CODE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
-def sample_one_shot_slide_artifacts_v7(context, subject_indices, seed, side=256):
-    sample = sample_one_shot_slide_artifacts_v6(context, subject_indices, seed, side)
+def sample_one_shot_slide_artifacts_v7(context, subject_indices, seed, side=256, source_sample=None):
+    sample = sample_one_shot_slide_artifacts_v6(context, subject_indices, seed, side,
+                                                source_sample=source_sample)
     inputs = sample['inputs'].clone()
     for row, subject_index in enumerate(subject_indices):
         rng = np.random.default_rng(np.random.SeedSequence([int(seed), int(subject_index), row, 32]))

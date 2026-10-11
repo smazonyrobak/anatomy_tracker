@@ -30,6 +30,7 @@ from training.arbitrary_plane_geometry import (
 from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 from training.arbitrary_plane_one_shot_slide_artifacts_v3 import sample_one_shot_slide_artifacts_v3
 from training.arbitrary_plane_one_shot_slide_artifacts_v4 import sample_one_shot_slide_artifacts_v4
+from training.arbitrary_plane_one_shot_slide_artifacts_v7 import sample_one_shot_slide_artifacts_v7
 from training.arbitrary_plane_panel_geometry_train_166 import sample_panel_geometry_train_166
 from training.arbitrary_plane_reserved_real_stream_v8 import (
     load_reserved_real_train, sample_reserved_real_train)
@@ -49,14 +50,16 @@ full_training = os.environ.get('ANATOMY_LUPORI_FULL_TRAIN') == '1'
 framing_arm = os.environ.get('ANATOMY_POSE_FRAMING_221_ARM')
 selection_arm = os.environ.get('ANATOMY_POSE_SELECTION_222_ARM')
 anchor_conditional_arm = os.environ.get('ANATOMY_POSE_ANCHOR_CONDITIONAL_223_ARM')
+appearance_226 = os.environ.get('ANATOMY_POSE_APPEARANCE_226') == '1'
 assert framing_arm in (None, 'framed', 'unframed')
 assert selection_arm in (None, 'control', 'intervention')
 assert anchor_conditional_arm in (None, 'control', 'intervention')
 assert sum((full_training, bool(framing_arm), bool(selection_arm),
-            bool(anchor_conditional_arm))) <= 1
-new_geometry = bool(framing_arm or selection_arm or anchor_conditional_arm)
-framed_geometry = framing_arm == 'framed' or bool(selection_arm or anchor_conditional_arm)
-protocol_name = ('POSE_ANCHOR_CONDITIONAL_223_PROTOCOL_20261011.md' if anchor_conditional_arm else
+            bool(anchor_conditional_arm), appearance_226)) <= 1
+new_geometry = bool(framing_arm or selection_arm or anchor_conditional_arm or appearance_226)
+framed_geometry = framing_arm == 'framed' or bool(selection_arm or anchor_conditional_arm or appearance_226)
+protocol_name = ('POSE_APPEARANCE_EXPOSURE_226_PROTOCOL_20261011.md' if appearance_226 else
+    'POSE_ANCHOR_CONDITIONAL_223_PROTOCOL_20261011.md' if anchor_conditional_arm else
     'POSE_SELECTION_222_PROTOCOL_20261011.md' if selection_arm else
     'POSE_FRAMING_221_PROTOCOL_20261011.md' if framing_arm else
     'LUPORI_FLUORESCENCE_POSE_ALL_TRAIN_188_PROTOCOL_20261011.md' if full_training else
@@ -65,24 +68,25 @@ protocol = source.parent / 'docs/publication' / protocol_name
 split_path = source / 'lupori_animal_split_185.json'
 split = json.loads(split_path.read_text())
 archive = root / 'data/lupori_joint_185/rawData.zip'
-parent_dir = root / ('runs/pose_framing_221_framed_train_001' if selection_arm or anchor_conditional_arm else
+parent_dir = root / ('runs/pose_framing_221_framed_train_001' if selection_arm or anchor_conditional_arm or appearance_226 else
                      'runs/lupori_fluorescence_pose_187_inner_AL1A' if framing_arm
                      else 'runs/v4_pose_adaptation_132')
-parent_step = 400 if selection_arm or anchor_conditional_arm else 800 if framing_arm else 2000
+parent_step = 400 if selection_arm or anchor_conditional_arm or appearance_226 else 800 if framing_arm else 2000
 parent = parent_dir / f'joint_step_{parent_step:05d}.pt'
-run = root / 'runs' / (f'pose_anchor_conditional_223_{anchor_conditional_arm}_train_001'
+run = root / 'runs' / ('pose_appearance_exposure_226_train_001' if appearance_226 else
+    f'pose_anchor_conditional_223_{anchor_conditional_arm}_train_001'
     if anchor_conditional_arm else f'pose_selection_222_{selection_arm}_train_001' if selection_arm else
     f'pose_framing_221_{framing_arm}_train_001' if framing_arm else
     'lupori_fluorescence_pose_188_all_train' if full_training else
     'lupori_fluorescence_pose_187_inner_AL1A')
 sagittal_dir = root / 'data/allen_sagittal_ish_expansion_002_train_inputs_20261008'
 guard_animal = None if full_training else 'AL1A'
-seed, side, updates, sites = (20261011223 if anchor_conditional_arm else
+seed, side, updates, sites = (20261011226 if appearance_226 else 20261011223 if anchor_conditional_arm else
     202610112231 if selection_arm == 'intervention' else
     202610112230 if selection_arm == 'control' else
     20261011222 if framing_arm == 'framed' else
-    20261011221 if framing_arm else 20261011188 if full_training else 20261011187), 256, 400 if new_geometry else 1200, 128
-checkpoints = (0, 200, 400) if new_geometry else (0, 400, 800, 1200)
+    20261011221 if framing_arm else 20261011188 if full_training else 20261011187), 256, 1200 if appearance_226 else 400 if new_geometry else 1200, 128
+checkpoints = (0, 400, 800, 1200) if appearance_226 else (0, 200, 400) if new_geometry else (0, 400, 800, 1200)
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -200,19 +204,22 @@ source_files = ('train_lupori_fluorescence_pose_187.py', 'arbitrary_plane_one_sh
     'arbitrary_plane_streaming_synthetic_v7.py',
     'arbitrary_plane_reserved_real_stream_v8.py',
     'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_geometry.py',
-    'global_atlas_contrast_090.py', 'global_plane_matcher_120.py')
+    'global_atlas_contrast_090.py', 'global_plane_matcher_120.py') + (
+    ('arbitrary_plane_one_shot_slide_artifacts_v6.py',
+     'arbitrary_plane_one_shot_slide_artifacts_v7.py') if appearance_226 else ())
 config = {'seed': seed, 'updates': updates, 'side': side, 'sites': sites,
-    'training_phase': f'pose_anchor_conditional_223_{anchor_conditional_arm}'
+    'training_phase': 'pose_appearance_exposure_226' if appearance_226 else
+        f'pose_anchor_conditional_223_{anchor_conditional_arm}'
         if anchor_conditional_arm else f'pose_selection_222_{selection_arm}' if selection_arm else
         f'pose_framing_221_{framing_arm}' if framing_arm else
         'all_four_train_animals' if full_training else 'inner_animal_pilot',
     'lupori_archive_bytes': split['archive_bytes'],
     'lupori_archive_md5': split['archive_md5'],
-    'synthetic_per_update': {'v4': 2, 'v3': 1},
+    'synthetic_per_update': {'v4': 1, 'v7': 1, 'v3': 1} if appearance_226 else {'v4': 2, 'v3': 1},
     'new_geometry_166_per_update': 2 if new_geometry else 0,
     'support_aware_framing_217': framed_geometry,
     'new_geometry_train_bases': list(range(60)) if new_geometry else [],
-    'new_geometry_draws_independent_between_arms': new_geometry and not anchor_conditional_arm,
+    'new_geometry_draws_independent_between_arms': new_geometry and not anchor_conditional_arm and not appearance_226,
     'lupori_per_update': 1, 'old_weak_per_update': 1,
     'inner_guard_animal': guard_animal, 'lupori_gradient_animals':
     [animal for animal in split['train'] if animal != guard_animal],
@@ -272,10 +279,12 @@ accepted_ids = set()
 with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w') as log:
     for step in range(1, updates + 1):
         samples = []
-        appearances = ('v4', 'v3', 'v4') if new_geometry else ('v4', 'v4', 'v3')
+        appearances = (('v4', 'v7', 'v3') if appearance_226 else
+                       ('v4', 'v3', 'v4') if new_geometry else ('v4', 'v4', 'v3'))
         for slot, appearance in enumerate(appearances):
-            sampler = (sample_one_shot_slide_artifacts_v4 if appearance == 'v4'
-                       else sample_one_shot_slide_artifacts_v3)
+            sampler = (sample_one_shot_slide_artifacts_v4 if appearance == 'v4' else
+                       sample_one_shot_slide_artifacts_v7 if appearance == 'v7' else
+                       sample_one_shot_slide_artifacts_v3)
             while True:
                 draw_seed = int(rng.integers(0, 2**63 - 1, dtype=np.int64))
                 with torch.no_grad():

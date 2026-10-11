@@ -17,11 +17,14 @@ from training.arbitrary_plane_streaming_synthetic_v7_appearance_v3 import (
 CODE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
-def sample_one_shot_slide_artifacts_v6(context, subject_indices, seed, side=192):
-    sampler = (sample_streaming_synthetic_v7_64_appearance_v3
-               if 'displacement_cpu' in context['bases'][0]
-               else sample_streaming_synthetic_v7_appearance_v3)
-    source = sampler(context, subject_indices, seed, side)
+def sample_one_shot_slide_artifacts_v6(context, subject_indices, seed, side=192, source_sample=None):
+    if source_sample is None:
+        sampler = (sample_streaming_synthetic_v7_64_appearance_v3
+                   if 'displacement_cpu' in context['bases'][0]
+                   else sample_streaming_synthetic_v7_appearance_v3)
+        source = sampler(context, subject_indices, seed, side)
+    else:
+        source = source_sample
     device = source['inputs'].device
     axis = torch.linspace(-1, 1, side, device=device)
     yy, xx = torch.meshgrid(axis, axis, indexing='ij')
