@@ -61,7 +61,8 @@ del saved
 import copy
 adapted = copy.deepcopy(model).eval().requires_grad_(False)
 saved = torch.load(checkpoint, map_location='cpu', weights_only=True)
-assert saved['step'] == 600 and saved['config'] == json.loads((train / 'config.json').read_text())
+assert saved['step'] == 600 and json.loads(json.dumps(saved['config'])) == json.loads(
+    (train / 'config.json').read_text())
 for name, weights in saved['modules'].items():
     getattr(adapted, name).load_state_dict(weights, strict=True)
 del saved
