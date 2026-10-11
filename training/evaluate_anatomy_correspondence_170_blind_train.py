@@ -41,7 +41,7 @@ protocol = source.parent / 'docs/publication/ANATOMY_CORRESPONDENCE_170_BLIND_TR
 train = root / 'runs/anatomy_correspondence_169_train_001'
 parent_dir = root / 'runs/v4_pose_adaptation_132'
 parent_path = parent_dir / 'joint_step_02000.pt'
-out = root / 'runs/anatomy_correspondence_170_blind_train_001'
+out = root / 'runs/anatomy_correspondence_170_blind_train_002'
 steps = (0, 1500, 3000, 4500, 6000)
 seed, attempts, side, bank_side = 202610121700, 64, 256, 48
 assert source.drive.upper() == out.drive.upper() == 'I:' and not out.exists()
@@ -225,7 +225,7 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
     for step, path in checkpoints.items():
         with torch.serialization.safe_globals([torch.torch_version.TorchVersion]):
             saved = torch.load(path, map_location='cpu', weights_only=True)
-        assert saved['step'] == step and saved['config'] == training_config
+        assert saved['step'] == step and json.loads(json.dumps(saved['config'])) == training_config
         assert saved['calibrated'] is False
         assert all(torch.equal(saved['model'][key], value) for key, value in parent_state.items())
         prefix = 'anatomy_correspondence_168.'
