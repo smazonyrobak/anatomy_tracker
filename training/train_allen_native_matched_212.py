@@ -97,7 +97,7 @@ context = load_streaming_synthetic_v7_64(device='cuda')
 atlas = context['atlas']
 assert json.loads(json.dumps(context['provenance'])) == parent_config['synthetic_provenance']
 old_coronal = load_reserved_real_train()
-assert old_coronal['bindings'] == parent_config['coronal_bindings']
+assert old_coronal['bindings'] == parent_config['old_coronal_bindings']
 sagittal_summary = json.loads((sagittal_dir / 'summary.json').read_text())
 assert sha(sagittal_dir / 'summary.json') == parent_config['sagittal_summary_sha256']
 assert all(sha(sagittal_dir / name) == digest
