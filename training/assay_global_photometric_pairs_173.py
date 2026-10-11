@@ -74,7 +74,7 @@ results = []
 with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
     for item, record in zip(panel, records):
         assert item['index'] == record['index']
-        pair = record['matched_pair']
+        pair = record.get('matched_pair')
         if record['panel_stratum'] != 'unconditional' or pair is None:
             continue
         slots = [pair['good_slot'], pair['wrong_slot']]
