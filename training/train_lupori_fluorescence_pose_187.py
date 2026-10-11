@@ -51,14 +51,17 @@ framing_arm = os.environ.get('ANATOMY_POSE_FRAMING_221_ARM')
 selection_arm = os.environ.get('ANATOMY_POSE_SELECTION_222_ARM')
 anchor_conditional_arm = os.environ.get('ANATOMY_POSE_ANCHOR_CONDITIONAL_223_ARM')
 appearance_226 = os.environ.get('ANATOMY_POSE_APPEARANCE_226') == '1'
+anchor_residual_arm = os.environ.get('ANATOMY_ANCHOR_RESIDUAL_227_ARM')
 assert framing_arm in (None, 'framed', 'unframed')
 assert selection_arm in (None, 'control', 'intervention')
 assert anchor_conditional_arm in (None, 'control', 'intervention')
+assert anchor_residual_arm in (None, 'shared', 'untied')
 assert sum((full_training, bool(framing_arm), bool(selection_arm),
-            bool(anchor_conditional_arm), appearance_226)) <= 1
-new_geometry = bool(framing_arm or selection_arm or anchor_conditional_arm or appearance_226)
-framed_geometry = framing_arm == 'framed' or bool(selection_arm or anchor_conditional_arm or appearance_226)
-protocol_name = ('POSE_APPEARANCE_EXPOSURE_226_PROTOCOL_20261011.md' if appearance_226 else
+            bool(anchor_conditional_arm), appearance_226, bool(anchor_residual_arm))) <= 1
+new_geometry = bool(framing_arm or selection_arm or anchor_conditional_arm or appearance_226 or anchor_residual_arm)
+framed_geometry = framing_arm == 'framed' or bool(selection_arm or anchor_conditional_arm or appearance_226 or anchor_residual_arm)
+protocol_name = ('ANCHOR_RESIDUAL_227_PROTOCOL_20261011.md' if anchor_residual_arm else
+    'POSE_APPEARANCE_EXPOSURE_226_PROTOCOL_20261011.md' if appearance_226 else
     'POSE_ANCHOR_CONDITIONAL_223_PROTOCOL_20261011.md' if anchor_conditional_arm else
     'POSE_SELECTION_222_PROTOCOL_20261011.md' if selection_arm else
     'POSE_FRAMING_221_PROTOCOL_20261011.md' if framing_arm else
@@ -68,12 +71,14 @@ protocol = source.parent / 'docs/publication' / protocol_name
 split_path = source / 'lupori_animal_split_185.json'
 split = json.loads(split_path.read_text())
 archive = root / 'data/lupori_joint_185/rawData.zip'
-parent_dir = root / ('runs/pose_framing_221_framed_train_001' if selection_arm or anchor_conditional_arm or appearance_226 else
+parent_dir = root / ('runs/pose_appearance_exposure_226_train_001' if anchor_residual_arm else
+                     'runs/pose_framing_221_framed_train_001' if selection_arm or anchor_conditional_arm or appearance_226 else
                      'runs/lupori_fluorescence_pose_187_inner_AL1A' if framing_arm
                      else 'runs/v4_pose_adaptation_132')
-parent_step = 400 if selection_arm or anchor_conditional_arm or appearance_226 else 800 if framing_arm else 2000
+parent_step = 1200 if anchor_residual_arm else 400 if selection_arm or anchor_conditional_arm or appearance_226 else 800 if framing_arm else 2000
 parent = parent_dir / f'joint_step_{parent_step:05d}.pt'
-run = root / 'runs' / ('pose_appearance_exposure_226_train_001' if appearance_226 else
+run = root / 'runs' / (f'pose_anchor_residual_227_{anchor_residual_arm}_train_001' if anchor_residual_arm else
+    'pose_appearance_exposure_226_train_001' if appearance_226 else
     f'pose_anchor_conditional_223_{anchor_conditional_arm}_train_001'
     if anchor_conditional_arm else f'pose_selection_222_{selection_arm}_train_001' if selection_arm else
     f'pose_framing_221_{framing_arm}_train_001' if framing_arm else
@@ -81,12 +86,12 @@ run = root / 'runs' / ('pose_appearance_exposure_226_train_001' if appearance_22
     'lupori_fluorescence_pose_187_inner_AL1A')
 sagittal_dir = root / 'data/allen_sagittal_ish_expansion_002_train_inputs_20261008'
 guard_animal = None if full_training else 'AL1A'
-seed, side, updates, sites = (20261011226 if appearance_226 else 20261011223 if anchor_conditional_arm else
+seed, side, updates, sites = (20261011227 if anchor_residual_arm else 20261011226 if appearance_226 else 20261011223 if anchor_conditional_arm else
     202610112231 if selection_arm == 'intervention' else
     202610112230 if selection_arm == 'control' else
     20261011222 if framing_arm == 'framed' else
-    20261011221 if framing_arm else 20261011188 if full_training else 20261011187), 256, 1200 if appearance_226 else 400 if new_geometry else 1200, 128
-checkpoints = (0, 400, 800, 1200) if appearance_226 else (0, 200, 400) if new_geometry else (0, 400, 800, 1200)
+    20261011221 if framing_arm else 20261011188 if full_training else 20261011187), 256, 1200 if appearance_226 or anchor_residual_arm else 400 if new_geometry else 1200, 128
+checkpoints = (0, 400, 800, 1200) if appearance_226 or anchor_residual_arm else (0, 200, 400) if new_geometry else (0, 400, 800, 1200)
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -178,23 +183,39 @@ torch.cuda.manual_seed_all(seed)
 rng = np.random.default_rng(seed)
 model = OneShotJointSliceModel(modes=16, normal_anchor_count=64,
     atlas_conditioning=True, fit_quality=True, vector_refinement=True,
-    candidate_ranking=True, fitted_ranking=True).cuda().train()
+    candidate_ranking=True, fitted_ranking=True,
+    anchor_residual_arm=anchor_residual_arm).cuda().train()
 attach_global_plane_matcher(model, enabled=True)
 saved = torch.load(parent, map_location='cpu', weights_only=True)
 assert saved['step'] == parent_step and saved['config'] == parent_config and saved['calibrated'] is False
-model.load_state_dict(saved['model'], strict=True)
+loaded = model.load_state_dict(saved['model'], strict=not anchor_residual_arm)
+if anchor_residual_arm:
+    assert not loaded.unexpected_keys
+    assert loaded.missing_keys and all(key.startswith('anchor_residual_') for key in loaded.missing_keys)
 del saved
 model.requires_grad_(False)
-pose_modules = (model.pose, model.anchor_pose, model.anchor_global)
+pose_modules = ((model.pose, model.anchor_residual_image, model.anchor_residual_query,
+                 model.anchor_residual_output) if anchor_residual_arm == 'shared' else
+                (model.pose, model.anchor_residual_image, model.anchor_residual_query)
+                 if anchor_residual_arm == 'untied' else
+                (model.pose, model.anchor_pose, model.anchor_global))
 shared_modules = (model.encoder, model.lateral)
 for module in (*pose_modules, *shared_modules):
     module.requires_grad_(True)
+if anchor_residual_arm == 'untied':
+    model.anchor_residual_weight.requires_grad_(True)
+    model.anchor_residual_bias.requires_grad_(True)
 groups = [
-    {'params': [p for module in pose_modules for p in module.parameters()], 'base_lr': 2e-5},
+    {'params': [p for module in pose_modules for p in module.parameters()] +
+        ([model.anchor_residual_weight, model.anchor_residual_bias]
+         if anchor_residual_arm == 'untied' else []), 'base_lr': 2e-5},
     {'params': [p for module in shared_modules for p in module.parameters()], 'base_lr': 5e-6},
 ]
 optimizer = torch.optim.AdamW(groups, weight_decay=1e-4)
 parameters = [p for group in groups for p in group['params']]
+if anchor_residual_arm:
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 source_files = ('train_lupori_fluorescence_pose_187.py', 'arbitrary_plane_one_shot_model.py',
     'arbitrary_plane_panel_geometry_train_166.py', 'support_aware_framing_217.py',
     'arbitrary_plane_one_shot_slide_artifacts_v3.py',
@@ -206,20 +227,25 @@ source_files = ('train_lupori_fluorescence_pose_187.py', 'arbitrary_plane_one_sh
     'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_geometry.py',
     'global_atlas_contrast_090.py', 'global_plane_matcher_120.py') + (
     ('arbitrary_plane_one_shot_slide_artifacts_v6.py',
-     'arbitrary_plane_one_shot_slide_artifacts_v7.py') if appearance_226 else ())
+     'arbitrary_plane_one_shot_slide_artifacts_v7.py') if appearance_226 or anchor_residual_arm else ())
 config = {'seed': seed, 'updates': updates, 'side': side, 'sites': sites,
-    'training_phase': 'pose_appearance_exposure_226' if appearance_226 else
+    'training_phase': f'pose_anchor_residual_227_{anchor_residual_arm}' if anchor_residual_arm else
+        'pose_appearance_exposure_226' if appearance_226 else
         f'pose_anchor_conditional_223_{anchor_conditional_arm}'
         if anchor_conditional_arm else f'pose_selection_222_{selection_arm}' if selection_arm else
         f'pose_framing_221_{framing_arm}' if framing_arm else
         'all_four_train_animals' if full_training else 'inner_animal_pilot',
     'lupori_archive_bytes': split['archive_bytes'],
     'lupori_archive_md5': split['archive_md5'],
-    'synthetic_per_update': {'v4': 1, 'v7': 1, 'v3': 1} if appearance_226 else {'v4': 2, 'v3': 1},
+    'synthetic_per_update': {'v4': 1, 'v7': 1, 'v3': 1} if appearance_226 or anchor_residual_arm else {'v4': 2, 'v3': 1},
     'new_geometry_166_per_update': 2 if new_geometry else 0,
     'support_aware_framing_217': framed_geometry,
     'new_geometry_train_bases': list(range(60)) if new_geometry else [],
-    'new_geometry_draws_independent_between_arms': new_geometry and not anchor_conditional_arm and not appearance_226,
+    'new_geometry_draws_independent_between_arms': new_geometry and not anchor_conditional_arm and not appearance_226 and not anchor_residual_arm,
+    'anchor_residual_arm': anchor_residual_arm,
+    'anchor_residual_parent_projections_frozen': bool(anchor_residual_arm),
+    'anchor_residual_parent_predictions_identical_at_step_zero': bool(anchor_residual_arm),
+    'anchor_residual_draws_matched_between_arms': bool(anchor_residual_arm),
     'lupori_per_update': 1, 'old_weak_per_update': 1,
     'inner_guard_animal': guard_animal, 'lupori_gradient_animals':
     [animal for animal in split['train'] if animal != guard_animal],
@@ -248,7 +274,8 @@ config = {'seed': seed, 'updates': updates, 'side': side, 'sites': sites,
     'anchor_conditional_supervision': ('synthetic exact-affine physical costs, detached; '
         'softmax over 128 anchor/reflection branches only' if anchor_conditional_arm else None),
     'anchor_conditional_draws_matched_between_arms': bool(anchor_conditional_arm),
-    'optimized': 'shared image encoder/lateral and probabilistic direct pose heads only',
+    'optimized': ('shared image encoder/lateral, free pose head and anchor residual; old anchor projections frozen'
+                  if anchor_residual_arm else 'shared image encoder/lateral and probabilistic direct pose heads only'),
     'calibrated': False, 'public_benchmark_used': False,
     'external_pretrained_weights_used': False, 'heldout_animal_used_in_training': False}
 config = json.loads(json.dumps(config))
@@ -279,7 +306,7 @@ accepted_ids = set()
 with (run / 'draws.jsonl').open('w') as draws, (run / 'training.jsonl').open('w') as log:
     for step in range(1, updates + 1):
         samples = []
-        appearances = (('v4', 'v7', 'v3') if appearance_226 else
+        appearances = (('v4', 'v7', 'v3') if appearance_226 or anchor_residual_arm else
                        ('v4', 'v3', 'v4') if new_geometry else ('v4', 'v4', 'v3'))
         for slot, appearance in enumerate(appearances):
             sampler = (sample_one_shot_slide_artifacts_v4 if appearance == 'v4' else

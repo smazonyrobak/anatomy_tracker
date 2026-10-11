@@ -27,10 +27,12 @@ class OneShotJointSliceModel(nn.Module):
     def __init__(self, modes=8, uncertainty_rank=4, atlas_conditioning=False, fit_quality=False,
                  vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
                  dense_coordinate=False, normal_anchor_count=0, anchor_specific_features=False,
-                 dense_coordinate_pyramid=False):
+                 dense_coordinate_pyramid=False, anchor_residual_arm=None):
         super().__init__()
         self.base_modes, self.normal_anchor_count = modes, normal_anchor_count
         self.anchor_specific_features = anchor_specific_features
+        assert anchor_residual_arm in (None, 'shared', 'untied')
+        self.anchor_residual_arm = anchor_residual_arm
         self.modes, self.uncertainty_rank = modes + normal_anchor_count, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
         widths = (64, 128, 256, 320)
@@ -75,6 +77,18 @@ class OneShotJointSliceModel(nn.Module):
             nn.init.zeros_(self.anchor_global[-1].bias)
             with torch.no_grad():
                 self.anchor_pose[-1].bias.view(normal_anchor_count, 18)[:, 16] = -2
+            if anchor_residual_arm:
+                self.anchor_residual_image = nn.Sequential(
+                    nn.Linear(64 * 8 * 8 + 12, 256), nn.GELU())
+                self.anchor_residual_query = nn.Sequential(
+                    nn.Linear(256 + 9 + 18, 128), nn.GELU())
+                if anchor_residual_arm == 'shared':
+                    self.anchor_residual_output = nn.Linear(128, 18)
+                    nn.init.zeros_(self.anchor_residual_output.weight)
+                    nn.init.zeros_(self.anchor_residual_output.bias)
+                else:
+                    self.anchor_residual_weight = nn.Parameter(torch.zeros(normal_anchor_count, 128, 18))
+                    self.anchor_residual_bias = nn.Parameter(torch.zeros(normal_anchor_count, 18))
         if dense_coordinate_pyramid:
             self.dense_coordinate_pyramid_head = nn.Sequential(
                 nn.Conv2d(66, 64, 3, padding=1), nn.GroupNorm(8, 64), nn.GELU(),
@@ -214,8 +228,20 @@ class OneShotJointSliceModel(nn.Module):
             anchors = (self.anchor_pose(torch.cat((
                 F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
                 + self.anchor_global(torch.cat((
-                    F.adaptive_avg_pool2d(anchor_x, 4).flatten(1), context), -1))).reshape(
+                F.adaptive_avg_pool2d(anchor_x, 4).flatten(1), context), -1))).reshape(
                         -1, self.normal_anchor_count, 18)
+            if self.anchor_residual_arm:
+                image = self.anchor_residual_image(torch.cat((
+                    F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
+                frames = self.normal_anchor_frames.reshape(1, self.normal_anchor_count, 9)
+                query = self.anchor_residual_query(torch.cat((
+                    image[:, None].expand(-1, self.normal_anchor_count, -1),
+                    frames.expand(len(image), -1, -1), anchors), -1))
+                residual = (self.anchor_residual_output(query)
+                    if self.anchor_residual_arm == 'shared' else
+                    torch.einsum('bkh,kho->bko', query, self.anchor_residual_weight)
+                    + self.anchor_residual_bias)
+                anchors = anchors + residual
             tilt = torch.cat((.65 * anchors[..., 3:5].tanh(),
                               torch.zeros_like(anchors[..., 5:6])), -1)
             roll = torch.cat((torch.zeros_like(anchors[..., 3:5]),
