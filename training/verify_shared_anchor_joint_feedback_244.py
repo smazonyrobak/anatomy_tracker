@@ -75,7 +75,8 @@ assert len(rows) == 176
 groups = defaultdict(list)
 for row in rows:
     groups[(row['step'], row['set'], row['animal_id'])].append(row)
-    assert all(math.isfinite(value) for key, value in row.items() if key.endswith('_um'))
+    assert all(math.isfinite(value) for key, value in row.items()
+               if key.endswith(('_um', '_deg')))
 summary = json.loads((readout / 'summary.json').read_text())
 for item in summary:
     step, split = item['step'], item['set']

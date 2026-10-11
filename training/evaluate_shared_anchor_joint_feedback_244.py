@@ -120,6 +120,12 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
             refined_rigid = (points(refined_state, reflection, chart)
                              - target).norm(dim=-1).mean(-1)[0]
             selected_branch = int(fitted.argmax())
+            true_axis = full_frame_state_to_components(truth)[1][0, :, 2]
+            prior_axis = full_frame_state_to_components(prediction['state'][:, choice // 2])[1][0, 0, :, 2]
+            fitted_axis = full_frame_state_to_components(refined_state)[1][0, selected_branch, :, 2]
+            nearest_principal_deg = torch.rad2deg(torch.acos(true_axis.abs().max().clamp_max(1)))
+            prior_normal_deg = torch.rad2deg(torch.acos((true_axis * prior_axis).sum().abs().clamp_max(1)))
+            fitted_normal_deg = torch.rad2deg(torch.acos((true_axis * fitted_axis).sum().abs().clamp_max(1)))
             _, _, null_choice, null_reflection, null_refined_state, null_fitted = infer(
                 image, offsets, weights, atlas_null)
             assert torch.equal(choice, null_choice)
@@ -138,6 +144,9 @@ with torch.inference_mode(), (out / 'rows.jsonl').open('w') as stream:
                                                    'panel_physical_section_id', 'synthetic_subject_plan_id')},
                    'panel_file_sha256': record['sha256'], 'appearance_mode': record['appearance_mode'],
                    'valid_fraction': float(valid.float().mean()),
+                   'true_nearest_principal_axis_deg': float(nearest_principal_deg),
+                   'prior_top1_normal_axis_error_deg': float(prior_normal_deg),
+                   'fitted_selected_normal_axis_error_deg': float(fitted_normal_deg),
                    'prior_top1_rigid_um': float(prior_rigid[0]),
                    'prior_top8_best_rigid_um': float(prior_rigid.min()),
                    'refined_top8_best_rigid_um': float(refined_rigid.min()),
