@@ -30,7 +30,7 @@ SEED, SIDE = 20261012304, 192
 SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/SOURCE_RELIABILITY_304_PROTOCOL_20261012.md'
 PARENT = ROOT / 'runs/pose_capture_275_v9_continuation_001/pose_step_08000.pt'
-RUN = ROOT / 'reports/source_reliability_304_001'
+RUN = ROOT / 'reports/source_reliability_304_002'
 assert SOURCE.drive.upper() == RUN.drive.upper() == 'I:' and not RUN.exists()
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
@@ -137,10 +137,10 @@ with (RUN / 'draws.jsonl').open('w', encoding='utf8') as draws, \
                 support = bank[:, 1].clamp(0, 1)
                 intensity = bank[:, 0] / support.clamp_min(1e-4)
                 image = F.avg_pool2d(sample['inputs'][:, :1], 4)[0, 0]
-                local_mean = F.avg_pool2d(image[None, None], 5, padding=2,
+                local_mean = F.avg_pool2d(image[None, None], 5, stride=1, padding=2,
                                           count_include_pad=False)[0, 0]
                 mad = F.avg_pool2d((image - local_mean).abs()[None, None],
-                                   5, padding=2, count_include_pad=False)[0, 0]
+                                   5, stride=1, padding=2, count_include_pad=False)[0, 0]
                 q50, q90 = torch.quantile(mad, mad.new_tensor([.5, .9]))
                 reliability = ((mad - q50) / (q90 - q50 + 1e-6)).clamp(0, 1)
                 full, support_only, effective = score(image, intensity, support,
