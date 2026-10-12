@@ -33,7 +33,7 @@ SEED, SIDE, BATCH, UPDATES = 20261012268, 192, 4, 8000
 STEPS = (0, 2000, 4000, 8000)
 SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/POSE_CAPTURE_268_PROTOCOL_20261012.md'
-RUN = ROOT / 'runs/pose_capture_268_v8_train_inner_001'
+RUN = ROOT / 'runs/pose_capture_268_v8_train_inner_002'
 assert SOURCE.drive.upper() == RUN.drive.upper() == 'I:' and not RUN.exists()
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
@@ -110,7 +110,7 @@ with (RUN / 'inner_draws.jsonl').open('w') as log:
                 min(1024, len(pixels)), device='cuda').long()]
             chart = torch.stack((selected.remainder(SIDE),
                 selected.div(SIDE, rounding_mode='floor')), -1).float() / SIDE
-            normal = record['physical_unit_normal_ap_dv_ml']
+            normal = full_frame_state_to_components(sample['state'][0])[1][:, 2].cpu().numpy()
             angle = float(np.degrees(np.arccos(np.clip(max(abs(x) for x in normal), -1, 1))))
             inner.append({'inputs': sample['inputs'][0].cpu(), 'state': sample['state'][0].cpu(),
                 'reflection': sample['reflection'][0].cpu(), 'chart': chart.cpu(),
