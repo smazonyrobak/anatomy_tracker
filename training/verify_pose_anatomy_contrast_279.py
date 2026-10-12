@@ -205,7 +205,9 @@ for arm, seed in ARMS.items():
         assert row['attempt'] == attempt and row['step'] == accepted // 4 + 1
         assert row['base_index'] == base and row['variant'] == variant
         assert row['subject_index'] == subject_index and row['draw_seed'] == draw_seed
-        assert row['used'] == provenance['eligible'] == (provenance['visible_support_mass'] >= 192 * 192 / 144)
+        assert provenance['eligible'] == (provenance['visible_support_mass'] >= 192 * 192 / 144)
+        assert row['used'] == (provenance['eligible'] and
+            provenance['one_shot_slide_artifacts_v3']['pixel_counts']['valid'] >= 192 * 192 / 144)
         assert provenance['seed_prefix'] == [draw_seed, subject_index, 0]
         assert provenance['virtual_index'] == subject_index
         assert provenance['virtual_subject_id'] == synthetic['virtual_subjects'][subject_index]['virtual_subject_id']
@@ -255,7 +257,7 @@ for arm, seed in ARMS.items():
     for step in STEPS[1:]:
         checkpoint = torch.load(RUN / f'{arm}_step_{step:05d}.pt', map_location='cpu', weights_only=False)
         assert checkpoint['arm'] == arm and checkpoint['step'] == step
-        assert checkpoint['config'] == config and not checkpoint['calibrated']
+        assert json.loads(json.dumps(checkpoint['config'])) == config and not checkpoint['calibrated']
         assert checkpoint['attempted'] == attempted_at_step[step] and checkpoint['accepted'] == 4 * step
         assert checkpoint['subject_rng'] == rng_at_step[step]
         del checkpoint
@@ -332,7 +334,7 @@ torch.backends.cudnn.allow_tf32 = False
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 parent_checkpoint = torch.load(PARENT / 'pose_step_08000.pt', map_location='cpu', weights_only=False)
 assert parent_checkpoint['step'] == 8000 and parent_checkpoint['config']['candidate'] == 275
-assert parent_checkpoint['config'] == json.loads((PARENT / 'config.json').read_text())
+assert json.loads(json.dumps(parent_checkpoint['config'])) == json.loads((PARENT / 'config.json').read_text())
 model = OneShotJointSliceModel(modes=16, normal_anchor_count=64).to(device).eval()
 replayed = 0
 with torch.inference_mode():
