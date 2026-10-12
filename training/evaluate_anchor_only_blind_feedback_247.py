@@ -22,7 +22,7 @@ from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 TRAIN = ROOT / 'runs/anchor_only_blind_feedback_247_train_001'
 PANEL = ROOT / 'data/one_shot_fresh_synthetic_dev_panel_001'
 REAL = ROOT / 'data/joint_v7_allen_fullcanvas_192_001'
-OUT = ROOT / 'runs/anchor_only_blind_feedback_247_readout_001'
+OUT = ROOT / 'runs/anchor_only_blind_feedback_247_readout_002'
 STEPS = (0, 1000, 3000, 6000)
 SIDE, FIRST_SIDE, FIT_SIDE = 256, 64, 96
 torch.set_num_threads(4)
@@ -144,9 +144,11 @@ def evaluate_synthetic(record, stage, step):
     zero_warp = (points(truth[:, None], selected_reflections[:, 1:], chart)
                  - target).norm(dim=-1).mean()
     true_axis = full_frame_state_to_components(truth)[1][0, :, 2]
+    cut_axis = torch.as_tensor(record['plane_normal_ap_dv_ml'], device='cuda')
     initial_axes = full_frame_state_to_components(prediction['state'][:, mode_indices])[1][0, :, :, 2]
     refined_axes = full_frame_state_to_components(refined)[1][0, :, :, 2]
     nearest_principal = torch.rad2deg(torch.acos(true_axis.abs().max().clamp_max(1)))
+    cut_nearest_principal = torch.rad2deg(torch.acos(cut_axis.abs().max().clamp_max(1)))
     initial_axis_error = torch.rad2deg(torch.acos(
         (initial_axes[prior_selected] * true_axis).sum().abs().clamp_max(1)))
     selected_axis_error = torch.rad2deg(torch.acos(
@@ -161,6 +163,7 @@ def evaluate_synthetic(record, stage, step):
             'appearance_mode': record['appearance_mode'],
             'artifacts': record['provenance']['one_shot']['events'],
             'valid_fraction': float(valid.float().mean()),
+            'cut_nearest_principal_axis_deg': float(cut_nearest_principal),
             'true_nearest_principal_axis_deg': float(nearest_principal),
             'prior_top1_normal_axis_error_deg': float(initial_axis_error),
             'fitted_selected_normal_axis_error_deg': float(selected_axis_error),
@@ -315,7 +318,7 @@ projective_angles = np.degrees(np.arccos(np.clip(np.abs(selected_normals @ selec
 projective_medoid = int(projective_angles.mean(0).argmin())
 projective_spread_75 = float(np.percentile(projective_angles[:, projective_medoid], 75))
 selected_modes_used_at_least_five = sum(count >= 5 for count in mode_counts.values())
-heavy = [row for row in full_rows if 45 <= row['true_nearest_principal_axis_deg'] < 55]
+heavy = [row for row in full_rows if 45 <= row['cut_nearest_principal_axis_deg'] < 55]
 assert len(heavy) == 21
 heavy_mean_rigid = float(np.mean([row['fitted_selected_rigid_um'] for row in heavy]))
 heavy_median_axis = float(np.median([row['fitted_selected_normal_axis_error_deg'] for row in heavy]))
