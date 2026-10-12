@@ -168,8 +168,15 @@ protocol = {
     'python': sys.version, 'numpy': np.__version__, 'torch': str(torch.__version__),
     'scope': 'synthetic DEV from one Allen atlas and TRAIN-only acquisition framing; not biological validation, CAL, FINAL, or public benchmark',
 }
-OUT.mkdir(parents=True, exist_ok=False)
-(OUT / 'protocol.json').write_text(json.dumps(protocol, indent=2), encoding='utf8')
+OUT.mkdir(parents=True, exist_ok=True)
+assert not (OUT / 'completed.json').exists(), 'panel is already frozen'
+protocol_path = OUT / 'protocol.json'
+protocol_text = json.dumps(protocol, indent=2)
+if protocol_path.exists():
+    assert protocol_path.read_text(encoding='utf8') == protocol_text
+else:
+    assert not any(OUT.iterdir())
+    protocol_path.write_text(protocol_text, encoding='utf8')
 atlas_array, annotation = allen._decode_and_preprocess_allen_v6()
 del annotation
 support = np.flatnonzero(atlas_array[1] > 0)
@@ -207,6 +214,25 @@ for ordinal, index in enumerate(protocol['subject_indices']):
     receipt = deformation.subject_deformation_plan_receipt_v2(plan)
     assert receipt['receipt_sha256'] == plan['receipt_sha256']
     directory = OUT / f'subject_{index:08d}'
+    done = directory / 'completed.json'
+    if done.exists():
+        saved = json.loads(done.read_text(encoding='utf8'))
+        assert saved['animal_index'] == index
+        assert saved['plan_receipt_sha256'] == plan['receipt_sha256']
+        assert saved['local_field_sha256'] == local_sha
+        assert len(saved['records']) == PLANES
+        assert saved['subject_index_record']['sha256'] == saved['subject_json_sha256']
+        assert all(bundle._file_sha256(OUT / row['file']) == row['sha256']
+                   for row in saved['records'])
+        assert bundle._file_sha256(directory / 'subject.json') == saved['subject_json_sha256']
+        assert bundle._file_sha256(directory / 'inverse_map.npz') == saved['inverse_map_sha256']
+        records.extend(saved['records'])
+        subject_records.append(saved['subject_index_record'])
+        print(json.dumps({'event': 'subject_reused', 'animal_index': index,
+                          'sections': len(saved['records'])}), flush=True)
+        del plan
+        continue
+    assert not directory.exists()
     directory.mkdir()
     plan_files = bundle._write_raw_artifact(directory, 'subject_plan', plan)
     (directory / 'subject_plan_receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf8')
@@ -296,6 +322,7 @@ for ordinal, index in enumerate(protocol['subject_indices']):
             'bounds_um': (mapped_centre + scale * (base['bounds'] - mapped_centre)).tolist()})
     sampling_context = {'atlas': atlas, 'bases': [base], 'subjects': variants,
         'geometry': geometry, 'donor_rows': donor_rows, 'nuisance': nuisance}
+    first_record = len(records)
     for section in range(PLANES):
         selection_rng = np.random.default_rng(np.random.SeedSequence([SEED, index, section, 4]))
         variant = int(selection_rng.integers(VARIANTS))
@@ -331,6 +358,15 @@ for ordinal, index in enumerate(protocol['subject_indices']):
         records.append(record)
         print(json.dumps({'section': len(records), 'animal_index': index,
             'eligible': record['eligible'], 'valid_pixels': record['valid_pixels']}), flush=True)
+    (directory / 'completed.json').write_text(json.dumps({
+        'animal_index': index, 'plan_receipt_sha256': plan['receipt_sha256'],
+        'local_field_sha256': local_sha, 'subject_index_record': subject_records[-1],
+        'subject_json_sha256': subject_records[-1]['sha256'],
+        'inverse_map_sha256': subject_record['inverse_map_sha256'],
+        'records': records[first_record:],
+    }, indent=2), encoding='utf8')
+    print(json.dumps({'event': 'subject_frozen', 'animal_index': index,
+                      'sections': len(records) - first_record}), flush=True)
     del plan, parameters, baked, displacement, base, sampling_context, sample, variants, forward_support
 
 (OUT / 'records.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in records), encoding='utf8')
@@ -339,7 +375,10 @@ completed = {'physical_sections': len(records), 'synthetic_subjects': SUBJECTS,
     'ineligible': sum(not row['eligible'] for row in records),
     'modes': {mode: sum(row['appearance_mode'] == mode for row in records)
               for mode in ('raw', 'exact_black', 'imperfect_brush')},
-    'subjects': subject_records, 'protocol_sha256': bundle._file_sha256(OUT / 'protocol.json'),
+    'subjects': subject_records,
+    'subject_completed_sha256': {str(index): bundle._file_sha256(
+        OUT / f'subject_{index:08d}' / 'completed.json') for index in protocol['subject_indices']},
+    'protocol_sha256': bundle._file_sha256(OUT / 'protocol.json'),
     'records_sha256': bundle._file_sha256(OUT / 'records.jsonl'),
     'scope': protocol['scope']}
 assert len(records) == SUBJECTS * PLANES
