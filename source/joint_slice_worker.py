@@ -74,8 +74,12 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
                           or getattr(model, 'spatial_feedback', False) else (256,))
         if image_side not in supported_side or model.modes not in (8, 16, 80):
             raise ValueError('Experimental whole-model inference requires a supported image side and mode count.')
-        if hasattr(model, 'fitted_matcher') or getattr(model, 'spatial_feedback', False):
-            name = 'arbitrary_plane_one_shot_model.py'
+        implementation = (('arbitrary_plane_one_shot_model.py',
+                           'arbitrary_plane_one_shot_inference.py')
+                          if getattr(model, 'spatial_feedback', False) else
+                          ('arbitrary_plane_one_shot_model.py',)
+                          if hasattr(model, 'fitted_matcher') else ())
+        for name in implementation:
             expected = config['source_sha256'][name]
             if hashlib.sha256((repository / 'training' / name).read_bytes()).hexdigest() != expected:
                 raise RuntimeError(f'Checkpoint implementation differs from installed source: {name}')
