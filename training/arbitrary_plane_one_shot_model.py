@@ -28,7 +28,7 @@ class OneShotJointSliceModel(nn.Module):
                  vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
                  dense_coordinate=False, normal_anchor_count=0, anchor_specific_features=False,
                  dense_coordinate_pyramid=False, anchor_residual_arm=None,
-                 shared_anchor_pose=False):
+                 shared_anchor_pose=False, warp_control_side=None):
         super().__init__()
         self.base_modes, self.normal_anchor_count = modes, normal_anchor_count
         self.anchor_specific_features = anchor_specific_features
@@ -37,6 +37,7 @@ class OneShotJointSliceModel(nn.Module):
         self.anchor_residual_arm = anchor_residual_arm
         self.modes, self.uncertainty_rank = modes + normal_anchor_count, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
+        self.warp_control_side = warp_control_side
         widths = (64, 128, 256, 320)
         self.encoder = nn.ModuleList()
         channels = 5
@@ -488,7 +489,9 @@ class OneShotJointSliceModel(nn.Module):
             evidence = torch.cat((feature, target, (feature - target).abs(),
                                   local_correlation(feature, target, 2), xy), 1)
             feature = feature + self.pair(evidence)
-        raw = F.interpolate(self.warp(feature), image_shape, mode='bilinear', align_corners=False)
+        warp_input = (F.adaptive_avg_pool2d(feature, self.warp_control_side)
+                      if self.warp_control_side is not None else feature)
+        raw = F.interpolate(self.warp(warp_input), image_shape, mode='bilinear', align_corners=False)
         if hasattr(self, 'fit_quality_head'):
             raw_small = F.interpolate(raw, evidence.shape[-2:], mode='bilinear', align_corners=False)
             match = torch.cat((evidence, raw_small), 1)
