@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path('I:/AnatomyTracker')
-os.environ['CUDA_VISIBLE_DEVICES'] = ''
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 os.environ['TEMP'] = os.environ['TMP'] = str(ROOT / 'tmp')
 os.environ['OMP_NUM_THREADS'] = os.environ['MKL_NUM_THREADS'] = '4'
 sys.dont_write_bytecode = True
