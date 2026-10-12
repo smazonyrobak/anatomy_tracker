@@ -1,0 +1,18 @@
+# 268: scratch arbitrary-plane proposal capture improves, but fails its gate
+
+The frozen `_002` run completed 8,000 optimizer batches of four independently drawn v8 synthetic TRAIN sections (32,000 accepted; 37,313 attempts). It initialized the 80-mode image-to-pose model randomly and trained only its image encoder and pose heads. The 64-case TRAIN-inner panel, eight cases from each of eight held-out synthetic deformation bases, was frozen before initialization. No prior weights/features/pseudolabels, acquired images, animal CAL/FINAL data, or public benchmark data were used. The failed `_001` preflight contains no trained checkpoint and is not part of this readout.
+
+The blind model ranks 160 pose/reflection branches from the slice image alone. “Top-16 hit” means at least one of its first 16 branches maps sampled valid tissue sites within 1.5 mm of their synthetic CCF target. This is a *candidate-capture* test, not a usable alignment or electrode-localization accuracy claim.
+
+| Optimizer batches | Top-16 hits / 64 | All-branch oracle hits / 64 | Top-2 hits / 64 | Mean first-choice site error | Median selected/true minor FOV |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 2 | 6 | 0 | 4.631 mm | 0.815 |
+| 2,000 | 4 | 13 | 0 | 4.106 mm | 0.636 |
+| 4,000 | 20 | 33 | 8 | 3.908 mm | 0.861 |
+| 8,000 | **31** | **46** | **8** | **3.274 mm** | **0.861** |
+
+At 8,000 batches, only **5/64 first choices** meet the 1.5-mm site threshold. The first-choice median is 2.945 mm; its mean antipodal plane-normal error is 43.24°, with 30/64 above 45°. Of the 33 top-16 misses, 15 have a near-enough branch somewhere among all 160 but are ranked outside the first 16; the other 18 have no branch within 1.5 mm. Thus both proposal generation and selection remain inadequate. The low-visible-tissue stratum (<15% of the image) has only 3/11 top-16 hits and 5.177-mm mean first-choice error. The >45°-from-cardinal stratum has 3/6 hits, too few for a strong angle-specific conclusion. All eight held-out bases improved their top-16 count over initialization. No selected minor FOV was ≤1.2 mm, so the earlier catastrophic span-collapse symptom is absent here.
+
+The prespecified pass conditions were ≥45/64 top-16 hits at batch 8,000, improvement in at least six bases, median minor FOV ratio ≥0.5, and at most four selected FOVs ≤1.2 mm. **Only the first failed (31/64); the whole gate failed.** The model must not be promoted or extended unchanged. The loss ranks a composite of valid-site error, five reference points and a normal penalty, whereas the gate measures valid-site error; this is a plausible, not yet established, contributor to the 15 misranked captured cases. Sparse visible tissue and only 56 synthetic training bases may limit the remaining proposal coverage. A targeted next experiment should separate site-aligned ranking from pose-coverage learning while preserving the finite-FOV constraint, not interpret more exposure alone as a fix.
+
+An independent read-only verifier checked source/protocol/config/checkpoint and all raw-log hashes; all 32,000 accepted physical-section IDs, 64 panel IDs, draw lineage, arithmetic, gate decision, and 32 saved-image/checkpoint inference replays passed. The selected 8,000-batch checkpoint SHA-256 is `bbbe06174064d95e426b02bd9106dcece1ee16eb851c76f2238229bce885d065`. Frozen receipt: `I:/AnatomyTracker/runs/pose_capture_268_v8_train_inner_002/completed.json`. These cases are variations of an Allen-average synthetic brain, **not 64 real animals**; the result neither validates physically arbitrary-oblique histology nor calibrates the model’s probability outputs. No GUI replacement or DeepSlice comparison is warranted.

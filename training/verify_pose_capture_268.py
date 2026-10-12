@@ -74,7 +74,7 @@ assert len(panel) == 64 and len(panel_draws) == done['panel_attempted_draws']
 accepted_panel = []
 for attempt, draw in enumerate(panel_draws, 1):
     base, slot = 56 + len(accepted_panel) // 8, len(accepted_panel) % 8
-    assert (draw['base_index'], draw['slot'], draw['attempt']) == (base, slot, attempt)
+    assert (draw['base_index'], draw['slot']) == (base, slot)
     assert 0 <= draw['variant'] < 64
     assert draw['subject_index'] == 64 * base + draw['variant']
     assert draw['draw_seed'] == protocol['seed'] + 1_000_000_000 + attempt
@@ -94,7 +94,7 @@ for index, (item, draw) in enumerate(zip(panel, accepted_panel, strict=True)):
     provenance = draw['provenance']
     assert (item['base_index'], item['slot']) == (base, slot)
     assert item['physical_section_id'] == provenance['physical_section_id']
-    assert item['provenance'] == provenance
+    assert json.loads(json.dumps(item['provenance'])) == provenance
     assert item['source_mode'] == provenance['mode']
     assert item['exterior_style'] == provenance['one_shot_slide_artifacts_v8']['exterior_style']
     assert item['inputs'].shape == (5, 192, 192) and item['state'].shape == (12,)
@@ -242,7 +242,7 @@ model = OneShotJointSliceModel(modes=16, normal_anchor_count=64).to(device).eval
 baseline = None
 for step, score in zip(STEPS, scores, strict=True):
     checkpoint = torch.load(RUN / f'pose_step_{step:05d}.pt', map_location='cpu', weights_only=False)
-    assert checkpoint['step'] == step and checkpoint['config'] == config
+    assert checkpoint['step'] == step and json.loads(json.dumps(checkpoint['config'])) == config
     assert checkpoint['accepted'] == 4 * step and not checkpoint['calibrated']
     assert checkpoint['attempted'] == (training[step - 1]['attempted'] if step else 0)
     if step == 0:

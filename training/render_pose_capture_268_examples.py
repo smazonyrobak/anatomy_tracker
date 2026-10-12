@@ -66,9 +66,10 @@ for row, draw in enumerate(fixed):
     for column, image in enumerate(images):
         axes[row, column].imshow(image, cmap='gray', vmin=0, vmax=1, interpolation='nearest')
         axes[row, column].axis('off')
-    axes[row, 0].set_ylabel(f"base {draw['base_index']} · {angle:.0f}° from cardinal\n"
-                             f"selected error {error_mm:.2f} mm", rotation=0,
-                             ha='right', va='center', labelpad=8)
+    axes[row, 0].text(.02, .98,
+        f"base {draw['base_index']} · {angle:.0f}° from cardinal\nselected site error {error_mm:.2f} mm",
+        transform=axes[row, 0].transAxes, ha='left', va='top', color='white', fontsize=9,
+        bbox={'facecolor': 'black', 'alpha': .7, 'edgecolor': 'none'})
 for axis, title in zip(axes[0], ('Correct atlas plane', 'Damaged synthetic input',
                                  'Blind model-selected atlas plane')):
     axis.set_title(title)
