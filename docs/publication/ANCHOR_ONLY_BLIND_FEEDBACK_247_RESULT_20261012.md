@@ -97,6 +97,10 @@ benchmark were used.
 
 The all-angle 185-section panel is a valid independent synthetic geometry
 stress test but uses an older `one_shot` artifact generator, **not v7**.
+The matched 32 sections selected the checkpoint and are included in the
+185-section readout; their threshold estimates are post-selection, not a
+fresh final test. The failure is large enough that this caveat cannot turn
+it into a pass.
 Prepare the already specified independent v7 DEV panel before attributing
 the failure to the architecture rather than appearance shift. Synthetic plans
 remain variants of one Allen atlas, not independent biological animals.
