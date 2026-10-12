@@ -1,5 +1,6 @@
 """One explicit experimental whole-model inference, used by the GUI executor."""
 import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -58,18 +59,27 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     model, config = load_checkpoint(path, device=device)
     if version in ('one-shot', 'joint-121'):
+        if getattr(model, 'spatial_feedback', False):
+            if config.get('stage') != 'joint_feedback':
+                raise ValueError('The spatial-feedback pose-only checkpoint is not a GUI model.')
+            receipt = json.loads((path.parent / 'completed.json').read_text(encoding='utf8'))
+            if (not receipt['summary']['gate_pass']
+                    or receipt['summary']['selected_step'] != int(path.stem.rsplit('_', 1)[-1])
+                    or receipt['output_sha256'].get(path.name) != digest):
+                raise ValueError('The spatial-feedback checkpoint did not pass its frozen qualification gate.')
         image_side = config.get('resolution', config.get('image_side', config.get('side')))
         if image_side is None and config.get('normal_anchors') == model.normal_anchor_count == 64:
             image_side = 256  # Frozen 059 training source samples at side=256.
-        supported_side = (192, 256) if getattr(model, 'shared_anchor_pose', False) else (256,)
+        supported_side = ((192, 256) if getattr(model, 'shared_anchor_pose', False)
+                          or getattr(model, 'spatial_feedback', False) else (256,))
         if image_side not in supported_side or model.modes not in (8, 16, 80):
-            raise ValueError('Experimental whole-model inference requires 256 pixels and a supported mode count.')
-        if hasattr(model, 'fitted_matcher'):
+            raise ValueError('Experimental whole-model inference requires a supported image side and mode count.')
+        if hasattr(model, 'fitted_matcher') or getattr(model, 'spatial_feedback', False):
             name = 'arbitrary_plane_one_shot_model.py'
             expected = config['source_sha256'][name]
             if hashlib.sha256((repository / 'training' / name).read_bytes()).hexdigest() != expected:
                 raise RuntimeError(f'Checkpoint implementation differs from installed source: {name}')
-        resolution = (256, 256)
+        resolution = (image_side, image_side)
     else:
         if f'arbitrary_plane_joint_model_{version}.py' not in config['source_sha256']:
             raise ValueError(f'Selected checkpoint is not a whole-model {version} checkpoint')
@@ -112,7 +122,11 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
                  f'Mapping {2 * model.modes} one-pass pose/warp candidates'
                  if version == 'one-shot' else 'Fitting all predicted locations')
     messages.put((0, f'{operation}, two at a time. Cancel discards the result when inference returns.'))
-    prediction = infer_joint(model, inputs, atlas, offsets, weights, context=None, chunk=2)
+    if version == 'one-shot' and getattr(model, 'spatial_feedback', False):
+        prediction = infer_joint(model, inputs, atlas, offsets, weights, context=None, chunk=2,
+                                 max_derivative=config.get('derivative_cap'))
+    else:
+        prediction = infer_joint(model, inputs, atlas, offsets, weights, context=None, chunk=2)
     if cancel_event.is_set():
         raise InterruptedError
     prediction['runtime'] = {'device': device, 'section_thickness_um': float(thickness_um),

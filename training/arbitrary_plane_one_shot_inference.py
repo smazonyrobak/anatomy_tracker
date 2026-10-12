@@ -27,7 +27,7 @@ def load_one_shot_checkpoint(path, device='cuda'):
 
 
 def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chunk=2,
-                   evidence_arm='full', max_derivative=.35):
+                   evidence_arm='full', max_derivative=None):
     mode = torch.arange(model.modes, device=inputs.device).repeat_interleave(2)
     reflection = torch.arange(2, device=inputs.device).repeat(model.modes)
     output = {name: [] for name in ('state', 'surface', 'local_displacement_um',
