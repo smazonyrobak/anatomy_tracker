@@ -128,6 +128,7 @@ with torch.inference_mode(), (OUT / 'rows.jsonl').open('w', encoding='utf8') as 
 keys = ('stage1_selected_rigid_um', 'stage1_selected_normal_axis_error_deg',
         'baseline247_selected_rigid_um', 'baseline247_selected_normal_axis_error_deg')
 identities = sorted({row['animal_id'] for row in rows})
+assert len(identities) == panel_done['synthetic_subjects'] == 8
 subject_means = {identity: {key: float(np.mean([row[key] for row in rows
                                                if row['animal_id'] == identity])) for key in keys}
                  for identity in identities}
@@ -138,6 +139,13 @@ assert len(last) == train_done['batches'] == STEP
 last500 = float(np.mean(last[-500:]))
 normal_gain = equal['baseline247_selected_normal_axis_error_deg'] - equal['stage1_selected_normal_axis_error_deg']
 rigid_gain_mm = (equal['baseline247_selected_rigid_um'] - equal['stage1_selected_rigid_um']) / 1000
+
+
+def group_mean(group):
+    return {'cases': len(group),
+            'case_mean': {key: float(np.mean([row[key] for row in group])) for key in keys} if group else {}}
+
+
 summary = {'status': 'development mechanism readout, not a deployable or calibrated model',
            'cases': len(rows), 'synthetic_subjects': len(identities),
            'subject_equal_mean': equal, 'subject_means': subject_means,
@@ -145,11 +153,12 @@ summary = {'status': 'development mechanism readout, not a deployable or calibra
            'normal_axis_gain_deg': normal_gain, 'rigid_gain_mm': rigid_gain_mm,
            'stage1_continuation_gate': bool(last500 <= math.log(64) - .5
                                              and normal_gain >= 10 and rigid_gain_mm >= .5),
-           'physical_cut_groups': {f'{low}-{high}': {'cases': sum(low <= row['cut_nearest_principal_axis_deg'] < high for row in rows),
-                              'stage1_rigid_um': float(np.mean([row['stage1_selected_rigid_um'] for row in rows
-                                     if low <= row['cut_nearest_principal_axis_deg'] < high])) if any(
-                                     low <= row['cut_nearest_principal_axis_deg'] < high for row in rows) else None}
-                                   for low, high in ((0, 15), (15, 30), (30, 45), (45, 60))}}
+           'physical_cut_groups': {f'{low}-{high}': group_mean([row for row in rows
+                                    if low <= row['cut_nearest_principal_axis_deg'] < high])
+                                   for low, high in ((0, 15), (15, 30), (30, 45), (45, 60))},
+           'valid_tissue_fraction_groups': {f'{low:.1f}-{high:.1f}': group_mean([row for row in rows
+                                    if low <= row['valid_fraction'] < high])
+                                   for low, high in ((0, .1), (.1, .3), (.3, .5), (.5, 1.01))}}
 (OUT / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf8')
 (OUT / 'completed.json').write_text(json.dumps({
     'cases': len(rows), 'checkpoint_step': STEP,
