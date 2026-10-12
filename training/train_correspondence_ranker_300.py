@@ -32,7 +32,7 @@ SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/EXACT_POINT_RANKER_300_PROTOCOL_20261012.md'
 PARENT = ROOT / 'runs/pose_capture_275_v9_continuation_001/pose_step_08000.pt'
 PREVIOUS = ROOT / 'runs/oriented_slab_ranker_299_train_inner_001'
-RUN = ROOT / 'runs/exact_point_ranker_300_train_inner_001'
+RUN = ROOT / 'runs/exact_point_ranker_300_train_inner_002'
 EXPECTED_PARENT = 'b4689e1d0dcbf1e8d65a63a400962bf27f44b2e571c8361e29e0e51412b2b97f'
 assert SOURCE.drive.upper() == RUN.drive.upper() == 'I:' and not RUN.exists()
 torch.set_num_threads(4)
@@ -127,7 +127,7 @@ with (RUN / 'draws.jsonl').open('w', encoding='utf8') as draws, \
                 truth = sample['centre'][0].reshape(-1, 3)[pixels]
                 points = rigid_points_090(states[None], reflections[None], chart[None],
                                           (SIDE, SIDE))[0]
-                error = (points - truth[None]).norm(-1).mean(-1) / 1000
+                error = (points - truth[None]).norm(dim=-1).mean(-1) / 1000
                 centre_bank = render_bank_299(context['atlas'], states, reflections,
                     sample['offsets'].expand(16, -1), sample['weights'].expand(16, -1), (0.,))
                 central_support = centre_bank[:, 0, 1].mean((1, 2))
