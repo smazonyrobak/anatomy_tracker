@@ -380,7 +380,9 @@ with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
                         F.logsigmoid(prediction['reflection_logit'])), -1)).flatten(1)
                     branches = prior.topk(16, -1).indices
                     branch_scores = {'full': [], 'support_only': [], 'shuffled': []}
-                    rigid_error, mapped_error, support_mean = [], [], []
+                    rigid_error, mapped_error, normal_error, support_mean = [], [], [], []
+                    true_normal = full_frame_state_to_components(
+                        item['state'][None].cuda())[1][0, :, 2]
                     for start in range(0, 16, 2):
                         group = branches[:, start:start + 2]
                         selected = select_branch(prediction, group)
@@ -394,6 +396,10 @@ with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
                             feature_side=64, source_shape=(SIDE, SIDE), max_derivative=None)
                         refined_state, _, _ = model.refine(first['refinement_feature'],
                                                            selected['state'])
+                        fitted_normal = full_frame_state_to_components(
+                            refined_state)[1][0, :, :, 2]
+                        normal_error.extend(torch.rad2deg(torch.acos((fitted_normal
+                            @ true_normal).abs().clamp(0, 1))).tolist())
                         refined = {**selected, 'state': refined_state}
                         fitted = model.map(refined, axial, index, group % 2, (96, 96),
                             context['atlas'], masses, feature_side=96,
@@ -445,6 +451,7 @@ with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
                         'exterior_style': item['exterior_style'],
                         'branch_ids': branches[0].tolist(), 'prior_log': score_prior,
                         'rigid_error_mm': rigid_error, 'mapped_error_mm': mapped_error,
+                        'normal_error_deg': normal_error,
                         'support_mean': support_mean, 'scores': branch_scores,
                         'chosen': chosen, 'pair': pair,
                         'exact_pose_drift_mm': exact_drift,
@@ -454,6 +461,8 @@ with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
                     rows.append(row)
             means = {name: float(np.mean([row['mapped_error_mm'][row['chosen'][name]]
                 for row in rows])) for name in ('direct_prior', 'full', 'support_only', 'shuffled')}
+            normal_means = {name: float(np.mean([row['normal_error_deg'][row['chosen'][name]]
+                for row in rows])) for name in means}
             per_base = {str(base): {name: float(np.mean([
                 row['mapped_error_mm'][row['chosen'][name]] for row in rows
                 if row['base'] == base])) for name in means} for base in range(56, 64)}
@@ -485,8 +494,12 @@ with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
                 for style in ('exact_black', 'near_black', 'gray', 'exact_black_brush')})
             strata_metrics = {name: {'n': len(group),
                 'full_mapped_mean_mm': (float(np.mean([r['mapped_error_mm'][r['chosen']['full']]
-                    for r in group])) if group else None)} for name, group in strata.items()}
+                    for r in group])) if group else None),
+                'full_unsigned_normal_mean_deg': (float(np.mean([
+                    r['normal_error_deg'][r['chosen']['full']] for r in group]))
+                    if group else None)} for name, group in strata.items()}
             readouts[str(step)] = {'mean_selected_mapped_error_mm': means,
+                'mean_selected_unsigned_normal_error_deg': normal_means,
                 'per_base': per_base, 'matched_pairs': len(pairs),
                 'matched_pair_evidence_wins': wins,
                 'exact_pose_drift_mean_mm': float(np.mean([
