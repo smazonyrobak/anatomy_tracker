@@ -1,0 +1,5 @@
+# 253: frozen 247 image-only pose-factor audit
+
+On all 227 eligible sections of the frozen 248 synthetic DEV panel, rerun only the frozen 247 image-only pose predictor. Reconstruct the original prior selection (top four anchor masses crossed with two reflection logits), and match section ID, selected mode/reflection, axis angle, and file hash to the frozen 248 readout. No atlas fitting, checkpoint selection, or training.
+
+Decode the target and selected predicted full-frame states. Report major/minor singular values of each in-plane basis in millimetres, their absolute errors and ratios, and Euclidean/AP/DV/ML centre errors. Summarize case means/medians and eight-plan-equal means. Count target and predicted minor FOV at or below 1.2 mm. From matched frozen 248 rows, count sections with image-only normal-axis error at or below 15 degrees yet image-only rigid tissue-coordinate error at or above 2 mm. This is synthetic DEV diagnosis, not biological validation or a public benchmark. Write only a new I: run directory; leave the panel, checkpoints, and prior readouts unchanged.
