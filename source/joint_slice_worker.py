@@ -119,7 +119,7 @@ def run_joint_slice(checkpoint_path, image, raw_to_oriented, raw_shape, brush_ma
         raise InterruptedError
     operation = ('Comparing 16 arbitrary-plane candidates with original/corrected actions and mapping the selection'
                  if version == 'joint-121' else
-                 f'Refining eight atlas fits and mapping the selected pose/warp candidate'
+                 f'Refining {16 if model.spatial_feedback else 8} atlas fits and mapping the selected pose/warp candidate'
                  if version == 'one-shot' and model.normal_anchor_count and hasattr(model, 'pose_refiner') else
                  f'Refining atlas fits and mapping {2 * model.modes} pose/warp candidates'
                  if version == 'one-shot' and hasattr(model, 'pose_refiner') else
