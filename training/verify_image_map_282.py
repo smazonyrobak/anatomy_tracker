@@ -303,7 +303,8 @@ def main():
     from training.arbitrary_plane_one_shot_slide_artifacts_v9 import sample_one_shot_slide_artifacts_v9
     from training.arbitrary_plane_streaming_synthetic_v7_64 import load_streaming_synthetic_v7_64
 
-    safe = [np._core.multiarray.scalar, np.dtype, np.dtypes.Float64DType]
+    safe = [np._core.multiarray.scalar, np.dtype, np.dtypes.Float64DType,
+            torch.torch_version.TorchVersion]
     with torch.serialization.safe_globals(safe):
         panel = torch.load(RUN / 'inner_panel.pt', map_location='cpu', weights_only=True)
     draws = jsonl(RUN / 'inner_draws.jsonl')

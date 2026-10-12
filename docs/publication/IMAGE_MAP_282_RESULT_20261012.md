@@ -1,0 +1,26 @@
+# 282: image-to-exact-plane map did not learn on the bounded pilot
+
+Status: completed on 12 October 2026; independent public verifier passed. This is a TRAIN-inner synthetic mechanism test, not a release model, biological validation, or a pose result.
+
+The first launch (`I:/AnatomyTracker/runs/image_map_282_001`) stopped before any training update because eight legacy TRAIN subjects omit the optional `animal_index` lineage field. That partial run is preserved and excluded. The frozen second launch (`I:/AnatomyTracker/runs/image_map_282_002`) validated the exact subject, animal, specimen, and experiment IDs against the bound generator context, completed all four matched 1,500-section arms, and has the sole 282 result. The 512-site readout minimum was corrected before either launch. Runner source was frozen at `237b435d6fc11d9855ee644965e913112649f84c`, with protocol SHA-256 `5c1acc4099d87a534af1ede305ac2eaea56a8107326931ee1cb799d979fa222a`.
+
+The new fixed readout comprised 64 eligible physical sections, eight each from synthetic TRAIN bases 56–63; 65 draws were attempted. Every section had 512 valid surviving coordinate sites. Each arm replayed the same 1,500 accepted TRAIN-base 0–55 sections, trained only its randomly initialized mapper/atlas-comparison modules, used the same frozen 275 scratch pose features, and was given the *true* synthetic plane. Thus this asks whether the image can predict the residual warp even when plane search is removed. It does not test full joint inference from a raw slice.
+
+At step 1,500, mean same-grid no-warp error was 0.191819 mm on the identical sites in all arms:
+
+| Arm | Mapped error (mm) | Gain over no warp (mm) | Nonnegative bases / 8 | Largest derivative |
+| --- | ---: | ---: | ---: | ---: |
+| A: smooth16, atlas intensity + support | 0.192047 | -0.000229 | 4 | 0.145 |
+| B: free64, atlas intensity + support | 0.191969 | -0.000151 | 5 | 0.285 |
+| C: smooth16, support only | 0.192025 | -0.000206 | 4 | 0.181 |
+| D: smooth16, both atlas channels zero | 0.192116 | -0.000298 | 3 | 0.043 |
+
+A's gain was +0.000133 mm at step 500 and -0.000229 mm at step 1,500. Its mean field displacement at 1,500 was 0.01076 mm and its mean surviving-site shift 0.01480 mm, small beside the 0.19182-mm no-warp site error. The head moved, but it did not correct the residual. All derivative bounds passed the 0.35 physical limit. The preregistered A gain threshold (+0.05 mm), six-of-eight-base threshold, smooth-over-free (+0.03 mm), atlas-intensity (+0.03 mm), and atlas-support (+0.03 mm) clauses all failed. Exact A−B, A−C, and C−D gain differences were -0.000078, -0.000023, and +0.000092 mm, respectively. These tiny differences do **not** establish that atlas information is useless; all four arms failed to learn a useful map.
+
+The panel had nine sparse-support sections (<15% visible). For A, their mean gain was -0.000099 mm versus -0.000250 mm on the other 55. The event-positive strata were fragments 17 (+0.002105 mm), folds 11 (-0.000569 mm), bubbles 11 (-0.002131 mm), and tile seams 10 (+0.002907 mm). These are descriptive, small subgroups; none changes the overall failed gate. Complete draw, source, specimen/experiment provenance, per-case metrics, checkpoint and output hashes are in the frozen receipt and readout files.
+
+`training/verify_image_map_282.py` independently passed after the runner exited. It checked the committed runner/protocol/source and bound input hashes, replayed all panel draws and training-schedule identities, checked 512-site labels, matched all four training schedules and their step/checkpoint bindings, rerendered all 768 fixed-panel readout rows from saved mappers, and recalculated derivatives, subgroup means, and gate decisions. It did not treat weak acquired orientation labels or public benchmark data as location truth.
+
+Interpretation: the 281 coordinate-fit oracle's 0.137-mm gain on a separate new panel showed this constrained smooth field can be optimized when target coordinates are directly supplied. 282 shows that the current frozen-feature image mapper, sparse site loss, and 1,500-section schedule did not infer that correction from images. It does not identify which of feature information, supervision density, schedule length, or architecture caused the failure, and it does not prove arbitrary-plane inference is impossible. The 275 pose model and 280 fit scorer remain below promotion gates; no model is ready for GUI replacement or calibrated electrode-region claims.
+
+Next, before scaling training or adding pose-feedback machinery, compare the frozen 282 checkpoints on a small matched sample of their *own* training sections against the untouched inner-TRAIN readout. If even training sections show no gain, run a bounded repeated-image overfit/gradient probe and then change the map learning signal or feature pathway; if training gain is substantial but inner gain is absent, address generalization and independent-animal diversity. Keep DEV/CAL/FINAL animals and DeepSlice comparison untouched until internal location and mapping gates pass. Continue to preserve full brain-intersecting-plane support as the target, with physical oblique accuracy explicitly unclaimed until animal-level data substantiate it.
