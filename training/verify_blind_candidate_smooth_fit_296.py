@@ -316,7 +316,8 @@ def main():
         assert (sid, base, slot) == (row['physical_section_id'], row['base_index'], row['slot'])
         assert (sid, base, slot) == (draw['physical_section_id'], draw['base_index'], draw['slot'])
         assert (item['subject_index'], item['draw_seed']) == (row['subject_index'], row['draw_seed'])
-        assert item['provenance'] == row['provenance'] == draw['provenance']
+        same(item['provenance'], row['provenance'], f'{sid} panel provenance')
+        assert row['provenance'] == draw['provenance']
         assert item['provenance']['seed_prefix'] == [item['draw_seed'], item['subject_index'], 0]
         assert item['provenance']['virtual_index'] == item['subject_index']
         assert row['virtual_index'] == item['subject_index']
