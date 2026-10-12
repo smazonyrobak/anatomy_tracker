@@ -1,0 +1,21 @@
+# Frozen protocol — exact-point-supervised ranker 300
+
+## Question
+
+Candidate 299's correctly centred, candidate-aligned five-plane shared-rigid score failed to beat frozen prior-first selection or a support-only null. It received only candidate-level near/far supervision. The v9 generator supplies exact observed-pixel-to-CCF correspondence on surviving synthetic tissue. Does using that point information to train the same random-init feature encoders produce an incremental *atlas-intensity* ranking signal?
+
+This is one targeted TRAIN-inner ablation, not a new backbone, a change to 299 outputs, an acquired-slice claim, or a request to scale a failed approach. The 299 frozen 64-case panel is deliberately reused for paired comparison; because its result already informed this design, it is **adaptive development readout, not independent validation**. A pass must be confirmed on a new panel and physical animal-level data before any promotion. 275 and all 16 proposals remain frozen.
+
+## Precommitted procedure
+
+- Independently draw 1,200 accepted v9 synthetic sections from TRAIN base animals 0–55 with new seeds. Per-example plane, virtual subject, appearance, optional brush and artifacts are random; no paired background copies, imported weights/features, or re-use of 299 training-section IDs. The exact 299 panel from bases 56–63 is used only once after training, at fixed step 1,200. No intermediate panel tuning or checkpoint selection.
+- Train two identically initialized copies of 299's source encoder, atlas encoder and source reliability head. Both see the same images, matched near/far candidates and true CCF point targets. The full arm sees atlas intensity+support; the null arm sees only support. Neither receives true coordinates at inference.
+- Preserve 299's candidate bank: five explicit finite-thickness atlas views at normal offsets −500…+500 µm, 48×48 block-centred lattice, 64 stratified sites, one shared local XY/depth residual, fixed-denominator unsupported-site penalty, same support-matched near/far selection and same prior+4×evidence decision rule. No pose adjustment or tissue warp is learned here.
+- Add exact physical-point supervision on the *unranked true plane*, using the v9 dense CCF coordinate of the centre of each sufficiently intact source feature block. Project each point through the true post-artifact pose into the atlas bank's XY/depth coordinates, bilinearly sample its positive atlas descriptor, and contrast it with 12 displaced same-bank atlas sites (invalid-support negatives masked). Require positive support >0.9 and at least four supported negatives. This prevents the 240 grid-centre mismatch and does not use 240's unsupported top-k or test-time gradient drift. The true plane and CCF target enter **training loss only**, never beam selection or inference.
+- Optimize the same 299 pairwise candidate margin, plus 0.5×point cross-entropy and 0.1×source reliability BCE; AdamW 1e-4, gradient clip 3, fixed 1,200 accepted presentations. Each section is drawn independently. Hard stop at two wall-clock hours. Save all attempts, raw train losses, 16-way readout scores, model states and source/input/output hashes on I:.
+
+## Predeclared gate
+
+On the reused 64-case panel require ≥30 support-matched near/far pairs; full evidence wins ≥75% and ≥10 percentage points more pairs than the matched support-only arm; full selected mean rigid-site error improves by ≥0.20 mm over frozen prior-first, ≥0.15 mm over newly trained support-only, and ≥0.15 mm over frozen 299 full; at least six of eight base-animal means are non-worse than frozen prior-first. Report per-arm training point loss and usable-site counts, brush/no-brush and ≥45°/other angle strata. A failure forbids unchanged scale-up. A pass permits a fresh TRAIN-inner confirmation and acquired weak-family guard only, not shipping, benchmark use, or calibrated region probabilities.
+
+No DEV/CAL/FINAL animals, public benchmark examples, prior external weights/features/pseudolabels, or physical oblique truth are used. Virtual oblique sections cannot establish real arbitrary-plane performance. A separately measured physical-oblique multi-animal cohort with clear rights remains a necessary validation input for the full goal.
