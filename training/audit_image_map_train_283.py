@@ -27,7 +27,7 @@ SEED = 20261012283
 SOURCE = Path(__file__).resolve()
 PROTOCOL = SOURCE.parent.parent / 'docs/publication/IMAGE_MAP_TRAIN_CHECK_283_PROTOCOL_20261012.md'
 PARENT_282 = ROOT / 'runs/image_map_282_002'
-RUN = ROOT / 'runs/image_map_train_check_283_001'
+RUN = ROOT / 'runs/image_map_train_check_283_002'
 
 
 assert SOURCE.drive.upper() == RUN.drive.upper() == 'I:' and not RUN.exists()
@@ -91,7 +91,7 @@ with (RUN / 'fresh_draws.jsonl').open('w', encoding='utf8') as fresh_draws, \
                 context, [entry['subject_index']], entry['draw_seed'], SIDE)
         identity = seen['provenance'][0]
         assert identity['physical_section_id'] == entry['physical_section_id']
-        assert identity == accepted[entry['physical_section_id']]['provenance']
+        assert json.loads(json.dumps(identity)) == accepted[entry['physical_section_id']]['provenance']
         assert identity['split'] == 'train'
         lineage = context['bases'][base]['lineage']
         assert all(identity['base_lineage'][key] == lineage[key] for key in
