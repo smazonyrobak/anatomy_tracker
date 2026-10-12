@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -26,10 +27,11 @@ from training.global_atlas_contrast_090 import rigid_points_090
 
 
 SEED, SIDE, BATCH, UPDATES = 20261012305, 192, 4, 26000
-READOUTS = (0, 2000, 8000, 16000, 26000)
+READOUTS = (2000, 8000, 16000, 26000)
 SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/JOINT_SPATIAL_FEEDBACK_305_PROTOCOL_20261012.md'
-RUN = ROOT / 'runs/joint_spatial_feedback_305_pose_001'
+PARENT = ROOT / 'runs/joint_spatial_feedback_305_pose_001'
+RUN = ROOT / 'runs/joint_spatial_feedback_305_pose_002'
 assert SOURCE.drive.upper() == RUN.drive.upper() == 'I:' and not RUN.exists()
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
@@ -45,13 +47,43 @@ def sha(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+parent_hashes = {
+    'config.json': '20bf2217aee22d07a8aa4e9a4b64df96cac815592be0df71b7ade1418de113be',
+    'inner_panel.pt': '53ca593e97fdcd02c5c8db66172f45662fbed2c98017e16ac7dbebc89194611f',
+    'panel_draws.jsonl': '43ff2df34b2f3804f48cba32171c9277dbc9b36720bf13a23871e89394f3dcb5',
+    'pose_step_02000.pt': '39e2468eeed4b0bdd8ebf41c3ed852a1afd30c548454e8456cf8686471b43c61',
+    'training.jsonl': '00894c1fefe4bb4d040a584f6bba8da6ba7c0e158702bc00136e7a407ebb5b1b',
+    'training_draws.jsonl': '5b3abc4b983a07b7e354f19f14284bf5d9dcf0a528330e78695fcfdedd6bd142',
+    'readouts.jsonl': 'e5b73d34de5b910fc04f775369b97afe41413295ee67aba5028366eb3c94ff67'}
+assert all(sha(PARENT / name) == digest for name, digest in parent_hashes.items())
+parent_config = json.loads((PARENT / 'config.json').read_text(encoding='utf8'))
+assert parent_config['source_sha256']['arbitrary_plane_one_shot_model.py'] == sha(
+    SOURCE / 'arbitrary_plane_one_shot_model.py')
+assert parent_config['protocol_sha256'] == sha(PROTOCOL)
+assert parent_config['source_sha256']['arbitrary_plane_postartifact_gauge_v1.py'] == \
+    'ea591afab155df059ba212b668871e7005d584268c2cadf3b01aa71a873aba32'
+checkpoint = torch.load(PARENT / 'pose_step_02000.pt', map_location='cuda', weights_only=False)
+assert checkpoint['step'] == 2000 and json.loads(json.dumps(checkpoint['config'])) == parent_config
+parent_training = next(json.loads(line) for line in (PARENT / 'training.jsonl').open(
+    encoding='utf8') if json.loads(line)['step'] == 2000)
+parent_next = next(json.loads(line) for line in (PARENT / 'training.jsonl').open(
+    encoding='utf8') if json.loads(line)['step'] == 2001)
+assert parent_training['accepted'] == 8000
+parent_readout_rows = [json.loads(line) for line in (PARENT / 'readouts.jsonl').open(
+    encoding='utf8') if json.loads(line)['step'] <= 2000]
+assert [row['step'] for row in parent_readout_rows] == [0, 2000]
+
+
 config = {'candidate': 305, 'stage': 'scratch_pose', 'seed': SEED, 'side': SIDE,
     'batch_size': BATCH, 'optimizer_batches': UPDATES, 'readouts': READOUTS,
     'model': {'modes': 16, 'normal_anchor_count': 64,
               'atlas_conditioning': True, 'vector_refinement': True,
               'spatial_feedback': True},
     'gradient_base_indices': list(range(56)), 'inner_base_indices': list(range(56, 64)),
-    'init': 'all trainable weights initialized by this run; no checkpoint loaded',
+    'init': 'randomly initialized in verified 305 pose run 001; resumed its step-2000 state',
+    'resume_parent': str(PARENT), 'resume_step': 2000,
+    'resume_parent_sha256': parent_hashes,
+    'resume_rule': 'rank-deficient nonfragment sections excluded from pose supervision',
     'synthetic_provenance': context['provenance'],
     'protocol_sha256': sha(PROTOCOL),
     'source_sha256': {name: sha(SOURCE / name) for name in (
@@ -65,53 +97,17 @@ config = {'candidate': 305, 'stage': 'scratch_pose', 'seed': SEED, 'side': SIDE,
 RUN.mkdir(parents=True, exist_ok=False)
 (RUN / 'config.json').write_text(json.dumps(config, indent=2), encoding='utf8')
 
-panel, attempts = [], 0
-panel_rng = np.random.default_rng(SEED + 1)
-with (RUN / 'panel_draws.jsonl').open('w', encoding='utf8') as output:
-    for base in range(56, 64):
-        for slot in range(8):
-            while True:
-                attempts += 1
-                variant = int(panel_rng.integers(VARIANTS))
-                subject = base * VARIANTS + variant
-                seed = SEED + 1_000_000_000 + attempts
-                with torch.no_grad():
-                    sample = sample_postartifact_gauge_v1(context, [subject], seed, SIDE)
-                accepted = bool(sample['eligible'][0])
-                output.write(json.dumps({'base': base, 'slot': slot, 'variant': variant,
-                    'seed': seed, 'accepted': accepted, 'provenance': sample['provenance'][0]},
-                    allow_nan=False) + '\n')
-                if accepted:
-                    break
-                del sample
-            valid = sample['valid_mask'][0]
-            pixels = valid.flatten().nonzero().flatten()
-            pixels = pixels[torch.linspace(0, len(pixels) - 1, min(512, len(pixels)),
-                device=pixels.device).long()]
-            chart = torch.stack((pixels.remainder(SIDE),
-                pixels.div(SIDE, rounding_mode='floor')), -1).float() / SIDE
-            truth = sample['centre'][0].reshape(-1, 3)[pixels]
-            normal = full_frame_state_to_components(sample['state'])[1][0, :, 2]
-            panel.append({'inputs': sample['inputs'][0].cpu(),
-                'state': sample['state'][0].cpu(),
-                'reflection': sample['reflection'][0].cpu(),
-                'offsets': sample['offsets'][0].cpu(),
-                'weights': sample['weights'][0].cpu(),
-                'valid_mask': valid.cpu(), 'chart': chart.cpu(), 'truth': truth.cpu(),
-                'base': base, 'slot': slot,
-                'physical_section_id': sample['provenance'][0]['physical_section_id'],
-                'visible_fraction': float((sample['visible'][0] > .25).float().mean()),
-                'damage_fraction': float((sample['fragment_displaced_mask'][0]
-                    | sample['fragment_overlap_mask'][0] | sample['fold_occlusion_mask'][0]
-                    | sample['fold_overlap_mask'][0] | sample['bubble_invalid_mask'][0]
-                    ).float().mean()),
-                'obliquity_deg': float(torch.rad2deg(torch.acos(normal.abs().max().clamp(0, 1)))),
-                'exterior_style': sample['provenance'][0][
-                    'one_shot_slide_artifacts_v9']['exterior_style'],
-                'provenance': sample['provenance'][0]})
-            del sample
+for name in ('panel_draws.jsonl', 'inner_panel.pt', 'pose_step_02000.pt'):
+    shutil.copyfile(PARENT / name, RUN / name)
+panel = torch.load(RUN / 'inner_panel.pt', map_location='cpu', weights_only=False)
 assert len(panel) == 64 and len({row['physical_section_id'] for row in panel}) == 64
-torch.save(panel, RUN / 'inner_panel.pt')
+for name in ('training_draws.jsonl', 'training.jsonl', 'readouts.jsonl'):
+    with (PARENT / name).open(encoding='utf8') as source, \
+            (RUN / name).open('w', encoding='utf8') as output:
+        for line in source:
+            if json.loads(line)['step'] > 2000:
+                break
+            output.write(line)
 
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
@@ -119,16 +115,24 @@ model = OneShotJointSliceModel(modes=16, normal_anchor_count=64,
     atlas_conditioning=True, vector_refinement=True, spatial_feedback=True).cuda()
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
 draw_rng = np.random.default_rng(SEED + 2)
+model.load_state_dict(checkpoint['model'])
+model.train()
+optimizer.load_state_dict(checkpoint['optimizer'])
+torch.set_rng_state(checkpoint['torch_rng'])
+torch.cuda.set_rng_state_all(checkpoint['cuda_rng'])
+draw_rng.bit_generator.state = checkpoint['draw_rng_state']
 corners = torch.tensor([[0., 0.], [191., 0.], [0., 191.], [191., 191.],
                         [95.5, 95.5]], device='cuda') / SIDE
 reflection_options = torch.arange(2, device='cuda')[None, None]
-attempted = accepted = 0
+attempted, accepted = parent_training['attempted'], parent_training['accepted']
 started = time.perf_counter()
-readouts = {}
-with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
-        (RUN / 'training.jsonl').open('w', encoding='utf8') as training, \
-        (RUN / 'readouts.jsonl').open('w', encoding='utf8') as readout_file:
-    for step in range(UPDATES + 1):
+readouts = {str(row['step']): row['summary'] for row in parent_readout_rows}
+print(json.dumps({'event': 'verified_resume', 'step': 2000,
+    'attempted': attempted, 'accepted': accepted}), flush=True)
+with (RUN / 'training_draws.jsonl').open('a', encoding='utf8') as draws, \
+        (RUN / 'training.jsonl').open('a', encoding='utf8') as training, \
+        (RUN / 'readouts.jsonl').open('a', encoding='utf8') as readout_file:
+    for step in range(2001, UPDATES + 1):
         if step:
             optimizer.param_groups[0]['lr'] = 2e-5 + 8e-5 * (1 + math.cos(math.pi * step / UPDATES)) / 2
             images, states, reflections, masks, centres, offsets, weights = [], [], [], [], [], [], []
@@ -206,6 +210,13 @@ with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
             loss.backward()
             gradient = torch.nn.utils.clip_grad_norm_(model.parameters(), 2., error_if_nonfinite=True)
             optimizer.step()
+            if step == 2001:
+                assert attempted == parent_next['attempted'] and accepted == parent_next['accepted']
+                assert abs(float(direct_loss.detach()) - parent_next['direct_loss']) < .01
+                assert abs(float(loss.detach()) - parent_next['loss']) < .01
+                print(json.dumps({'event': 'resume_replay_verified', 'step': step,
+                    'direct_loss': float(direct_loss.detach()), 'attempted': attempted,
+                    'accepted': accepted}), flush=True)
             training.write(json.dumps({'step': step, 'attempted': attempted,
                 'accepted': accepted, 'direct_loss': float(direct_loss.detach()),
                 'reliability_loss': float(reliability_loss.detach()),

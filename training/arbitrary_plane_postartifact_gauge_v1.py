@@ -101,9 +101,15 @@ def _refit_postartifact_gauge(sample, side, source_supplied=False):
         }
     fit_applied = torch.tensor(fit_applied, device=sample['eligible'].device,
                                dtype=torch.bool)
-    assert bool((~sample['eligible'] | fit_applied).all())
+    eligible = sample['eligible'] & fit_applied
+    for row, record in enumerate(provenance):
+        record[VERSION]['pose_supervision_eligible'] = bool(eligible[row])
+        record[VERSION]['excluded_from_pose_supervision_reason'] = (
+            'insufficient_non_displaced_non_collinear_pixels'
+            if bool(sample['eligible'][row] & ~fit_applied[row]) else None)
     return {**sample, 'state': torch.stack(fitted_states), 'provenance': provenance,
             'pre_artifact_state': pre_artifact_state,
+            'eligible': eligible,
             'post_artifact_pose_fit_applied': fit_applied}
 
 
