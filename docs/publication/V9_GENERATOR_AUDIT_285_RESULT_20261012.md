@@ -4,7 +4,7 @@
 
 The frozen TRAIN-only audit completed all 512 independent proposals (eight per each of 64 deformation bases) without retries or model updates. There were 473 generator-eligible sections (92.38%) and 512 unique physical-section IDs. Independent recomputation verified every output/source/protocol hash, per-base draw count, within-base variant uniqueness, eligibility count, unit normals, and the affine-decomposition identity.
 
-The consequential finding is a pose-gauge mismatch: on eligible sections, a median 49.51% of squared displacement from the saved plane lies in the support-restricted affine `[1,x,y]` subspace that the mapper removes from its local field. Pixel-pooled across eligible intact sites, the affine fraction is 56.99%. The v9 pose label is the pre-artifact source gauge, not a post-artifact fit. Thus a mapper trained with that pose held fixed cannot represent a large part of its synthetic coordinate target through its affine-free local field.
+The consequential finding is a pose-gauge mismatch: on eligible sections, a median 49.51% of squared displacement from the saved plane lies in the **intact-tissue-supported** affine `[1,x,y]` subspace. Pixel-pooled across eligible intact sites, the affine fraction is 56.99%. The v9 pose label is the pre-artifact source gauge, not a post-artifact fit. The mapper removes affine components over the **full canvas**, however, so this tissue-supported fraction is **not** an irreducible capacity floor: a field can make an affine-like correction on tissue and counterbalance it off tissue. The mismatch instead adds a substantial pose/deformation identifiability and optimization burden.
 
 ## Plane and support coverage
 
@@ -46,7 +46,7 @@ The lower all-proposal realization rates are partly the intended no-retry inclus
 
 The pixel-pooled decomposition is total/affine/local RMS = 0.2598/0.1961/0.1704 mm and 56.99% affine squared error. Its Pythagorean relative error is `1.30e-15`; the maximum per-section OLS orthogonality error is `7.20e-13`, confirming that the split was computed correctly.
 
-This is the valid-intact-support analogue of the mapper's full-canvas projection, not an assertion about unobserved pixels. Even with that limitation, it is large enough to explain why adding dense sites can expose little usable signal when the pre-artifact pose is clamped and the local mapper output is projected affine-free. It does not establish that the remaining local residual is learnable by the present optimizer.
+This is the valid-intact-support analogue of the mapper's full-canvas projection, not an assertion about unobserved pixels. It is a plausible contributor to the weak 284 learning signal, **not a demonstrated cause or mathematical impossibility**. Indeed, the separate 281 coordinate oracle reduced one v9 case from 0.1739 to 0.0052 mm with a 16×16 affine-free field on observed sites; this shows that the model's full-canvas gauge can still express affine-like tissue corrections by compensating elsewhere. The audit does not establish whether the residual is learnable by the present image-conditioned optimizer.
 
 ## Source semantics
 
@@ -70,4 +70,4 @@ No 284 output, checkpoint, receipt, or temporary artifact was read or changed. N
 
 ## Next bounded experiment
 
-Use one fixed eligible section to compare two explicit targets under the same mapper: (1) the current pre-artifact pose plus raw coordinate target and (2) a post-artifact affine pose plus the exactly affine-projected local residual. Overfit each without generalization claims. Failure on target 2 indicates mapper wiring/optimization trouble; success on 2 but failure on 1 isolates the gauge inconsistency measured here. A subsequent matched multi-section experiment should compare these gauges before any larger training run.
+Compare the pre-artifact and post-artifact intact-tissue pose conventions on matched, independently drawn TRAIN sections, preserving each image and dense coordinate truth. Measure both the no-warp baseline and the image-conditioned mapper's incremental gain on new TRAIN bases. This tests whether the corrected gauge improves learning; the current audit alone cannot decide that. Do not scale a model on the old gauge merely because its supervised coordinate targets are dense.
