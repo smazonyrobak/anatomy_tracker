@@ -30,7 +30,7 @@ from training.global_atlas_contrast_090 import rigid_points_090
 
 SEED, SIDE, UPDATES = 20261012306, 192, 4000
 READOUTS = (0, 1000, 2000, 4000)
-POSE_RUN = ROOT / 'runs/joint_spatial_feedback_305_pose_001'
+POSE_RUN = ROOT / 'runs/joint_spatial_feedback_305_pose_002'
 RUN = ROOT / 'runs/joint_spatial_feedback_305_joint_001'
 SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/JOINT_SPATIAL_FEEDBACK_305_PROTOCOL_20261012.md'
@@ -51,13 +51,17 @@ pose_summary = json.loads((POSE_RUN / 'summary.json').read_text(encoding='utf8')
 pose_config = json.loads((POSE_RUN / 'config.json').read_text(encoding='utf8'))
 assert pose_summary['joint_stage_capture_gate'] and pose_receipt['summary'] == pose_summary
 assert pose_config['no_external_weights_features_or_pseudolabels']
-assert pose_config['init'].startswith('all trainable weights initialized by this run')
+assert pose_config['init'].startswith('randomly initialized in verified 305 pose run 001')
+assert pose_config['resume_step'] == 2000
+assert all(sha(Path(pose_config['resume_parent']) / name) == digest
+    for name, digest in pose_config['resume_parent_sha256'].items())
 assert pose_config['source_sha256']['arbitrary_plane_one_shot_model.py'] == sha(
     SOURCE / 'arbitrary_plane_one_shot_model.py')
+assert pose_config['source_sha256']['arbitrary_plane_postartifact_gauge_v1.py'] == sha(
+    SOURCE / 'arbitrary_plane_postartifact_gauge_v1.py')
 assert pose_config['protocol_sha256'] == sha(PROTOCOL)
-assert sha(POSE_RUN / 'config.json') == pose_receipt['output_sha256']['config.json']
-assert sha(POSE_RUN / 'summary.json') == pose_receipt['output_sha256']['summary.json']
-assert sha(POSE_RUN / 'inner_panel.pt') == pose_receipt['output_sha256']['inner_panel.pt']
+assert all(sha(POSE_RUN / name) == digest
+    for name, digest in pose_receipt['output_sha256'].items())
 POSE_CHECKPOINT = POSE_RUN / f"pose_step_{pose_summary['selected_step']:05d}.pt"
 assert sha(POSE_CHECKPOINT) == pose_receipt['output_sha256'][POSE_CHECKPOINT.name]
 assert pose_summary['selected_step'] in (0, 2000, 8000, 16000, 26000)
@@ -96,7 +100,7 @@ config = {'candidate': 305, 'stage': 'joint_feedback', 'seed': SEED,
     'exact_and_jittered_pose_branches': 'training only; never candidates at inference',
     'same_candidate_controls': 'support-only and shuffled intensity change scoring, not the fitted candidate maps',
     'strong_warp_ordering': '16 highest truth-measured zero-warp rigid residual RMS on fixed panel points',
-    'deployment_mismatch_to_resolve': 'current infer_one_shot default max_derivative=.35; this run trains and reads out with None',
+    'deployment_mapping': 'spatial-model inference uses the saved derivative_cap=None',
     'derivative_cap': None, 'per_image_candidate_accumulation': True,
     'blind_candidate_chunk': 2,
     'chunk_gradient': 'exact first-order rank and selected-risk gradients at unchanged same-batch weights',
@@ -289,9 +293,12 @@ with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
                             (group % 2).bool(),
                             F.logsigmoid(selected['reflection_logit'][row_index, index]),
                             F.logsigmoid(-selected['reflection_logit'][row_index, index]))
-                        evidence = (scores - branch_prior).sum()
+                        fit_only = model.score_spatial_candidates(inputs, selected, fitted,
+                            context['atlas'], masses, evidence_arm='full',
+                            exit_weight=0., warp_weight=0.)
+                        evidence = (fit_only - branch_prior).sum()
                         pose_gradient, warp_gradient = torch.autograd.grad(evidence,
-                            (refined_state, fitted['local_displacement_um']), retain_graph=True)
+                            (refined_state, model.warp[-1].weight), retain_graph=True)
                         assert torch.isfinite(pose_gradient).all() and pose_gradient.norm() > 0
                         assert torch.isfinite(warp_gradient).all() and warp_gradient.norm() > 0
                         fit_pose_gradient = float(pose_gradient.norm())
@@ -353,8 +360,8 @@ with (RUN / 'training_draws.jsonl').open('w', encoding='utf8') as draws, \
                 'images': metrics, 'gradient_norm': float(gradient),
                 'elapsed_seconds': time.perf_counter() - started}
             if step == 1:
-                row['fit_score_to_pose_gradient_norm'] = fit_pose_gradient
-                row['fit_score_to_warp_gradient_norm'] = fit_warp_gradient
+                row['fit_only_score_to_pose_gradient_norm'] = fit_pose_gradient
+                row['fit_only_score_to_warp_head_gradient_norm'] = fit_warp_gradient
             training.write(json.dumps(row, allow_nan=False) + '\n')
             if step == 1 or step % 250 == 0:
                 draws.flush(); training.flush()
