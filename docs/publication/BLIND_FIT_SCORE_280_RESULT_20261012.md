@@ -1,0 +1,28 @@
+# 280 blind atlas-fit mechanism test: failed gate
+
+The frozen 280 run is `I:\AnatomyTracker\runs\blind_fit_score_280_pilot_001`. Its source is commit `1e273a2f40ad0641d0a99a72bdbcd4e2f6f5de65` (runner SHA-256 `8173b0b082c3565e69c686cfdc381f84f6e6bea487a36029db4f4d8c5f1f2e90`), and the prespecified protocol SHA-256 is `beec09db6389ac320d075d05a330d3d48717de58da90484c6bfbb85d72c64f33`. The process exited normally. The independent read-only `training/verify_blind_fit_score_280.py` passed after correcting verifier-only JSON tuple/list and float-reduction comparisons and the branch bound (16 learned modes plus 64 normal anchors, each reflected). No frozen runner, output, metric, threshold, or checkpoint was changed. The verifier checks source/input hashes, 275 pose and 272 acquired-source bindings, draw provenance and paired schedules, frozen pose tensors, readout arithmetic, and the exact gate; it does not independently rerender model predictions. `completed.json` records the output/checkpoint SHA-256 hashes.
+
+This is an inner-TRAIN synthetic mechanism test, not animal-level validation. Both arms used the same 1,500 independently drawn eligible physical v9 sections, one per optimizer batch, and the same 64 new-section readout (eight sections each from held-gradient TRAIN bases 56–63). The atlas-intensity arm and trained support-only arm started from identical randomly initialized fit modules and the same frozen 275 step-8,000 pose weights. Both ranked only the frozen pose's blind top 16, without an injected true candidate. A separately supplied true plane supervised and assessed the local map. The 98 acquired TRAIN donor medians were weak orientation checks, not location truth. No DEV/CAL/FINAL animal or public benchmark was used.
+
+## Fixed step-1,500 results
+
+| Readout | Full atlas | Trained support-only | Preregistered requirement |
+| --- | ---: | ---: | --- |
+| Original rigid first-choice mean, mm | 2.421973 | 2.484752 | Full improves ≥0.25 from frozen direct **and** ≥0.15 from control |
+| Gain from frozen direct 2.536678 mm | 0.114705 | 0.051926 | Full ≥0.25: **fail** |
+| Full gain over control, mm | 0.062779 | — | ≥0.15: **fail** |
+| Best original rigid plane within blind top 16, mm | 0.883449 | 0.883449 | Diagnostic only; physically best must not be selected |
+| Sections whose blind top 16 includes ≤1.5-mm rigid plane | 59/64 | 59/64 | Proposal availability, not first-choice success |
+| Support-matched nearest-vs-wrong wins | 31/48 = 64.6% | 31/48 = 64.6% | ≥24 sections: pass; ≥70% and ≥10-pp full advantage: **fail** |
+| Exact-plane no-warp → mapped mean, mm | 0.213388 → 0.214426 | 0.213388 → 0.214623 | Full improvement ≥0.05: **fail** |
+| Exact-plane predicted mean surviving displacement, mm | 0.013460 | 0.015348 | Oracle displacement mean is 0.213388 mm; trained field is small |
+| Already-near (≤0.5-mm) branch map gain, mm | −0.001862 across 4 sections/5 branches | −0.001949 | No degradation below −0.05: pass, but few branches |
+| Coronal/sagittal weak family agreement | 54/58; 20/40 | 54/58; 21/40 | Full ≥54/58 and ≥18/40: pass, not position truth |
+
+The full arm's selected mapped mean is 2.426399 mm on surviving tissue versus 2.426659 mm for its selected original plane; this tiny mapped improvement does not rescue first-choice plane selection. The full arm's exact-plane map is *worse* than no warp by 0.001038 mm. Its mean predicted surviving displacement is only 0.013460 mm against a 0.213388-mm mean target residual, so the ≥0.05-mm exact-map gain cannot be reached by this learned field as-is. The 0.213388-mm oracle residual shows a substantial target exists; it does **not** prove that the existing affine-free, derivative-limited field can represent that target. Maximum actual derivative was 0.35 on exact planes, so field capacity is a plausible bottleneck, not an established cause. Mean gain was nonnegative in all eight bases, but five gains were exactly zero: that clause passed without broad per-base improvement.
+
+Training exposure was real, not an empty-pair run: 1,500/1,500 batches per arm supplied ranking pairs; 1,295 supplied a near-versus-wrong pair, 1,066 supplied a support-matched near-versus-wrong pair. Among 264 sparse (<15% visible) batches, only 60 supplied the support-matched pair. Full step-1,500 sagittal weak median normal discrepancy was 49.104° versus the frozen direct 50.982°; weak affine normals cannot establish accurate AP/DV/ML location. The numerical gate failed five of twelve clauses. Neither arm is promoted, and a larger scorer run, fit-to-pose feedback, GUI replacement, calibrated electrode probability claim, or DeepSlice comparison is not licensed by 280.
+
+## Next bounded diagnosis
+
+Before changing architecture or scaling exposure, measure what the target and current map can actually express on a **new, preregistered TRAIN-only panel**. Compare exact-plane no-warp error with (a) the ideal sampled coordinate correction, (b) an oracle 64×64 field constrained to the current affine-free gauge and derivative ≤0.35, and (c) the current learned map, using identical valid cells and reporting intact tissue, surviving displaced fragments, seam/stretch cases, and sparse sections separately. If the constrained oracle cannot improve by 0.05 mm, revise the representation/gate for physical fragments; if it can but learning remains near zero, probe observable atlas correspondence and shared ranking/map gradient competition with small matched ablations. Do not interpret synthetic ambiguity as proof that arbitrary cutting planes are impossible. Real physical-oblique, animal-disjoint location truth and calibration are still missing and are necessary before any claim of arbitrary-plane performance or electrode-region probability.
