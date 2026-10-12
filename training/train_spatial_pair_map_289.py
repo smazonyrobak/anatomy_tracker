@@ -32,7 +32,7 @@ PROTOCOL = SOURCE.parent / 'docs/publication/SPATIAL_PAIR_MAP_289_PROTOCOL_20261
 PARENT = ROOT / 'runs/pose_capture_275_v9_continuation_001'
 CONTROL = ROOT / 'runs/pose_gauge_map_286_001'
 PREVIOUS = ROOT / 'runs/map_feature_287_001'
-RUN = ROOT / 'runs/spatial_pair_map_289_001'
+RUN = ROOT / 'runs/spatial_pair_map_289_002'
 SOURCE_NAMES = ('train_spatial_pair_map_289.py', 'arbitrary_plane_spatial_pair_map_v1.py',
     'arbitrary_plane_one_shot_model.py', 'arbitrary_plane_one_shot_slide_artifacts_v9.py',
     'arbitrary_plane_postartifact_gauge_v1.py', 'arbitrary_plane_full_frame_primitives.py',
@@ -169,7 +169,8 @@ with (RUN / 'inner_draws.jsonl').open('w', encoding='utf8') as draws:
                 with torch.no_grad():
                     old, new = pair(context, subject_index, draw_seed)
                 physical_id = old['provenance'][0]['physical_section_id']
-                used = bool(old['eligible'][0]) and int(old['valid_mask'][0].sum()) >= SITES
+                used = (bool(old['eligible'][0]) and int(old['valid_mask'][0].sum()) >= SITES
+                        and physical_id not in prior_ids)
                 draws.write(json.dumps({'base_index': base, 'slot': slot, 'attempt': attempts,
                     'subject_index': subject_index, 'draw_seed': draw_seed,
                     'physical_section_id': physical_id, 'used': used}, allow_nan=False) + '\n')
@@ -305,7 +306,8 @@ with (RUN / 'readouts.jsonl').open('w', encoding='utf8') as readout_stream, \
                 draw_seed = SEED + 2_000_000_000 + attempts_train
                 with torch.no_grad():
                     old, new = pair(context, subject_index, draw_seed)
-                if bool(old['eligible'][0]) and int(old['valid_mask'][0].sum()) >= SITES:
+                if (bool(old['eligible'][0]) and int(old['valid_mask'][0].sum()) >= SITES
+                    and old['provenance'][0]['physical_section_id'] not in prior_ids):
                     break
             indices, _, target = sites_from_sample(old, SITES)
         identity = old['provenance'][0]
