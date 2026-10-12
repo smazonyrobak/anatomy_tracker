@@ -443,7 +443,7 @@ def main():
         assert (item['base_index'], item['slot'], item['subject_index'], item['draw_seed']) == (
             base, slot, subject_index, draw_seed)
         assert item['physical_section_id'] == identity['physical_section_id']
-        assert item['provenance'] == json.loads(json.dumps(identity))
+        assert json.loads(json.dumps(item['provenance'])) == json.loads(json.dumps(identity))
         close(item['valid_fraction'], len(valid) / SIDE**2, 5e-8)
         close(item['visible_fraction'], float((sample['visible'][0] > .25).float().mean()), 5e-8)
         normal = full_frame_state_to_components(sample['state'])[1][0, :, 2]
