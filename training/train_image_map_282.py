@@ -38,7 +38,7 @@ EVENTS = ('fragment', 'fold', 'bubble', 'tile_seam')
 SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/IMAGE_MAP_282_PROTOCOL_20261012.md'
 PARENT = ROOT / 'runs/pose_capture_275_v9_continuation_001'
-RUN = ROOT / 'runs/image_map_282_001'
+RUN = ROOT / 'runs/image_map_282_002'
 
 
 def digest(path):
@@ -230,7 +230,9 @@ def main():
                         break
                     del sample
                 assert identity['split'] == 'train'
-                assert identity['base_lineage']['animal_index'] == base
+                lineage = context['bases'][base]['lineage']
+                assert all(identity['base_lineage'][key] == lineage[key] for key in
+                           ('subject_id', 'animal_id', 'specimen_id', 'experiment_id'))
                 assert identity['physical_section_id'] not in panel_ids
                 panel_ids.add(identity['physical_section_id'])
                 indices, _, target = sites_from_sample(sample, READOUT_SITES)
@@ -338,7 +340,9 @@ def main():
                         assert bool(sample['eligible'][0])
                         assert identity['physical_section_id'] == entry['physical_section_id']
                     assert identity['split'] == 'train'
-                    assert identity['base_lineage']['animal_index'] == subject_index // VARIANTS
+                    lineage = context['bases'][subject_index // VARIANTS]['lineage']
+                    assert all(identity['base_lineage'][key] == lineage[key] for key in
+                               ('subject_id', 'animal_id', 'specimen_id', 'experiment_id'))
                     indices, _, target = sites_from_sample(sample, TRAIN_SITES)
                     assert len(indices) == TRAIN_SITES
                     input_sha = tensor_digest(sample['inputs'])
