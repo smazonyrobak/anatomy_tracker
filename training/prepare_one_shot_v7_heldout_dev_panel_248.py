@@ -44,6 +44,7 @@ OUT = ROOT / 'data/one_shot_v7_heldout_dev_panel_248_004'
 PROTOCOL_DOC = Path('docs/publication/ONE_SHOT_V7_HELDOUT_DEV_PANEL_248_PROTOCOL_20261012.md')
 SEED, SIDE, SUBJECTS, PLANES = 2026101248, 192, 8, 32
 PLAN_SEED, FIRST_INDEX = 2026101249, 2000
+MAP_BATCH = 1024
 CONTEXT_SHA = 'c3bd31cc81af2788437cfd064f4cbf44d1d9f111919031c4c691552e796d94a8'
 OLD_SHA = '83fa8fc0ab19f15c8b64babdfe1e98251a972c6759dade08e5513e70c76a7c89'
 repository = Path(__file__).resolve().parents[1]
@@ -153,6 +154,7 @@ protocol = {
     'selection': 'all independently drawn physical planes retained; one independent v7 appearance/artifact draw each; no paired repeats or eligibility retries',
     'sampling': 'unchanged v7 appearance-v3 and one-shot artifact-v3/v4/v6/v7 functions; 64 derived affine variants per new 3D base; train-hardcoded provenance split relabeled development',
     'map': 'accepted FP64 inverse RK4 baked at 100um on CPU; 50um if fixed 4096-query sampled max exceeds 5um; same FP32 interpolation as TRAIN',
+    'map_point_batch_size': MAP_BATCH,
     'eligibility': 'source visible support and observed valid pixels each >= side^2/144; ineligible rows retained',
     'old_plan_completed_sha256': OLD_SHA,
     'train_map_completed_sha256': bundle._file_sha256(train_maps_path),
@@ -244,9 +246,9 @@ for ordinal, index in enumerate(protocol['subject_indices']):
     steps = int(plan['resolved_config']['flow']['steps'])
     map_centre, map_scale = plan['state']['frozen_center_um'], plan['state']['global_scale']
     forward_support = map_accepted_subject_points_torch_v6(torch.from_numpy(support_ccf), *parameters,
-        inverse=False, steps=steps).numpy()
+        inverse=False, steps=steps, batch_size=MAP_BATCH).numpy()
     mapped_centre = map_accepted_subject_points_torch_v6(torch.as_tensor(atlas_centre[None], dtype=torch.float64),
-        *parameters, inverse=False, steps=steps).numpy()[0]
+        *parameters, inverse=False, steps=steps, batch_size=MAP_BATCH).numpy()[0]
     support_bounds = []
     for level in ('coarse', 'fine'):
         coefficients = plan['state'][f'accepted_{level}_coefficients_um']
@@ -261,7 +263,7 @@ for ordinal, index in enumerate(protocol['subject_indices']):
                                      check_rng.uniform(bounds[0], bounds[1], (2048, 3))))
     check_subject = map_centre + map_scale * (check_unscaled - map_centre)
     check_exact = map_accepted_subject_points_torch_v6(torch.from_numpy(check_subject), *parameters,
-        inverse=True, steps=steps).numpy()
+        inverse=True, steps=steps, batch_size=MAP_BATCH).numpy()
     checks = []
     for spacing in (100., 50.):
         axes = [np.arange(bounds[0, k], bounds[1, k] + spacing, spacing) for k in range(3)]
@@ -272,7 +274,7 @@ for ordinal, index in enumerate(protocol['subject_indices']):
             points = np.stack(np.meshgrid(axes[0][start:start + 4], axes[1], axes[2], indexing='ij'), -1)
             subject_points = map_centre + map_scale * (points - map_centre)
             exact = map_accepted_subject_points_torch_v6(torch.from_numpy(subject_points), *parameters,
-                inverse=True, steps=steps).numpy()
+                inverse=True, steps=steps, batch_size=MAP_BATCH).numpy()
             baked[start:start + 4] = exact - points
         displacement = torch.from_numpy(np.moveaxis(baked, -1, 0).copy())
         grid = torch.as_tensor((check_unscaled - grid_lower) / (grid_upper - grid_lower) * 2 - 1,
