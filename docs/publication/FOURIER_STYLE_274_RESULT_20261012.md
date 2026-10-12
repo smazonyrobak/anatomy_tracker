@@ -1,0 +1,19 @@
+# 274: real-style Fourier pilot — frozen TRAIN-inner result
+
+The two pose-only continuations exited successfully after 2,000 optimizer batches of four independent physical synthetic planes each. Both began at the same randomly initialized project-lineage 270 checkpoint and inherited its optimizer moments; only the synthetic image recipe and independent draw seeds differed. The style arm used 4,035 acquired-image amplitude transfers and 3,965 unchanged v9 draws among its 8,000 accepted presentations. Its acquired styles came only from 30 coronal and 18 sagittal even-hash TRAIN donors; the readout used distinct odd-hash TRAIN donors (28 coronal, 22 sagittal). Weak Allen affines supplied orientation readouts only, never gradients or source-plane labels. No DEV/CAL/FINAL data, public benchmark, prior external weights/features, or pseudolabels entered training.
+
+The independent read-only verifier checked all four output-file hashes, four checkpoint hashes, source and protocol hashes, 17,598 draw records, 4,000 training-batch records, all 24 readout blocks, style/evaluation donor parity, and the predeclared gate arithmetic. It passed. The exact frozen run is `I:/AnatomyTracker/runs/pose_style_274_train_inner_001`.
+
+| Batch within each arm | Arm | Fresh v9 top-16 ≤1.5 mm | Fresh first-choice site error | Old v8 top-16 | Coronal weak-normal family | Sagittal weak-normal family | Sagittal median angle to weak affine |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | both | 46/64 | 3.015 mm | 49/64 | 27/28 | 11/22 | 46.3° |
+| 1,000 | v9 control | 47/64 | 2.800 mm | 49/64 | 27/28 | 12/22 | 41.2° |
+| 1,000 | Fourier v10 | 42/64 | 2.709 mm | 51/64 | 28/28 | 9/22 | 46.3° |
+| 2,000 | v9 control | 48/64 | 2.525 mm | 53/64 | 28/28 | 13/22 | 47.9° |
+| 2,000 | Fourier v10 | 51/64 | 2.585 mm | 51/64 | 27/28 | 19/22 | 30.9° |
+
+At batch 2,000, Fourier style gained **six**, not the required eight, sagittal first-choice orientation-family cases over the equal-budget control. All six changed from wrong to correct among the same 22 readout donors, with no correct-to-wrong flips. Its coronal loss was one donor (within the two-donor bound), fresh synthetic top-16 gained three cases rather than losing, and old-panel top-16 remained 51/64. Thus **the predeclared gate fails only on the minimum sagittal gain**. This is a directional signal worth remembering, but the effect is from a small TRAIN-only readout against weak labels and separately randomized training streams. It does not justify scaling this exact Fourier recipe, promoting its checkpoint, or claiming real arbitrary-plane localization. The control's synthetic gain also shows that more v9 exposure remains useful on synthetic data, while its sagittal transfer remains poor.
+
+The image generator preview is `I:/AnatomyTracker/previews/v10_fourier_style_274_002/atlas_and_input.png`: eight eligible independent atlas planes beside their generated inputs, not one repeated section with different backgrounds. It is a plausibility illustration, not validation. The next intervention should be driven by anatomical and orientation information or a substantively different contrast-invariant training design, then evaluated on donor-distinct acquired sections and genuinely labeled physical obliques. Pose-only checkpoint 270 and these continuations still lack trained local mapping, joint pose/deformation feedback, acquisition-constraint integration, calibrated uncertainty, and GUI-ready packaging. No DeepSlice benchmark is warranted.
+
+Protocol: `docs/publication/FOURIER_STYLE_274_PROTOCOL_20261012.md`. Verifier: `training/verify_pose_style_274.py`. FDA's source-phase/amplitude idea is described by [Yang and Soatto (CVPR 2020)](https://openaccess.thecvf.com/content_CVPR_2020/html/Yang_FDA_Fourier_Domain_Adaptation_for_Semantic_Segmentation_CVPR_2020_paper.html); its original result is not a histology-registration guarantee.
