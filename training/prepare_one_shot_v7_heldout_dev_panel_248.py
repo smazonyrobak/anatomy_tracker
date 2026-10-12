@@ -1,4 +1,4 @@
-"""CPU-only, independent v7 synthetic DEV panel; run after the 247 pilot."""
+"""Independent v7 synthetic DEV panel; run after the 247 pilot."""
 import hashlib
 import json
 import os
@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path('I:/AnatomyTracker')
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 os.environ['TEMP'] = os.environ['TMP'] = str(ROOT / 'tmp')
 os.environ['OMP_NUM_THREADS'] = os.environ['MKL_NUM_THREADS'] = '4'
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
@@ -50,7 +49,7 @@ CONTEXT_SHA = 'c3bd31cc81af2788437cfd064f4cbf44d1d9f111919031c4c691552e796d94a8'
 OLD_SHA = '83fa8fc0ab19f15c8b64babdfe1e98251a972c6759dade08e5513e70c76a7c89'
 repository = Path(__file__).resolve().parents[1]
 torch.set_num_threads(4)
-assert not torch.cuda.is_available()
+assert torch.cuda.is_available()
 
 old_bytes = (OLD / 'completed.json').read_bytes()
 assert hashlib.sha256(old_bytes).hexdigest() == OLD_SHA
@@ -165,7 +164,7 @@ protocol = {
     'subjects': SUBJECTS, 'planes_per_subject': PLANES, 'side': SIDE,
     'selection': 'all independently drawn physical planes retained; one independent v7 appearance/artifact draw each; no paired repeats or eligibility retries',
     'sampling': 'unchanged v7 appearance-v3 and one-shot artifact-v3/v4/v6/v7 functions; 64 derived affine variants per new 3D base; train-hardcoded provenance split relabeled development',
-    'map': 'accepted FP64 inverse RK4 baked at 100um on CPU; 50um if fixed 4096-query sampled max exceeds 5um; same FP32 interpolation as TRAIN',
+    'map': 'accepted FP64 inverse RK4 baked at 100um on CUDA; 50um if fixed 4096-query sampled max exceeds 5um; same GPU FP32 interpolation as TRAIN',
     'map_point_batch_size': MAP_BATCH,
     'eligibility': 'source visible support and observed valid pixels each >= side^2/144; ineligible rows retained',
     'old_plan_completed_sha256': OLD_SHA,
@@ -202,7 +201,7 @@ support = np.flatnonzero(atlas_array[1] > 0)
 selected = np.random.default_rng(SUPPORT_SEED).choice(support, 4096, replace=False)
 support_ccf = (np.array(np.unravel_index(selected, atlas_array.shape[1:])).T.astype(np.float64) + .5) * 25.
 support_sha = hashlib.sha256(support_ccf.tobytes()).hexdigest()
-atlas = torch.from_numpy(atlas_array)
+atlas = torch.from_numpy(atlas_array).cuda()
 del atlas_array, support
 
 tensor_keys = ('accepted_coarse_coefficients_um', 'coarse_origin_um', 'coarse_spacing_um',
@@ -255,13 +254,13 @@ for ordinal, index in enumerate(protocol['subject_indices']):
     directory.mkdir()
     plan_files = bundle._write_raw_artifact(directory, 'subject_plan', plan)
     (directory / 'subject_plan_receipt.json').write_text(json.dumps(receipt, indent=2), encoding='utf8')
-    parameters = [torch.as_tensor(plan['state'][key], dtype=torch.float64) for key in tensor_keys]
+    parameters = [torch.as_tensor(plan['state'][key], device='cuda', dtype=torch.float64) for key in tensor_keys]
     steps = int(plan['resolved_config']['flow']['steps'])
     map_centre, map_scale = plan['state']['frozen_center_um'], plan['state']['global_scale']
-    forward_support = map_accepted_subject_points_torch_v6(torch.from_numpy(support_ccf), *parameters,
-        inverse=False, steps=steps, batch_size=MAP_BATCH).numpy()
-    mapped_centre = map_accepted_subject_points_torch_v6(torch.as_tensor(atlas_centre[None], dtype=torch.float64),
-        *parameters, inverse=False, steps=steps, batch_size=MAP_BATCH).numpy()[0]
+    forward_support = map_accepted_subject_points_torch_v6(torch.as_tensor(support_ccf, device='cuda'), *parameters,
+        inverse=False, steps=steps, batch_size=MAP_BATCH).cpu().numpy()
+    mapped_centre = map_accepted_subject_points_torch_v6(torch.as_tensor(atlas_centre[None], device='cuda', dtype=torch.float64),
+        *parameters, inverse=False, steps=steps, batch_size=MAP_BATCH).cpu().numpy()[0]
     support_bounds = []
     for level in ('coarse', 'fine'):
         coefficients = plan['state'][f'accepted_{level}_coefficients_um']
@@ -275,8 +274,8 @@ for ordinal, index in enumerate(protocol['subject_indices']):
     check_unscaled = np.concatenate((check_rng.uniform(lower, upper, (2048, 3)),
                                      check_rng.uniform(bounds[0], bounds[1], (2048, 3))))
     check_subject = map_centre + map_scale * (check_unscaled - map_centre)
-    check_exact = map_accepted_subject_points_torch_v6(torch.from_numpy(check_subject), *parameters,
-        inverse=True, steps=steps, batch_size=MAP_BATCH).numpy()
+    check_exact = map_accepted_subject_points_torch_v6(torch.as_tensor(check_subject, device='cuda'), *parameters,
+        inverse=True, steps=steps, batch_size=MAP_BATCH).cpu().numpy()
     checks = []
     for spacing in (100., 50.):
         axes = [np.arange(bounds[0, k], bounds[1, k] + spacing, spacing) for k in range(3)]
@@ -286,14 +285,14 @@ for ordinal, index in enumerate(protocol['subject_indices']):
         for start in range(0, shape[0], 4):
             points = np.stack(np.meshgrid(axes[0][start:start + 4], axes[1], axes[2], indexing='ij'), -1)
             subject_points = map_centre + map_scale * (points - map_centre)
-            exact = map_accepted_subject_points_torch_v6(torch.from_numpy(subject_points), *parameters,
-                inverse=True, steps=steps, batch_size=MAP_BATCH).numpy()
+            exact = map_accepted_subject_points_torch_v6(torch.as_tensor(subject_points, device='cuda'), *parameters,
+                inverse=True, steps=steps, batch_size=MAP_BATCH).cpu().numpy()
             baked[start:start + 4] = exact - points
-        displacement = torch.from_numpy(np.moveaxis(baked, -1, 0).copy())
+        displacement = torch.from_numpy(np.moveaxis(baked, -1, 0).copy()).cuda()
         grid = torch.as_tensor((check_unscaled - grid_lower) / (grid_upper - grid_lower) * 2 - 1,
-                               dtype=torch.float32).flip(-1).reshape(1, 1, 1, -1, 3)
+                               device='cuda', dtype=torch.float32).flip(-1).reshape(1, 1, 1, -1, 3)
         delta = F.grid_sample(displacement[None], grid, mode='bilinear', padding_mode='zeros',
-                              align_corners=True)[0, :, 0, 0].T.numpy()
+                              align_corners=True)[0, :, 0, 0].T.cpu().numpy()
         check_approximate = check_unscaled + delta
         error = np.linalg.norm(check_approximate - check_exact, axis=1)
         check = {'spacing_um': spacing, 'shape': shape, 'max_error_um': float(error.max()),
@@ -324,10 +323,10 @@ for ordinal, index in enumerate(protocol['subject_indices']):
         'sha256': bundle._file_sha256(directory / 'subject.json'), 'plan_receipt_sha256': plan['receipt_sha256'],
         'local_field_sha256': local_sha, 'inverse_map_sha256': subject_record['inverse_map_sha256']})
     base = {'lineage': lineage, 'displacement': displacement,
-        'lower': torch.as_tensor(grid_lower, dtype=torch.float32),
-        'upper': torch.as_tensor(grid_upper, dtype=torch.float32),
-        'map_centre': torch.as_tensor(map_centre, dtype=torch.float32),
-        'map_scale': torch.as_tensor(map_scale, dtype=torch.float32),
+        'lower': torch.as_tensor(grid_lower, device='cuda', dtype=torch.float32),
+        'upper': torch.as_tensor(grid_upper, device='cuda', dtype=torch.float32),
+        'map_centre': torch.as_tensor(map_centre, device='cuda', dtype=torch.float32),
+        'map_scale': torch.as_tensor(map_scale, device='cuda', dtype=torch.float32),
         'bounds': subject_support_bounds_um(plan), 'anchor': mapped_centre,
         'support_points': forward_support}
     variants = []
@@ -356,13 +355,13 @@ for ordinal, index in enumerate(protocol['subject_indices']):
         assert bool(sample['eligible'][0]) == (
             source['visible_support_mass'] >= SIDE * SIDE / 144 and valid_pixels >= SIDE * SIDE / 144)
         filename = f'subject_{index:08d}_section_{section:02d}.npz'
-        np.savez_compressed(OUT / filename, inputs=sample['inputs'][0].numpy(),
-            target_state=sample['state'][0].numpy(), target_centre_um=sample['centre'][0].numpy(),
-            valid_mask=sample['valid_mask'][0].numpy(), reflection=sample['reflection'][0].numpy(),
-            offsets_um=sample['offsets'][0].numpy(), weights=sample['weights'][0].numpy(),
-            visible_support=sample['visible'][0].numpy(),
+        np.savez_compressed(OUT / filename, inputs=sample['inputs'][0].cpu().numpy(),
+            target_state=sample['state'][0].cpu().numpy(), target_centre_um=sample['centre'][0].cpu().numpy(),
+            valid_mask=sample['valid_mask'][0].cpu().numpy(), reflection=sample['reflection'][0].cpu().numpy(),
+            offsets_um=sample['offsets'][0].cpu().numpy(), weights=sample['weights'][0].cpu().numpy(),
+            visible_support=sample['visible'][0].cpu().numpy(),
             source_visible_support_mass=np.float32(source['visible_support_mass']),
-            eligible=sample['eligible'][0].numpy())
+            eligible=sample['eligible'][0].cpu().numpy())
         record = {'file': filename, 'sha256': bundle._file_sha256(OUT / filename),
             'animal_id': lineage['animal_id'], 'subject_id': lineage['subject_id'],
             'specimen_id': lineage['specimen_id'], 'experiment_id': lineage['experiment_id'],
