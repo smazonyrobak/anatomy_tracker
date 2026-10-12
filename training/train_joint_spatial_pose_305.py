@@ -27,7 +27,7 @@ from training.global_atlas_contrast_090 import rigid_points_090
 
 
 SEED, SIDE, BATCH, UPDATES = 20261012305, 192, 4, 26000
-READOUTS = (2000, 8000, 16000, 26000)
+READOUTS = (0, 2000, 8000, 16000, 26000)
 SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/JOINT_SPATIAL_FEEDBACK_305_PROTOCOL_20261012.md'
 PARENT = ROOT / 'runs/joint_spatial_feedback_305_pose_001'
@@ -51,6 +51,7 @@ parent_hashes = {
     'config.json': '20bf2217aee22d07a8aa4e9a4b64df96cac815592be0df71b7ade1418de113be',
     'inner_panel.pt': '53ca593e97fdcd02c5c8db66172f45662fbed2c98017e16ac7dbebc89194611f',
     'panel_draws.jsonl': '43ff2df34b2f3804f48cba32171c9277dbc9b36720bf13a23871e89394f3dcb5',
+    'pose_step_00000.pt': '01c09ed4e0d12c9a133df181fdcf1c0760ea9f0661c60b2049bbe7c65e59f547',
     'pose_step_02000.pt': '39e2468eeed4b0bdd8ebf41c3ed852a1afd30c548454e8456cf8686471b43c61',
     'training.jsonl': '00894c1fefe4bb4d040a584f6bba8da6ba7c0e158702bc00136e7a407ebb5b1b',
     'training_draws.jsonl': '5b3abc4b983a07b7e354f19f14284bf5d9dcf0a528330e78695fcfdedd6bd142',
@@ -62,7 +63,7 @@ assert parent_config['source_sha256']['arbitrary_plane_one_shot_model.py'] == sh
 assert parent_config['protocol_sha256'] == sha(PROTOCOL)
 assert parent_config['source_sha256']['arbitrary_plane_postartifact_gauge_v1.py'] == \
     'ea591afab155df059ba212b668871e7005d584268c2cadf3b01aa71a873aba32'
-checkpoint = torch.load(PARENT / 'pose_step_02000.pt', map_location='cuda', weights_only=False)
+checkpoint = torch.load(PARENT / 'pose_step_02000.pt', map_location='cpu', weights_only=False)
 assert checkpoint['step'] == 2000 and json.loads(json.dumps(checkpoint['config'])) == parent_config
 parent_training = next(json.loads(line) for line in (PARENT / 'training.jsonl').open(
     encoding='utf8') if json.loads(line)['step'] == 2000)
@@ -97,7 +98,8 @@ config = {'candidate': 305, 'stage': 'scratch_pose', 'seed': SEED, 'side': SIDE,
 RUN.mkdir(parents=True, exist_ok=False)
 (RUN / 'config.json').write_text(json.dumps(config, indent=2), encoding='utf8')
 
-for name in ('panel_draws.jsonl', 'inner_panel.pt', 'pose_step_02000.pt'):
+for name in ('panel_draws.jsonl', 'inner_panel.pt', 'pose_step_00000.pt',
+             'pose_step_02000.pt'):
     shutil.copyfile(PARENT / name, RUN / name)
 panel = torch.load(RUN / 'inner_panel.pt', map_location='cpu', weights_only=False)
 assert len(panel) == 64 and len({row['physical_section_id'] for row in panel}) == 64
@@ -121,6 +123,7 @@ optimizer.load_state_dict(checkpoint['optimizer'])
 torch.set_rng_state(checkpoint['torch_rng'])
 torch.cuda.set_rng_state_all(checkpoint['cuda_rng'])
 draw_rng.bit_generator.state = checkpoint['draw_rng_state']
+del checkpoint
 corners = torch.tensor([[0., 0.], [191., 0.], [0., 191.], [191., 191.],
                         [95.5, 95.5]], device='cuda') / SIDE
 reflection_options = torch.arange(2, device='cuda')[None, None]
