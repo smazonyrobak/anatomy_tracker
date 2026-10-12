@@ -28,7 +28,7 @@ class OneShotJointSliceModel(nn.Module):
                  vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
                  dense_coordinate=False, normal_anchor_count=0, anchor_specific_features=False,
                  dense_coordinate_pyramid=False, anchor_residual_arm=None,
-                 shared_anchor_pose=False, warp_control_side=None):
+                 shared_anchor_pose=False, warp_control_side=None, spatial_feedback=False):
         super().__init__()
         self.base_modes, self.normal_anchor_count = modes, normal_anchor_count
         self.anchor_specific_features = anchor_specific_features
@@ -37,6 +37,9 @@ class OneShotJointSliceModel(nn.Module):
         self.anchor_residual_arm = anchor_residual_arm
         self.modes, self.uncertainty_rank = modes + normal_anchor_count, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
+        self.spatial_feedback = spatial_feedback
+        if spatial_feedback:
+            assert atlas_conditioning and vector_refinement
         self.warp_control_side = warp_control_side
         widths = (64, 128, 256, 320)
         self.encoder = nn.ModuleList()
@@ -139,7 +142,8 @@ class OneShotJointSliceModel(nn.Module):
                 ResidualBlock(64),
             )
             self.pair = nn.Sequential(
-                nn.Conv2d(64 * 3 + 25 + 2, 64, 3, padding=1),
+                nn.Conv2d(64 * 3 + 25 + 2 + (6 if spatial_feedback else 0),
+                          64, 3, padding=1),
                 nn.GroupNorm(8, 64), nn.GELU(), ResidualBlock(64),
                 nn.Conv2d(64, 64, 1),
             )
@@ -171,12 +175,17 @@ class OneShotJointSliceModel(nn.Module):
                 )
             if vector_refinement:
                 self.pose_refiner = nn.Sequential(
-                    nn.Conv2d(229, 64, 5, stride=2, padding=2), nn.GroupNorm(8, 64), nn.GELU(),
+                    nn.Conv2d(234 if spatial_feedback else 229, 64, 5, stride=2, padding=2),
+                    nn.GroupNorm(8, 64), nn.GELU(),
                     ResidualBlock(64),
                     nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.GroupNorm(8, 128), nn.GELU(),
                     ResidualBlock(128), nn.AdaptiveAvgPool2d(4), nn.Flatten(),
                     nn.Linear(128 * 4 * 4, 10),
                 )
+        if spatial_feedback:
+            self.source_reliability_head = nn.Sequential(
+                nn.Conv2d(64, 32, 3, padding=1), nn.GELU(), nn.Conv2d(32, 1, 1),
+            )
         latent_size = 9 + 3 * 8 * 8
         self.uncertainty = nn.Linear(widths[-1] + 13, latent_size * (1 + uncertainty_rank))
         self.register_buffer('center_origin', torch.tensor([6600., 4000., 5700.]))
@@ -193,6 +202,9 @@ class OneShotJointSliceModel(nn.Module):
         if hasattr(self, 'pose_refiner'):
             nn.init.zeros_(self.pose_refiner[-1].weight)
             nn.init.zeros_(self.pose_refiner[-1].bias)
+        if spatial_feedback:
+            nn.init.zeros_(self.source_reliability_head[-1].weight)
+            nn.init.zeros_(self.source_reliability_head[-1].bias)
         if hasattr(self, 'candidate_matcher'):
             nn.init.zeros_(self.candidate_matcher[-1].weight)
             nn.init.zeros_(self.candidate_matcher[-1].bias)
@@ -303,6 +315,9 @@ class OneShotJointSliceModel(nn.Module):
             'global_feature': x.mean((-2, -1)),
             'calibrated': False,
         }
+        if self.spatial_feedback:
+            result['source_image'] = inputs[:, :1]
+            result['reliability_logit'] = self.source_reliability_head(shared_feature)
         if hasattr(self, 'dense_coordinate_pyramid_head'):
             height, width = shared_feature.shape[-2:]
             yy, xx = torch.meshgrid(
@@ -488,7 +503,19 @@ class OneShotJointSliceModel(nn.Module):
             xy = torch.stack((xx, yy))[None].expand(len(state), -1, -1, -1)
             evidence = torch.cat((feature, target, (feature - target).abs(),
                                   local_correlation(feature, target, 2), xy), 1)
-            feature = feature + self.pair(evidence)
+            if self.spatial_feedback:
+                source = F.interpolate(prediction['source_image'], (fh, fw), mode='area')
+                source = source[:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
+                source_q = F.interpolate(prediction['reliability_logit'], (fh, fw),
+                                         mode='bilinear', align_corners=False).sigmoid().detach()
+                source_q = source_q[:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
+                atlas_intensity = atlas_pair[:, :1]
+                residual = source - atlas_intensity
+                pair_input = torch.cat((evidence, source, atlas_intensity, support,
+                                        residual, residual.abs(), source_q), 1)
+            else:
+                pair_input = evidence
+            feature = feature + self.pair(pair_input)
         warp_input = (F.adaptive_avg_pool2d(feature, self.warp_control_side)
                       if self.warp_control_side is not None else feature)
         raw = F.interpolate(self.warp(warp_input), image_shape, mode='bilinear', align_corners=False)
@@ -498,6 +525,8 @@ class OneShotJointSliceModel(nn.Module):
             fit_energy = F.softplus(self.fit_quality_head(match).squeeze(-1))
         requested_local = 1000 * raw[:, :3].tanh()
         local, removed_affine = project_surface_affine_out(requested_local)
+        if self.spatial_feedback:
+            prelimit_local = local
         center, frame, basis = full_frame_state_to_components(state)
         if max_derivative is not None:
             canonical = torch.where(reflected[:, None, None, None], local.flip(-1), local)
@@ -545,6 +574,9 @@ class OneShotJointSliceModel(nn.Module):
             'joint_factor': covariance[..., 1:].reshape(batch, count, -1, self.uncertainty_rank),
             'calibrated': False,
         }
+        if self.spatial_feedback:
+            output['prelimit_local_displacement_um'] = prelimit_local.reshape(
+                batch, count, 3, height, width)
         if hasattr(self, 'fit_quality_head'):
             output['fit_energy'] = fit_energy.reshape(batch, count)
         if max_derivative is not None:
@@ -562,13 +594,101 @@ class OneShotJointSliceModel(nn.Module):
                        (0, 0, 0, 1))
             cost = torch.cat((local_small.square().sum(1, keepdim=True).sqrt(),
                               (dx + dy + 1e-8).sqrt()), 1)
-            output['refinement_feature'] = torch.cat((evidence, raw_small, local_small,
-                                                      support, cost), 1).reshape(
-                batch, count, 229, *evidence.shape[-2:])
+            refinement = torch.cat((evidence, raw_small, local_small, support, cost), 1)
+            if self.spatial_feedback:
+                source = F.interpolate(prediction['source_image'], evidence.shape[-2:], mode='area')
+                source = source[:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
+                source_q = F.interpolate(prediction['reliability_logit'],
+                                         evidence.shape[-2:], mode='bilinear',
+                                         align_corners=False).sigmoid().detach()
+                source_q = source_q[:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
+                target_intensity = atlas_pair[:, :1]
+                refinement = torch.cat((refinement, source, target_intensity,
+                                        source - target_intensity,
+                                        (source - target_intensity).abs(), source_q), 1)
+            output['refinement_feature'] = refinement.reshape(
+                batch, count, refinement.shape[1], *evidence.shape[-2:])
             output['atlas_pair'] = atlas_pair.reshape(batch, count, 2, *atlas_pair.shape[-2:])
         return output
 
-    def score_fitted_candidates(self, inputs, prediction, mapped, atlas, weights):
+    def source_reliability_loss(self, prediction, valid_mask):
+        logits = prediction['reliability_logit']
+        target = F.interpolate(valid_mask[:, None].float(), logits.shape[-2:], mode='area')
+        positive = (F.softplus(-logits) * target).sum((1, 2, 3)) / target.sum((1, 2, 3)).clamp_min(1)
+        negative = (F.softplus(logits) * (1 - target)).sum((1, 2, 3)) / (
+            1 - target).sum((1, 2, 3)).clamp_min(1)
+        return .5 * (positive + negative).mean()
+
+    def score_spatial_candidates(self, inputs, prediction, mapped, atlas, weights,
+                                 evidence_arm='full', fit_weight=4., exit_weight=2., warp_weight=.1):
+        assert self.spatial_feedback
+        assert evidence_arm in ('full', 'support_only', 'shuffled')
+        batch, count, _, side = mapped['coordinates'].shape[:4]
+        coordinates = mapped['coordinates'].flatten(0, 1)
+        masses = torch.as_tensor(weights, device=inputs.device, dtype=inputs.dtype)
+        if masses.ndim == 1:
+            masses = masses[None].expand(batch, -1)
+        masses = masses[:, None].expand(-1, count, -1).flatten(0, 1)
+        rendered = render_finite_thickness_coordinate_grid(
+            atlas, coordinates, (0., 0., 0.), (25., 25., 25.), masses)
+        support = rendered[:, 1:2].clamp(0, 1)
+        target = rendered[:, :1] / support.clamp_min(1e-4)
+        if evidence_arm == 'shuffled':
+            target = torch.roll(target, (side // 3, side // 5), dims=(-2, -1))
+        source = F.interpolate(inputs[:, :1], (side, side), mode='area')
+        source = source[:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
+        source_q = F.interpolate(prediction['reliability_logit'], (side, side),
+                                 mode='bilinear', align_corners=False).sigmoid().detach()
+        source_q = source_q[:, None].expand(-1, count, -1, -1, -1).flatten(0, 1)
+        q_total = source_q.sum((1, 2, 3)).clamp_min(1)
+        visible = source_q * support
+        visible_total = visible.sum((1, 2, 3)).clamp_min(1e-5)
+        source_mean = (visible * source).sum((1, 2, 3)) / visible_total
+        target_mean = (visible * target).sum((1, 2, 3)) / visible_total
+        centered_source = source - source_mean[:, None, None, None]
+        centered_target = target - target_mean[:, None, None, None]
+        cross = (visible * centered_source * centered_target).sum((1, 2, 3)) / q_total
+        source_var = (visible * centered_source.square()).sum((1, 2, 3)) / q_total
+        target_var = (visible * centered_target.square()).sum((1, 2, 3)) / q_total
+        correlation = (cross.square() + 1e-8).sqrt() / (
+            (source_var * target_var).clamp_min(0).sqrt() + 1e-4)
+        correlation = correlation.clamp_max(1)
+        aligned_target = target * torch.where(cross.detach() >= 0, 1., -1.)[:, None, None, None]
+        window_mass = F.avg_pool2d(visible, 7, 1, 3).clamp_min(1e-5)
+        source_local = F.avg_pool2d(visible * source, 7, 1, 3) / window_mass
+        target_local = F.avg_pool2d(visible * aligned_target, 7, 1, 3) / window_mass
+        covariance = (F.avg_pool2d(visible * source * aligned_target, 7, 1, 3) / window_mass
+                      - source_local * target_local)
+        source_variance = (F.avg_pool2d(visible * source.square(), 7, 1, 3) / window_mass
+                           - source_local.square()).clamp_min(0)
+        target_variance = (F.avg_pool2d(visible * aligned_target.square(), 7, 1, 3)
+                           / window_mass - target_local.square()).clamp_min(0)
+        local_ncc = (covariance / (source_variance * target_variance + 1e-6).sqrt()).clamp(-1, 1)
+        coverage = visible.sum((1, 2, 3)) / q_total
+        spatial_fit = (visible * local_ncc).sum((1, 2, 3)) / q_total
+        fit_evidence = .3 * correlation * coverage + .7 * spatial_fit
+        exit_fraction = 1 - coverage
+        local = mapped['local_displacement_um'].flatten(0, 1) / 1000
+        magnitude = local.square().sum(1, keepdim=True)
+        dx = F.pad((local[..., 1:] - local[..., :-1]).square().sum(1, keepdim=True),
+                   (0, 1, 0, 0))
+        dy = F.pad((local[..., 1:, :] - local[..., :-1, :]).square().sum(1, keepdim=True),
+                   (0, 0, 0, 1))
+        warp_cost = (source_q * (magnitude + .5 * (dx + dy))).sum((1, 2, 3)) / q_total
+        row = torch.arange(batch, device=inputs.device)[:, None]
+        mode = mapped['mode_index']
+        reflection_log = torch.where(mapped['reflection'].bool(),
+                                     F.logsigmoid(prediction['reflection_logit'][row, mode]),
+                                     F.logsigmoid(-prediction['reflection_logit'][row, mode]))
+        prior = prediction['log_mass'][row, mode] + reflection_log
+        fit = 0 if evidence_arm == 'support_only' else fit_weight * fit_evidence.reshape(batch, count)
+        return prior + fit - exit_weight * exit_fraction.reshape(batch, count) - warp_weight * warp_cost.reshape(batch, count)
+
+    def score_fitted_candidates(self, inputs, prediction, mapped, atlas, weights,
+                                evidence_arm='full'):
+        if self.spatial_feedback:
+            return self.score_spatial_candidates(inputs, prediction, mapped, atlas, weights,
+                                                 evidence_arm=evidence_arm)
         batch, count, samples, side = mapped['coordinates'].shape[:4]
         coordinates = mapped['coordinates'].flatten(0, 1)
         masses = torch.as_tensor(weights, device=inputs.device, dtype=inputs.dtype)
