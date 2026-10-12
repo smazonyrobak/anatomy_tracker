@@ -110,6 +110,10 @@ with torch.inference_mode():
         true_axis = full_frame_state_to_components(true_state)[1][0, :, 2]
         guess_axis = frame[0, :, 2]
         axis_error = float(torch.rad2deg(torch.acos((true_axis * guess_axis).sum().abs().clamp_max(1))))
+        true_centre, _, true_basis = full_frame_state_to_components(true_state)
+        centre_error_mm = float((centre[0] - true_centre[0]).norm() / 1000)
+        true_fov_mm = (torch.linalg.svdvals(true_basis[0]) / 1000).cpu().tolist()
+        guess_fov_mm = (torch.linalg.svdvals(basis[0]) / 1000).cpu().tolist()
         reference = reference_rows[row['provenance']['physical_section_id']]
         assert np.isclose(axis_error, reference['fitted_selected_normal_axis_error_deg'], atol=1e-4)
         assert np.isclose(rigid_error_mm * 1000, reference['fitted_selected_rigid_um'], atol=.1)
@@ -125,7 +129,9 @@ with torch.inference_mode():
         result.append({'physical_section_id': row['provenance']['physical_section_id'],
                        'file_sha256': row['sha256'], 'mode': row['appearance_mode'],
                        'required_artifact': event, 'nearest_principal_angle_deg': cut_angle,
-                       'normal_axis_error_deg': axis_error, 'rigid_error_mm': rigid_error_mm})
+                       'normal_axis_error_deg': axis_error, 'rigid_error_mm': rigid_error_mm,
+                       'centre_error_mm': centre_error_mm, 'true_fov_mm': true_fov_mm,
+                       'guessed_fov_mm': guess_fov_mm})
 
 for ax, title in zip(axes[0], ('Atlas at true plane', 'Actual generated input',
                                'Atlas at fitted model 247 plane')):
