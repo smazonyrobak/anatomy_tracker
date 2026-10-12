@@ -27,7 +27,7 @@ from training.train_image_map_282 import SIDE, digest, mapped_sites, tensor_dige
 SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/SPATIAL_PAIR_COST_290_PROTOCOL_20261012.md'
 PARENT = ROOT / 'runs/spatial_pair_map_289_002'
-RUN = ROOT / 'reports/spatial_pair_cost_290_001'
+RUN = ROOT / 'reports/spatial_pair_cost_290_002'
 SOURCE_NAMES = ('audit_spatial_pair_cost_290.py', 'arbitrary_plane_spatial_pair_map_v1.py',
     'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_geometry.py',
     'arbitrary_plane_streaming_synthetic_v7_64.py', 'train_image_map_282.py',
@@ -126,7 +126,7 @@ with (RUN / 'sites.jsonl').open('w', encoding='utf8') as output, torch.no_grad()
             delta = target - rigid_points
             local = delta @ frame[0]
             plane_offset = torch.linalg.solve(basis[0], local[:, :2].T).T * side
-            true_xy = torch.stack((plane_offset[:, 0] * torch.where(reflection[0], -1., 1.),
+            true_xy = torch.stack((plane_offset[:, 0] * torch.where(reflection[0].bool(), -1., 1.),
                                    plane_offset[:, 1]), -1)
             rounded = true_xy.round().long().clamp(-8, 8)
             true_index = (rounded[:, 1] + 8) * 17 + rounded[:, 0] + 8
