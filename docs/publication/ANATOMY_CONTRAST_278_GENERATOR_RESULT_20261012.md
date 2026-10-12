@@ -1,0 +1,20 @@
+# 278: independently redrawn anatomy contrast passes a limited generator QC, not a realism test
+
+The committed v11 generator nearest-samples the pinned Allen annotation on each newly drawn section's central CCF raster, draws fresh per-region contrast codes and correlated fine texture, and then uses the existing tissue damage, exposure, optional brush and background stream. It does not deliberately reuse a physical plane with changed appearance. The annotation is atlas anatomy, not a trained input, and central-label lookup is only an approximation to a finite-thickness section.
+
+The actual-generator [six-plane grid](I:/AnatomyTracker/previews/anatomy_contrast_278_actual_generator_001/atlas_source_input.png) places the fitted finite-thickness atlas image, styled source before the later damage stages, and final model-input image channel side by side. Six distinct planes were selected by obliquity alone from 16 eligible independent draws: about 6°, 19°, 36°, 41°, 43° and 49° from the nearest cardinal normal. We saw no pervasive annotation checkerboard or obvious tissue copied into the exterior. Several inputs are still too bright, dark or smooth to treat as a validated physical-slide distribution. The conspicuous square black void in the ~41° source is strongly explained by the older imperfect-brush path: a radius-four erosion of its support mask can enlarge a small hole to an axis-aligned 9×9 void. Its metadata reports no base damage and only a later tile seam; v11 does not alter masked pixels. This is a code-and-metadata attribution, not a saved-layer proof, and the legacy brush artifact remains a generator limitation.
+
+The separate 48-section census required 53 attempts. All 48 eligible physical section IDs, seeds and subject IDs were distinct and none reused a preview section; 12 were >40° oblique. Modes were 17 exact black, 12 exact-black brush, 10 gray and nine near-black. The 29 black/brush cases had zero recorded nonzero exterior pixels; that test does not assert zero exteriors for gray or near-black. All 48 had a measurable threshold-derived tissue proxy. The mean fraction of source-visible tissue covered by a sampled label was 0.982.
+
+| Interior metric | 278 exact-black, n=17 | 119 acquired TRAIN, n=505 measurable | 119 earlier synthetic black/raw |
+| --- | ---: | ---: | ---: |
+| 1-pixel high-pass RMS / contrast | 0.0958 | 0.0935 | 0.0751 |
+| 3-pixel high-pass RMS / contrast | 0.1966 | 0.2024 | 0.1866 |
+| 10th–90th percentile contrast | 0.6707 | 0.5580 | 0.5241 |
+| Interior fraction below 0.1 | 0.1876 | 0.0823 | 0.0515 |
+| Interior fraction above 0.9 | 0.0685 | 0.0143 | 0.0759 |
+| Proxy tissue area fraction | 0.2823 | 0.2166 | 0.2634 |
+
+The high-pass ratios are descriptively closer, but v11's photometric tails and area still differ; 17 sections have different orientation and coverage composition from real TRAIN images. Pooling gray backgrounds with exact black would be misleading: the intensity-threshold tissue proxy marks about 0.921 of a gray-background image as tissue on average. Neither these proxies nor six viewed cases establish biological realism, physical arbitrary-plane accuracy, or better pose predictions. Independent read-only audit matched the frozen preview/census/reference hashes and raw identities. The result warrants only the separately preregistered bounded 279 v9-versus-v11 pilot, not large-scale training or checkpoint promotion.
+
+Frozen preview PNG SHA-256 `ed41dd81999b171fdc56754b7f4bc557aeff56af888ccfe5e1fdc3f387566702`; selection SHA-256 `f5b331d075fa6e4548508996ca987dae030ffb978765a2e07579b1b3a52df0b1`. Frozen census rows SHA-256 `cc925bbb6c993c72176c300c35ba3b195b27065ad1c6abdfdbd5b77840252f7a`; summary SHA-256 `59b1801f750cbf3cc092c2a65ceaf79b0e86b68f0a60004e818c5db131123156`; v11 source SHA-256 `6dec45d4875aa0f7bcd2fa2fbca1ac87f54b5b2f59e4d4e5645ddbb34fe2c446`. Raw outputs: `I:/AnatomyTracker/previews/anatomy_contrast_278_actual_generator_001` and `I:/AnatomyTracker/runs/anatomy_contrast_278_texture_census_001`.
