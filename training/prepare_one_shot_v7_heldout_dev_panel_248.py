@@ -30,6 +30,7 @@ OLD = ROOT / 'data/joint_v6_coherent_subject_plans_002'
 TRAIN_MAPS = ROOT / 'data/joint_v7_independent_subject_maps_001'
 TRAIN_GEOMETRY = ROOT / 'data/joint_v7_training_data_001'
 FINGERPRINTS = ROOT / 'data/one_shot_v7_prior_fingerprints_248_001'
+CACHE = ROOT / 'data/allen_v6_float32_cache_248_001'
 PLANS = ROOT / 'data/one_shot_v7_heldout_dev_plans_248_001'
 PRIOR_DEV = tuple(ROOT / 'data' / name for name in (
     'one_shot_fresh_synthetic_dev_plans_001',
@@ -105,6 +106,17 @@ seen_local = {row['local_field_sha256'] for row in fingerprints}
 assert len(seen_ids) == 12 + 8 * len(PRIOR_DEV) + 56
 assert len(seen_realizations) == len(seen_receipts) == len(seen_local) == len(seen_ids)
 
+cache_done = json.loads((CACHE / 'completed.json').read_text())
+cache_protocol = json.loads((CACHE / 'protocol.json').read_text())
+assert bundle._file_sha256(CACHE / 'protocol.json') == cache_done['protocol_sha256']
+assert bundle._file_sha256(CACHE / 'atlas_float32.npy') == cache_done['atlas_file_sha256']
+assert cache_done['atlas_array_receipt'] == cache_protocol['atlas_array_receipt'] == allen.ATLAS_FLOAT32_RECEIPT_V6
+assert cache_protocol['template_raw_sha256'] == allen.TEMPLATE_RAW_SHA256_V6
+assert cache_protocol['annotation_raw_sha256'] == allen.ANNOTATION_RAW_SHA256_V6
+assert bundle._file_sha256(repository / 'docs/publication/ALLEN_V6_FLOAT32_CACHE_248_PROTOCOL_20261012.md') == cache_protocol['protocol_document_sha256']
+assert all(bundle._file_sha256(repository / 'training' / name) == digest
+           for name, digest in cache_protocol['source_sha256'].items())
+
 plans_completed_path = PLANS / 'completed.json'
 assert plans_completed_path.is_file(), 'independent 248 plans must be frozen first'
 plans_completed = json.loads(plans_completed_path.read_text(encoding='utf8'))
@@ -159,6 +171,7 @@ protocol = {
     'old_plan_completed_sha256': OLD_SHA,
     'train_map_completed_sha256': bundle._file_sha256(train_maps_path),
     'prior_fingerprints_completed_sha256': bundle._file_sha256(FINGERPRINTS / 'completed.json'),
+    'allen_float32_cache_completed_sha256': bundle._file_sha256(CACHE / 'completed.json'),
     'prior_dev_plan_completed_sha256': {root.name: bundle._file_sha256(root / 'completed.json')
                                         for root in PRIOR_DEV},
     'parent_context_sha256': hashlib.sha256(context_bytes).hexdigest(),
@@ -183,8 +196,8 @@ if protocol_path.exists():
 else:
     assert not any(OUT.iterdir())
     protocol_path.write_text(protocol_text, encoding='utf8')
-atlas_array, annotation = allen._decode_and_preprocess_allen_v6()
-del annotation
+atlas_array = np.load(CACHE / 'atlas_float32.npy', allow_pickle=False)
+assert atlas_array.shape == tuple(allen.ATLAS_FLOAT32_RECEIPT_V6['shape']) and atlas_array.dtype == np.float32
 support = np.flatnonzero(atlas_array[1] > 0)
 selected = np.random.default_rng(SUPPORT_SEED).choice(support, 4096, replace=False)
 support_ccf = (np.array(np.unravel_index(selected, atlas_array.shape[1:])).T.astype(np.float64) + .5) * 25.
@@ -394,6 +407,7 @@ assert all(bundle._file_sha256(repository / 'training' / name) == digest
 assert bundle._file_sha256(PROTOCOL_DOC) == protocol['protocol_document_sha256']
 assert bundle._file_sha256(train_maps_path) == protocol['train_map_completed_sha256']
 assert bundle._file_sha256(FINGERPRINTS / 'completed.json') == protocol['prior_fingerprints_completed_sha256']
+assert bundle._file_sha256(CACHE / 'completed.json') == protocol['allen_float32_cache_completed_sha256']
 assert bundle._file_sha256(geometry_path) == protocol['train_geometry_sha256']
 (OUT / 'completed.json').write_text(json.dumps(completed, indent=2), encoding='utf8')
 print(json.dumps({'event': 'panel_frozen', 'subjects': SUBJECTS,

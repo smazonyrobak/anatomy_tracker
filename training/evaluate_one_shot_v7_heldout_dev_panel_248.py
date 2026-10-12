@@ -20,6 +20,7 @@ from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_c
 from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 
 PANEL = ROOT / 'data/one_shot_v7_heldout_dev_panel_248_004'
+CACHE = ROOT / 'data/allen_v6_float32_cache_248_001'
 TRAIN = ROOT / 'runs/anchor_only_blind_feedback_247_train_001'
 READOUT_247 = ROOT / 'runs/anchor_only_blind_feedback_247_readout_002'
 OUT = ROOT / 'runs/one_shot_v7_heldout_dev_panel_248_readout_001'
@@ -50,6 +51,10 @@ assert sha(PANEL / 'protocol.json') == panel_completed['protocol_sha256']
 assert sha(PANEL / 'records.jsonl') == panel_completed['records_sha256']
 panel_protocol = json.loads((PANEL / 'protocol.json').read_text(encoding='utf8'))
 assert panel_protocol['side'] == SIDE and panel_protocol['split'] == 'development'
+cache_done = json.loads((CACHE / 'completed.json').read_text(encoding='utf8'))
+assert panel_protocol['allen_float32_cache_completed_sha256'] == sha(CACHE / 'completed.json')
+assert cache_done['atlas_array_receipt'] == allen.ATLAS_FLOAT32_RECEIPT_V6
+assert sha(CACHE / 'atlas_float32.npy') == cache_done['atlas_file_sha256']
 records = [json.loads(line) for line in (PANEL / 'records.jsonl').open(encoding='utf8')]
 assert len(records) == panel_completed['physical_sections'] == 256
 assert len({row['provenance']['physical_section_id'] for row in records}) == 256
@@ -77,7 +82,10 @@ assert training_config['protocol_sha256'] == sha(
     Path('docs/publication/ANCHOR_ONLY_BLIND_FEEDBACK_247_PROTOCOL_20261012.md'))
 assert torch.cuda.is_available()
 
-atlas = torch.from_numpy(allen._decode_and_preprocess_allen_v6()[0]).cuda()
+atlas_array = np.load(CACHE / 'atlas_float32.npy', allow_pickle=False)
+assert atlas_array.shape == tuple(allen.ATLAS_FLOAT32_RECEIPT_V6['shape']) and atlas_array.dtype == np.float32
+atlas = torch.from_numpy(atlas_array).cuda()
+del atlas_array
 atlas_null = torch.stack((torch.roll(atlas[0], 80, 0), atlas[1]))
 model = OneShotJointSliceModel(modes=0, normal_anchor_count=64,
                               shared_anchor_pose=True, atlas_conditioning=True,
@@ -253,6 +261,8 @@ summary = {
     'readout_protocol_sha256': sha(DOC),
     'atlas_template_sha256': allen.TEMPLATE_RAW_SHA256_V6,
     'atlas_normalized_receipt': allen.ATLAS_FLOAT32_RECEIPT_V6,
+    'allen_float32_cache_completed_sha256': sha(CACHE / 'completed.json'),
+    'allen_float32_cache_file_sha256': sha(CACHE / 'atlas_float32.npy'),
     'source_sha256': {name: sha(Path(__file__).parent / name) for name in (
         Path(__file__).name, 'arbitrary_plane_one_shot_model.py',
         'arbitrary_plane_full_frame_primitives.py', 'arbitrary_plane_allen_atlas_binding_v6.py')},
