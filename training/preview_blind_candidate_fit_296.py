@@ -24,7 +24,8 @@ rows = [json.loads(line) for line in (RUN / 'sections.jsonl').open(encoding='utf
 chosen = []
 for event in (None, 'fragment', 'fold', 'bubble', 'tile_seam'):
     chosen.append(next(i for i, item in enumerate(panel)
-        if i not in chosen and (not any(item['event_flags'].values()) if event is None
+        if i not in chosen and ((not any(item['event_flags'].values()) and
+            item['provenance']['one_shot_slide_artifacts_v9']['exterior_style'] == 'gray') if event is None
                             else item['event_flags'][event])))
 
 context = load_streaming_synthetic_v7_64('cuda')
@@ -45,7 +46,7 @@ for row_index, index in enumerate(chosen):
     titles = ['Generated slide (model input)', 'True atlas plane',
               f"Model first plane ({result['selectors']['prior_first']['rigid_site_error_mm']:.2f} mm)",
               f"Fit-score plane ({result['selectors']['fitted_image']['rigid_site_error_mm']:.2f} mm)"]
-    event = 'no flagged event' if row_index == 0 else (None, 'fragment', 'fold', 'bubble', 'tile seam')[row_index]
+    event = 'gray background; no event' if row_index == 0 else (None, 'fragment', 'fold', 'bubble', 'tile seam')[row_index]
     for column, (image, title) in enumerate(zip(images, titles)):
         ax = axes[row_index, column]
         ax.imshow(image, cmap='gray', vmin=0, vmax=1, interpolation='nearest')
