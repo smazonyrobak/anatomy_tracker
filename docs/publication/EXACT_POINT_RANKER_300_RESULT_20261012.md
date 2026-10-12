@@ -1,0 +1,17 @@
+# Candidate 300 — exact synthetic point supervision did not expose an atlas-intensity advantage
+
+The source and [predeclared protocol](EXACT_POINT_RANKER_300_PROTOCOL_20261012.md) were frozen before training. The first launch (`exact_point_ranker_300_train_inner_001`) stopped before its first training presentation because the physical-site error used a tensor norm's positional `p` argument instead of `dim=-1`. It is an incomplete technical failure, not a scientific result. The one-line correction and new output directory were committed before the successful `_002` run; the incomplete I: directory was retained, not silently overwritten. The `_002` runner exited normally. An independent verifier checked exact source/protocol/parent/299-panel/output/checkpoint hashes, all 1,200 distinct TRAIN examples, animal-base separation, all 64 final 16-way scores reloaded from the saved models, and the raw gate. `_002/completed.json` SHA-256: `55ccf5acc12e5b6cb67efb70a1d8afeb5022d5694de179289cbf07beb9ffc40c`.
+
+| Reused adaptive 299 TRAIN-inner panel, 64 sections | Mean rigid-site error | Matched near/far evidence wins, 49 pairs |
+|---|---:|---:|
+| Frozen 275 prior first | 2.6306 mm | — |
+| Frozen 299 full atlas+support | 2.6320 mm | 29/49 |
+| 300, exact-point-supervised full atlas+support | 2.6196 mm | 29/49 (59.2%) |
+| 300, same supervision but support only | 2.6215 mm | 30/49 (61.2%) |
+| Truth oracle among frozen top 16, unavailable at inference | 1.2113 mm | — |
+
+Only two of seven predeclared clauses passed (matched-pair count and six-of-eight base means non-worse). The full arm improved the frozen prior by merely 0.0110 mm and the matched support-only arm by 0.0019 mm, far below the 0.20/0.15 mm gates. Full selection changed 10/64 first choices: six better, four worse. The arms disagreed about near/far preference in only 1/49 pairs, and their mean absolute candidate-evidence difference was 0.022. Across training, the exact-point loss declined in *both* arms (first→last 200 presentations: full 1.826→1.381, support-only 1.766→1.357), with 13.2 usable point sites on average out of 64 and 28/1,200 presentations with none. Lower training loss did not translate to a meaningful incremental atlas-intensity signal or improved pose selection.
+
+Descriptively, brush cases (18) changed from prior 2.764 to full 2.721 mm; no-brush cases (46) changed 2.578→2.580 mm. Only seven cases had ≥45° obliquity; their 1.989→1.950 mm difference is not evidence of real steep-oblique competence. The readout panel was reused after observing 299, so it is adaptive internal development, not independent confirmation; no model should be promoted from it. Do not train this architecture longer unchanged or integrate it into the GUI.
+
+The repeated atlas-intensity-versus-support null result now makes synthetic image formation and actual source/atlas correspondence the priority scientific audit. In particular, 64 fixed sites yielded sparse point supervision on partial sections, and the generator applies inversion/gamma/background, coherent individual deformation, and damage without measured real-domain calibration. An explicitly registered physical-oblique multi-animal validation source with usable rights remains unavailable from the public-source audit. This result does **not** prove arbitrary-plane anatomy inference impossible. No DEV/CAL/FINAL animals, public benchmark cases, external trained weights/features/pseudolabels, local deformation model, or calibrated electrode probabilities entered 300.
