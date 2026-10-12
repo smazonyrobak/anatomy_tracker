@@ -19,7 +19,7 @@ from training import arbitrary_plane_allen_atlas_binding_v6 as allen
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 
-PANEL = ROOT / 'data/one_shot_v7_heldout_dev_panel_248_002'
+PANEL = ROOT / 'data/one_shot_v7_heldout_dev_panel_248_003'
 TRAIN = ROOT / 'runs/anchor_only_blind_feedback_247_train_001'
 READOUT_247 = ROOT / 'runs/anchor_only_blind_feedback_247_readout_002'
 OUT = ROOT / 'runs/one_shot_v7_heldout_dev_panel_248_readout_001'

@@ -38,7 +38,7 @@ PRIOR_DEV = tuple(ROOT / 'data' / name for name in (
     'cross_candidate_match_103_fresh_dev_plans_001',
     'v3_pose_capture_confirmation_plans_001',
     'matcher_150_fresh_dev_plans'))
-OUT = ROOT / 'data/one_shot_v7_heldout_dev_panel_248_002'
+OUT = ROOT / 'data/one_shot_v7_heldout_dev_panel_248_003'
 PROTOCOL_DOC = Path('docs/publication/ONE_SHOT_V7_HELDOUT_DEV_PANEL_248_PROTOCOL_20261012.md')
 SEED, SIDE, SUBJECTS, PLANES = 2026101248, 192, 8, 32
 PLAN_SEED, FIRST_INDEX = 2026101249, 2000
