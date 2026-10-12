@@ -1,0 +1,5 @@
+# 248 historical-plan fingerprint stage
+
+The held-out v7 panel must rule out reuse of any earlier synthetic 3D deformation, but repeatedly loading 132 historical plan archives inside its already-large atlas-rendering process has produced intermittent native Windows access violations. Freeze this small, separate read-only audit first. It does **not** create sections, train a model, or change any prior data.
+
+Verify every old v6 TRAIN/DEV plan archive and each of the 56 added v7 TRAIN plans against its existing completion receipt. Reconstruct each plan, confirm its stored plan/realization/receipt identities, and hash its accepted coarse and fine deformation coefficients. Require 132 distinct plan IDs, realization IDs, receipts and local-field hashes. Save those fingerprints and all input-manifest/source/protocol hashes to `I:/AnatomyTracker/data/one_shot_v7_prior_fingerprints_248_001`. The panel builder must separately recheck original artifact file hashes and this frozen manifest before comparing the eight new DEV plans. This changes only process isolation, not subjects, planes, seeds or deformation distributions.

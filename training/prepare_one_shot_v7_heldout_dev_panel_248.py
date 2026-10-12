@@ -29,6 +29,7 @@ from training.arbitrary_plane_subject_torch_v6 import map_accepted_subject_point
 OLD = ROOT / 'data/joint_v6_coherent_subject_plans_002'
 TRAIN_MAPS = ROOT / 'data/joint_v7_independent_subject_maps_001'
 TRAIN_GEOMETRY = ROOT / 'data/joint_v7_training_data_001'
+FINGERPRINTS = ROOT / 'data/one_shot_v7_prior_fingerprints_248_001'
 PLANS = ROOT / 'data/one_shot_v7_heldout_dev_plans_248_001'
 PRIOR_DEV = tuple(ROOT / 'data' / name for name in (
     'one_shot_fresh_synthetic_dev_plans_001',
@@ -66,38 +67,40 @@ assert old['context_sha256'] == parent_context['v2_context_sha256'] == CONTEXT_S
 lower = np.asarray(parent_context['full_ccf_lower_ap_dv_ml_um'], dtype=np.float64)
 upper = np.asarray(parent_context['full_ccf_upper_ap_dv_ml_um'], dtype=np.float64)
 
-seen_ids, seen_realizations, seen_receipts, seen_local = set(), set(), set(), set()
-for root, rows in [(OLD, old['subjects'])] + [(root, index['subjects']) for root, index in prior]:
-    for row in rows:
-        for name, expected in row['artifact_sha256'].items():
-            assert bundle._file_sha256(root / row['directory'] / name) == expected
-        seen_ids.add(row['subject_deformation_plan_id'])
-        seen_realizations.add(row['subject_deformation_realization_id'])
-        seen_receipts.add(row['subject_plan_receipt_sha256'])
-        previous = bundle._read_raw_artifact(root / row['directory'], row['plan_files'])
-        assert previous['subject_deformation_plan_id'] == row['subject_deformation_plan_id']
-        assert previous['subject_deformation_realization_id'] == row['subject_deformation_realization_id']
-        assert previous['receipt_sha256'] == row['subject_plan_receipt_sha256']
-        fields = (previous['state']['accepted_coarse_coefficients_um'],
-                  previous['state']['accepted_fine_coefficients_um'])
-        seen_local.add(hashlib.sha256(b''.join(np.asarray(a).tobytes() for a in fields)).hexdigest())
-for row in train_maps['new_train_subjects']:
+fingerprint_done = json.loads((FINGERPRINTS / 'completed.json').read_text())
+fingerprint_protocol = json.loads((FINGERPRINTS / 'protocol.json').read_text())
+assert bundle._file_sha256(FINGERPRINTS / 'protocol.json') == fingerprint_done['protocol_sha256']
+assert bundle._file_sha256(FINGERPRINTS / 'fingerprints.json') == fingerprint_done['fingerprints_sha256']
+assert fingerprint_protocol['sources'] == fingerprint_done['sources']
+assert bundle._file_sha256(repository / 'docs/publication/ONE_SHOT_V7_PRIOR_FINGERPRINTS_248_PROTOCOL_20261012.md') == fingerprint_protocol['protocol_document_sha256']
+assert all(bundle._file_sha256(repository / 'training' / name) == digest
+           for name, digest in fingerprint_protocol['source_sha256'].items())
+fingerprints = json.loads((FINGERPRINTS / 'fingerprints.json').read_text())
+assert len(fingerprints) == fingerprint_done['subjects'] == 132
+historical = [(OLD, old['subjects'])] + [(root, index['subjects']) for root, index in prior]
+historical.append((TRAIN_MAPS, train_maps['new_train_subjects']))
+assert fingerprint_done['sources'] == {root.name: bundle._file_sha256(root / 'completed.json')
+                                       for root, _ in historical}
+fingerprint_by_key = {(row['source'], row['source_ordinal']): row for row in fingerprints}
+assert len(fingerprint_by_key) == len(fingerprints)
+for root, rows in historical:
+    for ordinal, row in enumerate(rows):
+        prior_fingerprint = fingerprint_by_key[(root.name, ordinal)]
+        assert prior_fingerprint['directory'] == row['directory']
+        for key in ('subject_deformation_plan_id', 'subject_deformation_realization_id',
+                    'subject_plan_receipt_sha256'):
+            assert prior_fingerprint[key] == row[key]
+        assert all(bundle._file_sha256(root / row['directory'] / name) == digest
+                   for name, digest in row['artifact_sha256'].items())
+for ordinal, row in enumerate(train_maps['new_train_subjects']):
     assert row['split'] == 'train'
     directory = TRAIN_MAPS / row['directory']
     assert bundle._file_sha256(directory / 'completed.json') == row['completed_sha256']
-    for name, expected in row['artifact_sha256'].items():
-        assert bundle._file_sha256(directory / name) == expected
-    previous = bundle._read_raw_artifact(directory, row['plan_files'])
-    assert previous['subject_deformation_plan_id'] == row['subject_deformation_plan_id']
-    assert previous['subject_deformation_realization_id'] == row['subject_deformation_realization_id']
-    assert previous['receipt_sha256'] == row['subject_plan_receipt_sha256']
-    fields = (previous['state']['accepted_coarse_coefficients_um'],
-              previous['state']['accepted_fine_coefficients_um'])
-    assert hashlib.sha256(b''.join(np.asarray(a).tobytes() for a in fields)).hexdigest() == row['local_field_sha256']
-    seen_ids.add(row['subject_deformation_plan_id'])
-    seen_realizations.add(row['subject_deformation_realization_id'])
-    seen_receipts.add(row['subject_plan_receipt_sha256'])
-    seen_local.add(row['local_field_sha256'])
+    assert fingerprint_by_key[(TRAIN_MAPS.name, ordinal)]['local_field_sha256'] == row['local_field_sha256']
+seen_ids = {row['subject_deformation_plan_id'] for row in fingerprints}
+seen_realizations = {row['subject_deformation_realization_id'] for row in fingerprints}
+seen_receipts = {row['subject_plan_receipt_sha256'] for row in fingerprints}
+seen_local = {row['local_field_sha256'] for row in fingerprints}
 assert len(seen_ids) == 12 + 8 * len(PRIOR_DEV) + 56
 assert len(seen_realizations) == len(seen_receipts) == len(seen_local) == len(seen_ids)
 
@@ -153,6 +156,7 @@ protocol = {
     'eligibility': 'source visible support and observed valid pixels each >= side^2/144; ineligible rows retained',
     'old_plan_completed_sha256': OLD_SHA,
     'train_map_completed_sha256': bundle._file_sha256(train_maps_path),
+    'prior_fingerprints_completed_sha256': bundle._file_sha256(FINGERPRINTS / 'completed.json'),
     'prior_dev_plan_completed_sha256': {root.name: bundle._file_sha256(root / 'completed.json')
                                         for root in PRIOR_DEV},
     'parent_context_sha256': hashlib.sha256(context_bytes).hexdigest(),
@@ -387,6 +391,7 @@ assert all(bundle._file_sha256(repository / 'training' / name) == digest
            for name, digest in protocol['source_sha256'].items())
 assert bundle._file_sha256(PROTOCOL_DOC) == protocol['protocol_document_sha256']
 assert bundle._file_sha256(train_maps_path) == protocol['train_map_completed_sha256']
+assert bundle._file_sha256(FINGERPRINTS / 'completed.json') == protocol['prior_fingerprints_completed_sha256']
 assert bundle._file_sha256(geometry_path) == protocol['train_geometry_sha256']
 (OUT / 'completed.json').write_text(json.dumps(completed, indent=2), encoding='utf8')
 print(json.dumps({'event': 'panel_frozen', 'subjects': SUBJECTS,
