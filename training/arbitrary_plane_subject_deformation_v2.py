@@ -145,21 +145,6 @@ def cubic_bspline_velocity(
         raise ValueError("points, coefficients, lattice origin, or spacing are invalid")
     dtype = np.result_type(points.dtype, coefficients.dtype, origin.dtype, spacing.dtype, np.float32)
     flat = np.asarray(points, dtype=dtype).reshape(-1, 3)
-    if len(flat) > 4096:
-        velocity = np.empty((len(flat), 3), dtype=dtype)
-        gradient = np.empty((len(flat), 3, 3), dtype=dtype) if return_gradient else None
-        for start in range(0, len(flat), 4096):
-            end = min(start + 4096, len(flat))
-            part = cubic_bspline_velocity(
-                flat[start:end], coefficients, origin, spacing,
-                return_gradient=return_gradient,
-            )
-            if return_gradient:
-                velocity[start:end], gradient[start:end] = part
-            else:
-                velocity[start:end] = part
-        velocity = velocity.reshape(points.shape)
-        return (velocity, gradient.reshape(points.shape[:-1] + (3, 3))) if return_gradient else velocity
     origin = np.asarray(origin, dtype=dtype)
     spacing = np.asarray(spacing, dtype=dtype)
     coordinate = (flat - origin) / spacing

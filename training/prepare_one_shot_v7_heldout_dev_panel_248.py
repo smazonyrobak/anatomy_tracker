@@ -29,6 +29,7 @@ from training.arbitrary_plane_subject_torch_v6 import map_accepted_subject_point
 OLD = ROOT / 'data/joint_v6_coherent_subject_plans_002'
 TRAIN_MAPS = ROOT / 'data/joint_v7_independent_subject_maps_001'
 TRAIN_GEOMETRY = ROOT / 'data/joint_v7_training_data_001'
+PLANS = ROOT / 'data/one_shot_v7_heldout_dev_plans_248_001'
 PRIOR_DEV = tuple(ROOT / 'data' / name for name in (
     'one_shot_fresh_synthetic_dev_plans_001',
     'pose_feedback_037_fresh_synthetic_dev_plans_001',
@@ -38,7 +39,7 @@ PRIOR_DEV = tuple(ROOT / 'data' / name for name in (
     'cross_candidate_match_103_fresh_dev_plans_001',
     'v3_pose_capture_confirmation_plans_001',
     'matcher_150_fresh_dev_plans'))
-OUT = ROOT / 'data/one_shot_v7_heldout_dev_panel_248_003'
+OUT = ROOT / 'data/one_shot_v7_heldout_dev_panel_248_004'
 PROTOCOL_DOC = Path('docs/publication/ONE_SHOT_V7_HELDOUT_DEV_PANEL_248_PROTOCOL_20261012.md')
 SEED, SIDE, SUBJECTS, PLANES = 2026101248, 192, 8, 32
 PLAN_SEED, FIRST_INDEX = 2026101249, 2000
@@ -100,6 +101,20 @@ for row in train_maps['new_train_subjects']:
 assert len(seen_ids) == 12 + 8 * len(PRIOR_DEV) + 56
 assert len(seen_realizations) == len(seen_receipts) == len(seen_local) == len(seen_ids)
 
+plans_completed_path = PLANS / 'completed.json'
+assert plans_completed_path.is_file(), 'independent 248 plans must be frozen first'
+plans_completed = json.loads(plans_completed_path.read_text(encoding='utf8'))
+assert bundle._file_sha256(PLANS / 'protocol.json') == plans_completed['protocol_sha256']
+plans_protocol = json.loads((PLANS / 'protocol.json').read_text(encoding='utf8'))
+assert plans_protocol['root_seed'] == PLAN_SEED
+assert plans_protocol['animal_indices'] == list(range(FIRST_INDEX, FIRST_INDEX + SUBJECTS))
+assert all(bundle._file_sha256(repository / 'training' / name) == digest
+           for name, digest in plans_protocol['source_sha256'].items())
+plan_rows = {row['animal_index']: row for row in plans_completed['subjects']}
+assert len(plan_rows) == SUBJECTS
+assert all(bundle._file_sha256(PLANS / f'subject_{index:08d}' / 'completed.json') == digest
+           for index, digest in ((int(i), h) for i, h in plans_completed['subject_completed_sha256'].items()))
+
 geometry_path = TRAIN_GEOMETRY / 'train_acquisition_geometry.jsonl'
 geometry_bytes = geometry_path.read_bytes()
 map_protocol = json.loads((TRAIN_GEOMETRY / 'protocol.json').read_text())
@@ -143,6 +158,7 @@ protocol = {
     'parent_context_sha256': hashlib.sha256(context_bytes).hexdigest(),
     'train_geometry_sha256': hashlib.sha256(geometry_bytes).hexdigest(),
     'train_map_protocol_sha256': bundle._file_sha256(TRAIN_GEOMETRY / 'protocol.json'),
+    'independent_dev_plans_completed_sha256': bundle._file_sha256(plans_completed_path),
     'atlas_template_sha256': allen.TEMPLATE_RAW_SHA256_V6,
     'atlas_annotation_sha256': allen.ANNOTATION_RAW_SHA256_V6,
     'atlas_normalized_receipt': allen.ATLAS_FLOAT32_RECEIPT_V6,
@@ -172,9 +188,13 @@ for ordinal, index in enumerate(protocol['subject_indices']):
     lineage = {'split': 'development', 'animal_index': index, 'subject_id': prefix,
                'animal_id': prefix, 'specimen_id': f'{prefix}-specimen',
                'experiment_id': f'{prefix}-experiment'}
-    plan = deformation.sample_animal_subject_deformation_plan_v2(
-        lower, upper, root_seed=PLAN_SEED, split='development', animal_index=index,
-        animal_id=lineage['animal_id'], ccf_context_sha256=CONTEXT_SHA)
+    stored = plan_rows[index]
+    plan_directory = PLANS / f'subject_{index:08d}'
+    assert stored['animal_id'] == lineage['animal_id']
+    assert all(bundle._file_sha256(plan_directory / name) == digest
+               for name, digest in stored['artifact_sha256'].items())
+    plan = bundle._read_raw_artifact(plan_directory, stored['plan_files'])
+    assert plan['receipt_sha256'] == stored['subject_plan_receipt_sha256']
     fields = (plan['state']['accepted_coarse_coefficients_um'], plan['state']['accepted_fine_coefficients_um'])
     local_sha = hashlib.sha256(b''.join(np.asarray(a).tobytes() for a in fields)).hexdigest()
     assert plan['subject_deformation_plan_id'] not in seen_ids
