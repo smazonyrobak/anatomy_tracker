@@ -163,7 +163,9 @@ for readout in readouts:
     assert [(row['base'], row['slot']) for row in rows] == slots
     assert all(len(row['branch_ids']) == len(row['rigid_site_error_mm']) == 16
         and len(set(row['branch_ids'])) == 16
-        and all(0 <= branch < 32 for branch in row['branch_ids'])
+        and all(0 <= branch < 2 * (config['model']['modes'] +
+                                  config['model']['normal_anchor_count'])
+                for branch in row['branch_ids'])
         and all(math.isfinite(error) and error >= 0 for error in row['rigid_site_error_mm'])
         and math.isfinite(row['source_reliability_loss']) for row in rows)
     for row, original in zip(rows, panel):
