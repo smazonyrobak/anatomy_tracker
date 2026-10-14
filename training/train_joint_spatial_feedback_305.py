@@ -31,9 +31,10 @@ from training.global_atlas_contrast_090 import rigid_points_090
 SEED, SIDE, UPDATES = 20261012306, 192, 4000
 READOUTS = (0, 1000, 2000, 4000)
 POSE_RUN = ROOT / 'runs/joint_spatial_feedback_305_pose_002'
-RUN = ROOT / 'runs/joint_spatial_feedback_305_joint_001'
+RUN = ROOT / 'runs/joint_spatial_feedback_305_joint_004'
 SOURCE = Path(__file__).resolve().parent
 PROTOCOL = SOURCE.parent / 'docs/publication/JOINT_SPATIAL_FEEDBACK_305_PROTOCOL_20261012.md'
+AMENDMENT = SOURCE.parent / 'docs/publication/JOINT_SPATIAL_FEEDBACK_305_SCORE_STABILITY_AMENDMENT_20261014.md'
 assert SOURCE.drive.upper() == RUN.drive.upper() == 'I:' and not RUN.exists()
 torch.set_num_threads(4)
 torch.backends.cudnn.benchmark = False
@@ -55,8 +56,8 @@ assert pose_config['init'].startswith('randomly initialized in verified 305 pose
 assert pose_config['resume_step'] == 2000
 assert all(sha(Path(pose_config['resume_parent']) / name) == digest
     for name, digest in pose_config['resume_parent_sha256'].items())
-assert pose_config['source_sha256']['arbitrary_plane_one_shot_model.py'] == sha(
-    SOURCE / 'arbitrary_plane_one_shot_model.py')
+assert pose_config['source_sha256']['arbitrary_plane_one_shot_model.py'] == \
+    '6ffb9bdd8ad0e0e6f4c21b0eabf66f3e1beff0f7625de55da5fad0f7b1e87b66'
 assert pose_config['source_sha256']['arbitrary_plane_postartifact_gauge_v1.py'] == sha(
     SOURCE / 'arbitrary_plane_postartifact_gauge_v1.py')
 assert pose_config['protocol_sha256'] == sha(PROTOCOL)
@@ -93,7 +94,9 @@ config = {'candidate': 305, 'stage': 'joint_feedback', 'seed': SEED,
     'pose_parent': str(POSE_CHECKPOINT), 'pose_parent_sha256': sha(POSE_CHECKPOINT),
     'pose_receipt_sha256': sha(POSE_RUN / 'completed.json'),
     'inner_panel_sha256': sha(POSE_RUN / 'inner_panel.pt'),
-    'protocol_sha256': sha(PROTOCOL), 'synthetic_provenance': context['provenance'],
+    'protocol_sha256': sha(PROTOCOL), 'score_stability_amendment_sha256': sha(AMENDMENT),
+    'pose_parent_model_source_sha256': pose_config['source_sha256']['arbitrary_plane_one_shot_model.py'],
+    'synthetic_provenance': context['provenance'],
     'gradient_base_indices': list(range(56)), 'inner_base_indices': list(range(56, 64)),
     'first_map_gradient': 'stopped to bound memory; not fully end-to-end through first rendering',
     'second_map_score_gradient': 'enabled through refined state, atlas rendering, and local warp',

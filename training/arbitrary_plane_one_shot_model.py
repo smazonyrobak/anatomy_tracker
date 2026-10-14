@@ -650,8 +650,8 @@ class OneShotJointSliceModel(nn.Module):
         cross = (visible * centered_source * centered_target).sum((1, 2, 3)) / q_total
         source_var = (visible * centered_source.square()).sum((1, 2, 3)) / q_total
         target_var = (visible * centered_target.square()).sum((1, 2, 3)) / q_total
-        correlation = (cross.square() + 1e-8).sqrt() / (
-            (source_var * target_var).clamp_min(0).sqrt() + 1e-4)
+        correlation = cross.abs() / (
+            (source_var * target_var + 1e-8).sqrt() + 1e-4)
         correlation = correlation.clamp_max(1)
         aligned_target = target * torch.where(cross.detach() >= 0, 1., -1.)[:, None, None, None]
         window_mass = F.avg_pool2d(visible, 7, 1, 3).clamp_min(1e-5)
