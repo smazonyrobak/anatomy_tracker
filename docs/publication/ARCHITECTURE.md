@@ -39,6 +39,22 @@ registered 3-D specimen data and independently measured physical obliques
 remain separate data needs; the currently inspected AIND asset lacks an
 authenticated signed voxel-to-CCF map and cannot supply exact labels.
 
+**Current implementation priority:** The recurrent/three-graph design below is
+an earlier hypothesis, not a requirement to build it first. The user's simpler
+one-pass requirement is the primary candidate: from one slice, one shared
+image encoder outputs multimodal full-frame pose and an affine-free local map,
+trained with a *joint* mapped-coordinate objective so map failure can affect
+pose learning. Compare atlas-conditioned features or iterative rerendering only
+after an exact-pose map can beat zero warp materially and a fresh blind
+selection gate demonstrates benefit; prior 125/289/296/305 results do not
+license another scalar fitting loop. A 256-case synthetic sensitivity replay
+also found that a coarse AP/DV/ML cut-family hint changed mean first-choice
+error only 2.469→2.428 mm, whereas an artificial near-10° cutting-normal
+hint changed it to about 1.6 mm. These were truth-derived hints, and the GUI's
+probe insertion angle is not the cutting normal. Do not prioritize vague
+constraint conditioning over solving image-grounded selection; preserve
+optional accurate cut-direction evidence and fallible hints for later.
+
 ## Design decision
 
 The release candidate is trained from random initialization as one model with

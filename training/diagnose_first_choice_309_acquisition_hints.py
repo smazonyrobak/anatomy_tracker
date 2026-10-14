@@ -45,6 +45,16 @@ with torch.inference_mode():
         centres, frames, _ = full_frame_state_to_components(predicted['state'])
         true_centres, true_frames, _ = full_frame_state_to_components(true_state)
         true_normal = true_frames[:, :, 2]
+        true_family = true_normal.abs().argmax(-1)
+        candidate_family = frames[..., 2].abs().argmax(-1)
+        family_hint = true_family.clone()
+        family_wrong = torch.rand(len(cases), device='cuda') < .1
+        family_hint[family_wrong] = (family_hint[family_wrong] + 1
+                                     + torch.randint(2, (int(family_wrong.sum()),), device='cuda')) % 3
+        family_prior = torch.where(candidate_family == true_family[:, None],
+                                   math.log(.8), math.log(.1))
+        fallible_family_prior = torch.where(candidate_family == family_hint[:, None],
+                                            math.log(.8), math.log(.1))
         tangent = torch.randn_like(true_normal)
         tangent = F.normalize(tangent - (tangent * true_normal).sum(-1, keepdim=True) * true_normal,
                               dim=-1)
@@ -73,6 +83,9 @@ with torch.inference_mode():
         true_normal_penalty = .5 * (true_angle / math.radians(25)).square()
         scores = {
             'blind': mass,
+            'cut_family_top16': mass + family_prior.repeat_interleave(2, 1),
+            'cut_family_all160': mass + family_prior.repeat_interleave(2, 1),
+            'ten_percent_wrong_cut_family_top16': mass + fallible_family_prior.repeat_interleave(2, 1),
             'ap_hint_top16': mass - ap_penalty.repeat_interleave(2, 1),
             'normal_hint_top16': mass - normal_penalty.repeat_interleave(2, 1),
             'both_hints_top16': mass - (ap_penalty + normal_penalty).repeat_interleave(2, 1),
@@ -95,6 +108,7 @@ with torch.inference_mode():
                 'hint_ap_error_mm': float((ap_hint[i] - true_centres[i, 0]).abs() / 1000),
                 'hint_normal_error_deg': float(hint_angle[i].abs() * 180 / math.pi),
                 'wrong_hint': bool(wrong_hint[i]),
+                'cut_family_wrong': bool(family_wrong[i]),
                 'errors_mm': error[i].cpu().tolist(), 'chosen': chosen,
                 'top16_oracle_mm': float(error[i, top16[i]].min()),
                 'all160_oracle_mm': float(error[i].min())})
@@ -111,6 +125,10 @@ for arm in rows[0]['chosen']:
         'p90_mm': float(np.percentile(errors, 90)), 'over5mm': int((errors > 5).sum()),
         'within1p5mm': int((errors <= 1.5).sum())}
 summary['wrong_hint_cases'] = sum(row['wrong_hint'] for row in rows)
+summary['wrong_cut_family_cases'] = sum(row['cut_family_wrong'] for row in rows)
+summary['wrong_cut_family_subset_mean_mm'] = {arm: float(np.mean([
+    row['errors_mm'][row['chosen'][arm]] for row in rows if row['cut_family_wrong']]))
+    for arm in ('blind', 'ten_percent_wrong_cut_family_top16')}
 summary['wrong_hint_subset_mean_mm'] = {arm: float(np.mean([
     row['errors_mm'][row['chosen'][arm]] for row in rows if row['wrong_hint']]))
     for arm in ('blind', 'ten_percent_wrong_top16', 'ten_percent_wrong_robust_top16')}
