@@ -320,7 +320,7 @@ for index, (saved, loaded, trained) in enumerate(zip(
         final['optimizer']['param_groups'])):
     assert saved['params'] == loaded['params'] == trained['params']
     assert saved['base_lr'] == loaded['base_lr'] == trained['base_lr'] == (2e-5, 5e-6)[index]
-    assert loaded['lr'] == trained['lr'] == (4e-6, 1e-6)[index]
+    assert loaded['lr'] == trained['lr'] == .2 * (2e-5, 5e-6)[index]
 del parent, initial, final
 
 torch.set_num_threads(4)
