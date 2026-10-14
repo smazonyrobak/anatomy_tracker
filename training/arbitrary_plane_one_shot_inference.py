@@ -7,7 +7,8 @@ from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 
 
 def load_one_shot_checkpoint(path, device='cuda'):
-    checkpoint = torch.load(path, map_location='cpu', weights_only=True)
+    with torch.serialization.safe_globals([torch.torch_version.TorchVersion]):
+        checkpoint = torch.load(path, map_location='cpu', weights_only=True)
     anchors = checkpoint['model'].get('normal_anchor_frames')
     model = OneShotJointSliceModel(
         modes=checkpoint['model']['pose.2.bias'].numel() // 21,
