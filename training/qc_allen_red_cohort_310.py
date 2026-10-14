@@ -1,4 +1,4 @@
-"""Gross 25-um grid/anatomy check for three donor-distinct Allen red volumes."""
+"""Gross 25-um grid/anatomy check for six donor-distinct Allen red volumes."""
 import hashlib
 import json
 import os
@@ -15,18 +15,21 @@ import numpy as np
 from training.arbitrary_plane_allen_atlas_binding_v6 import ANNOTATION_PATH_V6, TEMPLATE_PATH_V6
 
 root = Path('I:/AnatomyTracker')
-sources = ((156198187, 607436902, 112942577),
-           (168615344, 607628055, 160252067),
-           (307742524, 315602749, 287634601))
+sources = ((156198187, 607436902, 112942577, 'TRAIN'),
+           (168615344, 607628055, 160252067, 'TRAIN'),
+           (307742524, 315602749, 287634601, 'TRAIN'),
+           (257636467, 607916488, 182849231, 'DEV'),
+           (526501457, 527105701, 517337553, 'DEV'),
+           (649361916, 650149968, 642454692, 'DEV'))
 template, _ = nrrd.read(str(TEMPLATE_PATH_V6), index_order='F')
 annotation, _ = nrrd.read(str(ANNOTATION_PATH_V6), index_order='F')
 brain = annotation != 0
 small_brain = brain[::4, ::4, ::4]
 small_template = np.log1p(template[::4, ::4, ::4].astype(np.float32))
-fig, axes = plt.subplots(1 + len(sources), 3, figsize=(12, 10))
+fig, axes = plt.subplots(1 + len(sources), 3, figsize=(12, 17))
 rows = []
 
-for row, (experiment, file_id, donor) in enumerate(((0, 0, 0), *sources)):
+for row, (experiment, file_id, donor, split) in enumerate(((0, 0, 0, 'atlas'), *sources)):
     if row == 0:
         volume = template
     else:
@@ -49,7 +52,7 @@ for row, (experiment, file_id, donor) in enumerate(((0, 0, 0), *sources)):
             correlations[str(tuple(int(flip) for flip in flips))] = float(
                 np.corrcoef(candidate[small_brain], small_template[small_brain])[0, 1])
         rows.append({'experiment_id': experiment, 'well_known_file_id': file_id,
-                     'donor_id': donor, 'archive_sha256': digest,
+                     'donor_id': donor, 'split': split, 'archive_sha256': digest,
                      'inside_q01_q99': np.quantile(volume[brain], (.01, .99)).tolist(),
                      'inside_outside_median': [float(np.median(volume[brain])),
                                                float(np.median(volume[~brain]))],
@@ -62,12 +65,12 @@ for row, (experiment, file_id, donor) in enumerate(((0, 0, 0), *sources)):
         axes[row, col].imshow(section, cmap='gray', vmin=0,
                               vmax=np.percentile(section[support], 99.5))
         axes[row, col].set_axis_off()
-        axes[row, col].set_title(f"{('atlas' if row == 0 else 'donor ' + str(donor))} / {('AP', 'DV', 'ML')[col]}")
+        axes[row, col].set_title(f"{('atlas' if row == 0 else split + ' donor ' + str(donor))} / {('AP', 'DV', 'ML')[col]}")
 
 fig.tight_layout()
-fig.savefig(root / 'reports/allen_stpt_red_three_donor_qc_310.png', dpi=130)
+fig.savefig(root / 'reports/allen_stpt_red_six_donor_qc_310.png', dpi=130)
 plt.close(fig)
-(root / 'reports/allen_stpt_red_three_donor_qc_310.json').write_text(
+(root / 'reports/allen_stpt_red_six_donor_qc_310.json').write_text(
     json.dumps(rows, indent=2) + '\n', encoding='utf8')
 print([(row['donor_id'], row['flip_correlations']['(0, 0, 0)'],
         max(row['flip_correlations'], key=row['flip_correlations'].get)) for row in rows])
