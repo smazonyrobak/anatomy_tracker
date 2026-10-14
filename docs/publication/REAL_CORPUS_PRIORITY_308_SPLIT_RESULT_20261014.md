@@ -1,0 +1,5 @@
+# 308 TRAIN-only coronal split frozen
+
+The metadata-only split completed before opening any section pixels. The verified source has **263,754 physical sections from 1,885 TRAIN donors**. All 58 donors from the earlier 1,280-row pool were excluded from 308 coronal gradients and from the new readout. Of the remaining donors, the predeclared hash rule held out 100 complete animals with one fixed median section each, leaving **1,727 donors** eligible for broad-corpus gradients. The held-out rows retain animal/specimen/experiment/section IDs, source-image hashes, and Allen's explicitly weak registered affine; they are not independently measured anatomical truth.
+
+Frozen split: `I:/AnatomyTracker/data/coronal_train_split_308_001/split.json`; SHA-256 `b0e5ce4060c6192c2fc166494459c5134beda3caa55488d01a6581c374821bbf`. It contains donor-shard receipt hashes and the source-manifest hash. No DEV/CAL/FINAL image, public benchmark, or pretrained feature was accessed, and no training ran in this split step.
