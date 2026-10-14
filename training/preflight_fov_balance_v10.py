@@ -28,6 +28,7 @@ from training.arbitrary_plane_fov_balance_v10 import load_fov_balance_v10, sampl
 from training.arbitrary_plane_full_frame_primitives import full_frame_state_to_components
 from training.arbitrary_plane_one_shot_inference import load_one_shot_checkpoint
 from training.arbitrary_plane_streaming_synthetic_v7_64 import VARIANTS
+from training.arbitrary_plane_streaming_synthetic_v7_appearance_v3 import sample_streaming_synthetic_v7_64_appearance_v3
 from training.global_atlas_contrast_090 import render_atlas_planes_090, rigid_points_090
 
 source = Path(__file__).resolve()
@@ -35,7 +36,7 @@ protocol = source.parents[1] / 'docs/publication/FOV_BALANCE_V10_PREFLIGHT_PROTO
 generator = source.with_name('arbitrary_plane_fov_balance_v10.py')
 parent = root / 'runs/joint_spatial_305_acquired_rehearsal_001/intervention/pose_local_00400.pt'
 baseline = root / 'runs/blind_ranking_only_306_001/panels.pt'
-output = root / 'runs/fov_balance_v10_preflight_001'
+output = root / 'runs/fov_balance_v10_preflight_002'
 assert source.drive.upper() == output.drive.upper() == 'I:' and not output.exists()
 torch.set_num_threads(4)
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -104,8 +105,11 @@ with (output / 'draws.jsonl').open('w', encoding='utf8') as draws, torch.inferen
                 'obliquity_deg': obliquity, 'first_rigid_error_mm': error_mm}
             rows.append(row)
             if len(rows) <= 6:
-                tissue = sample['clean'][0] / sample['support'][0].clamp_min(1e-4)
-                tissue = torch.where(sample['support'][0] > .05, tissue, 0)
+                source_sample = sample_streaming_synthetic_v7_64_appearance_v3(
+                    context, [base * VARIANTS + variant], draw_seed, 192)
+                assert source_sample['provenance'][0]['virtual_ouv_um'] == record['virtual_ouv_um']
+                tissue = source_sample['clean'][0] / source_sample['support'][0].clamp_min(1e-4)
+                tissue = torch.where(source_sample['support'][0] > .05, tissue, 0)
                 observed = sample['inputs'][0, 0]
                 p99 = max(float(torch.quantile(observed.flatten(), .99)), .001)
                 atlas = torch.where(guessed[1] > .05, guessed[0], 0)
