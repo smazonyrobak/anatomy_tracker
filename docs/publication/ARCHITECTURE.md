@@ -16,6 +16,13 @@ An exact-replay TRAIN-inner perturbation raises chosen error from 2.469 to
 head uses tissue spatial structure, so another background-only change is
 not an evidence-led remedy; the synthetic-to-real anatomical meaning of
 those cues remains unverified.
+On a paired TRAIN-only source-shift check, changing only the rendered 3-D
+intensity to a separate CCF-registered microCT mouse (with the same planes,
+support, synthetic warps and artifacts) raised blind selected error to
+4.149 mm and reduced top-16 ≤1.5-mm capture from 226/256 to 48/256.
+MicroCT contrast is not physical histology, so this does not measure real
+slide accuracy; it does show that more unchanged single-template examples
+cannot establish cross-source robustness.
 
 **Development reset:** Stop incremental pose-loss, scalar-ranker and unchanged
 exposure continuations. Exploratory pilots should use one new mechanism, one
