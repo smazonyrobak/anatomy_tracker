@@ -1,0 +1,17 @@
+# 305 scratch pose stage: synthetic capture gate passed
+
+The 26,000-batch pose/reliability stage completed with **104,000 accepted independently drawn synthetic sections** (114,382 attempts). It resumed the verified step-2,000 random-initialization lineage after the earlier run stopped on a gauge-fit failure; the failed parent was not overwritten. The continuation replayed step 2,001 exactly, retained the frozen 64-section TRAIN-inner panel, and completed all preregistered readouts. The independent verifier passed the completion receipt, source/protocol and parent hashes, copied history, draw provenance, row-level metrics, and checkpoint selection. No DEV, CAL, FINAL, acquired-animal test, or public benchmark data were used.
+
+| Pose batch | Blind top-8 capture ≤1.5 mm | Blind top-16 capture ≤1.5 mm | Top-16 oracle mean error | First-choice mean error |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 0/64 | 0/64 | 3.270 mm | 4.582 mm |
+| 2,000 | 3/64 | 6/64 | 2.407 mm | 4.037 mm |
+| 8,000 | 25/64 | 31/64 | 1.835 mm | 3.245 mm |
+| 16,000 | 48/64 | 52/64 | 1.192 mm | 2.606 mm |
+| **26,000** | **55/64** | **57/64** | **0.992 mm** | **2.180 mm** |
+
+The selected step-26,000 checkpoint passes the preregistered joint-stage entry gate of at least 45/64 top-16 captures and ≤1.5-mm mean top-16 oracle error. All nine panel sections with a plane normal ≥45° from the nearest cardinal axis had a top-16 candidate within 1.5 mm (oracle mean 0.770 mm), but first choice still averaged 2.225 mm there. The sparse-visibility stratum remains weak: only 2/5 sections with <10% visible tissue were captured, with 2.632-mm oracle and 6.059-mm first-choice means. Damage ≥2%: 4/5 captured; exact-black, near-black, gray, and optional-brush captures were 17/18, 13/14, 11/11, and 16/21. The independently recomputed true fitted-state rigid-site baseline was 0.117-mm mean (maximum 0.232 mm), so the 1.5-mm threshold was not imposed below this panel's deformational measurement floor.
+
+These are **synthetic TRAIN-inner candidate-capture diagnostics**, not measured accuracy on physically cut oblique brains. Oracle error chooses the best candidate using synthetic truth and is unavailable at inference. The actual first-choice error of 2.180 mm is not adequate electrode localization, and no local-warp gain, useful feedback, constraint benefit, calibrated probability, or GUI replacement has yet been demonstrated. The next controlled step is the frozen-protocol joint stage: rerender atlas candidates after a shared pose update, fit local deformation, and test whether spatial fit selects better poses than direct/support-only/shuffled controls. Its top-eight blind training set covers 55/64 panel cases within 1.5 mm at the selected pose checkpoint; top-16 inference covers 57/64. A synthetic joint pass would still require acquired animal-separated tests and physical-oblique evidence before an arbitrary-plane accuracy claim.
+
+Frozen run: `I:/AnatomyTracker/runs/joint_spatial_feedback_305_pose_002`. Completion receipt SHA-256 `400084a0a133991d58ecc679755d0c1d5e99b784f75e2ad37925b8299e3466f6`; selected `pose_step_26000.pt` SHA-256 `83b7db1c594946e255ffd0920488046c87d59193b433fb9da7a57685e867d4b0`. Independent verifier: `training/verify_joint_spatial_pose_305.py` (exit 0, `verified: true`). The underlying sampler spans arbitrary brain-intersecting normal directions but uses synthetic deformation bases and a deliberately broad, uncalibrated artifact mixture; it is not a substitute for a representative laboratory-slide collection.
