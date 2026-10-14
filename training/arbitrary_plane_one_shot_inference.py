@@ -10,9 +10,12 @@ def load_one_shot_checkpoint(path, device='cuda'):
     with torch.serialization.safe_globals([torch.torch_version.TorchVersion]):
         checkpoint = torch.load(path, map_location='cpu', weights_only=True)
     anchors = checkpoint['model'].get('normal_anchor_frames')
+    anchor_hypotheses = (checkpoint['model']['anchor_pose.2.bias'].numel() // (18 * len(anchors))
+                         if anchors is not None and 'anchor_pose.2.bias' in checkpoint['model'] else 1)
     model = OneShotJointSliceModel(
         modes=checkpoint['model']['pose.2.bias'].numel() // 21,
         normal_anchor_count=0 if anchors is None else len(anchors),
+        anchor_hypotheses=anchor_hypotheses,
         shared_anchor_pose=any(key.startswith('shared_anchor_query.') for key in checkpoint['model']),
         atlas_conditioning=any(key.startswith('atlas_encoder.') for key in checkpoint['model']),
         fit_quality=any(key.startswith('fit_quality_head.') for key in checkpoint['model']),

@@ -28,14 +28,18 @@ class OneShotJointSliceModel(nn.Module):
                  vector_refinement=False, candidate_ranking=False, fitted_ranking=False,
                  dense_coordinate=False, normal_anchor_count=0, anchor_specific_features=False,
                  dense_coordinate_pyramid=False, anchor_residual_arm=None,
-                 shared_anchor_pose=False, warp_control_side=None, spatial_feedback=False):
+                 shared_anchor_pose=False, warp_control_side=None, spatial_feedback=False,
+                 anchor_hypotheses=1):
         super().__init__()
         self.base_modes, self.normal_anchor_count = modes, normal_anchor_count
+        self.anchor_hypotheses = anchor_hypotheses
         self.anchor_specific_features = anchor_specific_features
         self.shared_anchor_pose = shared_anchor_pose
         assert anchor_residual_arm in (None, 'shared', 'untied')
+        assert anchor_hypotheses == 1 or (normal_anchor_count and not shared_anchor_pose
+                                          and anchor_residual_arm is None)
         self.anchor_residual_arm = anchor_residual_arm
-        self.modes, self.uncertainty_rank = modes + normal_anchor_count, uncertainty_rank
+        self.modes, self.uncertainty_rank = modes + normal_anchor_count * anchor_hypotheses, uncertainty_rank
         self.atlas_conditioning = atlas_conditioning
         self.spatial_feedback = spatial_feedback
         if spatial_feedback:
@@ -85,18 +89,18 @@ class OneShotJointSliceModel(nn.Module):
             else:
                 self.anchor_pose = nn.Sequential(
                     nn.Linear(64 * 8 * 8 + 12, 768), nn.GELU(),
-                    nn.Linear(768, normal_anchor_count * 18),
+                    nn.Linear(768, normal_anchor_count * anchor_hypotheses * 18),
                 )
                 self.anchor_global = nn.Sequential(
                     nn.Linear(widths[-1] * 4 * 4 + 12, 384), nn.GELU(),
-                    nn.Linear(384, normal_anchor_count * 18),
+                    nn.Linear(384, normal_anchor_count * anchor_hypotheses * 18),
                 )
                 nn.init.normal_(self.anchor_pose[-1].weight, std=.001)
                 nn.init.zeros_(self.anchor_pose[-1].bias)
                 nn.init.zeros_(self.anchor_global[-1].weight)
                 nn.init.zeros_(self.anchor_global[-1].bias)
                 with torch.no_grad():
-                    self.anchor_pose[-1].bias.view(normal_anchor_count, 18)[:, 16] = -2
+                    self.anchor_pose[-1].bias.view(normal_anchor_count * anchor_hypotheses, 18)[:, 16] = -2
             if anchor_residual_arm:
                 self.anchor_residual_image = nn.Sequential(
                     nn.Linear(64 * 8 * 8 + 12, 256), nn.GELU())
@@ -269,7 +273,7 @@ class OneShotJointSliceModel(nn.Module):
                     F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
                     + self.anchor_global(torch.cat((
                     F.adaptive_avg_pool2d(anchor_x, 4).flatten(1), context), -1))).reshape(
-                            -1, self.normal_anchor_count, 18)
+                            -1, self.normal_anchor_count * self.anchor_hypotheses, 18)
             if self.anchor_residual_arm:
                 image = self.anchor_residual_image(torch.cat((
                     F.adaptive_avg_pool2d(anchor_feature, 8).flatten(1), context), -1))
@@ -286,7 +290,9 @@ class OneShotJointSliceModel(nn.Module):
                               torch.zeros_like(anchors[..., 5:6])), -1)
             roll = torch.cat((torch.zeros_like(anchors[..., 3:5]),
                               math.pi * anchors[..., 5:6].tanh()), -1)
-            frame = (self.normal_anchor_frames[None] @ so3_exp_map(tilt) @ so3_exp_map(roll))
+            anchor_frames = (self.normal_anchor_frames if self.anchor_hypotheses == 1 else
+                             self.normal_anchor_frames.repeat_interleave(self.anchor_hypotheses, 0))
+            frame = (anchor_frames[None] @ so3_exp_map(tilt) @ so3_exp_map(roll))
             anchor_state = torch.cat((
                 self.center_origin + anchors[..., :3] * self.center_scale,
                 frame_to_rotation_6d(frame),
@@ -758,7 +764,7 @@ class OneShotJointSliceModel(nn.Module):
                 old_count = min(2 * self.base_modes, max(1, candidates // 4))
                 old = scores[:, :2 * self.base_modes].topk(old_count, -1).indices
                 new = scores[:, 2 * self.base_modes:].topk(
-                    min(candidates - old_count, 2 * self.normal_anchor_count), -1
+                    min(candidates - old_count, 2 * (self.modes - self.base_modes)), -1
                 ).indices + 2 * self.base_modes
                 selected = torch.cat((old, new), -1)
                 selected = selected.gather(1, scores.gather(1, selected).argsort(-1, descending=True))
