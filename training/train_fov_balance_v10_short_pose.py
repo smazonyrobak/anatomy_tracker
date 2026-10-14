@@ -58,7 +58,7 @@ assert not RUN.exists() and FOV_SCALE == .72
 assert hashlib.sha256(GENERATOR.read_bytes()).hexdigest() == V10_SHA
 with PARENT.open('rb') as stream:
     parent_sha = hashlib.file_digest(stream, 'sha256').hexdigest()
-assert parent_sha == '56d10febb1a6e6592adf18b9b4c7fe1febeae2a9179d9ddaffb78eefb82e692'
+assert parent_sha == '56d10febb1a6e6592adf18b9b4c7fe1fe0beae2a9179d9ddaffb78eefb82e692'
 rehearsal = json.loads((REHEARSAL / 'completed.json').read_text(encoding='utf8'))
 assert rehearsal['summary']['step_400_gate_pass']
 assert rehearsal['output_sha256']['intervention/completed.json'] == hashlib.sha256(
