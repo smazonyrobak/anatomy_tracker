@@ -114,5 +114,12 @@ start_c = torch.load(run / 'control/pose_local_00000.pt', map_location='cpu', we
 start_a = torch.load(run / 'intervention/pose_local_00000.pt', map_location='cpu', weights_only=False)
 assert start_c['local_step'] == start_a['local_step'] == 0
 assert all(torch.equal(value, start_a['model'][key]) for key, value in start_c['model'].items())
+assert start_c['optimizer']['param_groups'] == start_a['optimizer']['param_groups']
+assert start_c['optimizer']['state'].keys() == start_a['optimizer']['state'].keys()
+for key, state in start_c['optimizer']['state'].items():
+    other = start_a['optimizer']['state'][key]
+    assert state.keys() == other.keys()
+    assert all(torch.equal(value, other[name]) if torch.is_tensor(value)
+               else value == other[name] for name, value in state.items())
 print(json.dumps({'verified': True, 'gate_pass': gate,
                   'control_step_400': c, 'intervention_step_400': a}, allow_nan=False))

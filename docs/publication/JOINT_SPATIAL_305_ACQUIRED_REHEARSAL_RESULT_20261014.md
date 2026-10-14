@@ -1,0 +1,19 @@
+# 305 acquired-axis rehearsal recovers sagittal choice without losing fluorescence capture
+
+The [precommitted matched protocol](JOINT_SPATIAL_305_ACQUIRED_REHEARSAL_PROTOCOL_20261014.md) completed 400 local four-image optimizer batches per arm from the same fluorescence-adapted 305 batch-600 weights **and AdamW moments**. The two arms used identical synthetic, Lupori and older Allen draws; only the older weak-affine loss weight differed (0 versus 0.3). Twenty coronal and twenty sagittal TRAIN donors were wholly absent from rehearsal gradients, and the lower-median readout section of each remaining TRAIN donor was also excluded. The independent post-exit audit checked output hashes, 800 independently drawn accepted synthetic sections per arm, 400 Lupori and 400 alternating older presentations, exact matched draw logs and step-zero model/optimizer tensors, donor exclusion, all readout rows, and the predeclared gate (`verified: true`, exit 0). No DEV/CAL/FINAL image, public benchmark or external pretrained model initialized this run. The preparation-stage accidental parsing of 64 non-TRAIN coronal metadata rows is disclosed in the protocol; the frozen runner read only TRAIN rows.
+
+| Step 400, matched arms | No old rehearsal | Old rehearsal |
+| --- | ---: | ---: |
+| **Fully held-out sagittal donors, correct first-choice axis** | **9/20** | **16/20** |
+| Held-out sagittal median unsigned normal gap to weak affine | 53.06° | 16.59° |
+| Held-out sagittal median centre gap to weak affine | 2.285 mm | 1.672 mm |
+| Fully held-out coronal donors, correct first-choice axis | 20/20 | 20/20 |
+| `AL1A` fluorescence guard, mean first-choice five-site gap | 1.743 mm | 1.756 mm |
+| Full-sphere synthetic inner panel, mean first-choice site gap | 2.153 mm | 2.140 mm |
+| Synthetic top-16 capture within 1.5 mm | 59/64 | 56/64 |
+
+The primary gate **passed**: sagittal held-out first-axis choice gained seven donors and reached 16/20 (required gain ≥3 and ≥15/20); coronal choice did not decline; the `AL1A` mean rose only 0.013 mm (limit +0.20 mm); synthetic mean improved 0.013 mm (limit +0.20-mm regression), and synthetic top-16 capture declined by three cases (limit five). The all-donor descriptive sagittal readout likewise rose from 22/40 to 35/40, with median weak normal gap 34.85°→13.04°. At local step 200 the held-out sagittal count was already 14/20, whereas matched control remained 9/20 through step 400. Thus **short balanced acquired-domain rehearsal**, not another long synthetic-only schedule, is justified for later pose training.
+
+This is not a general accuracy estimate. The Allen affines and VisuAlign planes are approximate weak references, the older holdout is within TRAIN, and almost all acquired examples are near-cardinal cuts. The synthetic panel has only nine ≥45° and five <10%-visible sections. The 305 joint fit-to-pose selector previously failed against support-only and shuffled-intensity controls, and this experiment changed only the pose/image-feature modules. The experimental checkpoint must **not** replace the GUI model; it supplies an evidence-backed pose lineage for the next focused joint-selection test. Before scaling exposure or touching DeepSlice, that test must show a blind fit-informed gain beyond support/appearance shortcuts without giving the warp freedom to conceal a wrong plane. Independent physical oblique animals, exact local maps, and calibrated electrode-region probabilities remain separate qualification gates.
+
+Frozen output: `I:/AnatomyTracker/runs/joint_spatial_305_acquired_rehearsal_001`; completion SHA-256 `e32a32717534aed814b7f174d9bafb8fdb82d6548554f147c47e3e3284cffa69`; intervention step-400 checkpoint SHA-256 `56d10febb1a6e6592adf18b9b4c7fe1febeae2a9179d9ddaffb78eefb82e692`. Independent verifier: `training/verify_joint_spatial_305_acquired_rehearsal.py`.
