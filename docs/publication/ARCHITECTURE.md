@@ -10,6 +10,12 @@ on 64 frozen 309 cases also worsened rigid selection (2.322 to 2.420 mm).
 The model's local mapper can fit near-correct planes, but useful blind
 pose--deformation feedback and all-angle accuracy have not been established.
 No checkpoint is a GUI replacement or has calibrated electrode probabilities.
+An exact-replay TRAIN-inner perturbation raises chosen error from 2.469 to
+4.940 mm when within-tissue pixels are spatially shuffled, but only to
+2.534 mm when exterior pixels are shuffled. This narrows the failure: the
+head uses tissue spatial structure, so another background-only change is
+not an evidence-led remedy; the synthetic-to-real anatomical meaning of
+those cues remains unverified.
 
 **Development reset:** Stop incremental pose-loss, scalar-ranker and unchanged
 exposure continuations. Exploratory pilots should use one new mechanism, one

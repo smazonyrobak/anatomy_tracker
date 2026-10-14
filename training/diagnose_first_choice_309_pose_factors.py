@@ -46,10 +46,14 @@ with torch.inference_mode():
         true_span = torch.linalg.svdvals(true_basis) / 1000
         top16 = mass.topk(16, -1).indices
         first = mass.argmax(-1)
+        global_first = mass[:, :2 * model.base_modes].argmax(-1)
+        anchor_first = 2 * model.base_modes + mass[:, 2 * model.base_modes:].argmax(-1)
         oracle = top16.gather(1, error.gather(1, top16).argmin(-1, keepdim=True)).squeeze(1)
         for i in range(len(cases)):
             a, b = int(first[i]), int(oracle[i])
             rows.append({'first_mm': float(error[i, a]), 'best16_mm': float(error[i, b]),
+                'global_first_mm': float(error[i, global_first[i]]),
+                'anchor_first_mm': float(error[i, anchor_first[i]]),
                 'first_angle_deg': float(angle[i, a // 2]), 'best16_angle_deg': float(angle[i, b // 2]),
                 'first_centre_mm': float(centre_gap[i, a // 2]),
                 'best16_centre_mm': float(centre_gap[i, b // 2]),
@@ -67,7 +71,8 @@ summary = {'n': len(rows), 'wrong_with_near16_count': len(wrong),
 for label, cohort in (('all', rows), ('wrong_with_near16', wrong)):
     summary[label] = {name: {'median': float(np.median([r[name] for r in cohort])),
         'p90': float(np.percentile([r[name] for r in cohort], 90))}
-        for name in ('first_mm', 'best16_mm', 'first_angle_deg', 'best16_angle_deg',
+        for name in ('first_mm', 'best16_mm', 'global_first_mm', 'anchor_first_mm',
+                     'first_angle_deg', 'best16_angle_deg',
                      'first_centre_mm', 'best16_centre_mm', 'first_minor_fov_mm',
                      'best16_minor_fov_mm', 'true_minor_fov_mm')}
     summary[label].update({'first_angle_over20': sum(r['first_angle_deg'] > 20 for r in cohort),
