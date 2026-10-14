@@ -1,15 +1,30 @@
 # Proposed unified architecture
 
-**Status, 2026-10-09:** The recurrent render--compare design below is a research
-hypothesis, not the current qualified model or an established advantage over
-direct prediction. The active evidence-led line is the scratch-trained 094
-one-pass joint pose/local-map model and the predeclared
-[v3 direct pose-capture pilot](V3_ONE_PASS_POSE_CAPTURE_PILOT_001_PROTOCOL_20261009.md).
-That pilot changes only pose capture to isolate the measured bottleneck; it
-does not by itself qualify a joint model. Recurrent atlas feedback would need
-a small matched one-pass comparison using both correct and predicted planes,
-followed by improvement on blind selected mapping error, before adoption.
-No current checkpoint is a GUI replacement or a calibrated all-angle model.
+**Status, 2026-10-15:** The leading research reference is the scratch-lineage
+309 checkpoint, not a qualified joint model. After 20,000 further batches its
+blind first-choice synthetic error improved only 2.595 to 2.469 mm; a usable
+candidate was in the top 16 for 226/256 cases but first choice was within
+1.5 mm for only 109/256. The matched 310 direct-pose-likelihood addition
+worsened fresh first-choice error. Replaying the existing atlas-fit selector
+on 64 frozen 309 cases also worsened rigid selection (2.322 to 2.420 mm).
+The model's local mapper can fit near-correct planes, but useful blind
+pose--deformation feedback and all-angle accuracy have not been established.
+No checkpoint is a GUI replacement or has calibrated electrode probabilities.
+
+**Development reset:** Stop incremental pose-loss, scalar-ranker and unchanged
+exposure continuations. Exploratory pilots should use one new mechanism, one
+fresh animal/base-separated TRAIN-inner panel and one short, fixed training
+budget; judge the *blind selected* surviving-site/map error, its >5-mm tail,
+and acquired-animal guards, not only training loss, pairwise wins or a
+truth-chosen top-16 candidate. Scale only after a material selected-error gain
+without harmful tails. Keep exact source/animal/section provenance, but reserve
+full independent artifact verification for a model that clears this early
+gate; git commits and a compact raw-result table suffice for failed pilots.
+The next substantive intervention must change the information used for joint
+pose/warp inference, not retune the failed 305 fit score. Exact-coordinate
+registered 3-D specimen data and independently measured physical obliques
+remain separate data needs; the currently inspected AIND asset lacks an
+authenticated signed voxel-to-CCF map and cannot supply exact labels.
 
 ## Design decision
 
