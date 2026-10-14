@@ -1,0 +1,17 @@
+# 305 blind local-pose information: gate failed
+
+The [precommitted protocol](JOINT_SPATIAL_305_BLIND_TANGENT_INFORMATION_PROTOCOL_20261014.md) was run once from commit `13231b4` against the fluorescence/older-donor rehearsed batch-400 305 pose checkpoint (SHA-256 `56d10febb1a6e6592adf18b9b4c7fe1fe0beae2a9179d9ddaffb78eefb82e692`). It used only newly sampled synthetic TRAIN-inner sections, not DEV/CAL/FINAL animals or a public benchmark. The runner made 68 independent draws to obtain 64 eligible physical sections, eight per deformation base. A separate post-exit read of the frozen JSONL recomputed every file hash and the equal-base gate arithmetic; both matched the completion receipt.
+
+| Predeclared directional comparison | Equal-base win fraction |
+| --- | ---: |
+| Intact atlas intensity | 71.43% |
+| Source-weighted atlas support alone | 57.14% |
+| Spatially shuffled atlas intensity | 45.24% |
+
+Of 576 local ±-axis pairs, **81 passed the comparability rules**, across seven of eight bases but only **nine distinct sections**. The atlas-intensity advantage over support alone was **14.29 percentage points**, below the required 15; its advantage over shuffled intensity was 26.19 points. The exact predeclared gate therefore **failed**, even though its raw intensity win fraction exceeded 70%. Pair rows are highly clustered (all nine axes of each informative section), so 81 must not be treated as 81 independent experiments. Every informative section was oblique by the protocol's 20° cut; there were no informative near-axis sections. The 64 first-choice blind poses had median 1.79-mm and upper-quartile 4.16-mm sampled surviving-site CCF error. The nine informative sections averaged 1.74 mm, versus 2.66 mm for the other 55.
+
+The main loss of testable local information was unstable common atlas support: 414/576 pairs failed support IoU ≥0.45, 234 failed the area-gap limit, 117 lacked a ≥0.10-mm physical-error difference, and 27 lacked ≥64 source-weighted common cells. These exclusion counts overlap. The model's source-only reliability map did distinguish known tissue from exterior on these synthetic draws (mean 0.976 versus 0.039), so poor foreground detection is not an adequate explanation for this local gate failure. The result does **not** prove atlas texture is useless; it shows that a fixed-size local image-feedback stencil around the actual blind first guess has not earned a training run or deployment claim.
+
+**Decision:** stop this proposed local-stencil updater and do not loosen its threshold post hoc. The earlier 305 top-16 oracle contains a ≤1.5-mm candidate in 57/64 fixed synthetic sections, yet the fitted 16-way selector failed against support-only and shuffled controls. Efficient next work must address *blind proposal selection and gross pose capture* with a separate predeclared, candidate-level test and hard failures; do not spend another long schedule tuning a scalar fit weight or a local updater around a poorly placed first choice. Retain the current checkpoint as experimental, with no GUI promotion, calibration, DeepSlice comparison, or arbitrary-oblique physical claim.
+
+Frozen output: `I:/AnatomyTracker/runs/joint_spatial_305_blind_tangent_information_001`; completion receipt SHA-256 `6f69a23f0ac50997ed8646d2333a784a5b9262bb1180cf0bb7f4f69c13e1d460`. Source SHA-256 `5dbe708f7101229732c37e07b1f3032c38158e93771f7ee055e40c2c4a367c97`; protocol SHA-256 `14661a3692fc887b2acb9168ef24d129ee5edecc5f9563732316d28a1bcc1adf`. All model-development files remain on `I:`.
