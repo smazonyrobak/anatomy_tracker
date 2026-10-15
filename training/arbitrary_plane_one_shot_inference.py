@@ -1,8 +1,11 @@
 """Full-plane and local-map inference; all scores remain uncalibrated."""
+import math
+
 import torch
 import torch.nn.functional as F
 
-from training.arbitrary_plane_full_frame_primitives import render_finite_thickness_coordinate_grid
+from training.arbitrary_plane_full_frame_primitives import (
+    full_frame_state_to_components, render_finite_thickness_coordinate_grid)
 from training.arbitrary_plane_one_shot_model import OneShotJointSliceModel
 
 
@@ -33,7 +36,12 @@ def load_one_shot_checkpoint(path, device='cuda'):
 
 
 def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chunk=2,
-                   evidence_arm='full', max_derivative=None):
+                   evidence_arm='full', max_derivative=None,
+                   measured_cut_normal_ap_dv_ml=None, cut_normal_sd_deg=None,
+                   cut_hint_outlier_fraction=0.1):
+    """Optional cut normal is an independent CCF-frame measurement, never a probe angle."""
+    if measured_cut_normal_ap_dv_ml is not None and not getattr(model, 'prefer_image_prior', False):
+        raise ValueError('measured cutting-normal selection is evaluated only for the 309 image-prior path')
     mode = torch.arange(model.modes, device=inputs.device).repeat_interleave(2)
     reflection = torch.arange(2, device=inputs.device).repeat(model.modes)
     output = {name: [] for name in ('state', 'surface', 'local_displacement_um',
@@ -131,8 +139,23 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
         compact_score = (prediction['log_mass'][..., None] + torch.stack((
             F.logsigmoid(-prediction['reflection_logit']),
             F.logsigmoid(prediction['reflection_logit'])), -1)).flatten(1)
-        branches = (torch.tensor([int((compact_score if candidate_score is None else
-                                      candidate_score)[0].argmax())], device=inputs.device)
+        selection_score = compact_score if candidate_score is None else candidate_score
+        if measured_cut_normal_ap_dv_ml is not None:
+            measured = torch.as_tensor(measured_cut_normal_ap_dv_ml, device=inputs.device,
+                                       dtype=prediction['state'].dtype)
+            if (measured.shape != (3,) or not torch.isfinite(measured).all()
+                    or measured.norm() == 0 or cut_normal_sd_deg is None
+                    or not math.isfinite(cut_normal_sd_deg) or cut_normal_sd_deg <= 0
+                    or not 0 <= cut_hint_outlier_fraction < 1):
+                raise ValueError('supply a finite nonzero CCF AP/DV/ML normal, positive angular SD and outlier fraction in [0,1)')
+            normal = full_frame_state_to_components(prediction['state'])[1][..., :, 2]
+            angle = torch.acos((normal @ F.normalize(measured, dim=0)).abs().clamp(0, 1))
+            inlier = -.5 * (angle / math.radians(cut_normal_sd_deg)).square()
+            hint = torch.logaddexp(inlier + math.log1p(-cut_hint_outlier_fraction),
+                                   torch.full_like(inlier, math.log(cut_hint_outlier_fraction)
+                                                   if cut_hint_outlier_fraction else -torch.inf))
+            selection_score = selection_score + hint.repeat_interleave(2, dim=1)
+        branches = (torch.tensor([int(selection_score[0].argmax())], device=inputs.device)
                     if compact else torch.arange(2 * model.modes, device=inputs.device))
         for first in range(0, len(branches), chunk):
             selected_branches = branches[first:first + chunk]
@@ -162,8 +185,13 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
         F.logsigmoid(-prediction['reflection_logit'][0]),
         F.logsigmoid(prediction['reflection_logit'][0])), -1)
     result['prior_log_weight'] = prior.cpu()
-    result['component_log_weight'] = prior.cpu()
-    selected = prior.flatten() if candidate_score is None else candidate_score[0]
+    selected = selection_score[0]
+    if measured_cut_normal_ap_dv_ml is not None:
+        result['measured_cut_normal_ap_dv_ml'] = measured.cpu()
+        result['cut_normal_sd_deg'] = cut_normal_sd_deg
+        result['cut_hint_outlier_fraction'] = cut_hint_outlier_fraction
+    result['component_log_weight'] = (selected.reshape(model.modes, 2).cpu()
+                                      if measured_cut_normal_ap_dv_ml is not None else prior.cpu())
     result['selected_component'] = (0, 0) if compact else divmod(int(selected.argmax()), 2)
     if compact:
         result['source_selected_component'] = divmod(int(selected.argmax()), 2)
@@ -173,6 +201,8 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
                                   'postfit_atlas_candidate_score' if hasattr(model, 'fitted_matcher') else
                                   'atlas_candidate_score' if model.candidate_uses_atlas else
                                   'image_candidate_score')
+    if measured_cut_normal_ap_dv_ml is not None:
+        result['selection_method'] += '_plus_measured_cut_normal'
     if candidate_score is not None:
         result['candidate_score'] = candidate_score[0].reshape(model.modes, 2).cpu()
     if model.spatial_feedback:
