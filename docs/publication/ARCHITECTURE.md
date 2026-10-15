@@ -72,6 +72,36 @@ clears its scientific gate. Keep source hashes, exact animal/specimen/experiment
 IDs and sealed CAL/FINAL/DeepSlice sets throughout. This is a development
 priority, not a claim that the required physical pilot already exists.
 
+**Matched individual-volume pilot 319 (15 October): FAIL, do not scale.**
+The signed-regional handedness preflight favoured the atlas's direct ML axis
+over an ML mirror in all 18 TRAIN donor/region checks, sufficient for a
+bounded virtual-cut experiment but not independent physical coordinates.
+Both arms continued the same own-project scratch-lineage 309 checkpoint for
+2,000 batches, with identical initial predictions and matched plane/artifact
+draws. The treatment replaced one of four atlas-intensity synthetic sections
+per batch with a registered individual red STPT volume from one of three
+TRAIN donors. At the frozen final readout, 128 base-separated CCF virtual
+sections had 2.3841 mm control versus 2.3833 mm treatment blind first-choice
+error: a 0.00085-mm gain, far below the 0.35-mm gate. The CCF >5-mm tail was
+12 versus 11. On two separate registered DEV donor volumes (64 virtual cuts
+each), pooled mean error was 2.5347 versus 2.4315 mm, a 0.1032-mm gain below
+the 0.20-mm gate. On 52 acquired AL1A TRAIN-inner sections, human-plane mean
+error worsened from 1.4188 to 1.6388 mm, exceeding the 0.10-mm regression
+limit. Three of four predeclared gate conditions failed. Top-16 oracle means
+were nearly unchanged, reinforcing that useful-candidate selection, not
+candidate availability, remains the bottleneck. The runner saved all raw
+readouts, schedule and staged checkpoints but exited after the final readout
+because a NumPy boolean was not JSON serializable; a readout-only recovery
+recomputed the decision, checked all 308 per-case rows per stage and confirmed
+identical initial-arm rows without rerunning training. A sidecar reconstructs
+the 52 AL1A section IDs in the frozen raw-row order. The registered DEV
+volume cuts are weak-coordinate proxy tests, not physical oblique validation.
+Do not promote either 319 checkpoint or interpret modest red-volume gains as
+evidence of acquired-slice generalization. More same-budget source mixing is
+not a justified next investment; prioritize independently grounded physical
+pose labels and investigate the pose-selection information bottleneck before
+another larger training run.
+
 **Current implementation priority:** The recurrent/three-graph design below is
 an earlier hypothesis, not a requirement to build it first. The user's simpler
 one-pass requirement is the primary candidate: from one slice, one shared

@@ -102,7 +102,7 @@ torch.save(panels, RUN / 'panels.pt')
 del dev_intensities
 context['atlas'][0].copy_(context['source_intensities'][0])
 
-guard_images, guard_ouvs = [], []
+guard_images, guard_ouvs, guard_sections = [], [], []
 with ZipFile(ROOT / 'data/lupori_joint_185/rawData.zip') as archive:
     animal = 'AL1A'
     valid = {item.findtext('name') for item in ElementTree.fromstring(
@@ -120,6 +120,7 @@ with ZipFile(ROOT / 'data/lupori_joint_185/rawData.zip') as archive:
         gray = np.clip(gray / max(np.percentile(gray, 99), .01), 0, 1)
         raw_ouv = torch.tensor(item['anchoring'], dtype=torch.float32).reshape(3, 3)
         guard_images.append(gray)
+        guard_sections.append(section)
         guard_ouvs.append(torch.stack((quicknii_to_allen_points(raw_ouv[0]) * 25,
             quicknii_to_allen_vectors(raw_ouv[1]) * 25,
             quicknii_to_allen_vectors(raw_ouv[2]) * 25)))
@@ -258,7 +259,8 @@ for arm in ('control', 'red'):
                         + corners[None, :, 1:] * guard_ouvs[ids, 2, None]
                     errors = (mapped - reference[:, None, None]).norm(dim=-1).mean(-1).flatten(1) / 1000
                     first = mass.argmax(-1)
-                    rows.extend({'cohort': 'AL1A', 'first_mm': float(errors[i, first[i]])}
+                    rows.extend({'cohort': 'AL1A', 'section_id': guard_sections[ids[i]],
+                                 'first_mm': float(errors[i, first[i]])}
                         for i in range(len(ids)))
             metrics = {cohort: {'n': sum(row['cohort'] == cohort for row in rows),
                 'first_mean_mm': float(np.mean([row['first_mm'] for row in rows if row['cohort'] == cohort])),
@@ -284,10 +286,10 @@ for arm in ('control', 'red'):
 control, red = (all_readouts[arm][str(UPDATES)]['metrics'] for arm in ('control', 'red'))
 red_control = np.mean([control[f'red_{donor}']['first_mean_mm'] for _, _, donor in DEV])
 red_treatment = np.mean([red[f'red_{donor}']['first_mean_mm'] for _, _, donor in DEV])
-gate = {'ccf_gain_ge0p35': red['ccf']['first_mean_mm'] <= control['ccf']['first_mean_mm'] - .35,
-        'ccf_gt5_not_worse': red['ccf']['first_gt5'] <= control['ccf']['first_gt5'],
-        'dev_red_gain_ge0p20': red_treatment <= red_control - .20,
-        'AL1A_regression_le0p10': red['AL1A']['first_mean_mm'] <= control['AL1A']['first_mean_mm'] + .10}
+gate = {'ccf_gain_ge0p35': bool(red['ccf']['first_mean_mm'] <= control['ccf']['first_mean_mm'] - .35),
+        'ccf_gt5_not_worse': bool(red['ccf']['first_gt5'] <= control['ccf']['first_gt5']),
+        'dev_red_gain_ge0p20': bool(red_treatment <= red_control - .20),
+        'AL1A_regression_le0p10': bool(red['AL1A']['first_mean_mm'] <= control['AL1A']['first_mean_mm'] + .10)}
 (RUN / 'decision.json').write_text(json.dumps({'gate': gate, 'pass': all(gate.values()),
     'control': control, 'red': red}, indent=2) + '\n', encoding='utf8')
 print(json.dumps({'event': 'decision', 'gate': gate, 'pass': all(gate.values())}), flush=True)
