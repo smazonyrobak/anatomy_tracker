@@ -114,12 +114,15 @@ def attack_angle_factor(direction_ap_dv_ml, measured_angle_deg=None, sigma_deg=N
 def hard_constraint_factors(frame_state, *, entry_ap_dv_ml_um=None, direction_ap_dv_ml=None,
                            entry_center_ap_ml_um=None, entry_radius_um=None,
                            attack_angle_bounds_deg=None, plane_domain_normal=None,
-                           plane_reference_ap_dv_ml_um=None, plane_offset_bounds_um=None):
+                           plane_reference_ap_dv_ml_um=None, plane_offset_bounds_um=None,
+                           cutting_normal=None, cutting_normal_tolerance_deg=None):
     """Exact inclusive hard bounds: return feasibility, 0/-inf mask and violations.
 
     Plane offset is dot(frame centre - reference, normalized declared normal).
     It bounds centre position along that declared axis, not the candidate's own
-    normal or orientation. Entry disks are AP/ML; angles follow attack_angle_factor.
+    normal or orientation. Cutting-normal tolerance is an antipodal angle between
+    the candidate plane normal and an independently reported acquisition normal.
+    Entry disks are AP/ML; attack angles follow attack_angle_factor.
     All vectors use physical CCF AP,DV,ML. Absent constraints contribute nothing.
     """
     center = frame_state[..., :3]
@@ -141,4 +144,14 @@ def hard_constraint_factors(frame_state, *, entry_ap_dv_ml_um=None, direction_ap
         bounds = torch.as_tensor(plane_offset_bounds_um, device=center.device, dtype=center.dtype)
         violations["plane_offset_um"] = torch.maximum(bounds[..., 0] - offset, offset - bounds[..., 1]).clamp_min(0)
         feasible = feasible & (offset >= bounds[..., 0]) & (offset <= bounds[..., 1])
+    if (cutting_normal is None) != (cutting_normal_tolerance_deg is None):
+        raise ValueError("Cutting-normal constraints require both direction and tolerance")
+    if cutting_normal is not None:
+        candidate = full_frame_state_to_components(frame_state)[1][..., :, 2]
+        reported = torch.as_tensor(cutting_normal, device=center.device, dtype=center.dtype)
+        reported = reported / torch.linalg.vector_norm(reported, dim=-1, keepdim=True)
+        angle = torch.rad2deg(torch.acos((candidate * reported).sum(-1).abs().clamp(0, 1)))
+        tolerance = torch.as_tensor(cutting_normal_tolerance_deg, device=center.device, dtype=center.dtype)
+        violations["cutting_normal_deg"] = (angle - tolerance).clamp_min(0)
+        feasible = feasible & (angle <= tolerance)
     return {"feasible": feasible, "log_mask": torch.where(feasible, center[..., 0] * 0, -torch.inf), "violations": violations}

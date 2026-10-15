@@ -13,6 +13,14 @@ search-limited. The future arbitrary-plane solver instead masks a declared
 domain in full normal/physical-offset/frame or O/U/V geometry; an AP scalar
 cannot define sagittal or horizontal plane position.
 
+An optional independently reported cutting direction may bound the **unsigned**
+angle between that direction and each candidate plane normal. This is separate
+from a physical-offset interval: a normal cone alone does not specify where the
+plane lies. Apply it to the full candidate table before top-k truncation, and
+report infeasibility rather than returning an out-of-cone candidate. The
+synthetic information ceiling in 323–324 does not establish real operator-angle
+precision or make this input mandatory.
+
 ## Partial stack order
 
 The deployed coronal rule lets checked slices impose strict

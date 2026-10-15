@@ -22,7 +22,8 @@ def constraint_conditioned_posterior(
     azimuth_deg=None, direction_concentration=None, hard_entry_center_ap_ml_um=None,
     hard_entry_radius_um=None, hard_attack_angle_bounds_deg=None,
     plane_domain_normal=None, plane_reference_ap_dv_ml_um=None,
-    plane_offset_bounds_um=None,
+    plane_offset_bounds_um=None, cutting_normal=None,
+    cutting_normal_tolerance_deg=None,
 ):
     """Condition normalized image log probabilities [B,C,R] on an explicit ray.
 
@@ -68,6 +69,7 @@ def constraint_conditioned_posterior(
     if all(value is None for value in (
         source_points_yx, measured_entry_ap_ml_um, measured_angle_deg,
         hard_entry_center_ap_ml_um, hard_attack_angle_bounds_deg, plane_offset_bounds_um,
+        cutting_normal, cutting_normal_tolerance_deg,
     )):
         return result
     if any(value is not None for value in (
@@ -144,6 +146,8 @@ def constraint_conditioned_posterior(
         plane_domain_normal=None if plane_domain_normal is None else torch.as_tensor(plane_domain_normal, **tensor_options)[..., None, :],
         plane_reference_ap_dv_ml_um=None if plane_reference_ap_dv_ml_um is None else torch.as_tensor(plane_reference_ap_dv_ml_um, **tensor_options)[..., None, :],
         plane_offset_bounds_um=None if plane_offset_bounds_um is None else torch.as_tensor(plane_offset_bounds_um, **tensor_options)[..., None, :],
+        cutting_normal=None if cutting_normal is None else torch.as_tensor(cutting_normal, **tensor_options)[..., None, :],
+        cutting_normal_tolerance_deg=None if cutting_normal_tolerance_deg is None else torch.as_tensor(cutting_normal_tolerance_deg, **tensor_options)[..., None],
     )
     feasible = feasible & surgery_hard["feasible"] & plane_hard["feasible"].all(1)[..., None]
     logits = image_log_probability + result["section_mark_log_likelihood"].sum(1) + result["shared_surgery_log_likelihood"]
