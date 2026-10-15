@@ -102,6 +102,20 @@ not a justified next investment; prioritize independently grounded physical
 pose labels and investigate the pose-selection information bottleneck before
 another larger training run.
 
+**Four-view pose-consistency check 320 (15 October): FAIL.** On 128 distinct
+TRAIN-inner CCF virtual cuts, the frozen 309 model's original first choice
+averaged 2.447 mm. The same slices were rotated by exact raster quarter-turns;
+their predictions were mapped back to the same 128 physical tissue sites.
+Choosing the most self-consistent of the four first choices increased mean
+error to 2.930 mm, although the >5-mm count fell from 12 to 10. The median
+pairwise disagreement between views was 2.828 mm. A truth-selected best of the four
+would have averaged 1.348 mm, but that choice is unavailable at inference.
+The predeclared 0.35-mm improvement and non-worsening-tail gate failed.
+This exposes substantial rotation sensitivity without showing that naive
+four-view consensus can correct it; do not scale this inference shortcut or
+claim that properly equivariant features have been tested. The readout reused
+a TRAIN-inner panel, not acquired oblique truth or untouched validation.
+
 **Current implementation priority:** The recurrent/three-graph design below is
 an earlier hypothesis, not a requirement to build it first. The user's simpler
 one-pass requirement is the primary candidate: from one slice, one shared
