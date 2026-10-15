@@ -39,6 +39,39 @@ registered 3-D specimen data and independently measured physical obliques
 remain separate data needs; the currently inspected AIND asset lacks an
 authenticated signed voxel-to-CCF map and cannot supply exact labels.
 
+**Critical-path correction after 316--317 (15 October):** Do not start another
+pose selector, map-feedback or long exposure run yet. The 309 model selects a
+candidate with at most 1.5-mm rigid-site error in only 109/256 full-sphere
+synthetic cases even though one is present in its top 16 for 226/256; its
+mean first-choice error is 2.469 mm versus a 0.931-mm top-16 oracle. On the separate acquired TRAIN
+guard, 316's map adaptation improves only about 3% over a zero field and
+jointly updating shared features does not add a material gain; 317's human
+field image signal is inconsistent across animals. These results make more
+deformation capacity, another scalar fit score, or more 309 batches a poor
+next investment.
+
+The next work item is **information quality**, not optimizer tuning: establish
+signed specimen-volume-to-CCF geometry and independent animal IDs for at least
+two individual 3-D TRAIN sources, with asymmetric anatomical landmark checks.
+In parallel, seek a small physically cut oblique TRAIN pilot whose blockface or
+specimen geometry gives plane and landmarks independently of atlas fitting.
+Registered virtual cuts can diversify research training but cannot validate
+physical obliques. Do not call an unverified coordinate chain ground truth.
+If well-tissued physical cuts are intrinsically ambiguous, retain multiple
+poses/abstention rather than force a point answer.
+
+Once the *volume-source* geometry gate passes, run one matched, short
+random-initialized-project-lineage source-diversity experiment against the
+single-atlas control. The physical-cut pilot is a separate qualification gate,
+not a prerequisite for this exploratory virtual-cut experiment. The
+experiment's primary readout is fresh *blind first-choice* full-sphere error
+(at least 0.35 mm better), with no increase in the >5-mm tail and no regression on animal-separated
+acquired guards. Checkpoint once per fixed stage, inspect curves at those stages,
+and run full receipt/independent verification only when an exploratory arm
+clears its scientific gate. Keep source hashes, exact animal/specimen/experiment
+IDs and sealed CAL/FINAL/DeepSlice sets throughout. This is a development
+priority, not a claim that the required physical pilot already exists.
+
 **Current implementation priority:** The recurrent/three-graph design below is
 an earlier hypothesis, not a requirement to build it first. The user's simpler
 one-pass requirement is the primary candidate: from one slice, one shared
