@@ -26,6 +26,8 @@ def load_one_shot_checkpoint(path, device='cuda'):
         spatial_feedback=any(key.startswith('source_reliability_head.') for key in checkpoint['model']),
     ).to(device)
     model.candidate_uses_atlas = checkpoint.get('arm') != 'direct'
+    # The frozen 309 readout used this raw selector; retrospective atlas-fit rescoring did not help.
+    model.prefer_image_prior = checkpoint['config'].get('candidate') == 309
     model.load_state_dict(checkpoint['model'])
     return model.eval(), checkpoint['config']
 
@@ -41,7 +43,11 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
     with torch.inference_mode():
         prediction = model.predict(inputs, context)
         mapped_prediction = prediction
-        if hasattr(model, 'pose_refiner'):
+        if getattr(model, 'prefer_image_prior', False):
+            mapped_prediction = {**prediction,
+                                 'state': prediction['state'].repeat_interleave(2, dim=1)}
+            candidate_score = None
+        elif hasattr(model, 'pose_refiner'):
             log_reflection = torch.stack((F.logsigmoid(-prediction['reflection_logit']),
                                           F.logsigmoid(prediction['reflection_logit'])), -1)
             prior_score = (prediction['log_mass'][..., None] + log_reflection).flatten(1)
@@ -122,7 +128,11 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
         else:
             candidate_score = None
         compact = bool(model.normal_anchor_count and hasattr(model, 'pose_refiner'))
-        branches = (torch.tensor([int(candidate_score[0].argmax())], device=inputs.device)
+        compact_score = (prediction['log_mass'][..., None] + torch.stack((
+            F.logsigmoid(-prediction['reflection_logit']),
+            F.logsigmoid(prediction['reflection_logit'])), -1)).flatten(1)
+        branches = (torch.tensor([int((compact_score if candidate_score is None else
+                                      candidate_score)[0].argmax())], device=inputs.device)
                     if compact else torch.arange(2 * model.modes, device=inputs.device))
         for first in range(0, len(branches), chunk):
             selected_branches = branches[first:first + chunk]
@@ -157,10 +167,10 @@ def infer_one_shot(model, inputs, atlas, offsets_um, weights, context=None, chun
     result['selected_component'] = (0, 0) if compact else divmod(int(selected.argmax()), 2)
     if compact:
         result['source_selected_component'] = divmod(int(selected.argmax()), 2)
-    result['selection_method'] = ('spatial_feedback_' + evidence_arm if model.spatial_feedback else
+    result['selection_method'] = ('image_prior' if candidate_score is None else
+                                  'spatial_feedback_' + evidence_arm if model.spatial_feedback else
                                   'joint_rerender_refinement' if hasattr(model, 'pose_refiner') else
                                   'postfit_atlas_candidate_score' if hasattr(model, 'fitted_matcher') else
-                                  'image_prior' if candidate_score is None else
                                   'atlas_candidate_score' if model.candidate_uses_atlas else
                                   'image_candidate_score')
     if candidate_score is not None:
