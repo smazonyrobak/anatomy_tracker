@@ -1,0 +1,20 @@
+# Individual fluorescence exposes a large source shift in the frozen plane model
+
+**Decision:** the frozen 309 plane model does not transfer to this actual individual fluorescence volume. The check is useful for choosing the next training source, but it is not a physical-section accuracy test or evidence that training on multiple individuals would fail.
+
+The [AIND SmartSPIM preflight](AIND_SMARTSPIM_TRAIN_SOURCE_PREFLIGHT_20261012.md) identified individual registered brains whose derived assets state CC BY 4.0. Its [reference-grid audit](AIND_SMARTSPIM_568105_REFERENCE_GRID_AUDIT_20261012.md) did not establish subject 568105's exact signed voxel-to-CCF transform. An anonymous request for the contemporaneous Code Ocean reference asset returned HTTP 401, so that route did not resolve the grid. The public [568105 data description](https://aind-open-data.s3.us-west-2.amazonaws.com/SmartSPIM_568105_2024-03-06_10-19-06_stitched_2024-03-08_03-13-28/data_description.json) identifies the specific derived asset as CC BY 4.0. The registered volume is therefore used here only as image appearance, never as an exact pose label.
+
+[`acquire_aind_registered_568105.py`](../../training/acquire_aind_registered_568105.py) fetched the 360 public level-0 chunks of subject 568105, channel `Ex_639_Em_667`, to `I:/AnatomyTracker/data/aind_smartspim_568105_registered`. The completed 25-µm `[ML,DV,AP]` float32 array has SHA-256 `4971135578d420d3e6a41ee1bdcaf42a639146e7c437fc084fdf9eaa9ccc90fb`; `source.json` retains asset, subject, channel, license, metadata and individual chunk hashes. The first attempt stopped because the last Zarr chunk decompresses to a padded 64³ block. Only its incomplete 308-MB temporary output was removed; the decoder was corrected and the full volume regenerated.
+
+[`preflight_aind_source_shift_309.py`](../../training/preflight_aind_source_shift_309.py) re-rendered the **same 256 frozen TRAIN-inner v10 synthetic cuts** with this individual fluorescence intensity, retaining each plane, deformation/artifact draw, atlas support and CCF site truth. The unchanged 309 model predicted blind. Both possible left/right interpretations were evaluated because ML chirality is unverified. One `log1p` and positive-voxel 1st/99th-percentile intensity window was applied identically to both. The paired source substitutions are diagnostics, not duplicated training presentations.
+
+| Same 256 virtual cuts | Original atlas texture | AIND as stored | AIND mirrored ML |
+| --- | ---: | ---: | ---: |
+| Blind first-choice mean site error, mm | 2.469 | 4.416 | 4.383 |
+| First choices over 5 mm | 17 | 86 | 72 |
+| Top-16 capture within 1.5 mm | 226 | 41 | 40 |
+| Median unsigned normal error, degrees | 21.9 | 55.7 | 54.0 |
+
+Only 44/256 as-stored and 46/256 mirrored cuts improve relative to their original atlas-textured inputs. The raw 512 rows contain exactly 256 matching section IDs in each orientation; an independent read reproduced their means, severe-failure counts and top-16 captures, and matched the original 309 step-20,000 rows casewise. Frozen outputs are `I:/AnatomyTracker/reports/aind_source_shift_309_train_568105`: rows SHA-256 `514076d5353d46fe882881fc88e493847c5e55ae493bd2ea655ffd0863074dbb`, summary SHA-256 `e43d43f249c0e2b6edf789bd8c3fab504ee5117cfe5291066bddaa29f8f260a1`, source receipt SHA-256 `e3ff1581ce97e0b67813877776fb03a1c681372443855e1314d5e880640c1e95`.
+
+Resolving left/right chirality alone cannot explain the broad failure. Contrast/modality, individual anatomy, registration and the intensity window change together, so the check does not isolate a cause or establish whether scratch training on a donor-separated AIND cohort would help. It provides no physically cut oblique truth, calibrated uncertainty or GUI-ready replacement. Do not use 568105 for exact CCF-coordinate supervision or launch a long multi-volume training run merely because the asset is licensed and labelled registered. A new candidate-selection mechanism still needs a bounded, animal-separated source-diversity gate before scale-up.
