@@ -1,0 +1,17 @@
+# 317: human-field image signal is uneven across the three TRAIN animals
+
+**Decision: the predeclared cross-animal consistency gate failed.** The [no-training protocol](ACQUIRED_FIELD_CROSS_ANIMAL_317_PROTOCOL_20261015.md) repeated the exact [315](ACQUIRED_FIELD_IMAGE_SIGNAL_315_RESULT_20261015.md) supplied-plane image comparison on all 188 valid acquired sections from `CC2B`, `CC4B` and `CC4A`, the animals used for 316 gradients. The [independent read-only audit](../../training/verify_acquired_field_cross_animal_317.py) passed all 752 original image/field/mask member hashes, source/protocol/output hashes, animal/section identities, 187 eligible scores, row arithmetic and the gate. No model checkpoint, optimizer, DEV/CAL/FINAL animal or public benchmark was used.
+
+| TRAIN animal | Eligible / valid | Human local vs zero, Pearson mean / wins | Human local vs zero, MIND mean / wins | Consistency gate |
+| --- | ---: | ---: | ---: | --- |
+| `CC2B` | 54 / 54 | +0.02807; 45/54 | +0.00287; 42/54 | Pass |
+| `CC4B` | 65 / 66 | +0.01096; 40/65 | +0.00164; 45/65 | Pass |
+| `CC4A` | 68 / 68 | +0.00497; 36/68 | +0.00253; 45/68 | **Fail** |
+
+Larger scores are better. For `CC4A`, the local field beats zero in only 36/68 sections and the reversed field in only 39/68 under sign-invariant Pearson, below the required 60% for both. Its median paired Pearson margins are positive but small (+0.00428 vs zero, +0.00734 vs reversed). MIND meets the paired-count conditions in that animal. Thus the field is not devoid of visible signal; it is **too weak or inconsistent across the two prespecified image measures to justify scaling the current map objective**. The raw full human field scores higher on average than the affine-free local field in all three animals for both measures. This suggests that global pose/affine correction contributes to image agreement, but the assay cannot distinguish imprecise human planes, stain/atlas contrast mismatch and genuine tissue deformation as causes.
+
+Together, 315–317 narrow the present bottleneck. Human-drawn corrections can improve atlas-image agreement, but their affine-free signal varies by animal, and the 316 learned map improved only 3% over predicting no warp on the separate AL1A TRAIN-inner guard. The approximately 2.3-mm blind synthetic pose-choice error is much larger than the approximately 0.1-mm exact-pose local residual. More batches, loss-weight adjustments or a pose-feedback loop driven by this map would be a poor next investment. The next evidence gate should be a better-grounded physical/acquired pose and local-correspondence reference, or a genuinely new anatomical representation that produces a blind full-sphere first-choice gain over support/prior controls before joint retraining. Optional trustworthy cut-orientation evidence could help, but the GUI's electrode-insertion angle is not that evidence. Continue to reserve animal-separated calibration/final data and the DeepSlice comparison.
+
+These three animals were already used in 316 gradients, so 317 is a signal audit, not independent model validation. The human registrations are approximate near-coronal VisuAlign work, not measured physical cut geometry. The experiment does not validate arbitrary physical obliques, calibrated electrode-region probabilities or a GUI-ready model.
+
+Frozen outputs: `I:/AnatomyTracker/reports/acquired_field_cross_animal_317`; completion SHA-256 `fa063c2fa2400d10e76f3e55b12af1c805c3e22d2dd81b245b167354d76e0e87`.
