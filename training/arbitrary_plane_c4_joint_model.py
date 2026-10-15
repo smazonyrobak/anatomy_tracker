@@ -216,12 +216,18 @@ class C4JointSliceModel(nn.Module):
                                  (self.side, self.side))
         frame = full_frame_state_to_components(state.flatten(0, 1))[1]
         mapped = rigid + torch.einsum('bij,bnj->bni', frame, displacement)
+        group_flat = group.flatten()
+        row_flat = torch.arange(len(group_flat), device=group.device)
+        observed_local = torch.stack([torch.rot90(local, k, (-2, -1))
+                                      for k in range(4)], 1)[row_flat, group_flat]
+        observed_logit = torch.stack([torch.rot90(raw[:, 3:4], k, (-2, -1))
+                                      for k in range(4)], 1)[row_flat, group_flat]
         return {
             'coordinates': mapped.reshape(batch, count, -1, 3),
             'rigid_coordinates': rigid.reshape(batch, count, -1, 3),
-            'local_displacement_um': local.reshape(batch, count, 3, self.side, self.side),
+            'local_displacement_um': observed_local.reshape(batch, count, 3, self.side, self.side),
             'removed_affine_local_um': removed_affine.reshape(batch, count, 3, 3),
-            'correspondence_logit': raw[:, 3:].reshape(batch, count, 1, self.side, self.side),
+            'correspondence_logit': observed_logit.reshape(batch, count, 1, self.side, self.side),
             'state': state,
             'mode_index': mode_index,
             'reflection': reflection,
