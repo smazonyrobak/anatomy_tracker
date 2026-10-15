@@ -1,0 +1,17 @@
+# 323–324: cutting orientation helps, but does not make C4 deployable
+
+Frozen, randomly initialized-and-trained C4 checkpoint 321 was evaluated without further training on its 192 synthetic TRAIN-panel cuts. The [predeclared 323 protocol](C4_CUT_NORMAL_323_PROTOCOL_20261015.md) supplied a synthetic cutting-normal estimate **derived from the generator's true post-artifact plane**. It is an information ceiling conditional on external orientation metadata, not evidence that a human operator actually supplies this accuracy. The true-normal arm allowed a 30° cone; the coarse arm perturbed the true normal by an independent 0–20° rotation and allowed a 35° cone. Candidate scores were not refit: the highest original score among feasible top-16 planes was chosen; no feasible plane meant explicit infeasibility.
+
+| Cohort | Unconstrained first mean | Perfect-normal feasible/total; selected mean | Coarse-normal feasible/total; selected mean |
+| --- | ---: | ---: | ---: |
+| Inner | 2.575 mm | 125/128; 1.285 mm | 126/128; 1.397 mm |
+| Steep-oblique | 2.512 mm | 32/32; 1.400 mm | 31/32; 1.010 mm |
+| Sparse | 4.943 mm | 22/32; 2.384 mm | 25/32; 2.693 mm |
+
+Selected means above are **conditional on feasibility**, so their sparse figures exclude many of the hardest cuts. On exactly paired feasible inner cases the coarse normal reduced mean error by 1.105 mm and reduced >5-mm choices from 11 to 3. The analogous steep paired gain was 1.211 mm. The final 323 gate nevertheless **failed**: perfect-normal top-16 feasibility was only 22/32 on sparse cuts, below the required 85%; coarse feasibility was 25/32, below 80%. An intentionally wrong 55° report left only 40/128 inner cases feasible and worsened their selected mean by 1.074 mm relative to their own unconstrained choices. Wrong metadata must never be silently enforced or relaxed.
+
+A fixed follow-up 324 checked the specific sparse failure: apply the *perfect* 30° normal cone to all 512 original C4 branches **before** top-16 truncation. This rescued all ten top-16-infeasible sparse cases and made 32/32 feasible. Yet the selected mean was still 3.492 mm versus 4.943 mm unconstrained; the truth-best feasible candidate averaged 1.719 mm. Its exploratory <3.0-mm selected-error gate failed. This identifies both a truncation error and a remaining candidate-ranking/geometry error, not an information-free task.
+
+Decision: independently recorded cutting orientation is a promising **optional** constraint, but this simulation does not validate its real-world precision and does not rescue sparse slices or the unconstrained model. A future inference path should apply full-plane constraints before proposal truncation and return explicit infeasibility; it should not train a context head on truth-derived idealized angles or treat a surgical entry point/attack angle as the cutting normal. The existing GUI's AP interval and tilt controls are legacy coronal-chart constraints, not a complete arbitrary-plane domain; see [constraint semantics](CONSTRAINTS.md). The current C4 checkpoint remains unpromoted, uncalibrated, and not a GUI replacement. No DeepSlice comparison is warranted.
+
+Frozen outputs: `I:/AnatomyTracker/runs/c4_cut_normal_323_001` (192 rows, final gate false) and `I:/AnatomyTracker/runs/c4_full_bank_normal_324_001` (32 sparse rows, exploratory gate false). Post-run config/row/summary receipt hashes and row counts matched for both. Both used only synthetic TRAIN cuts and preserved all previous checkpoints and outputs.

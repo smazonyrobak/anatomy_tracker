@@ -1,0 +1,15 @@
+# 323: optional cutting-normal information ceiling on frozen C4 candidates
+
+This is a **no-training synthetic information test**, not a model benchmark or a claim that operators know an exact angle. Freeze 321 batch 12,000, its 192 TRAIN-only panel cuts (128 inner, 32 steep, 32 sparse), each case's top 16 candidates and original scores. Do not mutate 321/322 output or read acquired DEV/CAL/FINAL or public benchmark data. The synthetic true post-artifact plane normal is used only to simulate independent pre-cut orientation metadata; it is never added to model input or candidate scores.
+
+Evaluate three optional metadata arms in addition to the unconstrained first choice:
+
+1. **Perfect-normal ceiling:** report the true unsigned plane normal, accept candidates within 30°.
+2. **Coarse reported normal:** perturb the true unsigned normal by an independently sampled 0–20° tangent-plane rotation, fixed seed 20261015323, and accept candidates within 35°. This is conditional on an operator or cutting fixture really being accurate to 20°; that accuracy is not established here.
+3. **Incorrect report stress:** on the same random tangent direction, use a 55° error and the same 35° acceptance cone. This arm measures harm from plausible-looking but wrong metadata, not model accuracy.
+
+In each arm select the highest original C4 score among feasible top-16 candidates. If none is feasible, report **infeasible**, never silently return the unconstrained candidate. Report feasibility, mean and >5-mm selected error on the exact feasible subset alongside the unconstrained error on that same subset, top-16 physical oracle, and per-cohort/base effects. Compare perfect-versus-coarse gains on their common feasible cases. The hard normal test must be antipodal; reflection and in-plane quarter-turn cannot turn an infeasible normal into a feasible one. Also report how often the true normal lies inside each provided cone and how often an incorrect report remains feasible.
+
+The conditional utility gate requires: perfect-normal feasible ≥95% in inner and steep and ≥85% in sparse; on those exact feasible subsets perfect-normal mean error improves over unconstrained by ≥0.40 mm inner and ≥0.25 mm in steep and sparse; coarse-report feasible ≥90% inner and steep and ≥80% sparse, with ≥60% of the perfect-normal gain in inner and steep on common feasible cases; and coarse-report >5-mm tails no worse than unconstrained on paired feasible cases. A pass permits only planning a practical independently recorded acquisition-normal interface and a fresh study. Failure means do not make such metadata mandatory or train a context head on simulated precise angles. No numerical posterior calibration, GUI promotion, or DeepSlice follows either outcome.
+
+Legacy GUI AP intervals apply to coronal chart only. Electrode-entry point/attack angle without visible probe marks does not determine a cutting normal, so neither is treated as a normal label here. Stack order and true surgical constraints require a separate multi-slice/mark-bearing study.
