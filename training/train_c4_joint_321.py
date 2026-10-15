@@ -33,7 +33,7 @@ from training.global_atlas_contrast_090 import rigid_points_090
 SEED, SIDE, UPDATES = 20261015321, 192, 12000
 STAGES = (0, 1000, 4000, 12000)
 TRAIN, GUARD = ('CC2B', 'CC4B', 'CC4A'), 'AL1A'
-RUN = ROOT / 'runs/c4_joint_321_001'
+RUN = ROOT / 'runs/c4_joint_321_002'
 ARCHIVE = ROOT / 'data/lupori_joint_185/rawData.zip'
 SPLIT = Path(__file__).with_name('lupori_animal_split_185.json')
 COMPARATOR = ROOT / 'runs/first_choice_exposure_309_001/single/pose_local_20000.pt'
@@ -332,7 +332,7 @@ with (RUN / 'train_draws.jsonl').open('w', encoding='utf8') as draw_file, \
                             [base * VARIANTS + variant], seed, SIDE)
                         accepted = bool(sample['eligible'][0])
                         provenance = sample['provenance'][0]
-                        assert provenance['split'] == 'train' and provenance['base_lineage']['animal_index'] < 56
+                        assert provenance['split'] == 'train' and provenance['virtual_index'] == base * VARIANTS + variant
                         draw_file.write(json.dumps({'step': step, 'slot': slot,
                             'base': base, 'variant': variant, 'seed': seed,
                             'accepted': accepted, 'provenance': provenance}, allow_nan=False) + '\n')
