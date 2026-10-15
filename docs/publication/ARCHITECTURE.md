@@ -60,17 +60,14 @@ physical obliques. Do not call an unverified coordinate chain ground truth.
 If well-tissued physical cuts are intrinsically ambiguous, retain multiple
 poses/abstention rather than force a point answer.
 
-Once the *volume-source* geometry gate passes, run one matched, short
-random-initialized-project-lineage source-diversity experiment against the
-single-atlas control. The physical-cut pilot is a separate qualification gate,
-not a prerequisite for this exploratory virtual-cut experiment. The
-experiment's primary readout is fresh *blind first-choice* full-sphere error
-(at least 0.35 mm better), with no increase in the >5-mm tail and no regression on animal-separated
-acquired guards. Checkpoint once per fixed stage, inspect curves at those stages,
-and run full receipt/independent verification only when an exploratory arm
-clears its scientific gate. Keep source hashes, exact animal/specimen/experiment
-IDs and sealed CAL/FINAL/DeepSlice sets throughout. This is a development
-priority, not a claim that the required physical pilot already exists.
+The proposed short matched source-diversity continuation was performed as 319
+and failed below; do not repeat it with a different fluorescent donor and the
+same training question. A genuinely different from-scratch, multi-donor
+experiment would first require authenticated signed source coordinates and a
+reason to expect its source mix to address the 319 acquired-image regression.
+The physical-cut pilot remains a separate qualification gate, not a claim that
+virtual oblique cuts are physical ground truth. Keep source hashes, exact
+animal/specimen/experiment IDs and sealed CAL/FINAL/DeepSlice sets throughout.
 
 **Matched individual-volume pilot 319 (15 October): FAIL, do not scale.**
 The signed-regional handedness preflight favoured the atlas's direct ML axis
